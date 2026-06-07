@@ -33,7 +33,14 @@ from nexus import MemoryCategory
 from nexus.provenance import attach_source
 
 # ── Auto-load .env files ──────────────────────────────────────────
-for env_path in [Path.home() / ".hermes" / ".env", Path.cwd() / ".env"]:
+# Load from NEXUS_ENV_FILE explicit path, then fall back to cwd/.env
+env_paths = []
+custom_env = os.environ.get("NEXUS_ENV_FILE")
+if custom_env:
+    env_paths.append(Path(custom_env))
+env_paths.append(Path.cwd() / ".env")
+
+for env_path in env_paths:
     if env_path.exists():
         with open(env_path) as f:
             for line in f:

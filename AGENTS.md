@@ -24,11 +24,26 @@ pip install -e .
 
 ### 2. Configure
 
-Set your Voyage API key in `~/.hermes/.env` or `~/nexus-memory/.env`:
+Set your Voyage API key. Pick **one** of these — they all work:
 
-```bash
-echo 'VOYAGE_API_KEY="vo-your-key-here"' >> ~/.hermes/.env
+**Option A — MCP `env:` block (recommended):**
+```json
+// OpenClaw — mcp.servers.<name>.env
+// Hermes / Claude Code / Standard MCP — mcpServers.<name>.env
+{
+  "env": {
+    "VOYAGE_API_KEY": "vo-your-key-here"
+  }
+}
 ```
+
+**Option B — `.env` file:**
+```bash
+echo 'VOYAGE_API_KEY="vo-your-key-here"' >> ~/nexus-memory/.env
+# or anywhere else, point to it via NEXUS_ENV_FILE
+```
+
+`~/.hermes/.env` is no longer read by default (removed in v0.2.1).
 
 ### 3. Run MCP Server
 
