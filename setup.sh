@@ -108,19 +108,91 @@ else
     warn "Import test failed — check Python environment"
 fi
 
-# ── Step 7: Optional — MCP Server Start ───────────────────────────────
+# ── Step 7: Platform Configuration Guide ──────────────────────────
 echo ""
-info "To start the MCP server:"
-echo "  cd ${INSTALL_DIR}"
-echo "  ${PYTHON} -m src.nexus_memory.mcp_server"
+info "═══════════════════════════════════════════════"
+info "  Platform Configuration Guide"
+info "═══════════════════════════════════════════════"
 echo ""
-info "To connect Hermes Agent, add to ~/.hermes/config.yaml:"
+
+info "Universal MCP Config (works with any MCP client):"
+echo '  Create ~/.nexus-mcp.json or add to your MCP config:'
+echo '  {'
+echo '    "mcpServers": {'
+echo '      "nexus": {'
+echo '        "command": "'${PYTHON}'",'
+echo '        "args": ["-m", "nexus_memory.mcp_server"]'
+echo '      }'
+echo '    }'
+echo '  }'
+echo ""
+
+info "┌────────────────────────────────────────────────────────────┐"
+info "│ Platform-Specific Configurations                           │"
+info "└────────────────────────────────────────────────────────────┘"
+echo ""
+
+info "🔷 Hermes Agent — ~/.hermes/config.yaml:"
 echo '  mcp_servers:'
 echo '    nexus:'
 echo "      command: ${PYTHON}"
 echo '      args: ["-m", "nexus_memory.mcp_server"]'
 echo '      env:'
 echo "        PYTHONPATH: ${INSTALL_DIR}"
+echo ""
+
+info "🔷 Claude Code — ~/.claude/settings.json:"
+echo '  {'
+echo '    "mcpServers": {'
+echo '      "nexus": {'
+echo '        "command": "'${PYTHON}'",'
+echo '        "args": ["-m", "nexus_memory.mcp_server"]'
+echo '      }'
+echo '    }'
+echo '  }'
+echo ""
+
+info "🔷 Claude Code (project-level) — .mcp.json in your project:"
+echo '  {'
+echo '    "mcpServers": {'
+echo '      "nexus": {'
+echo '        "command": "python3",'
+echo '        "args": ["-m", "nexus_memory.mcp_server"]'
+echo '      }'
+echo '    }'
+echo '  }'
+echo ""
+
+info "🔷 OpenClaw — ~/.openclaw/config.yaml:"
+echo '  mcp_servers:'
+echo '    nexus:'
+echo "      command: ${PYTHON}"
+echo '      args: ["-m", "nexus_memory.mcp_server"]'
+echo ""
+
+info "🔷 Cursor — Settings → Features → MCP Servers:"
+echo '  Name: nexus'
+echo "  Command: ${PYTHON}"
+echo '  Arguments: -m nexus_memory.mcp_server'
+echo ""
+
+info "🔷 Cline — MCP Server Config:"
+echo '  {'
+echo '    "mcpServers": {'
+echo '      "nexus": {'
+echo '        "command": "'${PYTHON}'",'
+echo '        "args": ["-m", "nexus_memory.mcp_server"]'
+echo '      }'
+echo '    }'
+echo '  }'
+echo ""
+
+info "🔷 Other MCP-compatible agents — Standard MCP stdio:"
+echo '  Command: python3 -m nexus_memory.mcp_server'
+echo '  Protocol: stdio (JSON-RPC 2.0)'
+echo ""
+
+info "═══════════════════════════════════════════════"
 echo ""
 
 ok "${REPO} setup complete! 🦊"
