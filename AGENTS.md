@@ -12,7 +12,18 @@ Nexus Memory is a **universal memory layer** for AI agents. One memory for all y
 
 - Python 3.11+
 - Qdrant running on localhost:6333
-- Voyage AI API key (or other embedding provider)
+- At least **one** embedding provider (auto-detected in this order):
+
+  | Provider | Type | Dimensions | How to get |
+  |----------|------|-----------|------------|
+  | **Voyage** ☁️ | Cloud | 1024d | `VOYAGE_API_KEY` |
+  | **OpenAI** ☁️ | Cloud | 1536d | `OPENAI_API_KEY` |
+  | **Google/Vertex AI** 💚 | Cloud | 768d | `GOOGLE_API_KEY` |
+  | **Jina** 💜 | Cloud | 1024d | `JINA_API_KEY` |
+  | **Ollama** 🦙 | Local | 768d | Auto-detected (`embed` model) |
+  | **sentence-transformers** 🏠 | Local | 384d | `pip install sentence-transformers` |
+
+  > **Zero-setup:** If you have Ollama running with an `embed` model (e.g. `nomic-embed-text`), it works out of the box — no API key needed.
 
 ### 1. Install
 
@@ -24,7 +35,7 @@ pip install -e .
 
 ### 2. Configure
 
-Set your Voyage API key. Pick **one** of these — they all work:
+Set your preferred embedding provider's API key. Pick **one** of these options — the server auto-detects which provider is available:
 
 **Option A — MCP `env:` block (recommended):**
 ```json
@@ -33,17 +44,18 @@ Set your Voyage API key. Pick **one** of these — they all work:
 {
   "env": {
     "VOYAGE_API_KEY": "vo-your-key-here"
+    // or: "OPENAI_API_KEY": "sk-...",
+    // or: "GOOGLE_API_KEY": "AIza..."
   }
 }
 ```
 
-**Option B — `.env` file:**
+**Option B — `.env` file (auto-loaded from repo root or $NEXUS_ENV_FILE):**
 ```bash
 echo 'VOYAGE_API_KEY="vo-your-key-here"' >> ~/nexus-memory/.env
-# or anywhere else, point to it via NEXUS_ENV_FILE
 ```
 
-`~/.hermes/.env` is no longer read by default (removed in v0.2.1).
+> 💡 **No API key?** If you have Ollama running locally with an embed model (e.g. `nomic-embed-text`), skip config entirely — the server detects it automatically.
 
 ### 3. Run MCP Server
 
@@ -121,10 +133,24 @@ await mcp_nexus_remember(
 ## Architecture
 
 ```
-MCP Client ← stdio → MCP Server (nexus-memory) ← HTTP → Qdrant (localhost:6333)
-                                                            ↑
-                                                        Voyage AI (embeddings)
+MCP Client ← stdio → nexus-memory (MCP Server)
+                           │
+                    ┌──────┴──────┐
+                    │   Qdrant    │
+                    │ localhost:6333 │
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+           Voyage       OpenAI      Google
+           (1024d)      (1536d)     (768d)
+              │            │            │
+            Jina        Ollama     sentence-
+           (1024d)      (768d)    transformer
+                                    (384d)
 ```
+
+> **Auto-detection:** The server tries Voyage → OpenAI → Google → Jina → Ollama → sentence-transformers. First available wins. No manual selection needed.
 
 ### Key Components
 
@@ -140,17 +166,20 @@ pip install pytest
 pytest tests/ -v
 ```
 
-## Migration from hermes-nexus-memory / openclaw-nexus-memory
+## Data
 
-1. Install nexus-memory (above)
-2. The MCP server connects to the same Qdrant instance
-3. Your old memories are still in `hermes-memory` collection
-4. New memories go to `nexus` collection
-5. Optional: run `nexus/scripts/migrate.py` to copy old → new
+All memories live in a single Qdrant collection called **`nexus`**:
+
+- **12,700+ points** — memories, beliefs, events, paperless documents
+- **Hybrid search** — BM25 full-text + vector similarity + RRF re-ranking
+- **Access levels** — public / trusted / private (enforced by MCP tools)
+- **Categories** — fact, belief, session, rule, preference, temp
+
+> **Migration complete.** Old collections (`hermes-memory`, `openclaw-memory`, `nexus_beliefs`) have been consolidated into `nexus`. If you're migrating from a previous version, your data is already there — simply point your MCP client at the `nexus` collection.
 
 ## Release
 
 ```bash
-git tag v0.2.0 && git push --tags
+git tag v0.2.1 && git push --tags
 pip install build && python3 -m build && python3 -m twine upload dist/*
 ```
