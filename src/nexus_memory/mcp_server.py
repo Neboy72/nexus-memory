@@ -375,8 +375,10 @@ class MemoryStore:
             # Try hybrid search first
             if self._hybrid_retriever:
                 # Re-index periodically (every 50 calls or if collection changed)
+                query_vector = await self._embed(query)
                 h_results = self._hybrid_retriever.search(
                     query,
+                    query_vector=query_vector,
                     top_k=limit * 2,  # Fetch extra for filtering
                 )
                 raw_results = h_results
