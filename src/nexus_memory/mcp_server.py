@@ -73,7 +73,7 @@ class EmbeddingProvider:
     def _detect(self):
         """Detect best available embedding backend."""
         # 1. Voyage (cloud, best quality)
-        if VOYAGE_API_KEY and VOYAGE_API_KEY.startswith("vo-"):
+        if VOYAGE_API_KEY and (VOYAGE_API_KEY.startswith("vo-") or VOYAGE_API_KEY.startswith("pa-")):
             try:
                 import voyageai
                 self._client = voyageai.Client(api_key=VOYAGE_API_KEY)
