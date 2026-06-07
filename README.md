@@ -53,8 +53,8 @@ Choose your embedding (auto-detected at runtime, you pick):
 - **💚 Google / Vertex AI** — `GOOGLE_API_KEY` in `.env` (768d)
 - **💜 Jina** — `JINA_API_KEY` in `.env` (1024d, best value)
 - **🦙 Ollama** — `ollama pull nomic-embed-text`
-- **☁️ Voyage** — `echo 'VOYAGE_API_KEY=...' >> ~/.hermes/.env` (1024d, best quality)
-- **☁️ OpenAI** — `echo 'OPENAI_API_KEY=...' >> ~/.hermes/.env` (1536d)
+- **☁️ Voyage** — `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d, best quality)
+- **☁️ OpenAI** — `OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
 - **🏠 Local (default)** — `pip install nexus-memory[local]` (sentence-transformers, no key)
 
 Start the server:
@@ -85,13 +85,19 @@ Restart: `hermes gateway restart`
 <details>
 <summary>🔷 OpenClaw</summary>
 
-`~/.openclaw/config.yaml`:
+`~/.openclaw/openclaw.json` (`mcp.servers.<name>.env` — nested, not top-level):
 
-```yaml
-mcp_servers:
-  nexus:
-    command: /path/to/venv/bin/python3
-    args: ["-m", "nexus_memory.mcp_server"]
+```json
+{
+  "mcp": {
+    "servers": {
+      "nexus-memory": {
+        "command": "nexus-memory",
+        "env": { "VOYAGE_API_KEY": "vo-your-key-here" }
+      }
+    }
+  }
+}
 ```
 </details>
 
