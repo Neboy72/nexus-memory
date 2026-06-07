@@ -52,6 +52,7 @@ QDRANT_PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 COLLECTION_NAME = os.environ.get("NEXUS_COLLECTION", "nexus")
 VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
 # ── Embedding Provider ────────────────────────────────────────────
 
@@ -95,7 +96,34 @@ class EmbeddingProvider:
             except Exception:
                 pass
 
-        # 3. Ollama (local service)
+
+        # 3. Google / Vertex AI (cloud)
+        if GOOGLE_API_KEY and GOOGLE_API_KEY.startswith("AIza"):
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=GOOGLE_API_KEY)
+                self._client = genai
+                self._name = "text-embedding-004"
+                self._dim = 768
+                logging.info(f"Embedding: Google/{self._name} (768d, cloud)")
+                return
+            except Exception:
+                pass
+
+
+        # 4. Jina (cloud, best value)
+        JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
+        if JINA_API_KEY:
+            try:
+                self._client = {"api_key": JINA_API_KEY, "base_url": "https://api.jina.ai/v1"}
+                self._name = "jina-embeddings-v3"
+                self._dim = 1024
+                logging.info(f"Embedding: Jina/{self._name} (1024d, cloud)")
+                return
+            except Exception:
+                pass
+
+        # 5. Ollama (local service)
         try:
             import requests
             r = requests.get("http://localhost:11434/api/tags", timeout=2)
@@ -111,7 +139,7 @@ class EmbeddingProvider:
         except Exception:
             pass
 
-        # 4. sentence-transformers (local, zero-setup fallback)
+        # 6. sentence-transformers (local, zero-setup fallback)
         try:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -139,6 +167,15 @@ class EmbeddingProvider:
         elif self._model:
             vector = await asyncio.to_thread(self._model.encode, text)
             return vector.tolist()
+        elif "jina" in (self._name or ""):
+            import requests as _req
+            r = _req.post(
+                f"{self._client['base_url']}/embeddings",
+                json={"model": self._name, "input": [text]},
+                headers={"Authorization": f"Bearer {self._client['api_key']}"},
+                timeout=30,
+            )
+            return r.json()["data"][0]["embedding"]
         elif isinstance(self._client, dict):  # Ollama
             import requests as _req
             r = _req.post(
@@ -147,6 +184,10 @@ class EmbeddingProvider:
                 timeout=30,
             )
             return r.json()["embedding"]
+
+        elif "google" in str(type(self._client)).lower() or "generativeai" in str(type(self._client)).lower():
+            result = self._client.embed_content(model=self._name, content=text)
+            return result["embedding"]
         raise RuntimeError(
             f"No embedding provider available ({self._name}).\n"
             "Install: pip install sentence-transformers\n"
@@ -155,10 +196,8 @@ class EmbeddingProvider:
 
     @property
     def name(self) -> str: return self._name
-
     @property
     def dim(self) -> int: return self._dim
-
     @property
     def available(self) -> bool: return self._name != "none"
 

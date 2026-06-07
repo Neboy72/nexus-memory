@@ -46,7 +46,9 @@ pip install -e .
 
 Choose your embedding (auto-detected at runtime, you pick):
 
-- **🦙 Ollama** — If you use Ollama, `ollama pull nomic-embed-text`
+- **💚 Google / Vertex AI** — `GOOGLE_API_KEY` in `.env` (768d)
+- **💜 Jina** — `JINA_API_KEY` in `.env` (1024d, best value)
+- **🦙 Ollama** — `ollama pull nomic-embed-text`
 - **☁️ Voyage** — `echo 'VOYAGE_API_KEY=...' >> ~/.hermes/.env` (1024d, best quality)
 - **☁️ OpenAI** — `echo 'OPENAI_API_KEY=...' >> ~/.hermes/.env` (1536d)
 - **🏠 Local (default)** — `pip install nexus-memory[local]` (sentence-transformers, no key)
@@ -413,7 +415,9 @@ pytest tests/ -v   # 224 tests ✅
 - Python 3.11+
 - Qdrant v1.12+ running on `localhost:6333`
 - One embedding provider (auto-detected):
-  - **🦙 Ollama** — `ollama pull nomic-embed-text`
+  - **💚 Google / Vertex AI** — `GOOGLE_API_KEY` in `.env` (768d)
+- **💜 Jina** — `JINA_API_KEY` in `.env` (1024d, best value)
+- **🦙 Ollama** — `ollama pull nomic-embed-text`
   - **☁️ Voyage** — `VOYAGE_API_KEY` in `.env`
   - **☁️ OpenAI** — `OPENAI_API_KEY` in `.env`
   - **🏠 Local** — `pip install sentence-transformers`
