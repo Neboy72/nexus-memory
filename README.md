@@ -1,6 +1,10 @@
 # 🦊 Nexus Memory
 
-> **One memory for all your agents. Install what you want. Switch when you want. Nexus Memory is always there.**
+## One brain for all your agents.
+
+Your agents forget. Your context gets lost. Your setup knowledge is scattered across chats, tools and repos.
+
+**Nexus Memory gives every MCP-compatible agent one persistent, self-hosted memory they all share.**
 
 Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code • GitHub Copilot • Pi • Continue • Odysseus • Kilo Code …and more!
 
