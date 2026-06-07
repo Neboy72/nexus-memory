@@ -411,7 +411,11 @@ class MemoryStore:
 
         # Normalize scores relative to max score in results
         # Handles both RRF scores (0.001-0.1) and Qdrant scores (0.0-1.0)
-        max_raw = max((r.get("score", 0) for r in raw_results), default=1)
+        raw_scores = []
+        for r in raw_results:
+            s = r.get("rrf_score") or r.get("score", 0)
+            raw_scores.append(s if isinstance(s, (int, float)) else 0)
+        max_raw = max(raw_scores, default=1)
         max_raw = max(max_raw, 0.001)  # Avoid division by zero
         
         results = []
@@ -423,10 +427,12 @@ class MemoryStore:
             
             doc_id = r.get("doc_id") or r.get("id")
             text = (r.get("content") or r.get("text") or "").strip()
-            score = r.get("score", 0)
+            score = r.get("rrf_score") or r.get("score", 0)
+            if not isinstance(score, (int, float)):
+                score = 0
             
-            # Normalize score relative to max in result set (handles RRF + Qdrant scales)
-            normalized_score = round(score / max_raw, 3) if isinstance(score, (int, float)) else 0.0
+            # Normalize score relative to max in result set
+            normalized_score = round(score / max_raw, 3)
             
             # Determine match type
             if normalized_score > 0.7:
