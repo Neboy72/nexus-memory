@@ -409,24 +409,57 @@ class MemoryStore:
                     "score": point.score,
                 })
 
-        # Filter by access level
+        # Filter by access level and enrich with context
         results = []
+        seen_docs = set()
         for r in raw_results:
             mem_level = r.get("access_level", ACCESS_PUBLIC)
-            if ACCESS_HIERARCHY.get(mem_level, 0) <= ACCESS_HIERARCHY.get(agent_level, 0):
-                prov = r.get("provenance", {})
-                results.append({
-                    "id": r.get("id"),
-                    "text": r.get("content") or r.get("text"),
-                    "access_level": mem_level,
-                    "category": r.get("category"),
-                    "source": r.get("source"),
-                    "source_url": r.get("source_url"),
-                    "confidence": prov.get("confidence"),
-                    "created_at": r.get("created_at"),
-                    "score": r.get("score", 0),
-                })
+            if ACCESS_HIERARCHY.get(mem_level, 0) > ACCESS_HIERARCHY.get(agent_level, 0):
+                continue
+            
+            doc_id = r.get("doc_id") or r.get("id")
+            text = (r.get("content") or r.get("text") or "").strip()
+            score = r.get("score", 0)
+            
+            # Normalize score to 0-1 range
+            normalized_score = min(1.0, max(0.0, score / 10.0)) if isinstance(score, (int, float)) else 0.0
+            
+            # Determine match type
+            if normalized_score > 0.7:
+                match_type = "high"
+            elif normalized_score > 0.3:
+                match_type = "medium"
+            else:
+                match_type = "low"
+            
+            prov = r.get("provenance", {})
+            entry = {
+                "id": r.get("id"),
+                "text": text[:2000],  # Cap for readability
+                "score": round(normalized_score, 3),
+                "match": match_type,
+                "source": r.get("source"),
+                "source_url": r.get("source_url"),
+                "doc_id": doc_id,
+                "access_level": mem_level,
+                "category": r.get("category"),
+                "confidence": prov.get("confidence"),
+                "created_at": r.get("created_at"),
+            }
+            
+            # If same doc_id already in results, append text instead of duplicate
+            if doc_id and doc_id in seen_docs:
+                for existing in results:
+                    if existing.get("doc_id") == doc_id:
+                        existing["text"] = existing["text"] + "\n\n[...same document...]\n\n" + text[:1000]
+                        existing["score"] = max(existing["score"], normalized_score)
+                        break
+            else:
+                if doc_id:
+                    seen_docs.add(doc_id)
+                results.append(entry)
 
+        results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
 
     async def forget(self, memory_id: str) -> bool:
