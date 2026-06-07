@@ -162,13 +162,12 @@ class HybridRetriever:
 
     # ── Indexing ────────────────────────────────────────────────────────────
 
-    def search(self, query: str, top_k: int = 10, **kwargs):
+    def search(self, query: str, query_vector=None, top_k: int = 10, **kwargs):
         """Compatibility shim — delegates to search_hybrid.
         
-        The MCP server calls .search() — this bridges to the actual impl
-        without callers needing to know the internal method name.
+        The MCP server calls .search() — this bridges to the actual impl.
         """
-        return self.search_hybrid(query, query_vector=None, top_k=top_k, **kwargs)
+        return self.search_hybrid(query, query_vector=query_vector, top_k=top_k, **kwargs)
 
     def index_memories(
         self,
