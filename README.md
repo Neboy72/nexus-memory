@@ -16,7 +16,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 
 👉 [![Bot Self-Install](https://img.shields.io/badge/Bot%20Self--Install-blue?style=for-the-badge)](AGENTS.md)
 
-⭐️ If this helps your agent remember — drop a star so others find it too. Takes 2 seconds.
+👉 [![⭐ Star this repo](https://img.shields.io/badge/⭐%20Star%20this%20repo-yellow?style=for-the-badge)](https://github.com/Neboy72/nexus-memory)
 
 ---
 
