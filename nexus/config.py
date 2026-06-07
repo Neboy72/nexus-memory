@@ -7,7 +7,7 @@ across multiple modules.
 import os
 from typing import Optional
 
-DEFAULT_COLLECTION: Optional[str] = "hermes-memory"
+DEFAULT_COLLECTION: Optional[str] = "nexus"
 """Fallback collection name when no explicit value is passed.
 Used in production when neither parameter nor $NEXUS_COLLECTION is set."""
 
