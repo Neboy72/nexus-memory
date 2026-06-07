@@ -1,8 +1,0 @@
-LICENSE
-pyproject.toml
-nexus_memory.egg-info/PKG-INFO
-nexus_memory.egg-info/SOURCES.txt
-nexus_memory.egg-info/dependency_links.txt
-nexus_memory.egg-info/entry_points.txt
-nexus_memory.egg-info/requires.txt
-nexus_memory.egg-info/top_level.txt
