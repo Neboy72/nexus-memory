@@ -51,60 +51,116 @@ QDRANT_HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 COLLECTION_NAME = os.environ.get("NEXUS_COLLECTION", "nexus")
 VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 # ── Embedding Provider ────────────────────────────────────────────
 
 class EmbeddingProvider:
-    """Auto-detect embedding: local (sentence-transformers) -> cloud (Voyage)."""
+    """Auto-detect best embedding provider.
+    
+    Priority: Voyage (cloud, 1024d) → OpenAI (cloud, 1536d) → 
+    Ollama (local, 768d) → sentence-transformers (local, 384d).
+    """
 
     def __init__(self):
-        self._backend = None
-        self._model_name = "local"
+        self._name = "none"
         self._dim = 384
-        self._voyage_client = None
-        self._local_model = None
+        self._client = None
+        self._model = None
         self._detect()
 
     def _detect(self):
+        """Detect best available embedding backend."""
+        # 1. Voyage (cloud, best quality)
         if VOYAGE_API_KEY and VOYAGE_API_KEY.startswith("vo-"):
             try:
                 import voyageai
-                self._voyage_client = voyageai.Client(api_key=VOYAGE_API_KEY)
-                self._model_name = "voyage-3-large"
+                self._client = voyageai.Client(api_key=VOYAGE_API_KEY)
+                self._name = "voyage-3-large"
                 self._dim = 1024
-                logging.info("Embedding: Voyage AI (1024d, cloud)")
+                logging.info(f"Embedding: {self._name} (1024d, cloud)")
                 return
             except Exception:
                 pass
+
+        # 2. OpenAI (cloud)
+        if OPENAI_API_KEY and OPENAI_API_KEY.startswith("sk-"):
+            try:
+                from openai import OpenAI
+                self._client = OpenAI(api_key=OPENAI_API_KEY)
+                self._name = "text-embedding-3-small"
+                self._dim = 1536
+                logging.info(f"Embedding: {self._name} (1536d, cloud)")
+                return
+            except Exception:
+                pass
+
+        # 3. Ollama (local service)
+        try:
+            import requests
+            r = requests.get("http://localhost:11434/api/tags", timeout=2)
+            if r.status_code == 200:
+                models = [m["name"] for m in r.json().get("models", [])]
+                emb_model = next((m for m in models if "embed" in m.lower()), None)
+                if emb_model:
+                    self._client = {"base_url": "http://localhost:11434"}
+                    self._name = emb_model
+                    self._dim = 768
+                    logging.info(f"Embedding: Ollama/{emb_model} (768d, local)")
+                    return
+        except Exception:
+            pass
+
+        # 4. sentence-transformers (local, zero-setup fallback)
         try:
             from sentence_transformers import SentenceTransformer
-            self._local_model = SentenceTransformer("all-MiniLM-L6-v2")
-            self._model_name = "all-MiniLM-L6-v2"
+            self._model = SentenceTransformer("all-MiniLM-L6-v2")
+            self._name = "all-MiniLM-L6-v2"
             self._dim = 384
-            logging.info("Embedding: sentence-transformers (384d, local)")
+            logging.info(f"Embedding: {self._name} (384d, local)")
         except ImportError:
-            logging.warning("No embedding provider. Install sentence-transformers or set VOYAGE_API_KEY.")
+            logging.warning(
+                "No embedding provider found.\n"
+                "Install: pip install sentence-transformers  (local, free)\n"
+                "Or set VOYAGE_API_KEY or OPENAI_API_KEY in ~/.hermes/.env"
+            )
 
     async def embed(self, text: str) -> list[float]:
-        if self._voyage_client:
+        if "voyage" in (self._name or ""):
             import voyageai
-            result = await asyncio.to_thread(self._voyage_client.embed, [text], model=self._model_name)
+            result = await asyncio.to_thread(self._client.embed, [text], model=self._name)
             return result.embeddings[0]
-        elif self._local_model:
-            vector = await asyncio.to_thread(self._local_model.encode, text)
+        elif "text-embedding" in (self._name or ""):
+            result = await asyncio.to_thread(
+                self._client.embeddings.create,
+                model=self._name, input=[text]
+            )
+            return result.data[0].embedding
+        elif self._model:
+            vector = await asyncio.to_thread(self._model.encode, text)
             return vector.tolist()
+        elif isinstance(self._client, dict):  # Ollama
+            import requests as _req
+            r = _req.post(
+                f"{self._client['base_url']}/api/embeddings",
+                json={"model": self._name, "prompt": text},
+                timeout=30,
+            )
+            return r.json()["embedding"]
         raise RuntimeError(
-            "No embedding provider. Install: pip install sentence-transformers  (local, free)\n"
-            "Or set VOYAGE_API_KEY in ~/.hermes/.env  (cloud, better quality)\n"
-            "Get a Voyage key: https://dash.voyageai.com/api-keys"
+            f"No embedding provider available ({self._name}).\n"
+            "Install: pip install sentence-transformers\n"
+            "Or set VOYAGE_API_KEY or OPENAI_API_KEY"
         )
+
+    @property
+    def name(self) -> str: return self._name
 
     @property
     def dim(self) -> int: return self._dim
 
     @property
-    def available(self) -> bool:
-        return self._voyage_client is not None or self._local_model is not None
+    def available(self) -> bool: return self._name != "none"
 
 # ── Access Levels ─────────────────────────────────────────────────
 

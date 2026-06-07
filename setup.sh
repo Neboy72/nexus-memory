@@ -81,19 +81,43 @@ fi
 ok "Nexus Memory installed: v$($PYTHON -c "from nexus import __version__; print(__version__)" 2>/dev/null || echo "?")"
 
 # ── Step 5: Embedding Provider ────────────────────────────────────────
-info "Embedding: auto-detect (local sentence-transformers or Voyage cloud)"
-if $PYTHON -c "from sentence_transformers import SentenceTransformer; print('OK')" 2>/dev/null; then
-    ok "Local embedding available (sentence-transformers)"
-elif [ -n "${VOYAGE_API_KEY:-}" ]; then
-    ok "Cloud embedding available (Voyage AI)"
-else
-    info "No embedding found yet. Options:"
-    echo "  🏠 Local:  pip install sentence-transformers   (free, offline)"
-    echo "  ☁️ Cloud:  Add VOYAGE_API_KEY to ~/.hermes/.env (better quality)"
-    echo "  🔗 Get a Voyage key: https://dash.voyageai.com/api-keys"
-    echo "  💡 Default will be auto-detected — install either one."
-    echo ""
+info "Detecting available embedding backends..."
+
+EMBED_SUGGEST="sentence-transformers"
+EMBED_HINT="🏠 Default (local, no key): pip install sentence-transformers"
+
+# Check Ollama
+if curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+    OLLAMA_EMBED=$($PYTHON -c "
+import json, urllib.request
+r = urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2)
+models = [m['name'] for m in json.loads(r.read()).get('models', [])]
+emb = [m for m in models if 'embed' in m.lower()]
+print(emb[0] if emb else '')
+" 2>/dev/null)
+    if [ -n "$OLLAMA_EMBED" ]; then
+        EMBED_SUGGEST="ollama:$OLLAMA_EMBED"
+        EMBED_HINT="🦙 Ollama ($OLLAMA_EMBED detected) — recommended"
+        ok "Ollama embedding detected: $OLLAMA_EMBED"
+    fi
 fi
+
+# Check OpenAI
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+    EMBED_HINT="$EMBED_HINT | ☁️ OpenAI (API key set)"
+    ok "OpenAI API key detected"
+fi
+
+# Check Voyage
+if [ -n "${VOYAGE_API_KEY:-}" ]; then
+    EMBED_HINT="$EMBED_HINT | ☁️ Voyage (API key set)"
+    ok "Voyage AI API key detected"
+fi
+
+echo ""
+info "Recommended: $EMBED_HINT"
+info "The MCP server auto-detects the best available backend at startup."
+echo ""
 
 # ── Step 6: Quick Test ────────────────────────────────────────────────
 info "Running quick smoke test..."
