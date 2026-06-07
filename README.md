@@ -433,4 +433,4 @@ MIT — use it, modify it, ship it.
 
 ⭐️ Found it useful? [Give it a star on GitHub](https://github.com/Neboy72/nexus-memory) — it helps others find it!
 
-<sub>Built by [Nebojsa Kacavenda](https://github.com/Neboy72) · June 2026 · v0.2.0 — One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026 · v0.2.0 — One memory for all your agents</sub>
