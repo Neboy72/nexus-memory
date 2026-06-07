@@ -170,6 +170,18 @@ echo "      command: ${PYTHON}"
 echo '      args: ["-m", "nexus_memory.mcp_server"]'
 echo ""
 
+info "🔷 Codex CLI — ~/.codex/config.toml:"
+echo '  [mcp_servers.nexus]'
+echo "  command = \"${PYTHON}\""
+echo '  args = ["-m", "nexus_memory.mcp_server"]'
+echo ""
+
+info "🔷 Odysseus (PewDiePie) — Settings → MCP Management → Add Server:"
+echo '  Name: nexus'
+echo "  Command: ${PYTHON}"
+echo '  Arguments: -m nexus_memory.mcp_server'
+echo ""
+
 info "🔷 Cursor — Settings → Features → MCP Servers:"
 echo '  Name: nexus'
 echo "  Command: ${PYTHON}"
