@@ -199,7 +199,12 @@ class EmbeddingProvider:
     @property
     def dim(self) -> int: return self._dim
     @property
-    def available(self) -> bool: return self._name != "none"
+    def available(self) -> bool:
+        return self._name != "none"
+
+    @property
+    def model_name(self) -> str:
+        return self._name
 
 # ── Access Levels ─────────────────────────────────────────────────
 
