@@ -685,6 +685,12 @@ async def main():
             ),
         )
 
+def cli():
+    """Sync CLI entrypoint (for pyproject.toml scripts)."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    asyncio.run(main())
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     asyncio.run(main())
