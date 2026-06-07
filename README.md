@@ -44,10 +44,12 @@ cd nexus-memory
 pip install -e .
 ```
 
-Choose your embedding (auto-detected at runtime):
+Choose your embedding (auto-detected at runtime, you pick):
 
-- **🏠 Local (default, no key):** `pip install nexus-memory[local]` — sentence-transformers, offline
-- **☁️ Cloud (better quality):** Set `VOYAGE_API_KEY` in `~/.hermes/.env` — Voyage AI, 1024d
+- **🦙 Ollama** — If you use Ollama, `ollama pull nomic-embed-text`
+- **☁️ Voyage** — `echo 'VOYAGE_API_KEY=...' >> ~/.hermes/.env` (1024d, best quality)
+- **☁️ OpenAI** — `echo 'OPENAI_API_KEY=...' >> ~/.hermes/.env` (1536d)
+- **🏠 Local (default)** — `pip install nexus-memory[local]` (sentence-transformers, no key)
 
 Start the server:
 
@@ -379,9 +381,10 @@ One server. Multiple backends. Same API.
 
 | Provider | Type | Setup | Dims | Quality |
 |----------|------|-------|------|---------|
-| **Voyage** ☁️ | Cloud API | API key → `.env` | **1024** | ⭐ Best |
-| **sentence-transformers** 🏠 | Local | `pip install sentence-transformers` | 384 | Good |
-| **Ollama** 🏠 | Local service | `ollama pull nomic-embed-text` | 768 | Better |
+| **Voyage** ☁️ | Cloud API | `VOYAGE_API_KEY` in `.env` | **1024** | ⭐ Best |
+| **OpenAI** ☁️ | Cloud API | `OPENAI_API_KEY` in `.env` | **1536** | ⭐ Great |
+| **Ollama** 🦙 | Local | `ollama pull nomic-embed-text` | 768 | Better |
+| **sentence-transformers** 🏠 | Local | `pip install sentence-transformers` | 384 | Good ✅ *(default)* |
 
 ---
 
@@ -410,8 +413,10 @@ pytest tests/ -v   # 224 tests ✅
 - Python 3.11+
 - Qdrant v1.12+ running on `localhost:6333`
 - One embedding provider (auto-detected):
-  - **Local:** `pip install sentence-transformers`
-  - **Cloud:** Voyage AI key in `VOYAGE_API_KEY`
+  - **🦙 Ollama** — `ollama pull nomic-embed-text`
+  - **☁️ Voyage** — `VOYAGE_API_KEY` in `.env`
+  - **☁️ OpenAI** — `OPENAI_API_KEY` in `.env`
+  - **🏠 Local** — `pip install sentence-transformers`
 - **Optional:** `bm25s` for hybrid search
 
 ---
