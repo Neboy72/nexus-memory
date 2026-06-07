@@ -1,0 +1,2 @@
+[console_scripts]
+nexus-memory = nexus_memory.mcp_server:main
