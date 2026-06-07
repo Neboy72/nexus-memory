@@ -1,8 +1,8 @@
-# Nexus Memory
+# 🦊 Nexus Memory
 
-**Universal Memory Layer for AI Agents** — MCP-powered, self-hosted, secure.
+**One memory for all your agents. Install what you want. Switch when you want. Nexus Memory is always there.**
 
-Nexus Memory gives your AI agents persistent memory across sessions, apps, and providers. One memory for all your agents — install once, use everywhere.
+Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code • GitHub Copilot • Pi • Continue • Odysseus • Kilo Code …and more!
 
 ---
 
