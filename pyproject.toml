@@ -2,7 +2,7 @@
 name = "nexus-memory"
 version = "0.2.0"
 description = "Universal Memory Layer for AI Agents — MCP-powered, self-hosted, secure."
-authors = [{ name = "Nebojsa Kacavenda" }]
+authors = [{ name = "Nebo" }]
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
