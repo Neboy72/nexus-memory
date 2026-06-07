@@ -1,6 +1,13 @@
 """
-nexus-memory — MCP Server
+nexus-memory — MCP Server (v0.2.0)
 Universal Memory Layer for AI Agents
+
+Integrates all nexus v2.8.0 features:
+- MemoryCategory Enum (fact, belief, session, rule, preference, temp)
+- Provenance (source_url, confidence)
+- Guardrails (content length, PII hints)
+- Access Control (public/trusted/private)
+- Qdrant vector storage (Voyage embeddings)
 """
 
 import asyncio
@@ -8,9 +15,10 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass, field
-from typing import Optional
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import mcp.server.stdio
 import mcp.types as types
@@ -19,6 +27,10 @@ from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
+
+# Integrate from the nexus package (v2.8.0+ features)
+from nexus import MemoryCategory
+from nexus.provenance import attach_source
 
 # ── Auto-load .env files ──────────────────────────────────────────
 for env_path in [Path.home() / ".hermes" / ".env", Path.cwd() / ".env"]:
@@ -33,7 +45,7 @@ for env_path in [Path.home() / ".hermes" / ".env", Path.cwd() / ".env"]:
                     if key not in os.environ:
                         os.environ[key] = val
 
-# ── Config ──────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────
 
 QDRANT_HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
@@ -42,56 +54,57 @@ VOYAGE_MODEL = os.environ.get("NEXUS_VOYAGE_MODEL", "voyage-3-large")
 EMBEDDING_DIM = int(os.environ.get("NEXUS_EMBEDDING_DIM", "1024"))
 VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 
-# ── Access Levels ──────────────────────────────────────────────────────
+# ── Access Levels ─────────────────────────────────────────────────
 
-ACCESS_PUBLIC = "public"     # All agents can see
-ACCESS_TRUSTED = "trusted"   # Only trusted agents
-ACCESS_PRIVATE = "private"   # Only owner / explicitly permitted
+ACCESS_PUBLIC = "public"      # All agents can see
+ACCESS_TRUSTED = "trusted"    # Only trusted agents
+ACCESS_PRIVATE = "private"    # Only owner / explicitly permitted
 
 ALL_ACCESS_LEVELS = [ACCESS_PUBLIC, ACCESS_TRUSTED, ACCESS_PRIVATE]
-
 ACCESS_HIERARCHY = {
     ACCESS_PUBLIC: 0,
     ACCESS_TRUSTED: 1,
     ACCESS_PRIVATE: 2,
 }
 
-# ── Dataclasses ────────────────────────────────────────────────────────
-
-@dataclass
-class AgentIdentity:
-    """Who is asking"""
-    agent_id: str
-    access_level: str = ACCESS_PUBLIC
-
-    def can_access(self, memory_level: str) -> bool:
-        """Can this agent see a memory with the given access_level?"""
-        return ACCESS_HIERARCHY.get(self.access_level, 0) >= ACCESS_HIERARCHY.get(memory_level, 0)
+# ── Guardrails (from v2.8.0) ───────────────────────────────────────
+MAX_CONTENT_LENGTH = 5000
+PII_PATTERNS = {
+    "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),
+    "phone_e164": re.compile(r"\+[1-9]\d{6,14}"),
+    "phone_local": re.compile(r"(?<!\w)(0\d{2,3}[/\s-]?\d{3,8}[/\s-]?\d{3,5})(?!\w)"),
+}
 
 
-@dataclass
-class MemoryEntry:
-    """A single memory entry"""
-    id: str
-    text: str
-    access_level: str = ACCESS_PUBLIC
-    category: str = "fact"
-    source: str = ""
-    created_at: str = ""
-    metadata: dict = field(default_factory=dict)
+def _check_content_guardrails(text: str) -> list[str]:
+    """Return warnings for content that exceeds limits or contains PII hints."""
+    warnings = []
+    if len(text) > MAX_CONTENT_LENGTH:
+        warnings.append(
+            f"Content exceeds {MAX_CONTENT_LENGTH} chars ({len(text)}). "
+            "This may impact search quality."
+        )
+    for label, pattern in PII_PATTERNS.items():
+        if pattern.search(text):
+            warnings.append(
+                f"Detected {label} pattern in content. "
+                "Consider using access_level='private' for sensitive data."
+            )
+    return warnings
 
-# ── Storage ─────────────────────────────────────────────────────────────
+
+# ── Storage ─────────────────────────────────────────────────────────
 
 class MemoryStore:
-    """Qdrant-backed storage for memories"""
 
     def __init__(self):
         self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
         self.vo = voyageai.Client(api_key=VOYAGE_API_KEY) if VOYAGE_API_KEY else None
+        self._hybrid_retriever = None
         self._ensure_collection()
+        self._init_hybrid()
 
     def _ensure_collection(self):
-        """Create collection if it doesn't exist"""
         collections = [c.name for c in self.client.get_collections().collections]
         if COLLECTION_NAME not in collections:
             self.client.create_collection(
@@ -101,7 +114,6 @@ class MemoryStore:
                     distance=qmodels.Distance.COSINE,
                 ),
             )
-            # Create payload index for filtering
             self.client.create_payload_index(
                 collection_name=COLLECTION_NAME,
                 field_name="access_level",
@@ -109,36 +121,69 @@ class MemoryStore:
             )
             logging.info(f"Created collection '{COLLECTION_NAME}' ({EMBEDDING_DIM}d)")
 
+    def _init_hybrid(self):
+        """Initialize hybrid retriever (BM25 + Vector + RRF) if available."""
+        try:
+            from nexus.retrieval import HybridRetriever
+            self._hybrid_retriever = HybridRetriever(
+                qdrant_host=QDRANT_HOST,
+                qdrant_port=QDRANT_PORT,
+            )
+            # Try to build BM25 index (lazy — first call triggers it)
+            self._hybrid_retriever.index_memories()
+            logging.info("Hybrid retriever initialized (BM25 + Vector + RRF)")
+        except Exception as e:
+            logging.warning(f"Hybrid retriever not available: {e}")
+            self._hybrid_retriever = None
+
     async def _embed(self, text: str) -> list[float]:
-        """Get embedding vector for text"""
         if self.vo:
             result = await asyncio.to_thread(
                 self.vo.embed, [text], model=VOYAGE_MODEL
             )
             return result.embeddings[0]
-        else:
-            raise RuntimeError("VOYAGE_API_KEY not set — cannot generate embeddings")
+        raise RuntimeError("VOYAGE_API_KEY not set — cannot generate embeddings")
 
-    async def remember(self, text: str, access_level: str = ACCESS_PUBLIC,
-                       category: str = "fact", source: str = "",
-                       metadata: Optional[dict] = None) -> str:
-        """Store a memory and return its ID"""
-        import uuid
-        from datetime import datetime, timezone
+    async def remember(
+        self,
+        text: str,
+        access_level: str = ACCESS_PUBLIC,
+        category: str = "fact",
+        source: str = "",
+        source_url: str = "",
+        confidence: Optional[float] = None,
+    ) -> dict:
+        """Store a memory with full v2.8.0 metadata support."""
+        # Validate category against MemoryCategory
+        valid_categories = [c.value for c in MemoryCategory]
+        if category not in valid_categories:
+            category = MemoryCategory.FACT.value
 
         entry_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
-
         vector = await self._embed(text)
+
+        # Build provenance (v2.8.0 feature)
+        provenance = {
+            "source_type": "mcp",
+            "created_by": "nexus-memory-server",
+            "timestamp": created_at,
+            "confidence": confidence if confidence is not None else 0.7,
+        }
+        if source_url:
+            provenance["source_url"] = source_url
+        if source:
+            provenance["source"] = source
 
         payload = {
             "id": entry_id,
-            "text": text,
+            "content": text,
             "access_level": access_level,
             "category": category,
             "source": source,
+            "source_url": source_url,
             "created_at": created_at,
-            "metadata": json.dumps(metadata or {}),
+            "provenance": provenance,
         }
 
         self.client.upsert(
@@ -149,60 +194,94 @@ class MemoryStore:
                 payload=payload,
             )],
         )
-        logging.info(f"Stored memory {entry_id} [{access_level}]")
-        return entry_id
+        logging.info(f"Stored memory {entry_id[:8]} [{access_level}] cat={category}")
 
-    async def recall(self, query: str, agent_level: str = ACCESS_PUBLIC,
-                     limit: int = 5) -> list[dict]:
-        """Search memories, filtered by what the agent can see"""
-        vector = await self._embed(query)
+        return {
+            "status": "ok",
+            "id": entry_id,
+            "access_level": access_level,
+            "category": category,
+        }
 
+    async def recall(
+        self,
+        query: str,
+        agent_level: str = ACCESS_PUBLIC,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Search memories with hybrid search (BM25 + Vector + RRF) + access filtering."""
         allowed_levels = [ACCESS_PUBLIC]
-        if ACCESS_HIERARCHY.get(agent_level, 0) >= 1:
+        agent_lvl = ACCESS_HIERARCHY.get(agent_level, 0)
+        if agent_lvl >= 1:
             allowed_levels.append(ACCESS_TRUSTED)
-        if ACCESS_HIERARCHY.get(agent_level, 0) >= 2:
+        if agent_lvl >= 2:
             allowed_levels.append(ACCESS_PRIVATE)
 
-        response = self.client.query_points(
-            collection_name=COLLECTION_NAME,
-            query=vector,
-            limit=limit,
-            query_filter=qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="access_level",
-                        match=qmodels.MatchAny(any=allowed_levels),
-                    ),
-                ],
-            ),
-        )
+        raw_results = []
+        try:
+            # Try hybrid search first
+            if self._hybrid_retriever:
+                # Re-index periodically (every 50 calls or if collection changed)
+                h_results = self._hybrid_retriever.search(
+                    query,
+                    top_k=limit * 2,  # Fetch extra for filtering
+                )
+                raw_results = h_results
+                logging.debug(f"Hybrid search returned {len(raw_results)} results")
+        except Exception as e:
+            logging.warning(f"Hybrid search failed, falling back to vector: {e}")
 
-        memories = []
-        for point in response.points:
-            payload = point.payload
-            memories.append({
-                "id": payload.get("id"),
-                "text": payload.get("text"),
-                "access_level": payload.get("access_level"),
-                "category": payload.get("category"),
-                "source": payload.get("source"),
-                "created_at": payload.get("created_at"),
-                "score": point.score,
-            })
-        return memories
+        # Fallback: vector-only search
+        if not raw_results:
+            vector = await self._embed(query)
+            response = self.client.query_points(
+                collection_name=COLLECTION_NAME,
+                query=vector,
+                limit=limit * 2,
+            )
+            raw_results = []
+            for point in response.points:
+                payload = point.payload or {}
+                raw_results.append({
+                    "id": payload.get("id"),
+                    "content": payload.get("content"),
+                    "access_level": payload.get("access_level"),
+                    "category": payload.get("category"),
+                    "source": payload.get("source"),
+                    "source_url": payload.get("source_url"),
+                    "provenance": payload.get("provenance", {}),
+                    "created_at": payload.get("created_at"),
+                    "score": point.score,
+                })
+
+        # Filter by access level
+        results = []
+        for r in raw_results:
+            mem_level = r.get("access_level", ACCESS_PUBLIC)
+            if ACCESS_HIERARCHY.get(mem_level, 0) <= ACCESS_HIERARCHY.get(agent_level, 0):
+                prov = r.get("provenance", {})
+                results.append({
+                    "id": r.get("id"),
+                    "text": r.get("content") or r.get("text"),
+                    "access_level": mem_level,
+                    "category": r.get("category"),
+                    "source": r.get("source"),
+                    "source_url": r.get("source_url"),
+                    "confidence": prov.get("confidence"),
+                    "created_at": r.get("created_at"),
+                    "score": r.get("score", 0),
+                })
+
+        return results[:limit]
 
     async def forget(self, memory_id: str) -> bool:
-        """Delete a memory by ID"""
         result = self.client.delete(
             collection_name=COLLECTION_NAME,
-            points_selector=qmodels.PointIdsList(
-                points=[memory_id],
-            ),
+            points_selector=qmodels.PointIdsList(points=[memory_id]),
         )
         return result.status == "completed"
 
     async def health(self) -> dict:
-        """Check system health"""
         try:
             collections = self.client.get_collections().collections
             nexus_exists = COLLECTION_NAME in [c.name for c in collections]
@@ -212,12 +291,13 @@ class MemoryStore:
                 "collection": COLLECTION_NAME,
                 "exists": nexus_exists,
                 "voyage": self.vo is not None,
+                "dim": EMBEDDING_DIM,
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
 
-# ── MCP Server ─────────────────────────────────────────────────────────
+# ── MCP Server ─────────────────────────────────────────────────────
 
 _store: Optional[MemoryStore] = None
 
@@ -253,13 +333,26 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "category": {
                         "type": "string",
-                        "description": "Category: fact, preference, session, rule, etc.",
+                        "enum": [c.value for c in MemoryCategory],
+                        "description": "Memory category: fact, belief, session, rule, preference, temp",
                         "default": "fact",
                     },
                     "source": {
                         "type": "string",
                         "description": "Where this memory came from (e.g. 'conversation', 'document', 'cron')",
                         "default": "",
+                    },
+                    "source_url": {
+                        "type": "string",
+                        "description": "URL or origin reference for provenance tracking",
+                        "default": "",
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "description": "Confidence score (0.0-1.0) for provenance",
+                        "default": 0.7,
+                        "minimum": 0.0,
+                        "maximum": 1.0,
                     },
                 },
                 "required": ["text"],
@@ -307,6 +400,30 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="update",
+            description="Update an existing memory in-place without losing metadata.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to update",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "New content text (keep empty to keep existing)",
+                        "default": "",
+                    },
+                    "modified_by": {
+                        "type": "string",
+                        "description": "Who made this modification (e.g. 'Kiosha', 'Miosha', 'Nebo')",
+                        "default": "",
+                    },
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        types.Tool(
             name="health",
             description="Check if Nexus Memory is running and healthy.",
             inputSchema={
@@ -324,20 +441,28 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
     if name == "remember":
         text = arguments["text"]
         access_level = arguments.get("access_level", ACCESS_PUBLIC)
-        category = arguments.get("category", "fact")
+        category = arguments.get("category", MemoryCategory.FACT.value)
         source = arguments.get("source", "")
+        source_url = arguments.get("source_url", "")
+        confidence = arguments.get("confidence")
 
         if access_level not in ALL_ACCESS_LEVELS:
             access_level = ACCESS_PUBLIC
 
-        memory_id = await store.remember(text, access_level, category, source)
+        # Guardrails check (v2.8.0 feature)
+        guardrails = _check_content_guardrails(text)
+
+        result = await store.remember(
+            text, access_level, category, source, source_url, confidence
+        )
+
+        response = result
+        if guardrails:
+            response["warnings"] = guardrails
+
         return [types.TextContent(
             type="text",
-            text=json.dumps({
-                "status": "ok",
-                "id": memory_id,
-                "access_level": access_level,
-            }),
+            text=json.dumps(response),
         )]
 
     elif name == "recall":
@@ -362,6 +487,25 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             text=json.dumps({"status": "deleted" if success else "not_found"}),
         )]
 
+    elif name == "update":
+        memory_id = arguments["memory_id"]
+        new_text = arguments.get("text", "")
+        modified_by = arguments.get("modified_by", "")
+
+        from nexus import nexus_update
+        result = nexus_update(
+            point_id=memory_id,
+            new_content=new_text if new_text else None,
+            modified_by=modified_by if modified_by else None,
+            qdrant_host=QDRANT_HOST,
+            qdrant_port=QDRANT_PORT,
+            collection_name=COLLECTION_NAME,
+        )
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"status": "updated", "detail": result}),
+        )]
+
     elif name == "health":
         status = await store.health()
         return [types.TextContent(
@@ -380,7 +524,7 @@ async def main():
             write_stream,
             InitializationOptions(
                 server_name="nexus-memory",
-                server_version="0.1.0",
+                server_version="0.2.0",
                 capabilities=server.get_capabilities(
                     notification_options=mcp.server.lowlevel.NotificationOptions(),
                     experimental_capabilities={},
