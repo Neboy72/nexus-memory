@@ -86,6 +86,18 @@ info "Detecting available embedding backends..."
 EMBED_SUGGEST="sentence-transformers"
 EMBED_HINT="🏠 Default (local, no key): pip install sentence-transformers"
 
+# Check Jina
+if [ -n "${JINA_API_KEY:-}" ]; then
+    EMBED_HINT="$EMBED_HINT | 💜 Jina (API key set)"
+    ok "Jina API key detected"
+fi
+
+# Check Google
+if [ -n "${GOOGLE_API_KEY:-}" ]; then
+    EMBED_HINT="$EMBED_HINT | 💚 Google/Vertex (API key set)"
+    ok "Google API key detected"
+fi
+
 # Check Ollama
 if curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     OLLAMA_EMBED=$($PYTHON -c "
