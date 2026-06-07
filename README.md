@@ -75,8 +75,7 @@ Choose your agent:
 ```yaml
 mcp_servers:
   nexus:
-    command: /path/to/venv/bin/python3
-    args: ["-m", "nexus_memory.mcp_server"]
+    command: nexus-memory
 ```
 
 Restart: `hermes gateway restart`
