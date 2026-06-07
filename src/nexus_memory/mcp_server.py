@@ -409,7 +409,11 @@ class MemoryStore:
                     "score": point.score,
                 })
 
-        # Filter by access level and enrich with context
+        # Normalize scores relative to max score in results
+        # Handles both RRF scores (0.001-0.1) and Qdrant scores (0.0-1.0)
+        max_raw = max((r.get("score", 0) for r in raw_results), default=1)
+        max_raw = max(max_raw, 0.001)  # Avoid division by zero
+        
         results = []
         seen_docs = set()
         for r in raw_results:
@@ -421,8 +425,8 @@ class MemoryStore:
             text = (r.get("content") or r.get("text") or "").strip()
             score = r.get("score", 0)
             
-            # Normalize score to 0-1 range
-            normalized_score = min(1.0, max(0.0, score / 10.0)) if isinstance(score, (int, float)) else 0.0
+            # Normalize score relative to max in result set (handles RRF + Qdrant scales)
+            normalized_score = round(score / max_raw, 3) if isinstance(score, (int, float)) else 0.0
             
             # Determine match type
             if normalized_score > 0.7:
