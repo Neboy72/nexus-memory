@@ -80,18 +80,18 @@ else
 fi
 ok "Nexus Memory installed: v$($PYTHON -c "from nexus import __version__; print(__version__)" 2>/dev/null || echo "?")"
 
-# ── Step 5: API Key Setup ─────────────────────────────────────────────
-ENV_FILE="${HOME}/.hermes/.env"
-if [ ! -f "$ENV_FILE" ]; then
-    mkdir -p "${HOME}/.hermes"
-    touch "$ENV_FILE"
-fi
-
-if grep -q "VOYAGE_API_KEY" "$ENV_FILE" 2>/dev/null; then
-    ok "VOYAGE_API_KEY found in ${ENV_FILE}"
+# ── Step 5: Embedding Provider ────────────────────────────────────────
+info "Embedding: auto-detect (local sentence-transformers or Voyage cloud)"
+if $PYTHON -c "from sentence_transformers import SentenceTransformer; print('OK')" 2>/dev/null; then
+    ok "Local embedding available (sentence-transformers)"
+elif [ -n "${VOYAGE_API_KEY:-}" ]; then
+    ok "Cloud embedding available (Voyage AI)"
 else
-    info "Add your Voyage AI API key to ${ENV_FILE}:"
-    echo '  echo "VOYAGE_API_KEY=vo-...put your key here..." >> '"${ENV_FILE}"
+    info "No embedding found yet. Options:"
+    echo "  🏠 Local:  pip install sentence-transformers   (free, offline)"
+    echo "  ☁️ Cloud:  Add VOYAGE_API_KEY to ~/.hermes/.env (better quality)"
+    echo "  🔗 Get a Voyage key: https://dash.voyageai.com/api-keys"
+    echo "  💡 Default will be auto-detected — install either one."
     echo ""
 fi
 

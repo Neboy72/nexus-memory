@@ -7,7 +7,8 @@ Integrates all nexus v2.8.0 features:
 - Provenance (source_url, confidence)
 - Guardrails (content length, PII hints)
 - Access Control (public/trusted/private)
-- Qdrant vector storage (Voyage embeddings)
+- Qdrant vector storage
+- Embedding: auto-detect (sentence-transformers local → Voyage cloud)
 """
 
 import asyncio
@@ -22,7 +23,6 @@ from typing import Optional
 
 import mcp.server.stdio
 import mcp.types as types
-import voyageai
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from qdrant_client import QdrantClient
@@ -50,9 +50,61 @@ for env_path in [Path.home() / ".hermes" / ".env", Path.cwd() / ".env"]:
 QDRANT_HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 COLLECTION_NAME = os.environ.get("NEXUS_COLLECTION", "nexus")
-VOYAGE_MODEL = os.environ.get("NEXUS_VOYAGE_MODEL", "voyage-3-large")
-EMBEDDING_DIM = int(os.environ.get("NEXUS_EMBEDDING_DIM", "1024"))
 VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
+
+# ── Embedding Provider ────────────────────────────────────────────
+
+class EmbeddingProvider:
+    """Auto-detect embedding: local (sentence-transformers) -> cloud (Voyage)."""
+
+    def __init__(self):
+        self._backend = None
+        self._model_name = "local"
+        self._dim = 384
+        self._voyage_client = None
+        self._local_model = None
+        self._detect()
+
+    def _detect(self):
+        if VOYAGE_API_KEY and VOYAGE_API_KEY.startswith("vo-"):
+            try:
+                import voyageai
+                self._voyage_client = voyageai.Client(api_key=VOYAGE_API_KEY)
+                self._model_name = "voyage-3-large"
+                self._dim = 1024
+                logging.info("Embedding: Voyage AI (1024d, cloud)")
+                return
+            except Exception:
+                pass
+        try:
+            from sentence_transformers import SentenceTransformer
+            self._local_model = SentenceTransformer("all-MiniLM-L6-v2")
+            self._model_name = "all-MiniLM-L6-v2"
+            self._dim = 384
+            logging.info("Embedding: sentence-transformers (384d, local)")
+        except ImportError:
+            logging.warning("No embedding provider. Install sentence-transformers or set VOYAGE_API_KEY.")
+
+    async def embed(self, text: str) -> list[float]:
+        if self._voyage_client:
+            import voyageai
+            result = await asyncio.to_thread(self._voyage_client.embed, [text], model=self._model_name)
+            return result.embeddings[0]
+        elif self._local_model:
+            vector = await asyncio.to_thread(self._local_model.encode, text)
+            return vector.tolist()
+        raise RuntimeError(
+            "No embedding provider. Install: pip install sentence-transformers  (local, free)\n"
+            "Or set VOYAGE_API_KEY in ~/.hermes/.env  (cloud, better quality)\n"
+            "Get a Voyage key: https://dash.voyageai.com/api-keys"
+        )
+
+    @property
+    def dim(self) -> int: return self._dim
+
+    @property
+    def available(self) -> bool:
+        return self._voyage_client is not None or self._local_model is not None
 
 # ── Access Levels ─────────────────────────────────────────────────
 
@@ -99,7 +151,7 @@ class MemoryStore:
 
     def __init__(self):
         self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-        self.vo = voyageai.Client(api_key=VOYAGE_API_KEY) if VOYAGE_API_KEY else None
+        self._embedder = EmbeddingProvider()
         self._hybrid_retriever = None
         self._ensure_collection()
         self._init_hybrid()
@@ -110,7 +162,7 @@ class MemoryStore:
             self.client.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config=qmodels.VectorParams(
-                    size=EMBEDDING_DIM,
+                    size=self._embedder.dim,
                     distance=qmodels.Distance.COSINE,
                 ),
             )
@@ -119,7 +171,10 @@ class MemoryStore:
                 field_name="access_level",
                 field_type=qmodels.PayloadSchemaType.KEYWORD,
             )
-            logging.info(f"Created collection '{COLLECTION_NAME}' ({EMBEDDING_DIM}d)")
+            logging.info(f"Created collection '{COLLECTION_NAME}' ({self._embedder.dim}d)")
+
+    async def _embed(self, text: str) -> list[float]:
+        return await self._embedder.embed(text)
 
     def _init_hybrid(self):
         """Initialize hybrid retriever (BM25 + Vector + RRF) if available."""
@@ -129,20 +184,11 @@ class MemoryStore:
                 qdrant_host=QDRANT_HOST,
                 qdrant_port=QDRANT_PORT,
             )
-            # Try to build BM25 index (lazy — first call triggers it)
             self._hybrid_retriever.index_memories()
             logging.info("Hybrid retriever initialized (BM25 + Vector + RRF)")
         except Exception as e:
             logging.warning(f"Hybrid retriever not available: {e}")
             self._hybrid_retriever = None
-
-    async def _embed(self, text: str) -> list[float]:
-        if self.vo:
-            result = await asyncio.to_thread(
-                self.vo.embed, [text], model=VOYAGE_MODEL
-            )
-            return result.embeddings[0]
-        raise RuntimeError("VOYAGE_API_KEY not set — cannot generate embeddings")
 
     async def remember(
         self,
@@ -290,8 +336,8 @@ class MemoryStore:
                 "qdrant": "connected",
                 "collection": COLLECTION_NAME,
                 "exists": nexus_exists,
-                "voyage": self.vo is not None,
-                "dim": EMBEDDING_DIM,
+                "embedding": self._embedder.model_name if self._embedder.available else "none",
+                "embedding_available": self._embedder.available,
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
