@@ -176,6 +176,39 @@ echo "  command = \"${PYTHON}\""
 echo '  args = ["-m", "nexus_memory.mcp_server"]'
 echo ""
 
+info "🔷 GitHub Copilot (VS Code) — .vscode/mcp.json:"
+echo '  {'
+echo '    "mcpServers": {'
+echo '      "nexus": {'
+echo '        "command": "'${PYTHON}'",'
+echo '        "args": ["-m", "nexus_memory.mcp_server"]'
+echo '      }'
+echo '    }'
+echo '  }'
+echo ""
+
+info "🔷 Pi Coding Agent — ~/.pi/config.json:"
+echo '  {'
+echo '    "mcpServers": {'
+echo '      "nexus": {'
+echo '        "command": "'${PYTHON}'",'
+echo '        "args": ["-m", "nexus_memory.mcp_server"]'
+echo '      }'
+echo '    }'
+echo '  }'
+echo ""
+
+info "🔷 Continue.dev — .mcp.json or ~/.continue/config.json:"
+echo '  {'
+echo '    "mcpServers": {'
+echo '      "nexus": {'
+echo '        "command": "'${PYTHON}'",'
+echo '        "args": ["-m", "nexus_memory.mcp_server"]'
+echo '      }'
+echo '    }'
+echo '  }'
+echo ""
+
 info "🔷 Odysseus (PewDiePie) — Settings → MCP Management → Add Server:"
 echo '  Name: nexus'
 echo "  Command: ${PYTHON}"
