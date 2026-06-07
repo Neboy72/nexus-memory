@@ -13,6 +13,10 @@ dependencies = [
     "bm25s>=0.1.0",
 ]
 
+[project.optional-dependencies]
+local = ["sentence-transformers>=3.0.0"]
+all = ["sentence-transformers>=3.0.0"]
+
 [project.scripts]
 nexus-memory = "nexus_memory.mcp_server:main"
 
