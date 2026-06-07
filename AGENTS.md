@@ -1,68 +1,141 @@
-# Nexus Memory — AGENTS.md
+# Nexus Memory — AGENTS.md (AI Installation Guide)
+
+> Tell your AI agent: "Install Nexus Memory from https://github.com/Neboy72/nexus-memory"
 
 ## Overview
 
-Nexus Memory is a universal memory layer for AI agents. It runs as an MCP server on your local machine, backed by Qdrant (vector DB) and Voyage AI (embeddings).
+Nexus Memory is a **universal memory layer** for AI agents. One memory for all your agents — Hermes, OpenClaw, Claude Code, Cursor, or any MCP-compatible agent.
 
-### Key concepts
+## Quick Install
 
-- **MCP server** — communicates over stdio, provides tools: `remember`, `recall`, `forget`, `health`
-- **Access levels** — `public` (all agents), `trusted` (approved agents), `private` (owner only)
-- **Qdrant collection** — `nexus`, 1024d vectors (voyage-3-large)
-- **Auto .env loading** — reads `~/.hermes/.env` and `./.env` on startup
+### Prerequisites
 
-### Project structure
+- Python 3.11+
+- Qdrant running on localhost:6333
+- Voyage AI API key (or other embedding provider)
 
-```
-nexus-memory/
-├── src/nexus_memory/
-│   ├── mcp_server.py   # MCP server (main entry point)
-│   └── __init__.py
-├── tests/              # Not yet created
-├── test_mcp.py         # Integration test
-├── test_minimal.py     # Quick smoke test
-├── pyproject.toml
-├── README.md
-└── AGENTS.md
-```
-
-### Architecture
-
-```
-MCP Client (Hermes/OpenClaw) ←→ MCP Server (nexus-memory) ←→ Qdrant (localhost:6333)
-                                                                ↑
-                                                            Voyage AI (embeddings)
-```
-
-## Building & Testing
+### 1. Install
 
 ```bash
-pip install -e .                    # install in dev mode
-python3 -m src.nexus_memory.mcp_server  # run server
-python3 test_minimal.py             # run smoke test
+git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
+cd ~/nexus-memory
+pip install -e .
 ```
 
-## Config
+### 2. Configure
 
-Environment variables (auto-loaded from ~/.hermes/.env or ./.env):
+Set your Voyage API key in `~/.hermes/.env` or `~/nexus-memory/.env`:
 
-- `VOYAGE_API_KEY` — required for embeddings
-- `NEXUS_QDRANT_HOST` — default: localhost
-- `NEXUS_QDRANT_PORT` — default: 6333
-- `NEXUS_COLLECTION` — default: nexus
-- `NEXUS_VOYAGE_MODEL` — default: voyage-3-large
-- `NEXUS_EMBEDDING_DIM` — default: 1024
+```bash
+echo 'VOYAGE_API_KEY="vo-your-key-here"' >> ~/.hermes/.env
+```
 
-## Adding tools
+### 3. Run MCP Server
 
-1. Add tool definition in `handle_list_tools()`
-2. Add handler in `handle_call_tool()`
-3. Implement the logic (probably in `MemoryStore` class)
-4. Test with `test_minimal.py`
+```bash
+nexus-memory
+```
+
+The server starts on stdio and auto-creates a `nexus` collection in Qdrant.
+
+### 4. Connect your Agent
+
+**Hermes Agent** — add to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  nexus:
+    command: /path/to/venv/bin/python3
+    args: ["-m", "nexus_memory.mcp_server"]
+    env:
+      PYTHONPATH: /Users/you/nexus-memory
+```
+
+Restart gateway. Tools appear as `mcp_nexus_remember`, `mcp_nexus_recall`, etc.
+
+**Any MCP-compatible agent** — configure to launch:
+
+```json
+{
+  "mcpServers": {
+    "nexus": { "command": "nexus-memory" }
+  }
+}
+```
+
+## Available Tools (5)
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `remember` | Store a memory | `text` (req), `access_level`, `category`, `source`, `source_url`, `confidence` |
+| `recall` | Hybrid search (BM25 + Vector + RRF) | `query` (req), `limit`, `filter_level` |
+| `forget` | Delete a memory | `memory_id` (req) |
+| `update` | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
+| `health` | Check server status | — |
+
+## Memory Categories
+
+Use `category` parameter to classify memories:
+- `fact` — verified facts (default)
+- `belief` — drift-prone assumptions (nightly drift detection)
+- `session` — session-scoped episodic memory
+- `rule` — operating rules
+- `preference` — user preferences
+- `temp` — ephemeral entries
+
+## Access Levels
+
+| Level | Description | Visible to |
+|-------|-------------|-----------|
+| `public` | General knowledge | All agents |
+| `trusted` | Personal data | Trusted agents (e.g. Kiosha) |
+| `private` | Sensitive data | Owner only (Nebo) |
+
+## Provenance
+
+```python
+# Store with source tracking
+await mcp_nexus_remember(
+    text="...",
+    source_url="https://example.com",
+    confidence=0.95,
+    category="fact"
+)
+```
+
+## Architecture
+
+```
+MCP Client ← stdio → MCP Server (nexus-memory) ← HTTP → Qdrant (localhost:6333)
+                                                            ↑
+                                                        Voyage AI (embeddings)
+```
+
+### Key Components
+
+- **nexus/** — core library (MemoryCategory, HybridRetriever, DriftDetector, Provenance, Lifecycle, Graph, Discovery, Export, ...)
+- **src/nexus_memory/mcp_server.py** — MCP server (5 tools, guardrails, access control)
+- **tests/** — 224 tests (pytest)
+
+## Testing
+
+```bash
+cd ~/nexus-memory
+pip install pytest
+pytest tests/ -v
+```
+
+## Migration from hermes-nexus-memory / openclaw-nexus-memory
+
+1. Install nexus-memory (above)
+2. The MCP server connects to the same Qdrant instance
+3. Your old memories are still in `hermes-memory` collection
+4. New memories go to `nexus` collection
+5. Optional: run `nexus/scripts/migrate.py` to copy old → new
 
 ## Release
 
-1. Update version in `pyproject.toml`
-2. Update `CHANGELOG.md`
-3. Tag: `git tag v0.1.0 && git push --tags`
-4. Publish: `pip install build && python3 -m build && python3 -m twine upload dist/*`
+```bash
+git tag v0.2.0 && git push --tags
+pip install build && python3 -m build && python3 -m twine upload dist/*
+```
