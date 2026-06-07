@@ -44,11 +44,10 @@ cd nexus-memory
 pip install -e .
 ```
 
-Set your Voyage API key in `~/.hermes/.env` or `./.env`:
+Choose your embedding (auto-detected at runtime):
 
-```
-VOYAGE_API_KEY=vo-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
+- **🏠 Local (default, no key):** `pip install nexus-memory[local]` — sentence-transformers, offline
+- **☁️ Cloud (better quality):** Set `VOYAGE_API_KEY` in `~/.hermes/.env` — Voyage AI, 1024d
 
 Start the server:
 
@@ -410,7 +409,9 @@ pytest tests/ -v   # 224 tests ✅
 
 - Python 3.11+
 - Qdrant v1.12+ running on `localhost:6333`
-- Voyage AI API key (or alternative embedding provider)
+- One embedding provider (auto-detected):
+  - **Local:** `pip install sentence-transformers`
+  - **Cloud:** Voyage AI key in `VOYAGE_API_KEY`
 - **Optional:** `bm25s` for hybrid search
 
 ---
