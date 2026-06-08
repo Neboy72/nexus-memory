@@ -29,8 +29,13 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
 # Integrate from the nexus package (v2.8.0+ features)
+import nexus
 from nexus import MemoryCategory, __version__ as nexus_version
 from nexus.provenance import attach_source
+
+# Repo-Root dynamisch ableiten (nexus/ liegt im Repo-Root)
+_NEXUS_REPO = os.path.dirname(os.path.dirname(nexus.__file__))
+NEXUS_REPO_PATH = os.environ.get("NEXUS_REPO_PATH", _NEXUS_REPO)
 
 # ── Auto-load .env files ──────────────────────────────────────────
 # Load from NEXUS_ENV_FILE explicit path, then ~/.hermes/.env, then cwd/.env
@@ -61,8 +66,6 @@ COLLECTION_NAME = os.environ.get("NEXUS_COLLECTION", "nexus")
 VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-
-NEXUS_REPO_PATH = os.environ.get("NEXUS_REPO_PATH", os.path.expanduser("~/nexus-memory"))
 
 # ── Embedding Provider ────────────────────────────────────────────
 
@@ -594,49 +597,39 @@ def get_store() -> MemoryStore:
     return _store
 
 
-def _check_for_update() -> dict:
+async def _check_for_update() -> dict:
     """Check if a newer version is available on GitHub."""
     import urllib.request
-    import json as _json
     
-    local = nexus_version  # z.B. "0.2.0"
+    local = nexus_version
     try:
         req = urllib.request.Request(
             "https://api.github.com/repos/Neboy72/nexus-memory/releases/latest",
             headers={"Accept": "application/vnd.github.v3+json",
-                     "User-Agent": "nexus-memory/0.2.0"}
+                     "User-Agent": f"nexus-memory/{nexus_version}"}
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = _json.loads(resp.read().decode())
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: (
+            json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
+        ))
         
-        latest_tag = data.get("tag_name", "").lstrip("v")  # "v0.2.1" → "0.2.1"
+        latest_tag = data.get("tag_name", "").lstrip("v")
         latest_name = data.get("name", latest_tag)
         html_url = data.get("html_url", "")
         
-        # Version comparison (simple split, assumes SemVer)
         local_parts = [int(x) for x in local.split(".")]
         latest_parts = [int(x) for x in latest_tag.split(".")]
-        
         is_newer = latest_parts > local_parts
         
-        return {
-            "local_version": local,
-            "latest_version": latest_tag,
-            "latest_name": latest_name,
-            "release_url": html_url,
-            "update_available": is_newer,
-            "error": None,
-        }
+        return {"local_version": local, "latest_version": latest_tag,
+                "latest_name": latest_name, "release_url": html_url,
+                "update_available": is_newer, "error": None}
     except Exception as e:
-        return {
-            "local_version": local,
-            "latest_version": None,
-            "update_available": False,
-            "error": str(e),
-        }
+        return {"local_version": local, "latest_version": None,
+                "update_available": False, "error": str(e)}
 
 
-def _do_update(confirm: bool = False) -> dict:
+async def _do_update(confirm: bool = False) -> dict:
     """Pull the latest version from GitHub, reinstall, then restart."""
     import subprocess
     import sys
@@ -648,7 +641,6 @@ def _do_update(confirm: bool = False) -> dict:
         }
 
     repo = NEXUS_REPO_PATH
-
     if not os.path.isdir(repo):
         return {
             "status": "error",
@@ -656,31 +648,40 @@ def _do_update(confirm: bool = False) -> dict:
         }
 
     try:
-        # 1. Fetch + pull
-        subprocess.run(["git", "fetch", "origin"], cwd=repo, capture_output=True, text=True, timeout=30)
-        pull = subprocess.run(["git", "pull", "--ff-only"], cwd=repo, capture_output=True, text=True, timeout=30)
-
+        loop = asyncio.get_event_loop()
+        
+        # git pull --ff-only (fetch + merge in einem)
+        pull = await loop.run_in_executor(None, lambda: subprocess.run(
+            ["git", "pull", "--ff-only"], cwd=repo, capture_output=True, text=True, timeout=30
+        ))
         if pull.returncode != 0:
             return {
                 "status": "error",
                 "message": f"git pull failed: {pull.stderr.strip() or pull.stdout.strip()}. Local changes might conflict.",
             }
 
-        # 2. Reinstall
-        pip = subprocess.run(
+        # pip install
+        pip = await loop.run_in_executor(None, lambda: subprocess.run(
             [sys.executable, "-m", "pip", "install", "-e", repo],
             capture_output=True, text=True, timeout=120,
-        )
-
+        ))
         if pip.returncode != 0:
             return {
                 "status": "error",
                 "message": f"pip install failed: {pip.stderr.strip() or pip.stdout.strip()}",
             }
 
-        # 3. Neue Version auslesen
-        from nexus import __version__ as new_ver
-        new_version = new_ver
+        # Version frisch aus Datei lesen (nicht via import — sys.modules cached)
+        import re
+        init_file = os.path.join(repo, "nexus", "__init__.py")
+        new_version = nexus_version
+        try:
+            with open(init_file) as f:
+                m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', f.read())
+                if m:
+                    new_version = m.group(1)
+        except Exception:
+            pass
 
         return {
             "status": "success",
@@ -691,10 +692,7 @@ def _do_update(confirm: bool = False) -> dict:
         }
 
     except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-        }
+        return {"status": "error", "message": str(e)}
 
 
 server = Server("nexus-memory")
@@ -924,8 +922,23 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             text=json.dumps(status),
         )]
 
+    elif name == "do_update":
+        confirm = arguments.get("confirm", False)
+        result = await _do_update(confirm=confirm)
+        response = [types.TextContent(
+            type="text",
+            text=json.dumps(result, indent=2),
+        )]
+        # Self-restart: Nach erfolgreichem Update Server beenden.
+        if result.get("restarting"):
+            import sys as _sys
+            import asyncio as _asyncio
+            _sys.stdout.flush()
+            _asyncio.get_event_loop().call_later(1, lambda: os._exit(0))
+        return response
+
     elif name == "check_update":
-        result = _check_for_update()
+        result = await _check_for_update()
         return [types.TextContent(
             type="text",
             text=json.dumps(result, indent=2),
