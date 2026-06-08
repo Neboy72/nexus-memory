@@ -22,7 +22,7 @@ info "Checking Python..."
 PYTHON=""
 for cmd in python3.12 python3.11 python3; do
     if command -v "$cmd" &>/dev/null; then
-        ver=$("$cmd" --version 2>&1 | grep -oP '\d+\.\d+')
+        ver=$("$cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
         major="${ver%.*}"; minor="${ver#*.}"
         if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ] 2>/dev/null; then
             PYTHON="$cmd"
@@ -74,7 +74,12 @@ cd "$INSTALL_DIR"
 # ── Step 4: Install Dependencies ──────────────────────────────────────
 info "Installing Python dependencies..."
 if command -v uv &>/dev/null; then
-    uv pip install --system -e . 2>/dev/null || uv pip install -e .
+    if [ -n "${VIRTUAL_ENV:-}" ]; then
+        uv pip install -e . 2>/dev/null || $PYTHON -m pip install -e . --quiet
+    else
+        $PYTHON -m pip install --upgrade pip -q 2>/dev/null || true
+        $PYTHON -m pip install -e . --quiet
+    fi
 else
     $PYTHON -m pip install -e . --quiet
 fi
