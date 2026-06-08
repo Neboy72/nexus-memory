@@ -33,11 +33,12 @@ from nexus import MemoryCategory
 from nexus.provenance import attach_source
 
 # ── Auto-load .env files ──────────────────────────────────────────
-# Load from NEXUS_ENV_FILE explicit path, then fall back to cwd/.env
+# Load from NEXUS_ENV_FILE explicit path, then ~/.hermes/.env, then cwd/.env
 env_paths = []
 custom_env = os.environ.get("NEXUS_ENV_FILE")
 if custom_env:
     env_paths.append(Path(custom_env))
+env_paths.append(Path.home() / ".hermes" / ".env")
 env_paths.append(Path.cwd() / ".env")
 
 for env_path in env_paths:
@@ -297,6 +298,36 @@ class MemoryStore:
             logging.warning(f"Hybrid retriever not available: {e}")
             self._hybrid_retriever = None
 
+    async def _check_sources(self, source_urls: list[str]) -> dict[str, str]:
+        """Check source URLs via async HTTP HEAD. Returns dict mapping url -> status."""
+        if not source_urls:
+            return {}
+        unique_urls = list(set(u for u in source_urls if u and u.startswith("http")))
+        if not unique_urls:
+            return {}
+        results = {}
+
+        async def _check(url: str):
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.head(url, follow_redirects=True)
+                    results[url] = "verified" if resp.status_code < 400 else "unreachable"
+            except ImportError:
+                proc = await asyncio.create_subprocess_exec(
+                    "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                    "--max-time", "5", url,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                )
+                stdout, _ = await proc.communicate()
+                code = int(stdout.decode().strip()) if stdout else 0
+                results[url] = "verified" if code and code < 400 else "unreachable"
+            except Exception:
+                results[url] = "unreachable"
+
+        await asyncio.gather(*[_check(url) for url in unique_urls])
+        return results
+
     async def remember(
         self,
         text: str,
@@ -383,6 +414,55 @@ class MemoryStore:
                 )
                 raw_results = h_results
                 logging.debug(f"Hybrid search returned {len(raw_results)} results")
+
+                # Enrich hybrid results with payload fields (source_url, access_level, etc.)
+                if raw_results:
+                    hybrid_ids_raw = [r.get("id") for r in raw_results if r.get("id") is not None]
+                    if hybrid_ids_raw:
+                        try:
+                            def _to_point_id(val):
+                                if isinstance(val, int):
+                                    return val
+                                if isinstance(val, str):
+                                    # UUID string
+                                    if "-" in val and len(val) == 36:
+                                        from uuid import UUID
+                                        return UUID(val)
+                                    # Numeric string → int
+                                    try:
+                                        return int(val)
+                                    except ValueError:
+                                        return val
+                                return val
+                            parsed_ids = [_to_point_id(pid) for pid in hybrid_ids_raw]
+                            points = self.client.retrieve(
+                                collection_name=COLLECTION_NAME,
+                                ids=parsed_ids,
+                                with_payload=True,
+                                with_vectors=False,
+                            )
+                            payload_map = {}
+                            for pt in points:
+                                pl = pt.payload or {}
+                                payload_map[str(pt.id)] = pl
+                            for r in raw_results:
+                                rid = r.get("id")
+                                if rid and rid in payload_map:
+                                    pl = payload_map[rid]
+                                    if not r.get("source_url"):
+                                        r["source_url"] = pl.get("source_url")
+                                    if not r.get("access_level"):
+                                        r["access_level"] = pl.get("access_level")
+                                    if not r.get("category"):
+                                        r["category"] = pl.get("category")
+                                    if not r.get("source"):
+                                        r["source"] = pl.get("source")
+                                    if not r.get("created_at"):
+                                        r["created_at"] = pl.get("created_at")
+                                    if not r.get("provenance"):
+                                        r["provenance"] = pl.get("provenance", {})
+                        except Exception as enrich_err:
+                            logging.warning(f"Payload enrichment failed: {enrich_err}")
         except Exception as e:
             logging.warning(f"Hybrid search failed, falling back to vector: {e}")
 
@@ -417,7 +497,11 @@ class MemoryStore:
             raw_scores.append(s if isinstance(s, (int, float)) else 0)
         max_raw = max(raw_scores, default=1)
         max_raw = max(max_raw, 0.001)  # Avoid division by zero
-        
+
+        # Justification-Check (Rung 2): Verify source URLs are still reachable
+        source_urls = [r.get("source_url") for r in raw_results if r.get("source_url")]
+        source_verification = await self._check_sources(source_urls)
+
         results = []
         seen_docs = set()
         for r in raw_results:
@@ -450,6 +534,7 @@ class MemoryStore:
                 "match": match_type,
                 "source": r.get("source"),
                 "source_url": r.get("source_url"),
+                "verification": source_verification.get(r.get("source_url"), "unchecked"),
                 "doc_id": doc_id,
                 "access_level": mem_level,
                 "category": r.get("category"),

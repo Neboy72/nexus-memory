@@ -95,7 +95,7 @@ Restart gateway. Tools appear as `mcp_nexus_remember`, `mcp_nexus_recall`, etc.
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `remember` | Store a memory | `text` (req), `access_level`, `category`, `source`, `source_url`, `confidence` |
-| `recall` | Hybrid search (BM25 + Vector + RRF) | `query` (req), `limit`, `filter_level` |
+| `recall` | Hybrid search — returns results with `verification` status | `query` (req), `limit`, `filter_level` |
 | `forget` | Delete a memory | `memory_id` (req) |
 | `update` | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `health` | Check server status | — |
@@ -129,6 +129,18 @@ await mcp_nexus_remember(
     category="fact"
 )
 ```
+
+### Justification Check (Rung 2)
+
+Each recall result includes a `verification` field:
+
+| Status | Meaning |
+|--------|---------|
+| `verified` | Source URL is reachable (HTTP < 400) |
+| `unreachable` | Source URL is unreachable or blocks HEAD requests |
+| `unchecked` | No `source_url` was set when storing this memory |
+
+Memory entries stored with `source_url` are checked via async HTTP HEAD on every recall. If a source becomes unreachable, the agent sees the downgrade and can treat the memory with lower confidence.
 
 ## Architecture
 
