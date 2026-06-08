@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.2.3 (2026-06-08)
+
+**Auto-Update — Agent managed: check, ask, update, restart.**
+
+### New Tools (2)
+
+- **`check_update`** — Check if a newer version is available on GitHub. Returns local vs latest version, release URL, and whether an update is available.
+- **`do_update`** — Pull the latest version from GitHub, reinstall via pip, and restart the server. Requires `confirm: true` as safety guard. The server self-terminates after a successful update; the MCP client automatically reconnects.
+
+### Self-Restart
+
+- After a successful `do_update`, the server exits cleanly. The MCP client (Hermes gateway, Claude Code, Cursor, etc.) detects the disconnection and restarts the server with the new version — zero manual steps for the user.
+
+### Agent Workflow (Language-Neutral)
+
+1. Agent calls `check_update` → sees `update_available: true`
+2. Agent asks user in their language: "Update available. Install?"
+3. User says "yes"
+4. Agent calls `do_update(confirm: true)` → git pull + pip install + server restart
+5. Client reconnects automatically — new version is live
+
 ## v0.2.2 (2026-06-08)
 
 **Justification Check (Rung 2) — Source URL Verification on Recall.**

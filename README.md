@@ -262,6 +262,8 @@ Standard MCP stdio config:
 | `forget` 🗑️ | Delete a memory | `memory_id` (req) |
 | `update` ✏️ | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `health` ❤️ | Check server status | — |
+| `check_update` 🔄 | Check for newer version on GitHub | — |
+| `do_update` ⬆️ | Pull + install + restart server | `confirm` (req, must be `true`) |
 
 ### Memory Categories
 
