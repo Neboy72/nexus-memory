@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.2.2 (2026-06-08)
+
+**Justification Check (Rung 2) — Source URL Verification on Recall.**
+
+### New Feature
+
+- **`verification` field in recall results** — each result now includes a `verification` status:
+  - `verified` — source URL is reachable (HTTP HEAD < 400)
+  - `unreachable` — source URL unreachable or blocks HEAD requests
+  - `unchecked` — no `source_url` was set
+- **`_check_sources()` async method** — parallel HTTP HEAD checks on all source URLs in result set
+- **Payload enrichment** — hybrid search results now include `source_url`, `access_level`, `category`, `source`, `created_at`, `provenance` from Qdrant payload (previously only score + text)
+
+### Documentation
+
+- **AGENTS.md:** Justification Check section, recall tool description updated
+
+### Implementation Notes
+
+Follows Rung 2 (Justification Verification) from Spivakovsky's Ladder of Checks: schema-valid is not answer-correct. Memory sources are verified at recall time, not just at storage time.
+
 ## v0.2.1 (2026-06-08)
 
 **Breaking: hardcoded `~/.hermes/.env` removed for generic MCP compatibility.**
