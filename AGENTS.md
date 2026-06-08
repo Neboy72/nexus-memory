@@ -90,7 +90,7 @@ Restart gateway. Tools appear as `mcp_nexus_remember`, `mcp_nexus_recall`, etc.
 }
 ```
 
-## Available Tools (5)
+## Available Tools (7)
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
@@ -99,6 +99,8 @@ Restart gateway. Tools appear as `mcp_nexus_remember`, `mcp_nexus_recall`, etc.
 | `forget` | Delete a memory | `memory_id` (req) |
 | `update` | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `health` | Check server status | — |
+| `check_update` | Check for newer version on GitHub | — |
+| `do_update` | Update + restart server | `confirm` (req, must be `true`) |
 
 ## Memory Categories
 
