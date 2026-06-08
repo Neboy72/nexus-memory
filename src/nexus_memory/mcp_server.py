@@ -617,9 +617,8 @@ async def _check_for_update() -> dict:
         latest_name = data.get("name", latest_tag)
         html_url = data.get("html_url", "")
         
-        local_parts = [int(x) for x in local.split(".")]
-        latest_parts = [int(x) for x in latest_tag.split(".")]
-        is_newer = latest_parts > local_parts
+        from packaging.version import parse
+        is_newer = parse(latest_tag) > parse(local)
         
         return {"local_version": local, "latest_version": latest_tag,
                 "latest_name": latest_name, "release_url": html_url,
@@ -671,17 +670,10 @@ async def _do_update(confirm: bool = False) -> dict:
                 "message": f"pip install failed: {pip.stderr.strip() or pip.stdout.strip()}",
             }
 
-        # Version frisch aus Datei lesen (nicht via import — sys.modules cached)
-        import re
-        init_file = os.path.join(repo, "nexus", "__init__.py")
-        new_version = nexus_version
-        try:
-            with open(init_file) as f:
-                m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', f.read())
-                if m:
-                    new_version = m.group(1)
-        except Exception:
-            pass
+        # Reload the module to get the updated version cleanly
+        import importlib
+        importlib.reload(nexus)
+        new_version = nexus.__version__
 
         return {
             "status": "success",
@@ -943,20 +935,6 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             type="text",
             text=json.dumps(result, indent=2),
         )]
-
-    elif name == "do_update":
-        confirm = arguments.get("confirm", False)
-        result = _do_update(confirm=confirm)
-        response = [types.TextContent(
-            type="text",
-            text=json.dumps(result, indent=2),
-        )]
-        # Self-restart: Nach erfolgreichem Update Server beenden.
-        # Der MCP-Client (Gateway/IDE) startet ihn automatisch neu.
-        if result.get("restarting"):
-            import asyncio
-            asyncio.get_event_loop().call_later(1, lambda: os._exit(0))
-        return response
 
     else:
         raise ValueError(f"Unknown tool: {name}")
