@@ -1,6 +1,6 @@
 # Nexus Memory — AGENTS.md (AI Installation Guide)
 
-> Tell your AI agent: "Install Nexus Memory from https://github.com/Neboy72/nexus-memory"
+> Tell your AI agent: "Read https://raw.githubusercontent.com/Neboy72/nexus-memory/main/AGENTS.md and follow the installation instructions."
 
 ## Overview
 
