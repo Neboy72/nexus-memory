@@ -53,7 +53,7 @@ const MemoryGraph = {
 
     // Edges
     const link = edgeLayer.selectAll('line').data(this.edges).join('line')
-      .attr('stroke','#4a6fa5').attr('stroke-width',1).attr('stroke-opacity',0.25);
+      .attr('stroke','#6a9fcf').attr('stroke-width',1.5).attr('stroke-opacity',0.45);
 
     // Nodes
     const node = nodeLayer.selectAll('g').data(this.nodes).join('g').style('cursor','pointer');
@@ -84,7 +84,7 @@ const MemoryGraph = {
     });
     node.on('mouseleave', () => {
       node.select('.co').transition(200).attr('opacity',0.85);
-      link.transition(200).attr('stroke-opacity',0.25).attr('stroke-width',1);
+      link.transition(200).attr('stroke-opacity',0.45).attr('stroke-width',1.5);
       labelLayer.selectAll('text').transition(200).attr('opacity',0.6);
     });
     node.on('click', (e,d) => {
