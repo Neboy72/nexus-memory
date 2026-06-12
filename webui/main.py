@@ -181,7 +181,7 @@ EDGES = _build_edges(DEMO_MEMORIES)
 async def health():
     return {
         "status": "ok",
-        "version": "0.3.0",
+        "version": "0.2.3",
         "provider": "Demo Data (MCP server not connected)",
         "memories": len(DEMO_MEMORIES),
     }
