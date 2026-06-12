@@ -309,6 +309,15 @@ ul, ol { list-style: none; }
   font-size: 0.75rem;
 }
 
+.header__link--kofi {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.header__link--kofi svg {
+  opacity: 0.8;
+}
+
 .header__actions { display: flex; align-items: center; gap: var(--space-sm); }
 
 .theme-toggle {
