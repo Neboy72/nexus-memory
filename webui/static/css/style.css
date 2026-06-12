@@ -1190,7 +1190,7 @@ ul, ol { list-style: none; }
 
 /* Graph Node Colors — now set in JS (obs-core) */
 /* Graph Edge Color */
-.graph-edge { stroke: #4a6fa5; }
+.graph-edge { stroke: #6a9fcf; stroke-width: 1.5; stroke-opacity: 0.45; }
 
 [data-theme="light"] {
   --bg-primary: #ffffff;
