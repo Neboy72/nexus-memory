@@ -15,7 +15,8 @@ dependencies = [
 
 [project.optional-dependencies]
 local = ["sentence-transformers>=3.0.0"]
-all = ["sentence-transformers>=3.0.0", "openai>=1.0.0"]
+webui = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
+all = ["sentence-transformers>=3.0.0", "openai>=1.0.0", "fastapi>=0.100.0", "uvicorn>=0.20.0"]
 
 [project.scripts]
 nexus-memory = "nexus_memory.mcp_server:cli"
