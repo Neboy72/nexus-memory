@@ -15,6 +15,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![Version](https://img.shields.io/badge/version-0.2.0-green?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-224%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20on%20Ko--fi-FF5E5B?style=flat-square&logo=kofi)](https://ko-fi.com/nexusmemory)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
 
