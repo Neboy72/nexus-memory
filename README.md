@@ -2,6 +2,7 @@
   <img src="webui/static/assets/logo-transparent.png" width="54" height="54" alt=""/>&nbsp;
   <img src="docs/images/nexus-banner.svg" alt="Nexus Memory" height="54"/>
 </p>
+<p align="center">Universal Memory Layer for AI Agents</p>
 
 Your agents forget. Your context gets lost. Your setup knowledge is scattered across chats, tools and repos.
 
