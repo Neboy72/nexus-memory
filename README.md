@@ -63,6 +63,17 @@ Start the server:
 nexus-memory
 ```
 
+### 🌐 Web UI (optional)
+
+Nexus Memory comes with a live graph visualization — your memories as an interactive force-directed graph.
+
+```bash
+pip install nexus-memory[webui]
+nexus-memory webui
+```
+
+Opens a dashboard at `http://127.0.0.1:9120` — filter by category, search, click nodes to inspect details, and see drift status at a glance.
+
 ### 🔌 Platform Configuration
 
 Choose your agent:
