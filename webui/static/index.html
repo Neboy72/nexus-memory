@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Nexus Memory - Universal Memory Layer for AI Agents. Self-hosted, secure, MCP-based. One memory for all your agents.">
+  <meta name="theme-color" content="#0a0a0f">
+  <title>Nexus Memory - Universal Memory Layer for AI Agents</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- ═══ Navigation ═══ -->
+  <header class="header" role="banner">
+    <nav class="header__nav container" role="navigation" aria-label="Main navigation">
+      <a href="/" class="header__logo" aria-label="Nexus Memory Home">
+        <img src="/static/assets/logo-transparent.png" alt="Nexus Memory" class="header__logo-img" width="32" height="32">
+        <span class="header__logo-text">Nexus Memory</span>
+      </a>
+
+      <div class="header__links">
+        <a href="#features" class="header__link">Features</a>
+        <a href="#graph" class="header__link">Live Graph</a>
+        <a href="#stats" class="header__link">Stats</a>
+        <a href="https://github.com/Neboy72/nexus-memory" target="_blank" rel="noopener" class="header__link header__link--external">GitHub</a>
+      </div>
+
+      <div class="header__actions">
+        <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">
+          <svg class="theme-toggle__icon theme-toggle__icon--sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+          <svg class="theme-toggle__icon theme-toggle__icon--moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </button>
+      </div>
+
+      <button class="header__menu-toggle" id="menuToggle" aria-label="Menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </nav>
+  </header>
+
+  <!-- ═══ Hero ═══ -->
+  <section class="hero" role="region" aria-label="Hero">
+    <div class="hero__bg" aria-hidden="true">
+      <div class="hero__gradient"></div>
+      <div class="hero__particles" id="heroParticles"></div>
+    </div>
+    <div class="hero__content container">
+      <div class="hero__logo-wrapper">
+        <div class="hero__logo" id="heroLogoContainer">
+          <object type="text/html" data="/static/assets/logo-animated.html" width="220" height="220" style="display:block;pointer-events:none;"></object>
+        </div>
+      </div>
+      <p class="hero__brand-name" aria-label="Nexus Memory">Nexus Memory</p>
+      <h1 class="hero__title">
+        One Memory<br>
+        <span class="hero__title-highlight">for All Your Agents</span>
+      </h1>
+      <p class="hero__subtitle">
+        Universal memory layer for AI agents - self-hosted, secure, and MCP-based.<br>
+        What one agent learns, <span style="white-space:nowrap">every agent remembers.</span>
+      </p>
+      <div class="mcp-logos mcp-logos--hero">
+        <div class="mcp-logos__strip">
+          <img src="/static/assets/logos/nousresearch.svg" alt="Nous Research" class="mcp-logos__icon" title="#1 Hermes Agent - 851B tokens">
+          <img src="/static/assets/logos/kilocode.svg" alt="Kilo Code" class="mcp-logos__icon" title="#2 Kilo Code - 245B tokens">
+          <img src="/static/assets/logos/openclaw.svg" alt="OpenClaw" class="mcp-logos__icon" title="#3 OpenClaw - 194B tokens">
+          <img src="/static/assets/logos/claude.svg" alt="Claude" class="mcp-logos__icon" title="#4 Claude Code - 120B tokens">
+          <img src="/static/assets/logos/pi.svg" alt="pi" class="mcp-logos__icon" title="#5 pi - 83.7B tokens">
+          <img src="/static/assets/logos/cline.svg" alt="Cline" class="mcp-logos__icon" title="#8 Cline - 30.1B tokens">
+          <img src="/static/assets/logos/codex.svg" alt="Codex" class="mcp-logos__icon" title="#15 Codex - 12.3B tokens">
+          <img src="/static/assets/logos/cursor.svg" alt="Cursor" class="mcp-logos__icon" title="#16 Cursor - 10.4B tokens">
+          <img src="/static/assets/logos/github.svg" alt="GitHub" class="mcp-logos__icon" title="GitHub Copilot">
+          <span class="mcp-logos__more">+ all MCP AIs</span>
+        </div>
+      </div>
+      <div class="hero__actions">
+        <a href="https://github.com/Neboy72/nexus-memory" target="_blank" rel="noopener" class="btn btn--primary">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+          View on GitHub
+        </a>
+        <a href="https://github.com/Neboy72/nexus-memory/blob/main/AGENTS.md" target="_blank" rel="noopener" class="btn btn--secondary">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="1" width="18" height="12" rx="2"/><path d="M9 5h6"/><path d="M9 8h6"/><path d="M6 13v4a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-4"/><circle cx="8" cy="19" r="2"/><circle cx="16" cy="19" r="2"/></svg>
+          Bot Self Install
+        </a>
+        <a href="https://ko-fi.com/neboy72" target="_blank" rel="noopener" class="btn btn--secondary">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M23.881 8.948c-.773-4.085-4.859-4.593-4.859-4.593H.723c-.604 0-.679.798-.679.798s-.082 7.324-.022 11.822c.164 2.424 2.586 2.672 2.586 2.672s8.267-.023 11.966-.049c2.438-.426 2.683-2.566 2.658-3.734 4.352.24 7.422-2.831 6.649-6.916zm-11.062 3.511c-1.246 1.453-4.011 3.976-4.011 3.976s-.121.119-.31.023c-.076-.057-.108-.09-.108-.09-.443-.441-3.368-3.049-4.034-3.954-.709-.965-1.041-2.7-.091-3.71.951-1.01 3.005-1.086 4.363.407 0 0 1.565-1.782 3.468-.963 1.904.82 1.832 2.659.723 4.311z"/></svg>
+          Support on Ko-fi
+        </a>
+      </div>
+      <div class="hero__badges">
+        <span class="badge badge--rating" data-author="Gemini says:" data-quote="&#8220;Sets a new standard for agent memory management. Brilliant architecture.&#8221;">9.5/10 <small>Gemini</small></span>
+        <span class="badge badge--rating" data-author="Perplexity says:" data-quote="&#8220;Comprehensive memory solution with superior hybrid retrieval. Rare combination of power and simplicity.&#8221;">9.4/10 <small>Perplexity</small></span>
+        <span class="badge badge--rating" data-author="Grok says:" data-quote="&#8220;Brilliant architecture, best for productive agent setups. I would always choose Nexus Memory.&#8221;">9/10 <small>Grok</small></span>
+        <span class="badge badge--pill" data-author="Self-Hosted" data-quote="Run on your own infrastructure. Complete data sovereignty, zero third-party dependencies.">Self-Hosted</span>
+        <span class="badge badge--pill" data-author="MCP Native" data-quote="Native Model Context Protocol support. Connect any MCP-compatible agent - no adapters needed.">MCP Native</span>
+        <span class="badge badge--pill" data-author="Open Source" data-quote="Free and open source. MIT license. Contributions welcome on GitHub.">Open Source</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Features ═══ -->
+  <section class="features" id="features" role="region" aria-label="Features">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-header__label">Features</span>
+        <h2 class="section-header__title">Built for Agents,<br>Designed for Humans</h2>
+        <p class="section-header__desc">Everything you need for persistent, cross-agent memory - zero&nbsp;lock-in.</p>
+      </div>
+
+      <div class="features__grid">
+        <article class="feature-card">
+          <div class="feature-card__icon feature-card__icon--blue">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <h3 class="feature-card__title">Hybrid Retrieval</h3>
+          <p class="feature-card__desc">BM25 full-text search + vector similarity + RRF re-ranking. Precision meets recall.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-card__icon feature-card__icon--purple">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          </div>
+          <h3 class="feature-card__title">Drift Detection</h3>
+          <p class="feature-card__desc">Automatically detects contradictory memories. Your agent never acts on outdated facts.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-card__icon feature-card__icon--green">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3 class="feature-card__title">Zero Trust Security</h3>
+          <p class="feature-card__desc">Three access levels - public, trusted, private. Provenance tracking on every memory.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-card__icon feature-card__icon--amber">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <h3 class="feature-card__title">MCP Native</h3>
+          <p class="feature-card__desc">Model Context Protocol out of the box. Works with Hermes, OpenClaw, Claude Code, Cursor, and more.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-card__icon feature-card__icon--pink">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+          </div>
+          <h3 class="feature-card__title">Lifecycle Management</h3>
+          <p class="feature-card__desc">Memories age through fresh → active → stale → archived. Automatic cleanup of noise.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-card__icon feature-card__icon--cyan">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          </div>
+          <h3 class="feature-card__title">6 Embedding Providers</h3>
+          <p class="feature-card__desc">Voyage, OpenAI, Google, Jina, Ollama, sentence-transformers - auto-detected, zero config.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Live Graph ═══ -->
+  <section class="graph-section" id="graph" role="region" aria-label="Memory Graph">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-header__label">Live Visualization</span>
+        <h2 class="section-header__title">Your Memory Graph</h2>
+        <p class="section-header__desc">Every memory is a node. Every connection tells a story. Drag, zoom,&nbsp;explore.</p>
+      </div>
+
+      <div class="graph-controls">
+        <div class="graph-controls__row">
+          <div class="graph-controls__group">
+            <label class="graph-controls__label" for="filterCategory">Category</label>
+            <select id="filterCategory" class="graph-controls__select">
+              <option value="all">All Categories</option>
+              <option value="fact">Fact</option>
+              <option value="belief">Belief</option>
+              <option value="session">Session</option>
+              <option value="rule">Rule</option>
+              <option value="preference">Preference</option>
+              <option value="temp">Temp</option>
+            </select>
+          </div>
+          <div class="graph-controls__group">
+            <label class="graph-controls__label" for="filterAccess">Access Level</label>
+            <select id="filterAccess" class="graph-controls__select">
+              <option value="all">All Levels</option>
+              <option value="public">Public</option>
+              <option value="trusted">Trusted</option>
+              <option value="private">Private</option>
+            </select>
+          </div>
+          <div class="graph-controls__group">
+            <label class="graph-controls__label" for="filterDrift">Drift Status</label>
+            <select id="filterDrift" class="graph-controls__select">
+              <option value="all">All Status</option>
+              <option value="fresh">Fresh</option>
+              <option value="drifting">Drifting</option>
+              <option value="drifted">Drifted</option>
+            </select>
+          </div>
+          <div class="graph-controls__group graph-controls__group--search">
+            <label class="graph-controls__label" for="searchInput">Search</label>
+            <input type="text" id="searchInput" class="graph-controls__input" placeholder="Search memories…" autocomplete="off">
+          </div>
+        </div>
+        <div class="graph-controls__legend" id="graphLegend">
+          <span class="legend-item"><span class="legend-dot legend-dot--fact"></span>Fact</span>
+          <span class="legend-item"><span class="legend-dot legend-dot--belief"></span>Belief</span>
+          <span class="legend-item"><span class="legend-dot legend-dot--session"></span>Session</span>
+          <span class="legend-item"><span class="legend-dot legend-dot--rule"></span>Rule</span>
+          <span class="legend-item"><span class="legend-dot legend-dot--preference"></span>Preference</span>
+          <span class="legend-item"><span class="legend-dot legend-dot--temp"></span>Temp</span>
+          <span class="legend-item legend-item--drift"><span class="legend-ring legend-ring--fresh"></span>Fresh</span>
+          <span class="legend-item legend-item--drift"><span class="legend-ring legend-ring--drifting"></span>Drifting</span>
+          <span class="legend-item legend-item--drift"><span class="legend-ring legend-ring--drifted"></span>Drifted</span>
+        </div>
+      </div>
+
+      <div class="graph-container" id="graphContainer">
+        <div class="graph-container__loading" id="graphLoading">
+          <div class="spinner"></div>
+          <p>Loading memory graph…</p>
+        </div>
+        <svg id="graphSvg" class="graph-svg"></svg>
+        <div class="graph-tooltip" id="graphTooltip"></div>
+      </div>
+      <div class="graph-actions">
+        <button class="btn btn--secondary btn--sm" id="resetGraphBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+          Reset View
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Stats ═══ -->
+  <section class="stats" id="stats" role="region" aria-label="Statistics">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-header__label">Statistics</span>
+        <h2 class="section-header__title">Memory at a Glance</h2>
+      </div>
+      <div class="stats__grid" id="statsGrid">
+        <div class="stat-card"><div class="stat-card__value" id="statTotal">-</div><div class="stat-card__label">Memories</div></div>
+        <div class="stat-card"><div class="stat-card__value" id="statEdges">-</div><div class="stat-card__label">Connections</div></div>
+        <div class="stat-card"><div class="stat-card__value" id="statConfidence">-</div><div class="stat-card__label">Avg Confidence</div></div>
+        <div class="stat-card"><div class="stat-card__value" id="statSources">-</div><div class="stat-card__label">Sources</div></div>
+        <div class="stat-card"><div class="stat-card__value" id="statCategories">-</div><div class="stat-card__label">Categories</div></div>
+        <div class="stat-card"><div class="stat-card__value" id="statDrift">-</div><div class="stat-card__label">Drift Status</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ CTA ═══ -->
+  <section class="cta" role="region" aria-label="Call to Action">
+    <div class="container">
+      <div class="cta__card">
+        <h2 class="cta__title">Ready to Unify Your Agent Memory?</h2>
+        <p class="cta__desc">Self-hosted, zero lock-in, production-ready. One memory for all your agents.</p>
+        <div class="cta__actions">
+          <a href="https://github.com/Neboy72/nexus-memory" target="_blank" rel="noopener" class="btn btn--primary btn--lg">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            Get Started on GitHub
+          </a>
+          <a href="https://ko-fi.com/neboy72" target="_blank" rel="noopener" class="btn btn--secondary btn--lg">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M23.881 8.948c-.773-4.085-4.859-4.593-4.859-4.593H.723c-.604 0-.679.798-.679.798s-.082 7.324-.022 11.822c.164 2.424 2.586 2.672 2.586 2.672s8.267-.023 11.966-.049c2.438-.426 2.683-2.566 2.658-3.734 4.352.24 7.422-2.831 6.649-6.916zm-11.062 3.511c-1.246 1.453-4.011 3.976-4.011 3.976s-.121.119-.31.023c-.076-.057-.108-.09-.108-.09-.443-.441-3.368-3.049-4.034-3.954-.709-.965-1.041-2.7-.091-3.71.951-1.01 3.005-1.086 4.363.407 0 0 1.565-1.782 3.468-.963 1.904.82 1.832 2.659.723 4.311z"/></svg>
+            Support on Ko-fi
+          </a>
+        </div>
+        <p class="cta__sponsors">
+          <span class="cta__sponsors-label">Also supporting:</span>
+          <a href="https://github.com/sponsors/Neboy72" target="_blank" rel="noopener" class="cta__sponsors-link">GitHub Sponsors</a>
+          <span class="cta__sponsors-divider">·</span>
+          <span class="cta__sponsors-note">Coming soon</span>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Footer ═══ -->
+  <footer class="footer" role="contentinfo">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <img src="/static/assets/logo-transparent.png" alt="Nexus Memory" class="footer__logo" width="24" height="24">
+        <span class="footer__name">Nexus Memory</span>
+      </div>
+      <nav class="footer__nav" aria-label="Footer navigation">
+        <a href="https://github.com/Neboy72/nexus-memory" target="_blank" rel="noopener" class="footer__link">GitHub</a>
+        <a href="https://ko-fi.com/neboy72" target="_blank" rel="noopener" class="footer__link">Ko-fi</a>
+        <a href="https://github.com/sponsors/Neboy72" target="_blank" rel="noopener" class="footer__link">Sponsors</a>
+      </nav>
+      <div class="footer__author">
+        <p class="footer__author-name">Built by Nebo</p>
+        <p class="footer__author-desc">Developer, electrical engineer, tech enthusiast since the Commodore C64. His vision: giving AI agents a memory as human-like as technically possible. Nexus Memory is the result.</p>
+      </div>
+      <p class="footer__copy">Built with ❤️ for the AI agent ecosystem</p>
+    </div>
+  </footer>
+
+  <!-- ═══ Detail Panel ═══ -->
+  <aside class="detail-panel" id="detailPanel" role="dialog" aria-label="Memory Detail" aria-hidden="true">
+    <div class="detail-panel__backdrop" id="detailBackdrop"></div>
+    <div class="detail-panel__content">
+      <button class="detail-panel__close" id="detailClose" aria-label="Close">&times;</button>
+      <div id="detailBody">
+        <div class="detail-panel__empty">Click a node to view details</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══ Scripts ═══ -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/graph.js?v=2"></script>
+  <script src="/static/js/app.js?v=2"></script>
+</body>
+</html>
