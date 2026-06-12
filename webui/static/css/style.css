@@ -1416,6 +1416,9 @@ ul, ol { list-style: none; }
 .graph-footer:hover { opacity: 0.7; }
 
 .graph-footer__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--color-cat-fact);
   text-decoration: none;
   font-weight: 500;
