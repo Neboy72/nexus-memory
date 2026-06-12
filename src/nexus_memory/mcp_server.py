@@ -199,7 +199,7 @@ class EmbeddingProvider:
             return r.json()["embedding"]
 
         elif "google" in str(type(self._client)).lower() or "generativeai" in str(type(self._client)).lower():
-            result = self._client.embed_content(model=self._name, content=text)
+            result = await asyncio.to_thread(self._client.embed_content, model=self._name, content=text)
             return result["embedding"]
         raise RuntimeError(
             f"No embedding provider available ({self._name}).\n"
@@ -840,79 +840,108 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
     store = get_store()
 
     if name == "remember":
-        text = arguments["text"]
-        access_level = arguments.get("access_level", ACCESS_PUBLIC)
-        category = arguments.get("category", MemoryCategory.FACT.value)
-        source = arguments.get("source", "")
-        source_url = arguments.get("source_url", "")
-        confidence = arguments.get("confidence")
+        try:
+            text = arguments["text"]
+            access_level = arguments.get("access_level", ACCESS_PUBLIC)
+            category = arguments.get("category", MemoryCategory.FACT.value)
+            source = arguments.get("source", "")
+            source_url = arguments.get("source_url", "")
+            confidence = arguments.get("confidence")
 
-        if access_level not in ALL_ACCESS_LEVELS:
-            access_level = ACCESS_PUBLIC
+            if access_level not in ALL_ACCESS_LEVELS:
+                access_level = ACCESS_PUBLIC
 
-        # Guardrails check (v2.8.0 feature)
-        guardrails = _check_content_guardrails(text)
+            guardrails = _check_content_guardrails(text)
 
-        result = await store.remember(
-            text, access_level, category, source, source_url, confidence
-        )
+            result = await store.remember(
+                text, access_level, category, source, source_url, confidence
+            )
 
-        response = result
-        if guardrails:
-            response["warnings"] = guardrails
+            response = result
+            if guardrails:
+                response["warnings"] = guardrails
 
-        return [types.TextContent(
-            type="text",
-            text=json.dumps(response),
-        )]
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(response),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
 
     elif name == "recall":
-        query = arguments["query"]
-        limit = min(arguments.get("limit", 5), 20)
-        filter_level = arguments.get("filter_level", ACCESS_PUBLIC)
+        try:
+            query = arguments["query"]
+            limit = min(arguments.get("limit", 5), 20)
+            filter_level = arguments.get("filter_level", ACCESS_PUBLIC)
 
-        if filter_level not in ALL_ACCESS_LEVELS:
-            filter_level = ACCESS_PUBLIC
+            if filter_level not in ALL_ACCESS_LEVELS:
+                filter_level = ACCESS_PUBLIC
 
-        results = await store.recall(query, agent_level=filter_level, limit=limit)
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"results": results, "count": len(results)}),
-        )]
+            results = await store.recall(query, agent_level=filter_level, limit=limit)
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"results": results, "count": len(results)}),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
 
     elif name == "forget":
-        memory_id = arguments["memory_id"]
-        success = await store.forget(memory_id)
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"status": "deleted" if success else "not_found"}),
-        )]
+        try:
+            memory_id = arguments["memory_id"]
+            success = await store.forget(memory_id)
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "deleted" if success else "not_found"}),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
 
     elif name == "update":
-        memory_id = arguments["memory_id"]
-        new_text = arguments.get("text", "")
-        modified_by = arguments.get("modified_by", "")
+        try:
+            memory_id = arguments["memory_id"]
+            new_text = arguments.get("text", "")
+            modified_by = arguments.get("modified_by", "")
 
-        from nexus import nexus_update
-        result = nexus_update(
-            point_id=memory_id,
-            new_content=new_text if new_text else None,
-            modified_by=modified_by if modified_by else None,
-            qdrant_host=QDRANT_HOST,
-            qdrant_port=QDRANT_PORT,
-            collection_name=COLLECTION_NAME,
-        )
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"status": "updated", "detail": result}),
-        )]
+            from nexus import nexus_update
+            result = nexus_update(
+                point_id=memory_id,
+                new_content=new_text if new_text else None,
+                modified_by=modified_by if modified_by else None,
+                qdrant_host=QDRANT_HOST,
+                qdrant_port=QDRANT_PORT,
+                collection_name=COLLECTION_NAME,
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "updated", "detail": result}),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
 
     elif name == "health":
-        status = await store.health()
-        return [types.TextContent(
-            type="text",
-            text=json.dumps(status),
-        )]
+        try:
+            status = await store.health()
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(status),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
 
     elif name == "do_update":
         confirm = arguments.get("confirm", False)

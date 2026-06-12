@@ -289,7 +289,7 @@ def nexus_remember(
             source_type, content,
         )
 
-    # Warn if source_url missing for non-chat sources
+    if not source_url and source_type not in ("chat", "session"):
         _logger.warning(
             "Missing source_url for source_type '%s' — content: %.60s",
             source_type, content,
