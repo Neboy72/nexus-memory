@@ -1292,8 +1292,8 @@ ul, ol { list-style: none; }
   display: flex;
   flex-direction: column;
   min-height: calc(100vh - 64px);
-  padding: var(--space-md) var(--space-lg);
-  gap: var(--space-sm);
+  padding: 80px var(--space-lg) var(--space-md);
+  gap: var(--space-md);
 }
 
 .graph-main .graph-container {
@@ -1351,5 +1351,63 @@ ul, ol { list-style: none; }
   }
   .graph-controls__group--actions {
     min-width: 100%;
+  }
+}
+
+/* ═══ STATS KACHELN (Graph View) ═══ */
+.graph-stats {
+  margin-top: var(--space-sm);
+}
+
+.graph-stats__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-sm);
+}
+
+.graph-stat {
+  padding: var(--space-md) var(--space-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid;
+  text-align: center;
+  transition: all var(--transition-fast);
+}
+
+.graph-stat__value {
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-stat__label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  opacity: 0.55;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+[data-theme="dark"] .graph-stat {
+  background: var(--bg-card);
+  border-color: var(--border-default);
+}
+
+[data-theme="light"] .graph-stat {
+  background: var(--bg-card);
+  border-color: var(--border-default);
+}
+
+@media (max-width: 600px) {
+  .graph-stats__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .graph-stat {
+    padding: var(--space-sm);
+  }
+  .graph-stat__value {
+    font-size: 1.1rem;
   }
 }

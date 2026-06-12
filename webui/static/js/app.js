@@ -152,10 +152,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (el('statSources')) el('statSources').textContent = stats.total_unique_sources;
     if (el('statCategories')) el('statCategories').textContent = Object.keys(stats.by_category).length;
 
-    // Minimal stats bar (graph-only view)
-    if (el('statTotalMemories')) el('statTotalMemories').textContent = stats.total_memories + ' memories';
-    if (el('statConnections')) el('statConnections').textContent = stats.total_edges + ' connections';
-    if (el('statAvgConfidence')) el('statAvgConfidence').textContent = (stats.avg_confidence * 100).toFixed(0) + '% avg confidence';
+    // Stats cards (graph view)
+    if (el('statTotalMemories')) el('statTotalMemories').textContent = stats.total_memories;
+    if (el('statConnections')) el('statConnections').textContent = stats.total_edges;
+    if (el('statAvgConfidence')) el('statAvgConfidence').textContent = (stats.avg_confidence * 100).toFixed(0) + '%';
+    if (el('statSources')) el('statSources').textContent = stats.total_unique_sources;
 
     // Drift (legacy)
     const statDrift = el('statDrift');
