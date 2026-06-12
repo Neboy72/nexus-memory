@@ -35,7 +35,7 @@ const MemoryGraph = {
       fullText: m.text, category: m.category || 'fact', access_level: m.access_level || 'public',
       confidence: m.confidence || 0.7, drift: m.drift || 'fresh', source: m.source || '',
       created_at: m.created_at || null,
-      r: 4 + (m.confidence||0.7) * 11,
+      r: 7 + (m.confidence||0.7) * 15,
       color: catColors[m.category] || '#6b7280', driftColor: driftColors[m.drift] || '#22c55e',
     }));
 
@@ -53,26 +53,26 @@ const MemoryGraph = {
 
     // Edges
     const link = edgeLayer.selectAll('line').data(this.edges).join('line')
-      .attr('stroke','#6a9fcf').attr('stroke-width',1.5).attr('stroke-opacity',0.45);
+      .attr('stroke','#7ab0df').attr('stroke-width',2).attr('stroke-opacity',0.55);
 
     // Nodes
     const node = nodeLayer.selectAll('g').data(this.nodes).join('g').style('cursor','pointer');
 
     node.append('circle').attr('class','dr')
-      .attr('r', d => d.r+3).attr('fill','none')
-      .attr('stroke', d => d.driftColor).attr('stroke-width', d => d.drift==='fresh'?1:1.8)
-      .attr('stroke-opacity', d => d.drift==='fresh'?0.2:0.5);
+      .attr('r', d => d.r+4).attr('fill','none')
+      .attr('stroke', d => d.driftColor).attr('stroke-width', d => d.drift==='fresh'?2:3)
+      .attr('stroke-opacity', d => d.drift==='fresh'?0.3:0.6);
 
     node.append('circle').attr('class','co')
       .attr('r', d => d.r).attr('fill', d => d.color)
-      .attr('stroke', d => d3.color(d.color).darker(0.4)).attr('stroke-width',1)
-      .attr('filter','url(#sd)').attr('opacity',0.85);
+      .attr('stroke', d => d3.color(d.color).darker(0.3)).attr('stroke-width',1.5)
+      .attr('filter','url(#sd)').attr('opacity',0.9);
 
     // Labels
     labelLayer.selectAll('text').data(this.nodes).join('text')
-      .attr('text-anchor','middle').attr('font-size','8px')
-      .attr('font-family',"'Inter',sans-serif").attr('font-weight',500)
-      .attr('fill','currentColor').attr('opacity',0.6).text(d => d.label);
+      .attr('text-anchor','middle').attr('font-size','11px')
+      .attr('font-family',"'Inter',sans-serif").attr('font-weight',600)
+      .attr('fill','currentColor').attr('opacity',0.7).text(d => d.label);
 
     // Events
     node.on('mouseenter', (e,d) => {
@@ -83,10 +83,10 @@ const MemoryGraph = {
       labelLayer.selectAll('text').transition(150).attr('opacity', n => (n.id===d.id||connected.has(n.id))?1:0.08);
     });
     node.on('mouseleave', () => {
-      node.select('.co').transition(200).attr('opacity',0.85);
-      link.transition(200).attr('stroke-opacity',0.45).attr('stroke-width',1.5);
-      labelLayer.selectAll('text').transition(200).attr('opacity',0.6);
-    });
+        node.select('.co').transition(200).attr('opacity',0.9);
+        link.transition(200).attr('stroke-opacity',0.55).attr('stroke-width',2);
+        labelLayer.selectAll('text').transition(200).attr('opacity',0.7);
+      });
     node.on('click', (e,d) => {
       e.stopPropagation();
       node.select('.co').attr('stroke-width',1).attr('stroke', n => d3.color(n.color).darker(0.4));
@@ -116,7 +116,7 @@ const MemoryGraph = {
         labelLayer.selectAll('text').attr('x', d=>d.x).attr('y', d=>d.y+d.r+12);
       });
 
-    setTimeout(() => this._fit(), 3500);
+    setTimeout(() => this._fit(), 5000);
   },
 
   _fit() {
