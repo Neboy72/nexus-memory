@@ -270,24 +270,25 @@ ul, ol { list-style: none; }
 .header__logo-text { letter-spacing: -0.02em; }
 
 .header__logo-badge {
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: var(--radius-full);
-  opacity: 0.6;
-  margin-left: 2px;
+  margin-left: 8px;
 }
 
 [data-theme="dark"] .header__logo-badge {
-  background: rgba(59,130,246,0.12);
-  color: var(--color-cat-fact);
+  background: rgba(59,130,246,0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59,130,246,0.25);
 }
 
 [data-theme="light"] .header__logo-badge {
-  background: rgba(59,130,246,0.08);
-  color: var(--color-cat-fact);
+  background: rgba(59,130,246,0.12);
+  color: #2563eb;
+  border: 1px solid rgba(59,130,246,0.2);
 }
 
 .header__links {
