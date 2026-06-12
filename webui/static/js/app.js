@@ -158,6 +158,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (el('statAvgConfidence')) el('statAvgConfidence').textContent = (stats.avg_confidence * 100).toFixed(0) + '%';
     if (el('statSources')) el('statSources').textContent = stats.total_unique_sources;
 
+    // Drift Ampel
+    const drift = stats.by_drift_status || {};
+    if (el('driftFresh')) el('driftFresh').textContent = drift.fresh || 0;
+    if (el('driftDrifting')) el('driftDrifting').textContent = drift.drifting || 0;
+    if (el('driftDrifted')) el('driftDrifted').textContent = drift.drifted || 0;
+
     // Drift (legacy)
     const statDrift = el('statDrift');
     if (statDrift) {
