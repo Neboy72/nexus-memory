@@ -9,6 +9,6 @@
   </defs>
   <text x="0" y="34" font-family="Inter, -apple-system, BlinkMacSystemFont, sans-serif"
         font-size="40" font-weight="800" fill="url(#g)" letter-spacing="-1.5">Nexus Memory</text>
-  <text x="0" y="56" font-family="Inter, -apple-system, BlinkMacSystemFont, sans-serif"
+  <text x="18" y="56" font-family="Inter, -apple-system, BlinkMacSystemFont, sans-serif"
         font-size="14" fill="#b0b0c0" letter-spacing="0.5">Universal Memory Layer for AI Agents</text>
 </svg>
