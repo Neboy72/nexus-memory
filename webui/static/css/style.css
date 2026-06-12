@@ -269,6 +269,27 @@ ul, ol { list-style: none; }
 }
 .header__logo-text { letter-spacing: -0.02em; }
 
+.header__logo-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  opacity: 0.6;
+  margin-left: 2px;
+}
+
+[data-theme="dark"] .header__logo-badge {
+  background: rgba(59,130,246,0.12);
+  color: var(--color-cat-fact);
+}
+
+[data-theme="light"] .header__logo-badge {
+  background: rgba(59,130,246,0.08);
+  color: var(--color-cat-fact);
+}
+
 .header__links {
   display: flex;
   gap: var(--space-lg);
