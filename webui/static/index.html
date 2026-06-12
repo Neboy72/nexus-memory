@@ -102,38 +102,38 @@
     <!-- ═══ Stats Kacheln ═══ -->
     <div class="graph-stats" id="graphStats">
       <div class="graph-stats__grid">
-        <div class="graph-stat">
+        <div class="graph-stat" title="Total number of stored memory entries in your Nexus">
           <div class="graph-stat__value" id="statTotalMemories">-</div>
           <div class="graph-stat__label">Memories</div>
         </div>
-        <div class="graph-stat">
+        <div class="graph-stat" title="Links between related memories — how your knowledge is connected">
           <div class="graph-stat__value" id="statConnections">-</div>
           <div class="graph-stat__label">Connections</div>
         </div>
-        <div class="graph-stat">
+        <div class="graph-stat" title="Average reliability score — higher is more trustworthy">
           <div class="graph-stat__value" id="statAvgConfidence">-</div>
           <div class="graph-stat__label">Avg Confidence</div>
         </div>
-        <div class="graph-stat">
+        <div class="graph-stat" title="Distinct origin sources your memories come from">
           <div class="graph-stat__value" id="statSources">-</div>
           <div class="graph-stat__label">Sources</div>
         </div>
       </div>
       <!-- ═══ Drift-Ampel ═══ -->
       <div class="graph-drift" id="graphDrift">
-        <span class="graph-drift__item graph-drift__item--fresh">
+        <span class="graph-drift__item graph-drift__item--fresh" title="Recently verified — no contradictions found">
           <span class="graph-drift__dot"></span>
           <span class="graph-drift__count" id="driftFresh">-</span>
           <span class="graph-drift__label">Fresh</span>
         </span>
         <span class="graph-drift__sep"></span>
-        <span class="graph-drift__item graph-drift__item--drifting">
+        <span class="graph-drift__item graph-drift__item--drifting" title="Showing early signs of becoming outdated">
           <span class="graph-drift__dot"></span>
           <span class="graph-drift__count" id="driftDrifting">-</span>
           <span class="graph-drift__label">Drifting</span>
         </span>
         <span class="graph-drift__sep"></span>
-        <span class="graph-drift__item graph-drift__item--drifted">
+        <span class="graph-drift__item graph-drift__item--drifted" title="Outdated or contradicted — needs review">
           <span class="graph-drift__dot"></span>
           <span class="graph-drift__count" id="driftDrifted">-</span>
           <span class="graph-drift__label">Drifted</span>
