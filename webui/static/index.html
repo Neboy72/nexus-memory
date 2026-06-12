@@ -91,13 +91,26 @@
       <div class="graph-tooltip" id="graphTooltip"></div>
     </div>
 
-    <!-- ═══ Minimal Stats Bar ═══ -->
-    <div class="stats-bar" id="statsBar">
-      <span class="stats-bar__item" id="statTotalMemories">- memories</span>
-      <span class="stats-bar__sep"></span>
-      <span class="stats-bar__item" id="statConnections">- connections</span>
-      <span class="stats-bar__sep"></span>
-      <span class="stats-bar__item" id="statAvgConfidence">- avg confidence</span>
+    <!-- ═══ Stats Kacheln ═══ -->
+    <div class="graph-stats" id="graphStats">
+      <div class="graph-stats__grid">
+        <div class="graph-stat">
+          <div class="graph-stat__value" id="statTotalMemories">-</div>
+          <div class="graph-stat__label">Memories</div>
+        </div>
+        <div class="graph-stat">
+          <div class="graph-stat__value" id="statConnections">-</div>
+          <div class="graph-stat__label">Connections</div>
+        </div>
+        <div class="graph-stat">
+          <div class="graph-stat__value" id="statAvgConfidence">-</div>
+          <div class="graph-stat__label">Avg Confidence</div>
+        </div>
+        <div class="graph-stat">
+          <div class="graph-stat__value" id="statSources">-</div>
+          <div class="graph-stat__label">Sources</div>
+        </div>
+      </div>
     </div>
   </main>
 
