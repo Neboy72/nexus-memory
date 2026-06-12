@@ -134,10 +134,14 @@ const MemoryGraph = {
     const g=this.g; if(!g) return;
     const cat=filters.category, acc=filters.access_level, drf=filters.drift, q=(filters.search||'').toLowerCase();
     g.selectAll('g > g').attr('opacity', d => {
+      if(!d||!d.category) return 1;
       if(cat&&cat!=='all'&&d.category!==cat) return 0.04;
-      if(acc&&acc!=='all'&&d.access!==acc) return 0.04;
+      if(acc&&acc!=='all'&&d.access_level!==acc) return 0.04;
       if(drf&&drf!=='all'&&d.drift!==drf) return 0.04;
-      if(q&&!d.full.toLowerCase().includes(q)) return 0.04;
+      if(q) {
+        const txt = ((d.fullText||'') + ' ' + (d.label||'')).toLowerCase();
+        if(!txt.includes(q)) return 0.04;
+      }
       return 1;
     });
     g.selectAll('text').attr('opacity',0.6);
