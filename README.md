@@ -1,13 +1,6 @@
-# Nexus Memory
-
 <p align="center">
-  <img src="webui/static/assets/logo-transparent.png" width="72" alt="Nexus Memory"/>
+  <img src="docs/images/nexus-banner.svg" alt="Nexus Memory" height="140"/>
 </p>
-<p align="center">
-  <img src="docs/images/nexus-banner.svg" alt="Nexus Memory" height="52"/>
-</p>
-
-## One brain for all your agents.
 
 Your agents forget. Your context gets lost. Your setup knowledge is scattered across chats, tools and repos.
 
