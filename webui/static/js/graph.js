@@ -53,7 +53,7 @@ const MemoryGraph = {
 
     // Edges
     const link = edgeLayer.selectAll('line').data(this.edges).join('line')
-      .attr('stroke','#7ab0df').attr('stroke-width',2).attr('stroke-opacity',0.55);
+      .attr('stroke','#8bc4f0').attr('stroke-width',4).attr('stroke-opacity',0.75);
 
     // Nodes
     const node = nodeLayer.selectAll('g').data(this.nodes).join('g').style('cursor','pointer');
@@ -79,12 +79,12 @@ const MemoryGraph = {
       const connected = new Set();
       this.edges.forEach(e => { const s=e.source.id||e.source, t=e.target.id||e.target; if(s===d.id) connected.add(t); if(t===d.id) connected.add(s); });
       node.each(function(n) { d3.select(this).select('.co').transition(150).attr('opacity', (n.id===d.id||connected.has(n.id))?1:0.1); });
-      link.transition(150).attr('stroke-opacity', e => { const s=e.source.id||e.source, t=e.target.id||e.target; return (s===d.id||t===d.id)?0.7:0.03; }).attr('stroke-width', e => { const s=e.source.id||e.source, t=e.target.id||e.target; return (s===d.id||t===d.id)?2.5:0.5; });
+      link.transition(150).attr('stroke-opacity', e => { const s=e.source.id||e.source, t=e.target.id||e.target; return (s===d.id||t===d.id)?1:0.08; }).attr('stroke-width', e => { const s=e.source.id||e.source, t=e.target.id||e.target; return (s===d.id||t===d.id)?5:1; });
       labelLayer.selectAll('text').transition(150).attr('opacity', n => (n.id===d.id||connected.has(n.id))?1:0.08);
     });
     node.on('mouseleave', () => {
         node.select('.co').transition(200).attr('opacity',0.9);
-        link.transition(200).attr('stroke-opacity',0.55).attr('stroke-width',2);
+        link.transition(200).attr('stroke-opacity',0.75).attr('stroke-width',4);
         labelLayer.selectAll('text').transition(200).attr('opacity',0.7);
       });
     node.on('click', (e,d) => {
