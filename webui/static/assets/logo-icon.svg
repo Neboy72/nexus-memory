@@ -1,0 +1,12 @@
+<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <path d="M16 2 L30 12 L16 24 L2 12 Z" fill="none" stroke="url(#g)" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M16 2 L16 24 M3 12 L29 12" stroke="url(#g)" stroke-width="0.6" opacity="0.35"/>
+  <path d="M9 7 L16 5 L23 7" stroke="url(#g)" stroke-width="0.6" opacity="0.25" fill="none"/>
+  <text x="16" y="18" text-anchor="middle" font-family="Inter, -apple-system, sans-serif" font-weight="800" font-size="14" fill="url(#g)">N</text>
+</svg>
