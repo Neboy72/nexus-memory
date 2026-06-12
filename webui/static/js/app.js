@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     },
   };
 
-  // ─── Theme ───
+  // ─── Theme (optional — nur wenn Button existiert) ───
   const themeToggle = document.getElementById('themeToggle');
   const html = document.documentElement;
 
@@ -32,10 +32,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     setTheme(prefersDark ? 'dark' : 'light');
   }
 
-  themeToggle.addEventListener('click', () => {
-    const current = html.getAttribute('data-theme');
-    setTheme(current === 'dark' ? 'light' : 'dark');
-  });
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      const current = html.getAttribute('data-theme');
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
 
   // ─── Header Scroll Effect ───
   const header = document.querySelector('.header');
@@ -68,7 +70,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // ─── Hero Particles ───
+  // ─── Hero Particles (optional) ───
   function createParticles() {
     const container = document.getElementById('heroParticles');
     if (!container) return;
@@ -142,24 +144,35 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // ─── Stats ───
   function renderStats(stats) {
-    document.getElementById('statTotal').textContent = stats.total_memories;
-    document.getElementById('statEdges').textContent = stats.total_edges;
-    document.getElementById('statConfidence').textContent = (stats.avg_confidence * 100).toFixed(0) + '%';
-    document.getElementById('statSources').textContent = stats.total_unique_sources;
-    document.getElementById('statCategories').textContent = Object.keys(stats.by_category).length;
+    // Legacy stats grid (marketing page)
+    const el = (id) => document.getElementById(id);
+    if (el('statTotal')) el('statTotal').textContent = stats.total_memories;
+    if (el('statEdges')) el('statEdges').textContent = stats.total_edges;
+    if (el('statConfidence')) el('statConfidence').textContent = (stats.avg_confidence * 100).toFixed(0) + '%';
+    if (el('statSources')) el('statSources').textContent = stats.total_unique_sources;
+    if (el('statCategories')) el('statCategories').textContent = Object.keys(stats.by_category).length;
 
-    const drift = stats.by_drift_status || {};
-    const ampel = [];
-    const colors = {'fresh':'#22c55e','drifting':'#eab308','drifted':'#ef4444'};
-    for (const [key, color] of Object.entries(colors)) {
-      if (drift[key] && drift[key] > 0) {
-        ampel.push(`<div style="display:flex;align-items:center;gap:12px;padding:3px 8px">
-          <span style="width:12px;height:12px;border-radius:50%;background:${color};display:inline-block;box-shadow:0 0 5px ${color}50;flex-shrink:0"></span>
-          <span style="font-size:1.1rem;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;text-align:right;flex:1">${drift[key]}</span>
-        </div>`);
+    // Minimal stats bar (graph-only view)
+    if (el('statTotalMemories')) el('statTotalMemories').textContent = stats.total_memories + ' memories';
+    if (el('statConnections')) el('statConnections').textContent = stats.total_edges + ' connections';
+    if (el('statAvgConfidence')) el('statAvgConfidence').textContent = (stats.avg_confidence * 100).toFixed(0) + '% avg confidence';
+
+    // Drift (legacy)
+    const statDrift = el('statDrift');
+    if (statDrift) {
+      const drift = stats.by_drift_status || {};
+      const ampel = [];
+      const colors = {'fresh':'#22c55e','drifting':'#eab308','drifted':'#ef4444'};
+      for (const [key, color] of Object.entries(colors)) {
+        if (drift[key] && drift[key] > 0) {
+          ampel.push(`<div style="display:flex;align-items:center;gap:12px;padding:3px 8px">
+            <span style="width:12px;height:12px;border-radius:50%;background:${color};display:inline-block;box-shadow:0 0 5px ${color}50;flex-shrink:0"></span>
+            <span style="font-size:1.1rem;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;text-align:right;flex:1">${drift[key]}</span>
+          </div>`);
+        }
       }
+      statDrift.innerHTML = ampel.join('');
     }
-    document.getElementById('statDrift').innerHTML = ampel.join('');
   }
 
   // ─── Filters ───
