@@ -1401,6 +1401,27 @@ ul, ol { list-style: none; }
 }
 [data-theme="light"] .graph-drift__sep { background: var(--text-secondary); }
 
+/* ═══ GRAPH FOOTER (dezent) ═══ */
+.graph-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  font-size: 0.72rem;
+  opacity: 0.35;
+  padding: var(--space-sm) 0 var(--space-lg);
+  text-align: center;
+  transition: opacity var(--transition-base);
+}
+.graph-footer:hover { opacity: 0.7; }
+
+.graph-footer__link {
+  color: var(--color-cat-fact);
+  text-decoration: none;
+  font-weight: 500;
+}
+.graph-footer__link:hover { text-decoration: underline; }
+
 @media (max-width: 768px) {
   .graph-main {
     padding: 100px var(--space-sm) var(--space-md);
