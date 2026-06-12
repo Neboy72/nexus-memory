@@ -955,21 +955,13 @@ async def main():
             ),
         )
 
-WEBUI_PORT = 9120
-WEBUI_HOST = "127.0.0.1"
-
-
-def _webui_banner():
-    return (
-        f"\n"
-        f"  🌐 Nexus Memory WebUI\n"
-        f"  ─────────────────────\n"
-        f"  URL:  http://{WEBUI_HOST}:{WEBUI_PORT}\n"
-        f"  Stop: Ctrl+C\n"
-        f"\n"
-        f"  💡 Opens in your browser automatically.\n"
-        f"  If not, copy the URL above.\n"
-    )
+def _check_webui_available():
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+        print("WebUI available: nexus-memory webui")
+    except ImportError:
+        pass
 
 
 def cli():
@@ -1010,15 +1002,6 @@ def cli():
     _check_webui_available()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     asyncio.run(main())
-
-
-def _check_webui_available():
-    try:
-        import fastapi  # noqa: F401
-        import uvicorn  # noqa: F401
-        print("💡 WebUI available: nexus-memory webui")
-    except ImportError:
-        pass
 
 
 if __name__ == "__main__":
