@@ -257,7 +257,7 @@ def nexus_remember(
     import requests as _req
     from nexus.provenance import attach_source
 
-    # Build payload
+    # Build payload (category wird nach Validierung korrigiert, siehe unten)
     payload: dict[str, Any] = {
         "content": content,
         "category": category,
@@ -270,6 +270,7 @@ def nexus_remember(
     if category not in MemoryCategory._value2member_map_:
         _logger.warning("Unknown category '%s' — coercing to 'fact'", category)
         category = MemoryCategory.FACT.value
+        payload["category"] = category  # Payload nach Coercion aktualisieren
 
     # ── Guardrails (Ch18) — Input Validation ───────────────────────────
     if len(content) > 5000:
