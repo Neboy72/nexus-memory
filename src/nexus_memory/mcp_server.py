@@ -472,8 +472,12 @@ class MemoryStore:
                                         r["source_url"] = pl.get("source_url")
                                     if not r.get("access_level"):
                                         r["access_level"] = pl.get("access_level")
+                                    # State-prefixing: legacy entries written
+                                    # before category was required are missing
+                                    # the field — fill with the "fact" default
+                                    # so consumers always see a valid value.
                                     if not r.get("category"):
-                                        r["category"] = pl.get("category")
+                                        r["category"] = pl.get("category") or MemoryCategory.FACT.value
                                     if not r.get("source"):
                                         r["source"] = pl.get("source")
                                     if not r.get("created_at"):
@@ -499,7 +503,9 @@ class MemoryStore:
                     "id": payload.get("id"),
                     "content": payload.get("content"),
                     "access_level": payload.get("access_level"),
-                    "category": payload.get("category"),
+                    # State-prefixing: legacy entries may not have a category —
+                    # fall back to "fact" so the response is always well-typed.
+                    "category": payload.get("category") or MemoryCategory.FACT.value,
                     "source": payload.get("source"),
                     "source_url": payload.get("source_url"),
                     "provenance": payload.get("provenance", {}),
@@ -724,7 +730,12 @@ async def handle_list_tools() -> list[types.Tool]:
                     "category": {
                         "type": "string",
                         "enum": [c.value for c in MemoryCategory],
-                        "description": "Memory category: fact, belief, session, rule, preference, temp",
+                        "description": (
+                            "Memory category (state-prefixing scope): fact, belief, "
+                            "session, rule, preference, temp. Required for state-prefixing "
+                            "— the server applies 'fact' as a backward-compatible default "
+                            "when the client omits this field."
+                        ),
                         "default": "fact",
                     },
                     "source": {
@@ -745,7 +756,7 @@ async def handle_list_tools() -> list[types.Tool]:
                         "maximum": 1.0,
                     },
                 },
-                "required": ["text"],
+                "required": ["text", "category"],
             },
         ),
         types.Tool(
@@ -855,7 +866,14 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         try:
             text = arguments["text"]
             access_level = arguments.get("access_level", ACCESS_PUBLIC)
+            # State-prefixing: category is required by the tool schema, but the
+            # server applies "fact" as a backward-compatible default when an
+            # older client omits the field. We also coerce unknown / invalid
+            # values to "fact" so the 6-value enum is always respected.
             category = arguments.get("category", MemoryCategory.FACT.value)
+            valid_categories = [c.value for c in MemoryCategory]
+            if not category or category not in valid_categories:
+                category = MemoryCategory.FACT.value
             source = arguments.get("source", "")
             source_url = arguments.get("source_url", "")
             confidence = arguments.get("confidence")
