@@ -69,6 +69,224 @@ VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
+
+# ── Webhook Subscriptions ─────────────────────────────────────────
+
+# Event types emitted by the MCP server when memory state changes.
+# Subscriptions are stored as plain JSON in ~/.nexus-webhooks.json so the
+# feature has zero new dependencies and no impact on the Qdrant collection.
+WEBHOOK_EVENTS = ("memory.remember", "memory.update", "memory.forget")
+WEBHOOK_STORE_PATH = Path.home() / ".nexus-webhooks.json"
+
+
+class WebhookStore:
+    """Persistent store for webhook subscriptions.
+
+    Subscriptions are kept in a single JSON file (``~/.nexus-webhooks.json``
+    by default) so we don't need a new Qdrant collection, a new SQLite
+    database, or any new runtime dependency. The file is small (handful of
+    entries) and is read / written through an ``asyncio.Lock`` so a
+    concurrent ``subscribe()`` and ``unsubscribe()`` cannot lose data.
+
+    Schema on disk::
+
+        {
+          "subscriptions": [
+            {
+              "id": "uuid4-string",
+              "event_type": "memory.remember",
+              "webhook_url": "https://example.com/hook",
+              "created_at": "2026-06-13T12:34:56+00:00"
+            }
+          ]
+        }
+    """
+
+    def __init__(self, path: Path | None = None):
+        self.path = Path(path) if path is not None else WEBHOOK_STORE_PATH
+        self._lock = asyncio.Lock()
+
+    # ---- low-level IO --------------------------------------------------
+
+    def _read_sync(self) -> list[dict]:
+        """Synchronous read of the JSON file. Caller must hold ``_lock``.
+
+        Returns an empty list when the file is missing or unreadable so a
+        fresh install / permission hiccup never breaks the MCP server.
+        """
+        if not self.path.exists():
+            return []
+        try:
+            with self.path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            logging.warning(f"Webhook store read failed: {exc}; starting empty")
+            return []
+        if not isinstance(data, dict):
+            return []
+        subs = data.get("subscriptions", [])
+        return subs if isinstance(subs, list) else []
+
+    def _write_sync(self, subs: list[dict]) -> None:
+        """Synchronous write of the JSON file. Caller must hold ``_lock``."""
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump({"subscriptions": subs}, fh, indent=2)
+            tmp.replace(self.path)
+        except OSError as exc:
+            logging.error(f"Webhook store write failed: {exc}")
+
+    # ---- public API ----------------------------------------------------
+
+    async def list(self) -> list[dict]:
+        """Return all subscriptions currently registered."""
+        async with self._lock:
+            return list(self._read_sync())
+
+    async def subscribe(self, event_type: str, webhook_url: str) -> dict:
+        """Register a new subscription and return it (with a fresh ``id``)."""
+        if event_type not in WEBHOOK_EVENTS:
+            raise ValueError(
+                f"Unknown event_type {event_type!r}. "
+                f"Valid: {', '.join(WEBHOOK_EVENTS)}"
+            )
+        if not webhook_url or not (
+            webhook_url.startswith("http://") or webhook_url.startswith("https://")
+        ):
+            raise ValueError(
+                "webhook_url must be a non-empty http:// or https:// URL"
+            )
+
+        sub = {
+            "id": str(uuid.uuid4()),
+            "event_type": event_type,
+            "webhook_url": webhook_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        async with self._lock:
+            subs = self._read_sync()
+            subs.append(sub)
+            self._write_sync(subs)
+        logging.info(f"Webhook subscribed: {sub['id'][:8]} {event_type} -> {webhook_url}")
+        return sub
+
+    async def unsubscribe(self, subscription_id: str) -> bool:
+        """Remove the subscription with ``subscription_id``. Returns True
+        when something was actually removed, False when the id was unknown.
+        """
+        async with self._lock:
+            subs = self._read_sync()
+            kept = [s for s in subs if s.get("id") != subscription_id]
+            if len(kept) == len(subs):
+                return False
+            self._write_sync(kept)
+        logging.info(f"Webhook unsubscribed: {subscription_id[:8]}")
+        return True
+
+    async def matching(self, event_type: str) -> list:
+        """Return subscriptions for ``event_type``. Used by the dispatcher."""
+        async with self._lock:
+            return [s for s in self._read_sync() if s.get("event_type") == event_type]
+
+
+_webhook_store: Optional["WebhookStore"] = None
+
+
+def get_webhook_store() -> WebhookStore:
+    """Module-level singleton accessor — keeps the same pattern as
+    ``get_store()`` so the webhook store can be patched in tests via
+    ``monkeypatch.setattr(mcp, "_webhook_store", ...)``.
+    """
+    global _webhook_store
+    if _webhook_store is None:
+        _webhook_store = WebhookStore()
+    return _webhook_store
+
+
+async def dispatch_event(event_type: str, memory_id: str) -> None:
+    """Fire-and-forget dispatch of ``event_type`` to every matching webhook.
+
+    Each subscription is POSTed to in its own background task. Errors
+    (timeouts, 4xx/5xx, connection failures) are caught and logged so
+    a single broken subscriber can never crash the MCP server or block
+    the main tool call.
+
+    Body shape: ``{"event": ..., "memory_id": ..., "timestamp": ...}``.
+    """
+    if event_type not in WEBHOOK_EVENTS:
+        return  # unknown events are silently ignored — defense in depth
+    try:
+        subs = await get_webhook_store().matching(event_type)
+    except Exception as exc:
+        logging.warning(f"Webhook lookup failed for {event_type}: {exc}")
+        return
+    if not subs:
+        return
+
+    payload = {
+        "event": event_type,
+        "memory_id": memory_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    for sub in subs:
+        url = sub.get("webhook_url")
+        if not url:
+            continue
+        # create_task is enough — the inner coroutine catches all errors.
+        try:
+            asyncio.create_task(_post_webhook(url, payload))
+        except RuntimeError as exc:
+            # No running loop (e.g. during interpreter shutdown).
+            logging.debug(f"Skipping webhook fire (no loop): {exc}")
+
+
+async def _post_webhook(url: str, payload: dict) -> None:
+    """POST ``payload`` to ``url`` and swallow every error.
+
+    Tried first with ``httpx.AsyncClient`` (already a transitive dep in
+    the project's recall path); if it's not installed, falls back to
+    ``urllib.request`` in a thread executor. Either way, every exception
+    is caught and logged — webhooks are best-effort.
+    """
+    body = json.dumps(payload).encode("utf-8")
+    try:
+        try:
+            import httpx  # type: ignore
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(url, content=body,
+                                          headers={"Content-Type": "application/json"})
+                if resp.status_code >= 400:
+                    logging.warning(
+                        f"Webhook {url} returned {resp.status_code} for "
+                        f"{payload.get('event')}"
+                    )
+                return
+        except ImportError:
+            pass
+
+        # Fallback: blocking urllib in a thread so the event loop stays free.
+        loop = asyncio.get_running_loop()
+
+        def _send():
+            import urllib.request
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                # Drain body so the connection can be reused.
+                resp.read(1024)
+
+        await loop.run_in_executor(None, _send)
+    except Exception as exc:
+        logging.warning(
+            f"Webhook fire failed for {url} (event={payload.get('event')}): {exc}"
+        )
+
+
 # ── Embedding Provider ────────────────────────────────────────────
 
 class EmbeddingProvider:
@@ -867,6 +1085,65 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["confirm"],
             },
         ),
+        types.Tool(
+            name="subscribe",
+            description=(
+                "Register a webhook URL to receive HTTP POST notifications when "
+                "a memory event of the given type fires. Returns the subscription "
+                "id (UUID) which you need to unsubscribe. Subscriptions are stored "
+                "in ~/.nexus-webhooks.json and survive server restarts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "event_type": {
+                        "type": "string",
+                        "enum": list(WEBHOOK_EVENTS),
+                        "description": (
+                            "Event to subscribe to. One of: "
+                            "'memory.remember' (after a new memory is stored), "
+                            "'memory.update' (after a memory is updated in place), "
+                            "'memory.forget' (after a memory is deleted)."
+                        ),
+                    },
+                    "webhook_url": {
+                        "type": "string",
+                        "description": (
+                            "The http:// or https:// URL that will receive the "
+                            "JSON POST payload {event, memory_id, timestamp}."
+                        ),
+                    },
+                },
+                "required": ["event_type", "webhook_url"],
+            },
+        ),
+        types.Tool(
+            name="unsubscribe",
+            description=(
+                "Remove a webhook subscription by its id (returned from subscribe)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "subscription_id": {
+                        "type": "string",
+                        "description": "The id of the subscription to remove.",
+                    },
+                },
+                "required": ["subscription_id"],
+            },
+        ),
+        types.Tool(
+            name="list_subscriptions",
+            description=(
+                "List all currently registered webhook subscriptions "
+                "(id, event_type, webhook_url, created_at)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
     ]
 
 
@@ -898,6 +1175,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             result = await store.remember(
                 text, access_level, category, source, source_url, confidence
             )
+
+            # Fire-and-forget: dispatch "memory.remember" to any subscribers.
+            # The dispatcher swallows every error so a broken subscriber
+            # cannot affect the response we return to the client.
+            await dispatch_event("memory.remember", result["id"])
 
             response = result
             if guardrails:
@@ -937,6 +1219,9 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         try:
             memory_id = arguments["memory_id"]
             success = await store.forget(memory_id)
+            if success:
+                # Fire-and-forget: dispatch "memory.forget" to subscribers.
+                await dispatch_event("memory.forget", memory_id)
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": "deleted" if success else "not_found"}),
@@ -962,6 +1247,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 qdrant_port=QDRANT_PORT,
                 collection_name=COLLECTION_NAME,
             )
+            # Fire-and-forget: dispatch "memory.update" to subscribers.
+            # We always dispatch when the update call did not raise — the
+            # result detail from nexus_update already encodes its own
+            # success / noop state, and dispatching a noop is harmless.
+            await dispatch_event("memory.update", memory_id)
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": "updated", "detail": result}),
@@ -1004,6 +1294,62 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             type="text",
             text=json.dumps(result, indent=2),
         )]
+
+    elif name == "subscribe":
+        try:
+            event_type = arguments["event_type"]
+            webhook_url = arguments["webhook_url"]
+            sub = await get_webhook_store().subscribe(event_type, webhook_url)
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "status": "subscribed",
+                    "subscription": sub,
+                }),
+            )]
+        except ValueError as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
+
+    elif name == "unsubscribe":
+        try:
+            subscription_id = arguments["subscription_id"]
+            removed = await get_webhook_store().unsubscribe(subscription_id)
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "status": "unsubscribed" if removed else "not_found",
+                    "removed": removed,
+                }),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
+
+    elif name == "list_subscriptions":
+        try:
+            subs = await get_webhook_store().list()
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "subscriptions": subs,
+                    "count": len(subs),
+                }),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
 
     else:
         raise ValueError(f"Unknown tool: {name}")
