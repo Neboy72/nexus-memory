@@ -1,7 +1,7 @@
 """EdgeStore — Qdrant-Payload-backed CRUD for SkillGraph edges.
 
 v2.2.0: SQLite removed. Edges live directly in Qdrant point payloads
-of the canonical facts (Collection ``hermes-memory``).
+of the canonical facts (Collection ``nexus``).
 
 Each fact point carries an ``edges`` field:
   ``edges: [{"edge_id", "target_fact_id", "relation", "status", ...}, ...]``
