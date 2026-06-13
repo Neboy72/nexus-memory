@@ -13,8 +13,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-|[![Version](https://img.shields.io/badge/version-0.2.5-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-|[![Tests](https://img.shields.io/badge/tests-379%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.2.5-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-379%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -52,9 +52,9 @@ pip install -e .
 Choose your embedding (auto-detected at runtime, you pick):
 
 - **💚 Google / Vertex AI** — `GOOGLE_API_KEY` in `.env` (768d)
-- **💜 Jina** — `JINA_API_KEY` in `.env` (1024d, best value)
+- **💜 Jina** — `JINA_API_KEY` in `.env` (1024d)
 - **🦙 Ollama** — `ollama pull nomic-embed-text`
-- **☁️ Voyage** — `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d, best quality)
+- **☁️ Voyage** — `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d)
 - **☁️ OpenAI** — `OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
 - **🏠 Local (default)** — `pip install nexus-memory[local]` (sentence-transformers, no key)
 
@@ -409,12 +409,14 @@ Detects stale entries, old patterns (`"X running as fallback"` — but X was rep
 
 One server. Multiple backends. Same API.
 
-| Provider | Type | Setup | Dims | Quality |
-|----------|------|-------|------|---------|
-| **Voyage** ☁️ | Cloud API | `VOYAGE_API_KEY` in `.env` | **1024** | ⭐ Best |
-| **OpenAI** ☁️ | Cloud API | `OPENAI_API_KEY` in `.env` | **1536** | ⭐ Great |
-| **Ollama** 🦙 | Local | `ollama pull nomic-embed-text` | 768 | Better |
-| **sentence-transformers** 🏠 | Local | `pip install sentence-transformers` | 384 | Good ✅ *(default)* |
+| Provider | Type | Setup | Dims |
+|----------|------|------|------|
+| **Voyage** ☁️ | Cloud | `VOYAGE_API_KEY` in MCP `env:` block | 1024 |
+| **OpenAI** ☁️ | Cloud | `OPENAI_API_KEY` in MCP `env:` block | 1536 |
+| **Google / Vertex AI** 💚 | Cloud | `GOOGLE_API_KEY` in `.env` | 768 |
+| **Jina** 💜 | Cloud | `JINA_API_KEY` in `.env` | 1024 |
+| **Ollama** 🦙 | Local | `ollama pull nomic-embed-text` | 768 |
+| **sentence-transformers** 🏠 | Local | `pip install sentence-transformers` | 384 |
 
 ---
 
@@ -444,12 +446,12 @@ pytest tests/ -v   # 379 tests ✅
 - Qdrant v1.12+ running on `localhost:6333`
 - One embedding provider (auto-detected):
   - **💚 Google / Vertex AI** — `GOOGLE_API_KEY` in `.env` (768d)
-- **💜 Jina** — `JINA_API_KEY` in `.env` (1024d, best value)
-- **🦙 Ollama** — `ollama pull nomic-embed-text`
-  - **☁️ Voyage** — `VOYAGE_API_KEY` in `.env`
-  - **☁️ OpenAI** — `OPENAI_API_KEY` in `.env`
+  - **💜 Jina** — `JINA_API_KEY` in `.env` (1024d)
+  - **🦙 Ollama** — `ollama pull nomic-embed-text`
+  - **☁️ Voyage** — `VOYAGE_API_KEY` in `.env` (1024d)
+  - **☁️ OpenAI** — `OPENAI_API_KEY` in `.env` (1536d)
   - **🏠 Local** — `pip install sentence-transformers`
-- **Optional:** `bm25s` for hybrid search
+
 
 ---
 
@@ -461,4 +463,4 @@ MIT — use it, modify it, ship it.
 
 ⭐️ Found it useful? [Give it a star on GitHub](https://github.com/Neboy72/nexus-memory) — it helps others find it!
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026 · v0.2.0 — One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026 · v0.2.5 — One memory for all your agents</sub>
