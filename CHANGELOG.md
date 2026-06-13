@@ -4,15 +4,22 @@
 
 **State-Prefixing: `category` ist jetzt Pflichtfeld im `remember`-Tool (mit Default `fact` für Rückwärtskompatibilität).**
 
+**Provenance-Standard: `source_url` + `confidence` als empfohlene Pflichtfelder im `remember`-Tool.**
+
 ### MCP Server
 
 - **Tool-Schema** — `category` ist in `required: ["text", "category"]` aufgenommen. Der Server wendet `"fact"` als Default an, wenn der Client das Feld weglässt oder einen unbekannten Wert sendet → ältere Clients funktionieren weiter.
 - **Dispatcher-Validierung** — `handle_call_tool` für `remember` prüft `category` jetzt explizit gegen `MemoryCategory._value2member_map_` und coerced ungültige / leere Werte auf `MemoryCategory.FACT.value`.
 - **Recall-Pfade** — `category` aus dem Qdrant-Payload wird in beiden Suchpfaden (Hybrid + Vector-Fallback) auf `MemoryCategory.FACT.value` normalisiert, falls der Eintrag vor diesem Release ohne `category` geschrieben wurde. Konsumenten sehen damit immer einen gültigen Enum-Wert.
+- **Provenance-Schema-Doku** — `source_url` und `confidence` bleiben optional (kein Eintrag in `required`), aber die Tool-Schema-Beschreibungen erklären jetzt explizit:
+  - `source_url` aktiviert Justification-Check (Rung 2) — async HTTP HEAD bei jedem Recall, `verification: "verified" | "unreachable"` statt `"unchecked"`.
+  - `confidence` bekommt eine Empfehlungs-Skala (0.9+ für verifizierte Fakten, 0.5-0.8 für Beliefs, <0.5 für Spekulation).
+  - Server-Defaults (`0.7` für Confidence) bleiben rückwärtskompatibel.
 
 ### Docs
 
 - `AGENTS.md` — Memory-Categories-Sektion umgeschrieben (State-Prefixing-Tabelle, Legacy-Data-Hinweis, Pflichtfeld-Vermerk in der Tool-Übersicht).
+- `AGENTS.md` — Provenance-Sektion komplett überarbeitet: "Recommended call"-Beispiel, Parametertabelle (source_url / confidence / source), Verifikationsstatus-Tabelle mit "When"-Spalte, "Why this matters"-Sektion mit Spivakovsky-Referenz.
 
 ## v0.2.5 (2026-06-13)
 
