@@ -16,6 +16,7 @@ patched. We exercise:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from typing import Any
@@ -649,3 +650,310 @@ class TestEmbeddingProviderDetection:
         assert ep.name != "voyage-3-large", (
             "Bad-prefix VOYAGE_API_KEY must not be accepted as a voyage key"
         )
+
+
+# ===========================================================================
+# 7. Webhook Subscriptions — store, tools, and event dispatch
+# ===========================================================================
+
+
+@pytest.fixture
+def webhook_store(tmp_path, monkeypatch):
+    """A ``WebhookStore`` pointed at a per-test temp file.
+
+    The store is also installed as the module-level singleton so the
+    dispatcher (``dispatch_event`` → ``get_webhook_store()``) and the
+    tool handlers see it.
+    """
+    store = mcp.WebhookStore(path=tmp_path / "webhooks.json")
+    monkeypatch.setattr(mcp, "_webhook_store", store)
+    return store
+
+
+class TestWebhookStore:
+    """Direct unit tests on the ``WebhookStore`` data layer."""
+
+    async def test_subscribe_persists_to_disk(self, webhook_store, tmp_path):
+        sub = await webhook_store.subscribe(
+            "memory.remember", "https://example.com/hook"
+        )
+        assert sub["event_type"] == "memory.remember"
+        assert sub["webhook_url"] == "https://example.com/hook"
+        assert sub["id"]
+        assert sub["created_at"]
+
+        # The file must actually exist on disk and be valid JSON.
+        on_disk = json.loads((tmp_path / "webhooks.json").read_text())
+        assert on_disk["subscriptions"][0]["id"] == sub["id"]
+
+    async def test_unsubscribe_removes_subscription(self, webhook_store):
+        sub = await webhook_store.subscribe(
+            "memory.forget", "https://example.com/forget-hook"
+        )
+        removed = await webhook_store.unsubscribe(sub["id"])
+        assert removed is True
+        assert await webhook_store.list() == []
+
+    async def test_unsubscribe_unknown_id_returns_false(self, webhook_store):
+        await webhook_store.subscribe(
+            "memory.update", "https://example.com/x"
+        )
+        removed = await webhook_store.unsubscribe("nonexistent-id")
+        assert removed is False
+        # The real subscription is still there.
+        subs = await webhook_store.list()
+        assert len(subs) == 1
+
+    async def test_list_subscriptions_returns_all(self, webhook_store):
+        await webhook_store.subscribe("memory.remember", "https://a.example/h")
+        await webhook_store.subscribe("memory.update", "https://b.example/h")
+        await webhook_store.subscribe("memory.forget", "https://c.example/h")
+        subs = await webhook_store.list()
+        assert len(subs) == 3
+        event_types = {s["event_type"] for s in subs}
+        assert event_types == {"memory.remember", "memory.update", "memory.forget"}
+
+    async def test_matching_filters_by_event_type(self, webhook_store):
+        await webhook_store.subscribe("memory.remember", "https://a/h")
+        await webhook_store.subscribe("memory.update", "https://b/h")
+        matches = await webhook_store.matching("memory.remember")
+        assert len(matches) == 1
+        assert matches[0]["event_type"] == "memory.remember"
+
+    async def test_unknown_event_type_rejected(self, webhook_store):
+        with pytest.raises(ValueError, match="Unknown event_type"):
+            await webhook_store.subscribe("memory.bogus", "https://x/h")
+
+    @pytest.mark.parametrize("bad_url", ["", "ftp://x/y", "not-a-url", "javascript:alert(1)"])
+    async def test_invalid_webhook_url_rejected(self, webhook_store, bad_url):
+        with pytest.raises(ValueError, match="http:// or https://"):
+            await webhook_store.subscribe("memory.remember", bad_url)
+
+    async def test_empty_store_file_returns_empty_list(self, tmp_path):
+        # A non-existent file must NOT raise — a fresh install starts empty.
+        store = mcp.WebhookStore(path=tmp_path / "does_not_exist.json")
+        assert await store.list() == []
+
+    async def test_corrupt_store_file_does_not_crash(self, tmp_path):
+        # A garbage file must NOT propagate the error — the store stays empty.
+        path = tmp_path / "webhooks.json"
+        path.write_text("{not valid json")
+        store = mcp.WebhookStore(path=path)
+        assert await store.list() == []
+
+
+class TestWebhookTools:
+    """End-to-end tests of the three webhook MCP tools."""
+
+    async def test_subscribe_tool_returns_subscription(self, webhook_store):
+        out = await mcp.handle_call_tool(
+            "subscribe",
+            {"event_type": "memory.remember", "webhook_url": "https://x/h"},
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "subscribed"
+        assert body["subscription"]["id"]
+        assert body["subscription"]["event_type"] == "memory.remember"
+        assert body["subscription"]["webhook_url"] == "https://x/h"
+
+    async def test_subscribe_tool_rejects_bad_event_type(self, webhook_store):
+        out = await mcp.handle_call_tool(
+            "subscribe",
+            {"event_type": "memory.bogus", "webhook_url": "https://x/h"},
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "error"
+        assert "Unknown event_type" in body["error"]
+
+    async def test_subscribe_tool_rejects_bad_url(self, webhook_store):
+        out = await mcp.handle_call_tool(
+            "subscribe",
+            {"event_type": "memory.remember", "webhook_url": "not-a-url"},
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "error"
+
+    async def test_unsubscribe_tool_removes_subscription(self, webhook_store):
+        sub = await webhook_store.subscribe(
+            "memory.remember", "https://x/h"
+        )
+        out = await mcp.handle_call_tool(
+            "unsubscribe", {"subscription_id": sub["id"]}
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "unsubscribed"
+        assert body["removed"] is True
+        assert await webhook_store.list() == []
+
+    async def test_unsubscribe_tool_unknown_id_returns_not_found(self, webhook_store):
+        out = await mcp.handle_call_tool(
+            "unsubscribe", {"subscription_id": "no-such-id"}
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "not_found"
+        assert body["removed"] is False
+
+    async def test_list_subscriptions_tool_shows_all(self, webhook_store):
+        await webhook_store.subscribe("memory.remember", "https://a/h")
+        await webhook_store.subscribe("memory.forget", "https://b/h")
+        out = await mcp.handle_call_tool("list_subscriptions", {})
+        body = _decode(out[0].text)
+        assert body["count"] == 2
+        urls = {s["webhook_url"] for s in body["subscriptions"]}
+        assert urls == {"https://a/h", "https://b/h"}
+
+    async def test_list_subscriptions_tool_empty(self, webhook_store):
+        out = await mcp.handle_call_tool("list_subscriptions", {})
+        body = _decode(out[0].text)
+        assert body["count"] == 0
+        assert body["subscriptions"] == []
+
+    async def test_tool_schemas_listed(self):
+        tools = await mcp.handle_list_tools()
+        names = {t.name for t in tools}
+        assert "subscribe" in names
+        assert "unsubscribe" in names
+        assert "list_subscriptions" in names
+
+    async def test_subscribe_schema_marks_fields_required(self):
+        tools = await mcp.handle_list_tools()
+        sub = next(t for t in tools if t.name == "subscribe")
+        assert set(sub.inputSchema["required"]) == {"event_type", "webhook_url"}
+        # event_type must be a closed enum of the three valid event types.
+        assert set(sub.inputSchema["properties"]["event_type"]["enum"]) == {
+            "memory.remember", "memory.update", "memory.forget"
+        }
+
+    async def test_unsubscribe_schema_marks_id_required(self):
+        tools = await mcp.handle_list_tools()
+        unsub = next(t for t in tools if t.name == "unsubscribe")
+        assert unsub.inputSchema["required"] == ["subscription_id"]
+
+
+class TestWebhookEventDispatch:
+    """``dispatch_event`` is wired into the existing tool handlers."""
+
+    async def test_remember_fires_webhook_when_subscription_exists(
+        self, mcp_store, webhook_store
+    ):
+        # Patch _post_webhook so we don't actually open a socket.
+        captured = []
+        async def _fake_post(url, payload):
+            captured.append((url, dict(payload)))
+        monkeypatch = pytest.MonkeyPatch()
+        try:
+            monkeypatch.setattr(mcp, "_post_webhook", _fake_post)
+            await webhook_store.subscribe("memory.remember", "https://hook/x")
+
+            out = await mcp.handle_call_tool(
+                "remember", {"text": "hello webhook", "category": "fact"}
+            )
+            body = _decode(out[0].text)
+            assert body["status"] == "ok"
+            mem_id = body["id"]
+
+            # The dispatcher schedules _post_webhook as a background task;
+            # give the loop a chance to run it.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            assert len(captured) == 1
+            url, payload = captured[0]
+            assert url == "https://hook/x"
+            assert payload["event"] == "memory.remember"
+            assert payload["memory_id"] == mem_id
+            assert "timestamp" in payload
+        finally:
+            monkeypatch.undo()
+
+    async def test_remember_does_not_fire_webhook_without_subscription(
+        self, mcp_store, webhook_store, monkeypatch
+    ):
+        # Patch _post_webhook so we can assert it is NEVER called.
+        captured = []
+        async def _fake_post(url, payload):
+            captured.append((url, dict(payload)))
+        monkeypatch.setattr(mcp, "_post_webhook", _fake_post)
+
+        # No subscription registered.
+        assert await webhook_store.list() == []
+
+        out = await mcp.handle_call_tool(
+            "remember", {"text": "no one listening", "category": "fact"}
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "ok"
+        # Drain the event loop so any spurious background task gets to run.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert captured == []
+
+    async def test_remember_only_fires_for_matching_event_type(
+        self, mcp_store, webhook_store, monkeypatch
+    ):
+        captured = []
+        async def _fake_post(url, payload):
+            captured.append((url, dict(payload)))
+        monkeypatch.setattr(mcp, "_post_webhook", _fake_post)
+
+        # Only subscribed to memory.update — remember() must not fire.
+        await webhook_store.subscribe("memory.update", "https://hook/update")
+
+        out = await mcp.handle_call_tool(
+            "remember", {"text": "x", "category": "fact"}
+        )
+        assert _decode(out[0].text)["status"] == "ok"
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert captured == [], (
+            "A memory.remember subscription must not fire for memory.update"
+        )
+
+    async def test_dispatcher_swallows_post_errors(
+        self, mcp_store, webhook_store, monkeypatch
+    ):
+        # The dispatcher must NOT crash the main tool call when the
+        # underlying HTTP POST raises. (We use a stub that raises.)
+        async def _explode(url, payload):
+            raise ConnectionError("simulated network failure")
+        monkeypatch.setattr(mcp, "_post_webhook", _explode)
+        await webhook_store.subscribe("memory.remember", "https://hook/x")
+
+        out = await mcp.handle_call_tool(
+            "remember", {"text": "x", "category": "fact"}
+        )
+        body = _decode(out[0].text)
+        # The tool call itself still succeeds.
+        assert body["status"] == "ok"
+        # Give the background task a chance to run; it must have errored
+        # internally without surfacing.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    async def test_dispatch_event_unknown_event_is_silent(
+        self, mcp_store, monkeypatch
+    ):
+        # Unknown event types are silently ignored (defense in depth).
+        captured = []
+        async def _fake_post(url, payload):
+            captured.append((url, payload))
+        monkeypatch.setattr(mcp, "_post_webhook", _fake_post)
+        # No subscription, but the unknown-event guard should still no-op.
+        await mcp.dispatch_event("memory.bogus", "abc")
+        await asyncio.sleep(0)
+        assert captured == []
+
+    async def test_subscriptions_survive_new_webhookstore_instance(
+        self, webhook_store, tmp_path
+    ):
+        # What we write to disk must come back when we instantiate a
+        # second WebhookStore over the same file. This is the persistence
+        # contract that lets subscriptions survive server restarts.
+        sub = await webhook_store.subscribe(
+            "memory.remember", "https://hook/x"
+        )
+        store2 = mcp.WebhookStore(path=tmp_path / "webhooks.json")
+        subs = await store2.list()
+        assert len(subs) == 1
+        assert subs[0]["id"] == sub["id"]
+

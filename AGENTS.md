@@ -99,7 +99,7 @@ nexus-memory webui
 
 Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory network visually.
 
-## Available Tools (7)
+## Available Tools (10)
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
@@ -110,6 +110,74 @@ Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory 
 | `health` | Check server status | — |
 | `check_update` | Check for newer version on GitHub | — |
 | `do_update` | Update + restart server | `confirm` (req, must be `true`) |
+| `subscribe` | Register a webhook for a memory event | `event_type` (req), `webhook_url` (req) |
+| `unsubscribe` | Remove a webhook subscription | `subscription_id` (req) |
+| `list_subscriptions` | List all registered webhook subscriptions | — |
+
+## Webhook Subscriptions
+
+MCP clients can register a webhook URL to be notified when the memory store
+changes. The server POSTs a small JSON payload to every subscriber that
+matches the event type — useful for keeping external systems (CRMs, audit
+logs, notification bots, second-brain tools) in sync with your memory.
+
+### Event types
+
+| Event | Fires when |
+|-------|-----------|
+| `memory.remember` | A new memory has been stored (`remember` tool succeeded) |
+| `memory.update`   | An existing memory was updated in place (`update` tool succeeded) |
+| `memory.forget`   | A memory was deleted (`forget` tool succeeded) |
+
+### Tools
+
+```python
+# Register a webhook
+await mcp_nexus_subscribe(
+    event_type="memory.remember",
+    webhook_url="https://example.com/hooks/nexus"
+)
+# → { "status": "subscribed", "subscription": { "id": "<uuid>", ... } }
+
+# List all subscriptions
+await mcp_nexus_list_subscriptions()
+# → { "subscriptions": [...], "count": 1 }
+
+# Remove one
+await mcp_nexus_unsubscribe(subscription_id="<uuid-from-subscribe>")
+```
+
+### Payload shape
+
+The server POSTs a JSON body to your URL:
+
+```json
+{ "event": "memory.remember", "memory_id": "<uuid>", "timestamp": "2026-06-13T12:34:56+00:00" }
+```
+
+### Storage
+
+Subscriptions are persisted in `~/.nexus-webhooks.json` (a single
+human-readable JSON file). They survive server restarts. No new Qdrant
+collection or database is required.
+
+### Delivery semantics
+
+* **Fire-and-forget** — the tool call returns immediately; HTTP delivery
+  happens in a background task. A slow or unresponsive endpoint does not
+  block `remember` / `update` / `forget`.
+* **Best-effort, 5s timeout** — POSTs time out after 5 seconds. Failures
+  (timeouts, 4xx, 5xx, DNS errors) are logged at WARNING and never
+  crash the server.
+* **No retries** — webhook delivery is at-most-once. Subscribers should
+  tolerate gaps; use `recall` to reconcile state if needed.
+
+### Validation
+
+* `event_type` must be one of `memory.remember`, `memory.update`,
+  `memory.forget`. Unknown values are rejected with an error envelope.
+* `webhook_url` must be a non-empty `http://` or `https://` URL. Other
+  schemes (`ftp://`, `javascript:`, …) are rejected.
 
 ## Memory Categories (State-Prefixing)
 
