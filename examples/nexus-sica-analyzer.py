@@ -17,7 +17,7 @@ from typing import Any
 # ━━ Config ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
-COLLECTION = os.environ.get("NEXUS_COLLECTION", "hermes-memory")
+COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
 OUTPUT_DIR = Path.home() / ".hermes/self-improvement"
 SILENT_THRESHOLD = float(os.environ.get("SICA_SILENT_THRESHOLD", "0.6"))
 
