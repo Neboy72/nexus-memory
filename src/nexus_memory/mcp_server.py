@@ -745,12 +745,24 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "source_url": {
                         "type": "string",
-                        "description": "URL or origin reference for provenance tracking",
+                        "description": (
+                            "Recommended: URL or origin reference for provenance tracking. "
+                            "When set, the server activates Justification-Check (Rung 2) "
+                            "on recall: the URL is checked via async HTTP HEAD and the "
+                            "result is returned as `verification` (`verified`, `unreachable`). "
+                            "Optional — omit to skip verification (the memory will be returned "
+                            "with `verification: \"unchecked\"` on recall)."
+                        ),
                         "default": "",
                     },
                     "confidence": {
                         "type": "number",
-                        "description": "Confidence score (0.0-1.0) for provenance",
+                        "description": (
+                            "Optional: Confidence score (0.0-1.0) attached to the provenance. "
+                            "Use 0.9+ for verified facts, 0.5-0.8 for beliefs/inferences, "
+                            "<0.5 for speculative notes. The server applies a sensible "
+                            "default (0.7) when omitted."
+                        ),
                         "default": 0.7,
                         "minimum": 0.0,
                         "maximum": 1.0,
