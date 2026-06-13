@@ -19,6 +19,7 @@ dependencies = [
 local = ["sentence-transformers>=3.0.0"]
 webui = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
 all = ["sentence-transformers>=3.0.0", "openai>=1.0.0", "fastapi>=0.100.0", "uvicorn>=0.20.0"]
+test = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]
 
 [project.scripts]
 nexus-memory = "nexus_memory.mcp_server:cli"
@@ -30,3 +31,14 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src", "."]
 include = ["nexus_memory*", "nexus*"]
+
+[tool.pytest.ini_options]
+# auto: every `async def test_...` is treated as an asyncio test
+# — no need to mark them explicitly. Keeps the existing test style
+# (sync tests stay sync) and lets the MCP-server tests run with
+# `pytest tests/` out of the box.
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
