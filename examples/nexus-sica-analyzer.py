@@ -80,7 +80,7 @@ def analyze() -> dict:
             f"http://{QDRANT_HOST}:{QDRANT_PORT}/collections/{COLLECTION}",
             timeout=5
         )
-        status = "ok" if health.status_code == 200 else "error"
+        status = "ok" if 200 <= health.status_code < 300 else "error"
     except Exception as e:
         return {"status": "error", "error": str(e), "suggestions": []}
 

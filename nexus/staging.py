@@ -16,7 +16,7 @@ import logging
 from typing import Any, Optional
 
 import requests
-from nexus.config import get_collection
+from nexus.config import get_collection, is_success
 
 from nexus.lifecycle import (
     FactStatus,
@@ -102,7 +102,7 @@ def ensure_collections(
         url = f"{_qdrant_url(host, port, name)}"
         try:
             r = requests.get(url, timeout=10)
-            if r.status_code == 200:
+            if is_success(r.status_code):
                 results[name] = True
                 continue
         except requests.RequestException:
@@ -455,7 +455,7 @@ def _get_current_canonical(
     url = f"{_qdrant_url(host, port, _collection_canonical())}/points/{fact_id}"
     try:
         r = requests.get(url, timeout=10)
-        if r.status_code == 200:
+        if is_success(r.status_code):
             result = r.json().get("result")
             if result:
                 payload = result.get("payload", {})
@@ -475,7 +475,7 @@ def _get_version(
     url = f"{_qdrant_url(host, port, _collection_all())}/points/{version_id}"
     try:
         r = requests.get(url, timeout=10)
-        if r.status_code == 200:
+        if is_success(r.status_code):
             result = r.json().get("result")
             if result:
                 payload = result.get("payload", {})

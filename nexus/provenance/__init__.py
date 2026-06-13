@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, date
 from typing import Any, Optional
 
-from nexus.config import get_collection
+from nexus.config import get_collection, is_success
 
 _logger = logging.getLogger(__name__)
 
@@ -392,7 +392,7 @@ def corroborate_entry(
     def _fetch(pid: str) -> dict | None:
         try:
             r = _req.get(f"{base_url}/collections/{collection_name}/points/{pid}", timeout=10)
-            if r.status_code == 200:
+            if is_success(r.status_code):
                 return r.json().get("result")
         except Exception:
             pass
@@ -494,7 +494,7 @@ def add_dependency(
     def _fetch(pid: str) -> dict | None:
         try:
             r = _req.get(f"{base_url}/collections/{collection_name}/points/{pid}", timeout=10)
-            if r.status_code == 200:
+            if is_success(r.status_code):
                 return r.json().get("result")
         except Exception:
             pass
@@ -604,7 +604,7 @@ def build_dependency_graph(
     def _fetch(pid: str) -> dict | None:
         try:
             r = _req.get(f"{base_url}/collections/{collection_name}/points/{pid}", timeout=10)
-            if r.status_code == 200:
+            if is_success(r.status_code):
                 return r.json().get("result")
         except Exception:
             pass
