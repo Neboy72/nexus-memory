@@ -1,0 +1,59 @@
+name: Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Collection-Name Check
+        run: |
+          echo "=== Checking for stale collection names ==="
+          BAD_PATTERNS='("openclaw-memory"|"openclaw_beliefs"|"openclaw_events"|"nexus_beliefs"|"nexus_events"|"hermes-memory-1024d"|"kiosha-memory")'
+          FOUND=$(grep -rn "$BAD_PATTERNS" nexus/ src/ --include="*.py" --exclude="__pycache__" || true)
+          if [ -n "$FOUND" ]; then
+            echo "❌ Stale collection names found:"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "✅ No stale collection names"
+
+      - name: Status-Code Check
+        run: |
+          echo "=== Checking for hardcoded status_code == 200 / != 200 ==="
+          # Allow only is_success() calls, not raw == 200 / != 200
+          FOUND=$(grep -rn '\.status_code == 200\|\.status_code != 200' nexus/ src/ --include="*.py" --exclude="__pycache__" || true)
+          if [ -n "$FOUND" ]; then
+            echo "❌ Raw status_code checks found (use is_success() instead):"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "✅ All status_code checks use is_success()"
+
+      - name: Python Compile Check
+        run: |
+          echo "=== Python compile check ==="
+          python -m compileall nexus/ src/ -q
+          echo "✅ All files compile"
+
+      - name: Run Tests
+        run: |
+          echo "=== Running tests ==="
+          python -m pytest tests/ -v --tb=short -x 2>&1 | head -80
