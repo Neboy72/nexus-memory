@@ -269,15 +269,20 @@ Standard MCP stdio config:
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `remember` 💾 | Store a memory | `text` (req), `access_level`, `category`, `source`, `source_url`, `confidence` |
+| `remember` 💾 | Store a memory | `text` (req), `category` (req, default `fact`), `access_level`, `source`, `source_url`, `confidence` |
 | `recall` 🔍 | Hybrid search (BM25 + Vector + RRF) | `query` (req), `limit`, `filter_level` |
 | `forget` 🗑️ | Delete a memory | `memory_id` (req) |
 | `update` ✏️ | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
+| `subscribe` 🔔 | Register a webhook for memory events | `event_type` (req), `webhook_url` (req) |
+| `unsubscribe` 🔕 | Remove a webhook subscription | `subscription_id` (req) |
+| `list_subscriptions` 📋 | List all active webhooks | — |
 | `health` ❤️ | Check server status | — |
 | `check_update` 🔄 | Check for newer version on GitHub | — |
 | `do_update` ⬆️ | Pull + install + restart server | `confirm` (req, must be `true`) |
 
-### Memory Categories
+### Memory Categories (State-Prefixing)
+
+`category` is a **required** parameter on `remember`. The server applies `"fact"` as a backward-compatible default if a client omits it or sends an unknown value.
 
 | Category | Scope | Use Case |
 |----------|-------|----------|
@@ -428,7 +433,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v   # 224 tests ✅
+pytest tests/ -v   # 379 tests ✅
 ```
 
 ---
