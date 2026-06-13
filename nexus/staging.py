@@ -34,15 +34,15 @@ _logger = logging.getLogger(__name__)
 #
 # We use TWO Qdrant collections:
 #
-#   hermes-memory          — All versions (append-only, full history)
-#   hermes-memory-canonical — Canonical-only view (fast queries)
+#   nexus          — All versions (append-only, full history)
+#   nexus-canonical — Canonical-only view (fast queries)
 #
-# Every write goes to hermes-memory.  Canonical promotions are ALSO written
-# to hermes-memory-canonical for fast lookups.
+# Every write goes to nexus.  Canonical promotions are ALSO written
+# to nexus-canonical for fast lookups.
 #
-# The canonical view is rebuilt from hermes-memory on DriftDetector runs.
+# The canonical view is rebuilt from nexus on DriftDetector runs.
 #
-# Collection: hermes-memory (v1.8+)
+# Collection: nexus (v1.8+, consolidated)
 #   payload schema:
 #     fact_id: str           # UUID, stable across versions
 #     version_id: str        # UUID, unique per revision
@@ -165,7 +165,7 @@ def _upsert_point(
     host: str = "localhost",
     port: int = 6333,
 ) -> str:
-    """Write a FactVersion to the append-only collection (hermes-memory).
+    """Write a FactVersion to the append-only collection (nexus).
 
     Returns the version_id.
     """
@@ -276,7 +276,7 @@ def promote(
     """Promote a pending fact to canonical (live, queryable).
 
     Also writes to the canonical-fast-lookup collection.
-    The pending version stays in hermes-memory as-is (append-only).
+    The pending version stays in nexus as-is (append-only).
 
     Args:
         pending: The PENDING FactVersion to promote.
@@ -350,7 +350,7 @@ def deprecate(
 
     The deprecated version stays in the full-history collection.
     It is removed from the canonical-fast-lookup collection.
-    A new DEPRECATED version is appended to hermes-memory.
+    A new DEPRECATED version is appended to nexus.
 
     Args:
         fact_id: The fact to deprecate.
