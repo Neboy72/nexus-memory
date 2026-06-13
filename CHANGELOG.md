@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.2.5 (2026-06-13)
+
+**Bugfix: `is_success()` statt rohem `status_code == 200` — Qdrant 201/204 werden nicht mehr fälschlich als Fehler gewertet.**
+
+### Bugfixes (29 Stellen in 10 Dateien)
+
+- **is_success() Helper** in `nexus/config.py` — zentrale Prüfung `200 <= code < 300` statt überall `== 200`
+- **apply.py** (9 Stellen) — Batch-Operationen sicher
+- **events.py** (7 Stellen) — Event-CRUD sicher
+- **staging.py** (3 Stellen) — Stage/Promote sicher
+- **nexus/__init__.py** (2 Stellen) — API-Interface sicher
+- **provenance/__init__.py** (3 Stellen) — Provenance-Tracking sicher
+- **cli.py** (1 Stelle) — CLI-verify sicher
+- **mcp_server.py** (1 Stelle) — Embedding-Detection sicher
+- **retrieval/__init__.py** (1 Stelle) — Rerank-Abbruch sicher
+- **examples/nexus-sica-analyzer.py + nexus_search.py** (2 Stellen)
+
+### Code-Qualität (simplify-code)
+
+- **TRUST_EPSILON konsolidiert** — gleicher Wert (0.01) in recompute_trust + recompute_all (vorher 0.01 vs 1e-9)
+- **EVENT_TYPES aus Enum abgeleitet** — single source of truth statt Duplikat
+- **Deprecated `asyncio.get_event_loop()`** durch `get_running_loop()` ersetzt
+- **Re-Embedding bei Hybrid-Fallback eliminiert** — ein API-Call statt zwei
+- **Unused imports entfernt** (json, Any, datetime, timezone, sys locales)
+- **Unused constants entfernt** (STATUS_CONTESTED, RETRACTED, HISTORICAL, VALID_STATUSES)
+
+### CI / Qualitätssicherung
+
+- **Audit GitHub Action** — automatischer Check bei jedem Push:
+  - Collection-Name-Check (findet `openclaw-memory`, `hermes-memory-1024d` etc.)
+  - Status-Code-Check (findet rohe `== 200`)
+  - Python Compile-Check (alle Dateien kompilierbar)
+  - pytest
+
+### config.py
+
+- **Docstring korrigiert** — sagt "nexus" statt "hermes-memory" (Code war bereits korrekt)
+
+### Migration
+
+No change — same Qdrant collection, same API. Zero breaking changes.
+
 ## v0.2.3 (2026-06-08)
 
 **Auto-Update — Agent managed: check, ask, update, restart.**
