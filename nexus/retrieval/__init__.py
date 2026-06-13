@@ -18,6 +18,8 @@ Requirements: bm25s (pip install bm25s)
 
 from __future__ import annotations
 import json, re
+
+from nexus.config import is_success
 from collections import defaultdict
 from pathlib import Path
 from datetime import datetime
@@ -622,7 +624,7 @@ class HybridRetriever:
                 json={'query': query, 'documents': docs, 'model': 'rerank-2', 'top_k': len(docs)},
                 timeout=15
             )
-            if resp.status_code != 200:
+            if not is_success(resp.status_code):
                 return results
             ranking = resp.json().get('data', [])
             reranked = []

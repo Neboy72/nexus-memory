@@ -77,7 +77,7 @@ from nexus.discovery import AutoDiscovery
 from nexus.analytics import GraphAnalytics
 from nexus.graph.schema import EdgeRelation, EdgeStatus
 
-from nexus.config import get_collection
+from nexus.config import get_collection, is_success
 
 __version__ = "0.2.3"
 
@@ -419,7 +419,7 @@ def nexus_consolidate(
                     f"{base}/collections/{collection_name}/points/{pid}",
                     timeout=10,
                 )
-                if r.status_code == 200:
+                if is_success(r.status_code):
                     result = r.json().get("result")
                     if result:
                         return result
@@ -538,7 +538,7 @@ def _apply_consolidation(
     point = None
     try:
         r = _req.get(f"{url}/{point_id}", timeout=10)
-        if r.status_code == 200:
+        if is_success(r.status_code):
             point = r.json().get("result")
     except Exception:
         pass

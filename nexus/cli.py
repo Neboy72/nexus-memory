@@ -15,7 +15,8 @@ import argparse
 import json
 import sys
 import os
-from datetime import datetime, timezone
+
+from nexus.config import is_success
 
 
 def main():
@@ -200,7 +201,7 @@ def cmd_verify():
     ok = ensure_beliefs_collection()
     import requests
     r = requests.get("http://localhost:6333/collections/nexus_beliefs", timeout=5)
-    if r.status_code == 200:
+    if is_success(r.status_code):
         d = r.json()["result"]
         print(f"\n📦 nexus_beliefs (✅):")
         print(f"  Points:  {d['points_count']}")
