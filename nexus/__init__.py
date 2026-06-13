@@ -268,7 +268,8 @@ def nexus_remember(
     }
     # Validate category (State-Prefixing Pattern, Ch8)
     if category not in MemoryCategory._value2member_map_:
-        _logger.warning("Unknown category '%s' — expected one of %s", category, [c.value for c in MemoryCategory])
+        _logger.warning("Unknown category '%s' — coercing to 'fact'", category)
+        category = MemoryCategory.FACT.value
 
     # ── Guardrails (Ch18) — Input Validation ───────────────────────────
     if len(content) > 5000:
