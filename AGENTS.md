@@ -103,7 +103,7 @@ Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory 
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `remember` | Store a memory | `text` (req), `access_level`, `category`, `source`, `source_url`, `confidence` |
+| `remember` | Store a memory | `text` (req), `category` (req, default `fact`), `access_level`, `source`, `source_url`, `confidence` |
 | `recall` | Hybrid search — returns results with `verification` status | `query` (req), `limit`, `filter_level` |
 | `forget` | Delete a memory | `memory_id` (req) |
 | `update` | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
@@ -111,15 +111,24 @@ Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory 
 | `check_update` | Check for newer version on GitHub | — |
 | `do_update` | Update + restart server | `confirm` (req, must be `true`) |
 
-## Memory Categories
+## Memory Categories (State-Prefixing)
 
-Use `category` parameter to classify memories:
-- `fact` — verified facts (default)
-- `belief` — drift-prone assumptions (nightly drift detection)
-- `session` — session-scoped episodic memory
-- `rule` — operating rules
-- `preference` — user preferences
-- `temp` — ephemeral entries
+`category` is a **required** parameter on `remember` (declared in the tool schema).
+The server applies `"fact"` as a backward-compatible default if a client omits it
+or sends an unknown value, so older clients keep working. The six scopes map to
+the State-Prefixing pattern from Agentic Design Patterns (Ch8):
+
+| Category | Scope | Lifetime / Notes |
+|----------|-------|------------------|
+| `fact` | Permanent verified facts | Default. No TTL, no drift check. |
+| `belief` | Mutable assumptions | Drift-detection candidates (nightly job). |
+| `session` | Session-specific | Episodic memory, scoped to a single session. |
+| `rule` | Operating rules | Stable, rarely changed. |
+| `preference` | User preferences | Per-user, durable. |
+| `temp` | Ephemeral | Expires after a TTL. |
+
+> **Legacy data:** memories stored before `category` was required are returned
+> with `category: "fact"` on read so consumers always see a valid enum value.
 
 ## Access Levels
 
