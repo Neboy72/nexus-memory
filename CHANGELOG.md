@@ -2,7 +2,41 @@
 
 ## Unreleased
 
-**State-Prefixing: `category` ist jetzt Pflichtfeld im `remember`-Tool (mit Default `fact` für Rückwärtskompatibilität).**
+**Webhook Subscriptions: Drei neue Tools (`subscribe`, `unsubscribe`, `list_subscriptions`) feuern HTTP-POSTs an registrierte URLs, wenn sich der Memory-Store ändert.**
+
+### MCP Server
+
+- **`subscribe(event_type, webhook_url)`** — registriert einen HTTP-Webhook für einen Memory-Event-Typ. Gibt eine Subscription-ID (UUID) zurück. Persistiert in `~/.nexus-webhooks.json` (kein Qdrant, keine SQLite, keine neue Dependency).
+- **`unsubscribe(subscription_id)`** — entfernt eine Subscription anhand ihrer ID. Antwortet `unsubscribed` (removed=true) oder `not_found`.
+- **`list_subscriptions()`** — listet alle registrierten Subscriptions (id, event_type, webhook_url, created_at).
+- **Event-Dispatching in `remember` / `update` / `forget`** — nach erfolgreichem Tool-Call feuert der Server `asyncio.create_task(_post_webhook(url, payload))` für jede passende Subscription.
+  - Body: `{"event": "...", "memory_id": "<uuid>", "timestamp": "ISO-8601"}`
+  - **Fire-and-forget** — blockiert den Tool-Call nicht.
+  - **Fehler-Tolerant** — Timeouts (5s), 4xx/5xx, DNS-Fehler werden geloggt, nicht gecrasht.
+  - Event-Typen: `memory.remember`, `memory.update`, `memory.forget`.
+- **Validierung** — `event_type` muss im geschlossenen Enum sein, `webhook_url` muss `http://` oder `https://` sein. Ungültige Werte → Error-Envelope.
+
+### Code-Struktur
+
+- **`WebhookStore`-Klasse** (`src/nexus_memory/mcp_server.py`) — kapselt die JSON-Datei-IO, mit `asyncio.Lock` für race-freie subscribe/unsubscribe-Operationen. Atomare Schreibvorgänge via `.tmp` + `replace()`.
+- **`dispatch_event(event_type, memory_id)`** — Modul-Funktion, die passende Subscriptions ermittelt und pro URL einen Background-Task startet.
+- **`_post_webhook(url, payload)`** — interner HTTP-POST; nutzt `httpx` falls vorhanden, fällt zurück auf `urllib.request` im Thread-Pool. Jede Exception wird geloggt und geschluckt.
+- **Singletons `get_store()` / `get_webhook_store()`** — gleiche Pattern; tests monkey-padden `_webhook_store` direkt.
+
+### Tests
+
+- 27 neue Tests in `tests/test_mcp_server.py`:
+  - **`TestWebhookStore`** (9 Tests) — Persistenz, subscribe/unsubscribe, unknown id, list, matching, ungültige Event-Typen/URLs, leere/korrupte JSON-Datei.
+  - **`TestWebhookTools`** (9 Tests) — MCP-Tool-Dispatcher: subscribe/unsubscribe/list-Success- und Error-Pfade, Tool-Schema-Validierung.
+  - **`TestWebhookEventDispatch`** (6 Tests) — remember feuert Webhook bei Subscription, NICHT ohne Subscription, nur passende Event-Typen, Webhook-Fehler crashen nicht, Unbekannte Events werden ignoriert, Persistence über mehrere Store-Instanzen.
+- Alle 351 bestehenden Tests bleiben grün → **379 / 379 pass**.
+
+### Docs
+
+- `AGENTS.md` — Tool-Tabelle auf 10 Tools erweitert, neue Sektion „Webhook Subscriptions" mit Event-Typen-Tabelle, Tool-Beispielen, Payload-Schema, Storage- und Delivery-Semantik.
+- `CHANGELOG.md` — dieser Unreleased-Eintrag.
+
+
 
 **Provenance-Standard: `source_url` + `confidence` als empfohlene Pflichtfelder im `remember`-Tool.**
 
