@@ -140,27 +140,59 @@ the State-Prefixing pattern from Agentic Design Patterns (Ch8):
 
 ## Provenance
 
+Provenance is **strongly recommended** for every memory you store. It lets the
+server verify sources at recall time (Rung 2: Justification Check) so you
+always know whether a memory's evidence is still alive.
+
+### Recommended call
+
 ```python
-# Store with source tracking
+# Best practice: include source_url + confidence on every remember()
 await mcp_nexus_remember(
-    text="...",
-    source_url="https://example.com",
+    text="Voyage-3-large produces 1024-dim embeddings",
+    source_url="https://docs.voyageai.com/docs/embeddings",
     confidence=0.95,
-    category="fact"
+    source="documentation",
+    category="fact",
 )
 ```
 
-### Justification Check (Rung 2)
+### The three parameters
 
-Each recall result includes a `verification` field:
+| Parameter | Type | Default | Purpose |
+|-----------|------|---------|---------|
+| `source_url` | string | `""` | **Activates verification.** When set, the server runs an async HTTP HEAD against this URL on every recall. Result is returned as the `verification` field. Omit to disable verification. |
+| `confidence` | number 0.0-1.0 | `0.7` | Your self-assessed confidence in the fact. Use 0.9+ for verified facts, 0.5-0.8 for beliefs / inferences, <0.5 for speculative notes. |
+| `source` | string | `""` | Free-form origin label — `"conversation"`, `"document"`, `"cron"`, etc. Stored alongside, but does not trigger verification. |
 
-| Status | Meaning |
-|--------|---------|
-| `verified` | Source URL is reachable (HTTP < 400) |
-| `unreachable` | Source URL is unreachable or blocks HEAD requests |
-| `unchecked` | No `source_url` was set when storing this memory |
+> **All three stay optional.** Older clients that omit them keep working — they
+> just get `verification: "unchecked"` on recall and `confidence: 0.7` stored.
 
-Memory entries stored with `source_url` are checked via async HTTP HEAD on every recall. If a source becomes unreachable, the agent sees the downgrade and can treat the memory with lower confidence.
+### Justification Check (Rung 2) — what recall returns
+
+Each recall result includes a `verification` field derived from `source_url`:
+
+| Status | When | Meaning |
+|--------|------|---------|
+| `verified` | `source_url` set, HTTP HEAD returned `< 400` | The source is alive — treat the memory as trustworthy. |
+| `unreachable` | `source_url` set, HEAD failed (timeout, DNS, 4xx/5xx, bot block) | The source is gone or inaccessible — downgrade the memory's trust and consider re-fetching. |
+| `unchecked` | `source_url` was not set at storage time | No provenance was attached — the server did not verify anything. |
+
+Source URLs are checked in parallel via async HTTP HEAD on every recall. If a
+URL becomes unreachable, the agent sees the downgrade immediately and can
+decide whether to keep, refresh, or drop the memory.
+
+### Why this matters
+
+- **Spivakovsky's Ladder of Checks, Rung 2:** *schema-valid is not
+  answer-correct.* A memory that was true yesterday may be stale today.
+  Justification verification keeps evidence alive without re-running the
+  original ingest.
+- **Trust degrades visibly:** a fact with `verification: "unreachable"` is a
+  signal to the agent to either re-check the source or treat the claim as
+  provisional.
+- **Zero-config default:** when you cannot supply a `source_url`, omit it —
+  no error, no warning, just `verification: "unchecked"`.
 
 ## Architecture
 
