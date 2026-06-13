@@ -44,7 +44,7 @@ if voyage_key:
             json={'input': query, 'model': 'voyage-3-large'},
             timeout=15
         )
-        if resp.status_code == 200:
+        if 200 <= resp.status_code < 300:
             vec = resp.json()['data'][0]['embedding']
             print("1024d")
         else:

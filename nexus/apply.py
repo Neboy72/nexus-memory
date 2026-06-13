@@ -8,7 +8,6 @@ Belief operations:
   - govern:      Agent contests, user confirms
 """
 
-import json
 import logging
 import os
 import uuid
@@ -17,6 +16,7 @@ from typing import Any, Optional
 
 import requests
 
+from nexus.config import is_success
 from nexus.events import create_event, ensure_collection as ensure_events_collection
 
 log = logging.getLogger("nexus.apply")
@@ -35,13 +35,18 @@ STATUS_HISTORICAL = "HISTORICAL"
 
 VALID_STATUSES = {STATUS_ACTIVE, STATUS_CONTESTED, STATUS_RETRACTED, STATUS_SUPERSEDED, STATUS_HISTORICAL}
 
+# Single source of truth for trust-recompute comparison epsilon.
+# Skip writes when |new - old| < this threshold — avoids noisy re-writes
+# from floating-point drift. Used by both recompute_trust() and recompute_all().
+TRUST_EPSILON = 0.01
+
 
 # --- Collection Management ---
 
 def ensure_beliefs_collection() -> bool:
     """Creates nexus_beliefs if not exists (with payload schema)."""
     r = requests.get(f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}", timeout=10)
-    if r.status_code == 200:
+    if is_success(r.status_code):
         return True
 
     payload = {
@@ -57,7 +62,7 @@ def ensure_beliefs_collection() -> bool:
         ],
     }
     r = requests.put(f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}", json=payload, timeout=10)
-    if r.status_code == 200:
+    if is_success(r.status_code):
         log.info(f"✅ Collection '{BELIEFS_COLLECTION}' angelegt")
         return True
     log.error(f"❌ Anlage fehlgeschlagen: {r.status_code}")
@@ -118,7 +123,7 @@ def resolve_belief(
         json={"points": [point]},
         timeout=10,
     )
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         log.error(f"❌ Belief-Erstellung fehlgeschlagen: {r.status_code}")
         return {"error": True, "belief_id": None}
 
@@ -167,7 +172,7 @@ def apply_delta(belief_id: str, delta: dict) -> dict:
         json={"points": [belief]},
         timeout=10,
     )
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         return {"error": True, "message": "Update fehlgeschlagen"}
 
     # Event-Typ bestimmen
@@ -215,7 +220,7 @@ def user_override(belief_id: str, field: str, value: Any) -> dict:
         json={"points": [belief]},
         timeout=10,
     )
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         return {"error": True, "message": "Override fehlgeschlagen"}
 
     create_event(
@@ -260,7 +265,7 @@ def recompute_trust(belief_id: str) -> dict:
     new_trust = max(contributions) if contributions else payload.get("trust", 0.5)
 
     old_trust = payload.get("trust", 0.5)
-    if abs(new_trust - old_trust) < 0.01:
+    if abs(new_trust - old_trust) < TRUST_EPSILON:
         return {"belief_id": belief_id, "trust": old_trust, "changed": False}
 
     payload["trust"] = new_trust
@@ -271,7 +276,7 @@ def recompute_trust(belief_id: str) -> dict:
         json={"points": [belief]},
         timeout=10,
     )
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         return {"error": True}
 
     create_event(
@@ -304,7 +309,7 @@ def recompute_all() -> dict:
             json=scroll_params,
             timeout=30,
         )
-        if r.status_code != 200:
+        if not is_success(r.status_code):
             log.error(f"❌ Scroll failed: {r.status_code}")
             stats["errors"] += 1
             break
@@ -336,7 +341,7 @@ def recompute_all() -> dict:
             new_trust = max(e.get("trust_contribution", 0.0) for e in evidences)
             old_trust = payload.get("trust", 0.0)
 
-            if abs(new_trust - old_trust) > 1e-9:
+            if abs(new_trust - old_trust) > TRUST_EPSILON:
                 batch_updates.append({
                     "id": p["id"],
                     "payload": {"trust": new_trust},
@@ -345,16 +350,9 @@ def recompute_all() -> dict:
 
         # Batch PUT — one request per page instead of N individual requests
         if batch_updates:
-            points_payload = []
-            for bu in batch_updates:
-                points_payload.append({
-                    "id": bu["id"],
-                    "payload": bu["payload"],
-                })
-            
             r2 = requests.put(
                 f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}/points",
-                json={"points": points_payload},
+                json={"points": batch_updates},
                 timeout=30,
             )
             if r2.status_code not in (200, 201):
@@ -384,7 +382,7 @@ def _find_by_fact(fact: str) -> Optional[dict]:
         },
         timeout=10,
     )
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         return None
     points = r.json()["result"]["points"]
     if not points:
@@ -412,7 +410,7 @@ def _get_belief(belief_id: str) -> Optional[dict]:
         },
         timeout=10,
     )
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         return None
     points = r.json()["result"]["points"]
     return points[0] if points else None

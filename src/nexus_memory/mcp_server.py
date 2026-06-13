@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ from qdrant_client.http import models as qmodels
 import nexus
 from nexus import MemoryCategory, __version__ as nexus_version
 from nexus.provenance import attach_source
+from nexus.config import is_success
 
 # Repo-Root dynamisch ableiten (nexus/ liegt im Repo-Root)
 _NEXUS_REPO = os.path.dirname(os.path.dirname(nexus.__file__))
@@ -140,7 +142,7 @@ class EmbeddingProvider:
         try:
             import requests
             r = requests.get("http://localhost:11434/api/tags", timeout=2)
-            if r.status_code == 200:
+            if is_success(r.status_code):
                 models = [m["name"] for m in r.json().get("models", [])]
                 emb_model = next((m for m in models if "embed" in m.lower()), None)
                 if emb_model:
@@ -219,7 +221,7 @@ class EmbeddingProvider:
     def model_name(self) -> str:
         return self._name
 
-# ── Access Levels ─────────────────────────────────────────────────
+# ── Access Levels ──────────────────────────────────────────────────
 
 ACCESS_PUBLIC = "public"      # All agents can see
 ACCESS_TRUSTED = "trusted"    # Only trusted agents
@@ -231,6 +233,30 @@ ACCESS_HIERARCHY = {
     ACCESS_TRUSTED: 1,
     ACCESS_PRIVATE: 2,
 }
+
+
+def _to_point_id(val):
+    """Coerce a point ID to a Qdrant-friendly typed value.
+
+    Qdrant accepts UUID strings, integer strings (auto-coerced to int), and
+    raw ints. Anything else (None, unknown types) is returned as ``str(val)``.
+
+    Returns:
+        int | UUID | str
+    """
+    from uuid import UUID
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str):
+        if "-" in val and len(val) == 36:
+            return UUID(val)
+        try:
+            return int(val)
+        except ValueError:
+            return val
+    if val is None:
+        return ""  # callers filter None out before calling
+    return str(val)
 
 # ── Guardrails (from v2.8.0) ───────────────────────────────────────
 MAX_CONTENT_LENGTH = 5000
@@ -407,11 +433,13 @@ class MemoryStore:
             allowed_levels.append(ACCESS_PRIVATE)
 
         raw_results = []
+        query_vector = None
         try:
+            # Compute the embedding once — reused in the fallback path below.
+            query_vector = await self._embed(query)
+
             # Try hybrid search first
             if self._hybrid_retriever:
-                # Re-index periodically (every 50 calls or if collection changed)
-                query_vector = await self._embed(query)
                 h_results = self._hybrid_retriever.search(
                     query,
                     query_vector=query_vector,
@@ -425,20 +453,6 @@ class MemoryStore:
                     hybrid_ids_raw = [r.get("id") for r in raw_results if r.get("id") is not None]
                     if hybrid_ids_raw:
                         try:
-                            def _to_point_id(val):
-                                if isinstance(val, int):
-                                    return val
-                                if isinstance(val, str):
-                                    # UUID string
-                                    if "-" in val and len(val) == 36:
-                                        from uuid import UUID
-                                        return UUID(val)
-                                    # Numeric string → int
-                                    try:
-                                        return int(val)
-                                    except ValueError:
-                                        return val
-                                return val
                             parsed_ids = [_to_point_id(pid) for pid in hybrid_ids_raw]
                             points = self.client.retrieve(
                                 collection_name=COLLECTION_NAME,
@@ -471,12 +485,11 @@ class MemoryStore:
         except Exception as e:
             logging.warning(f"Hybrid search failed, falling back to vector: {e}")
 
-        # Fallback: vector-only search
-        if not raw_results:
-            vector = await self._embed(query)
+        # Fallback: vector-only search (reuses the embedding computed above)
+        if not raw_results and query_vector is not None:
             response = self.client.query_points(
                 collection_name=COLLECTION_NAME,
-                query=vector,
+                query=query_vector,
                 limit=limit * 2,
             )
             raw_results = []
@@ -600,7 +613,7 @@ def get_store() -> MemoryStore:
 async def _check_for_update() -> dict:
     """Check if a newer version is available on GitHub."""
     import urllib.request
-    
+
     local = nexus_version
     try:
         req = urllib.request.Request(
@@ -608,18 +621,17 @@ async def _check_for_update() -> dict:
             headers={"Accept": "application/vnd.github.v3+json",
                      "User-Agent": f"nexus-memory/{nexus_version}"}
         )
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: (
-            json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
-        ))
-        
+        data = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
+        )
+
         latest_tag = data.get("tag_name", "").lstrip("v")
         latest_name = data.get("name", latest_tag)
         html_url = data.get("html_url", "")
-        
+
         from packaging.version import parse
         is_newer = parse(latest_tag) > parse(local)
-        
+
         return {"local_version": local, "latest_version": latest_tag,
                 "latest_name": latest_name, "release_url": html_url,
                 "update_available": is_newer, "error": None}
@@ -647,8 +659,8 @@ async def _do_update(confirm: bool = False) -> dict:
         }
 
     try:
-        loop = asyncio.get_event_loop()
-        
+        loop = asyncio.get_running_loop()
+
         # git pull --ff-only (fetch + merge in einem)
         pull = await loop.run_in_executor(None, lambda: subprocess.run(
             ["git", "pull", "--ff-only"], cwd=repo, capture_output=True, text=True, timeout=30
@@ -952,10 +964,8 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         )]
         # Self-restart: Nach erfolgreichem Update Server beenden.
         if result.get("restarting"):
-            import sys as _sys
-            import asyncio as _asyncio
-            _sys.stdout.flush()
-            _asyncio.get_event_loop().call_later(1, lambda: os._exit(0))
+            sys.stdout.flush()
+            asyncio.get_running_loop().call_later(1, lambda: os._exit(0))
         return response
 
     elif name == "check_update":
@@ -1029,8 +1039,8 @@ def cli():
 
     # Default: MCP server
     _check_webui_available()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     asyncio.run(main())
+    return 0
 
 
 if __name__ == "__main__":

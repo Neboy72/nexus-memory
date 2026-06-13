@@ -18,9 +18,11 @@ import os
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 import requests
+
+from nexus.config import is_success
 
 log = logging.getLogger("nexus.events")
 
@@ -28,16 +30,6 @@ log = logging.getLogger("nexus.events")
 COLLECTION = "nexus_events"
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 VECTOR_SIZE = 1024  # 1024d Cosine — matches nexus_beliefs
-
-EVENT_TYPES = [
-    "belief_created",
-    "belief_updated",
-    "trust_changed",
-    "status_changed",
-    "belief_split",
-    "user_override",
-]
-
 
 class EventType(str, Enum):
     CREATED = "belief_created"
@@ -48,12 +40,16 @@ class EventType(str, Enum):
     OVERRIDE = "user_override"
 
 
+# Derived once from the enum — single source of truth.
+EVENT_TYPES = [e.value for e in EventType]
+
+
 # --- Collection Management ---
 
 def ensure_collection() -> bool:
     """Creates nexus_events if not exists (indexes created separately later)."""
     r = requests.get(f"{QDRANT_URL}/collections/{COLLECTION}", timeout=10)
-    if r.status_code == 200:
+    if is_success(r.status_code):
         return True
 
     # Create collection without indexes first (Qdrant ignores payload_schema in PUT body)
@@ -65,7 +61,7 @@ def ensure_collection() -> bool:
         },
     }
     r = requests.put(f"{QDRANT_URL}/collections/{COLLECTION}", json=payload, timeout=10)
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         log.error(f"❌ Collection-Anlage fehlgeschlagen: {r.status_code} {r.text[:200]}")
         return False
 
@@ -137,7 +133,7 @@ def create_event(
         json={"points": [point]},
         timeout=10,
     )
-    if r.status_code == 200:
+    if is_success(r.status_code):
         return event_id
     log.error(f"❌ Event-Speicherung fehlgeschlagen: {r.status_code} {r.text[:200]}")
     return None
@@ -190,7 +186,7 @@ def get_events(
             json=params,
             timeout=10,
         )
-        if r.status_code != 200:
+        if not is_success(r.status_code):
             log.error(f"❌ Event query failed: {r.status_code}")
             break
         
@@ -224,38 +220,40 @@ def get_events_since(
     
     all_events: list[dict] = []
     offset: Optional[str] = None
-    
+
+    # Page size is constant — no reason to vary it across iterations. The
+    # loop terminates once we've collected `limit` events or no more pages.
     while True:
         params = {
-            "limit": limit if not all_events else 500,
+            "limit": limit,
             "with_payload": True,
             "filter": {"must": filters},
         }
         if offset:
             params["offset"] = offset
-        
+
         r = requests.post(
             f"{QDRANT_URL}/collections/{COLLECTION}/points/scroll",
             json=params,
             timeout=10,
         )
-        if r.status_code != 200:
+        if not is_success(r.status_code):
             log.error(f"❌ Event query failed: {r.status_code}")
             break
-        
+
         data = r.json()["result"]
         batch = [_parse_event(p) for p in data["points"]]
         all_events.extend(batch)
-        
+
         next_offset = data.get("next_page_offset")
         if not next_offset or not data["points"]:
             break
         offset = str(next_offset)
-        
+
         if len(all_events) >= limit:
             all_events = all_events[:limit]
             break
-    
+
     return all_events
 
 
@@ -269,7 +267,7 @@ def get_recent_events(limit: int = 20) -> list[dict]:
         },
         timeout=10,
     )
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         return []
     events = [_parse_event(p) for p in r.json()["result"]["points"]]
     events.sort(key=lambda e: e.get("ingested_at", ""), reverse=True)
@@ -279,7 +277,7 @@ def get_recent_events(limit: int = 20) -> list[dict]:
 def verify_collection() -> dict:
     """Prüft ob Collection existiert und ggf. Indizes aktiv sind."""
     r = requests.get(f"{QDRANT_URL}/collections/{COLLECTION}", timeout=10)
-    if r.status_code != 200:
+    if not is_success(r.status_code):
         return {"exists": False, "points": 0, "indexes": 0}
     data = r.json()["result"]
     points = data.get("points_count", 0)
