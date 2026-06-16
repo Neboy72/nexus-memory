@@ -95,13 +95,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const graphTooltip = document.getElementById('graphTooltip');
   const graphLoading = document.getElementById('graphLoading');
 
-  // Set SVG dimensions
-  const graphContainer = document.getElementById('graphContainer');
-  const initW = Math.max(graphContainer.clientWidth, 800);
-  const initH = Math.max(graphContainer.clientHeight, 500);
-  graphSvg.setAttribute('width', initW);
-  graphSvg.setAttribute('height', initH);
-
   MemoryGraph.init(graphSvg);
 
   // Node selection → detail panel
@@ -126,7 +119,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       state.memories = memData.memories;
       state.edges = memData.edges;
 
-      MemoryGraph.load(state.memories, state.edges);
+      MemoryGraph.load(state.memories, state.edges, memData.category_counts || {});
 
       renderStats(statsData);
       graphLoading.style.display = 'none';
@@ -217,6 +210,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const detailClose = document.getElementById('detailClose');
   const detailBackdrop = document.getElementById('detailBackdrop');
 
+  function cleanLabel(t) {
+    return t.replace(/\b(logo|logos)\b/gi, '').replace(/\s+/g, ' ').trim() || '—';
+  }
+
   function showDetail(d) {
     const catColors = {
       fact: '#3b82f6', belief: '#8b5cf6', session: '#f59e0b',
@@ -229,14 +226,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
     }) : '-';
 
+    // Paperless-Kategorie aus Titel parsen: "Datum – Kategorie – Beschreibung"
+    const paperCat = d.title ? (d.title.split(' – ')[1] || '') : '';
+
     detailBody.innerHTML = `
       <div class="detail-node">
         <div class="detail-node__header">
-          <span class="detail-node__category" style="background:${color}20;color:${color}">${d.category}</span>
+          <span class="detail-node__category" style="background:${color}20;color:${color}">${d.category || d._category || 'fact'}</span>
           <span class="detail-node__access">${d.access_level || d.access || 'public'}</span>
           <span style="margin-left:auto;font-size:0.8rem;opacity:0.4">${driftIcons[d.drift] || '⚪'} ${d.drift}</span>
         </div>
-        <div class="detail-node__text">${d.fullText}</div>
+        ${paperCat ? `<div class="detail-node__paper-cat" style="margin-top:4px;font-size:0.85rem;opacity:0.5">${paperCat}</div>` : ''}
+        <div class="detail-node__text">${cleanLabel(d.fullText || d.text || d.title || '')}</div>
         <div class="detail-node__meta">
           <div class="detail-node__meta-item">
             <span class="detail-node__meta-label">Confidence</span>

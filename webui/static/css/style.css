@@ -703,22 +703,24 @@ ul, ol { list-style: none; }
 
 .graph-container__loading {
   position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-loading);
   font-size: 0.9rem;
   opacity: 0.6;
 }
 
-.graph-svg {
-  width: 100%;
+.graph-main .graph-container {
+  flex: 1;
+  min-height: 0;
   height: 100%;
+  position: relative;
+}
+
+.graph-svg {
+  position: absolute;
+  inset: 0;
   cursor: grab;
 }
 .graph-svg:active { cursor: grabbing; }
+.graph-svg canvas { display: block; }
 
 .graph-tooltip {
   position: absolute;

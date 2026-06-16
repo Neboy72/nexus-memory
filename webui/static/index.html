@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="format-detection" content="telephone=no">
   <title>Nexus Memory</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260616r">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -95,7 +95,7 @@
         <div class="spinner"></div>
         <p>Loading memory graph…</p>
       </div>
-      <svg id="graphSvg" class="graph-svg"></svg>
+      <div id="graphSvg" class="graph-svg" style="width:100%;height:100%"></div>
       <div class="graph-tooltip" id="graphTooltip"></div>
     </div>
 
@@ -162,9 +162,9 @@
   </aside>
 
   <!-- ═══ Scripts ═══ -->
-  <script src="/static/d3.v7.min.js?v=20260612"></script>
-  <script src="/static/js/api.js?v=20260612"></script>
-  <script src="/static/js/graph.js?v=20260612"></script>
-  <script src="/static/js/app.js?v=20260612"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="/static/js/api.js?v=20260616r"></script>
+  <script src="/static/js/graph.js?v=20260616r"></script>
+  <script src="/static/js/app.js?v=20260616r"></script>
 </body>
 </html>
