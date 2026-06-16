@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+<defs>
+  <radialGradient id="bg" cx="45%" cy="35%">
+    <stop offset="0%" stop-color="#0a1120"/>
+    <stop offset="50%" stop-color="#060912"/>
+    <stop offset="100%" stop-color="#020408"/>
+  </radialGradient>
+  <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#a78bfa"/>
+  </linearGradient>
+</defs>
+<rect width="1200" height="1200" fill="#060912"/>
+<rect width="1200" height="1200" fill="url(#bg)"/>
+<g stroke="#1a2744" stroke-width="0.3"><line x1="0" y1="0" x2="0" y2="1200"/><line x1="40" y1="0" x2="40" y2="1200"/><line x1="80" y1="0" x2="80" y2="1200"/><line x1="120" y1="0" x2="120" y2="1200"/><line x1="160" y1="0" x2="160" y2="1200"/><line x1="200" y1="0" x2="200" y2="1200"/><line x1="240" y1="0" x2="240" y2="1200"/><line x1="280" y1="0" x2="280" y2="1200"/><line x1="320" y1="0" x2="320" y2="1200"/><line x1="360" y1="0" x2="360" y2="1200"/><line x1="400" y1="0" x2="400" y2="1200"/><line x1="440" y1="0" x2="440" y2="1200"/><line x1="480" y1="0" x2="480" y2="1200"/><line x1="520" y1="0" x2="520" y2="1200"/><line x1="560" y1="0" x2="560" y2="1200"/><line x1="600" y1="0" x2="600" y2="1200"/><line x1="640" y1="0" x2="640" y2="1200"/><line x1="680" y1="0" x2="680" y2="1200"/><line x1="720" y1="0" x2="720" y2="1200"/><line x1="760" y1="0" x2="760" y2="1200"/><line x1="800" y1="0" x2="800" y2="1200"/><line x1="840" y1="0" x2="840" y2="1200"/><line x1="880" y1="0" x2="880" y2="1200"/><line x1="920" y1="0" x2="920" y2="1200"/><line x1="960" y1="0" x2="960" y2="1200"/><line x1="1000" y1="0" x2="1000" y2="1200"/><line x1="1040" y1="0" x2="1040" y2="1200"/><line x1="1080" y1="0" x2="1080" y2="1200"/><line x1="1120" y1="0" x2="1120" y2="1200"/><line x1="1160" y1="0" x2="1160" y2="1200"/><line x1="1200" y1="0" x2="1200" y2="1200"/><line x1="0" y1="0" x2="1200" y2="0"/><line x1="0" y1="40" x2="1200" y2="40"/><line x1="0" y1="80" x2="1200" y2="80"/><line x1="0" y1="120" x2="1200" y2="120"/><line x1="0" y1="160" x2="1200" y2="160"/><line x1="0" y1="200" x2="1200" y2="200"/><line x1="0" y1="240" x2="1200" y2="240"/><line x1="0" y1="280" x2="1200" y2="280"/><line x1="0" y1="320" x2="1200" y2="320"/><line x1="0" y1="360" x2="1200" y2="360"/><line x1="0" y1="400" x2="1200" y2="400"/><line x1="0" y1="440" x2="1200" y2="440"/><line x1="0" y1="480" x2="1200" y2="480"/><line x1="0" y1="520" x2="1200" y2="520"/><line x1="0" y1="560" x2="1200" y2="560"/><line x1="0" y1="600" x2="1200" y2="600"/><line x1="0" y1="640" x2="1200" y2="640"/><line x1="0" y1="680" x2="1200" y2="680"/><line x1="0" y1="720" x2="1200" y2="720"/><line x1="0" y1="760" x2="1200" y2="760"/><line x1="0" y1="800" x2="1200" y2="800"/><line x1="0" y1="840" x2="1200" y2="840"/><line x1="0" y1="880" x2="1200" y2="880"/><line x1="0" y1="920" x2="1200" y2="920"/><line x1="0" y1="960" x2="1200" y2="960"/><line x1="0" y1="1000" x2="1200" y2="1000"/><line x1="0" y1="1040" x2="1200" y2="1040"/><line x1="0" y1="1080" x2="1200" y2="1080"/><line x1="0" y1="1120" x2="1200" y2="1120"/><line x1="0" y1="1160" x2="1200" y2="1160"/><line x1="0" y1="1200" x2="1200" y2="1200"/></g><g fill="none" stroke="#6366f1" stroke-width="2.2" stroke-opacity="0.4" stroke-linecap="round"><path d="M600,400 Q568,316 600,190"/><path d="M600,400 Q657,331 782,295"/><path d="M600,400 Q688,415 782,505"/><path d="M600,400 Q646,477 636,607"/><path d="M600,400 Q563,482 452,548"/><path d="M600,400 Q512,416 393,364"/><path d="M600,400 Q531,343 495,218"/><path d="M600,400 Q715,379 869,447"/></g><g transform="translate(600,400) scale(0.185546875)">
+<defs><filter id="g"><feGaussianBlur stdDeviation="5"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+<polygon points="256,80 120,240 256,200" fill="rgba(99,102,241,0.10)" stroke="rgba(99,102,241,0.20)" stroke-width="1"/>
+<polygon points="256,80 392,240 256,200" fill="rgba(99,102,241,0.06)" stroke="rgba(99,102,241,0.14)" stroke-width="1"/>
+<polygon points="256,80 120,240 80,120" fill="rgba(139,92,246,0.08)" stroke="rgba(139,92,246,0.18)" stroke-width="1"/>
+<polygon points="256,80 392,240 432,120" fill="rgba(139,92,246,0.06)" stroke="rgba(139,92,246,0.14)" stroke-width="1"/>
+<polygon points="256,440 120,240 256,200" fill="rgba(99,102,241,0.07)" stroke="rgba(99,102,241,0.15)" stroke-width="1"/>
+<polygon points="256,440 392,240 256,200" fill="rgba(99,102,241,0.04)" stroke="rgba(99,102,241,0.10)" stroke-width="1"/>
+<polygon points="256,440 120,240 80,120" fill="rgba(139,92,246,0.06)" stroke="rgba(139,92,246,0.14)" stroke-width="1"/>
+<polygon points="256,440 392,240 432,120" fill="rgba(139,92,246,0.04)" stroke="rgba(139,92,246,0.10)" stroke-width="1"/>
+<polygon points="120,240 80,120 60,260" fill="rgba(99,102,241,0.06)" stroke="rgba(139,92,246,0.15)" stroke-width="1"/>
+<polygon points="392,240 432,120 460,260" fill="rgba(139,92,246,0.06)" stroke="rgba(139,92,246,0.15)" stroke-width="1"/>
+<g filter="url(#g)">
+<polygon points="256,80 120,240 256,280" fill="rgba(129,140,248,0.28)" stroke="rgba(129,140,248,0.50)" stroke-width="1.2"/>
+<polygon points="256,80 392,240 256,280" fill="rgba(167,139,250,0.22)" stroke="rgba(167,139,250,0.40)" stroke-width="1.2"/>
+<polygon points="256,80 120,240 60,260" fill="rgba(129,140,248,0.20)" stroke="rgba(129,140,248,0.38)" stroke-width="1.2"/>
+<polygon points="256,80 392,240 460,260" fill="rgba(167,139,250,0.18)" stroke="rgba(167,139,250,0.34)" stroke-width="1.2"/>
+<polygon points="256,440 120,240 256,280" fill="rgba(129,140,248,0.18)" stroke="rgba(129,140,248,0.34)" stroke-width="1.2"/>
+<polygon points="256,440 392,240 256,280" fill="rgba(167,139,250,0.14)" stroke="rgba(167,139,250,0.28)" stroke-width="1.2"/>
+<polygon points="256,440 120,240 60,260" fill="rgba(129,140,248,0.14)" stroke="rgba(129,140,248,0.28)" stroke-width="1.2"/>
+<polygon points="256,440 392,240 460,260" fill="rgba(167,139,250,0.12)" stroke="rgba(167,139,250,0.24)" stroke-width="1.2"/>
+<polygon points="120,240 60,260 200,280" fill="rgba(129,140,248,0.14)" stroke="rgba(167,139,250,0.26)" stroke-width="1.2"/>
+<polygon points="392,240 460,260 312,280" fill="rgba(167,139,250,0.12)" stroke="rgba(167,139,250,0.24)" stroke-width="1.2"/>
+</g>
+<polygon points="256,80 256,440" fill="none" stroke="rgba(129,140,248,0.12)" stroke-width="1"/>
+<polygon points="120,240 392,240" fill="none" stroke="rgba(129,140,248,0.12)" stroke-width="1"/>
+<text x="256" y="275" text-anchor="middle" dominant-baseline="central" font-family="Inter,sans-serif" font-weight="800" font-size="140" fill="#e0e7ff" filter="url(#g)">N</text>
+</g><circle cx="600.0" cy="190.0" r="28" fill="#0f1a3a" stroke="#6366f1" stroke-width="1.8"/><g transform="translate(584.0,174.0) scale(1.33)"><svg viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm-1 15h2v2h-2v-2zm0-12h2v8h-2V5z" fill="#818cf8"/></svg></g><text x="600.0" y="238.0" text-anchor="middle" fill="#94a3b8" font-family="Inter,sans-serif" font-size="13" font-weight="500">Hermes</text><circle cx="781.865334794732" cy="294.9999999999999" r="28" fill="#0f1a3a" stroke="#6366f1" stroke-width="1.8"/><g transform="translate(765.865334794732,278.9999999999999) scale(1.33)"><svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="5" fill="#a78bfa"/><path d="M5 14c-1.7 1.3-2 3.6-.7 5.3s3.6 2 5.3.7l2.4-3.2 2.4 3.2c1.3 1.7 3.6 2 5.3.7s2-3.6.7-5.3L18 12l-2.6 3.5L12 9l-3.4 6.5L6 12l-1 2z" fill="#a78bfa"/></svg></g><text x="781.865334794732" y="342.9999999999999" text-anchor="middle" fill="#94a3b8" font-family="Inter,sans-serif" font-size="13" font-weight="500">OpenClaw</text><circle cx="781.8653347947321" cy="505.0" r="28" fill="#0f1a3a" stroke="#6366f1" stroke-width="1.8"/><g transform="translate(765.8653347947321,489.0) scale(1.33)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#f97316"/><polygon points="12,3 14,9 20,9 15,13 17,19 12,15 7,19 9,13 4,9 10,9" fill="white"/></svg></g><text x="781.8653347947321" y="553.0" text-anchor="middle" fill="#94a3b8" font-family="Inter,sans-serif" font-size="13" font-weight="500">Claude Code</text><circle cx="636.4661173100554" cy="606.8096281325637" r="28" fill="#0f1a3a" stroke="#6366f1" stroke-width="1.8"/><g transform="translate(620.4661173100554,590.8096281325637) scale(1.33)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="#10b981"/><text x="7" y="15" font-family="monospace" font-size="8" font-weight="bold" fill="white">&gt;_</text></svg></g><text x="636.4661173100554" y="654.8096281325637" text-anchor="middle" fill="#94a3b8" font-family="Inter,sans-serif" font-size="13" font-weight="500">Codex</text><circle cx="451.50757595082507" cy="548.492424049175" r="28" fill="#0f1a3a" stroke="#6366f1" stroke-width="1.8"/><g transform="translate(435.50757595082507,532.492424049175) scale(1.33)"><svg viewBox="0 0 24 24"><rect width="24" height="24" rx="4" fill="#ec4899"/><text x="12" y="17" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="white">C</text></svg></g><text x="451.50757595082507" y="596.492424049175" text-anchor="middle" fill="#94a3b8" font-family="Inter,sans-serif" font-size="13" font-weight="500">Cursor</text><circle cx="393.1903718674363" cy="363.5338826899446" r="28" fill="#0f1a3a" stroke="#6366f1" stroke-width="1.8"/><g transform="translate(377.1903718674363,347.5338826899446) scale(1.33)"><svg viewBox="0 0 24 24"><rect width="24" height="24" rx="4" fill="#6366f1"/><text x="12" y="17" text-anchor="middle" font-family="sans-serif" font-weight="800" font-size="14" fill="white">K</text></svg></g><text x="393.1903718674363" y="411.5338826899446" text-anchor="middle" fill="#94a3b8" font-family="Inter,sans-serif" font-size="13" font-weight="500">Kilo Code</text><circle cx="494.9999999999999" cy="218.13466520526794" r="28" fill="#0f1a3a" stroke="#6366f1" stroke-width="1.8"/><g transform="translate(478.9999999999999,202.13466520526794) scale(1.33)"><svg viewBox="0 0 24 24"><rect width="24" height="24" rx="3" fill="#8b5cf6"/><text x="12" y="17" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="12" fill="white">CL</text></svg></g><text x="494.9999999999999" y="266.13466520526794" text-anchor="middle" fill="#94a3b8" font-family="Inter,sans-serif" font-size="13" font-weight="500">Cline</text><circle cx="868.8525165723328" cy="447.405952503072" r="28" fill="#0f1a3a" stroke="#6366f1" stroke-width="1.8"/><text x="868.8525165723328" y="453.405952503072" text-anchor="middle" fill="#818cf8" font-family="Inter,sans-serif" font-size="16" font-weight="700">+</text><text x="868.8525165723328" y="495.405952503072" text-anchor="middle" fill="#94a3b8" font-family="Inter,sans-serif" font-size="13" font-weight="500">+ more</text>
+<rect x="460.0" y="690" width="280" height="26" rx="13" fill="#6366f1" fill-opacity="0.08" stroke="#6366f1" stroke-width="1" stroke-opacity="0.15"/>
+<text x="600.0" y="708" text-anchor="middle" fill="#818cf8" font-family="Inter,sans-serif" font-size="12" font-weight="600" letter-spacing="0.5">✦ Universal Memory Layer</text>
+
+<text x="600.0" y="774" text-anchor="middle" fill="#f1f5f9" font-family="Inter,sans-serif" font-size="54" font-weight="800" letter-spacing="-1.5">One Memory</text>
+<text x="600.0" y="832" text-anchor="middle" fill="url(#grad)" font-family="Inter,sans-serif" font-size="54" font-weight="800" letter-spacing="-1.5">for All Your Agents</text>
+
+<text x="600.0" y="876" text-anchor="middle" fill="#64748b" font-family="Inter,sans-serif" font-size="14.5">
+  Universal memory layer for AI agents — self-hosted, secure, and <tspan fill="#818cf8" font-weight="600">MCP-based</tspan>.
+</text>
+<text x="600.0" y="900" text-anchor="middle" fill="#818cf8" font-family="Inter,sans-serif" font-size="14" font-weight="500">
+  What one agent learns, every agent remembers.
+</text>
+
+<text x="600.0" y="944" text-anchor="middle" fill="#475569" font-family="Inter,sans-serif" font-size="13.5" font-style="italic">
+  Agents come. Agents go. <tspan fill="#818cf8" font-weight="600">Nexus Memory stays.</tspan>
+</text>
+
+<text x="600.0" y="980" text-anchor="middle" fill="#475569" font-family="Inter,sans-serif" font-size="12" letter-spacing="0.5">
+  ✦ MCP  ✦  Local-first  ✦  Open Source
+</text>
+
+<text x="600.0" y="1172" text-anchor="middle" fill="#334155" font-family="Inter,sans-serif" font-size="10.5">
+  github.com/Neboy72/nexus-memory
+</text>
+</svg>

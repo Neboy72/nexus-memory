@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus Memory — One Memory for All Your Agents</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #020818; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: Inter, -apple-system, sans-serif; }
+.poster { width: 1200px; min-height: 1400px; background: radial-gradient(ellipse at 50% 30%, #0a1630 0%, #040c1c 50%, #020612 100%); position: relative; overflow: hidden; padding: 60px 80px 50px; }
+.star { position: absolute; background: #fff; border-radius: 50%; }
+.glow-orb { position: absolute; border-radius: 50%; pointer-events: none; }
+
+/* Crystal center */
+.crystal-zone {position: relative; height: 420px; display: flex; align-items: center; justify-content: center;}
+.crystal-halo { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 200px; height: 200px; border-radius: 50%; background: radial-gradient(circle, rgba(59,130,246,0.15) 0%, rgba(59,130,246,0.04) 50%, transparent 70%); z-index: 0; }
+.crystal-globe { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 160px; height: 160px; border-radius: 50%; background: rgba(10,20,45,0.8); border: 1px solid rgba(59,130,246,0.2); box-shadow: 0 0 60px rgba(59,130,246,0.2), inset 0 0 60px rgba(59,130,246,0.05); z-index: 1; }
+.crystal { position: relative; z-index: 2; width: 110px; height: 110px; filter: drop-shadow(0 0 40px rgba(59,130,246,0.7)) drop-shadow(0 0 80px rgba(99,102,241,0.4)); }
+.crystal svg { width: 100%; height: 100%; }
+
+.mcp-label {position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%); text-align: center; z-index: 3;}
+.mcp-label .mcp { font-size: 11px; color: #64748b; letter-spacing: 1px; }
+.mcp-label .nm { font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #6366f1, #818cf8, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+/* Agent columns */
+.agents-left, .agents-right { position: absolute; top: 60px; width: 240px; z-index: 3; }
+.agents-left { left: 80px; }
+.agents-right { right: 80px; }
+.agent-row { display: flex; align-items: center; gap: 14px; margin-bottom: 50px; }
+.agent-row .logo-box { width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.agent-row .logo-box img { max-width: 44px; max-height: 44px; }
+.agent-row .info { display: flex; flex-direction: column; gap: 2px; }
+.agent-row .info .aname { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+.agent-row .info .adesc { font-size: 11px; color: #64748b; }
+
+/* Connectors */
+.connectors { position: absolute; top: 0; left: 0; width: 100%; height: 420px; z-index: 2; pointer-events: none; }
+
+/* Text section */
+.content { text-align: center; margin-top: 20px; }
+.headline { margin: 12px 0; }
+.headline .w { font-size: 56px; font-weight: 800; letter-spacing: -2px; color: #f1f5f9; display: block; }
+.headline .p { font-size: 56px; font-weight: 800; letter-spacing: -2px; background: linear-gradient(135deg, #6366f1, #818cf8, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; display: block; margin-top: -4px; }
+.sub { font-size: 15px; color: #94a3b8; line-height: 1.6; margin: 16px 0; }
+.sub b { color: #a5b4fc; }
+.tagline { font-size: 15px; font-style: italic; color: #94a3b8; margin: 18px 0; }
+.tagline b { color: #818cf8; font-style: normal; font-weight: 600; }
+.footer { font-size: 11px; color: #475569; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="poster" id="poster">
+<div class="glow-orb" style="top:-120px;right:-80px;width:500px;height:500px;background:radial-gradient(circle,rgba(59,130,246,0.06) 0%,transparent 70%)"></div>
+<div class="glow-orb" style="bottom:-100px;left:-60px;width:400px;height:400px;background:radial-gradient(circle,rgba(139,92,246,0.04) 0%,transparent 70%)"></div>
+
+<div class="crystal-zone">
+  <div class="crystal-halo"></div>
+  <div class="crystal-globe"></div>
+  <div class="crystal">
+    <svg viewBox="0 0 512 512"><defs><filter id="g"><feGaussianBlur stdDeviation="4"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+    <polygon points="256,80 120,240 256,200" fill="rgba(59,130,246,0.10)" stroke="rgba(59,130,246,0.22)" stroke-width="1.5"/><polygon points="256,80 392,240 256,200" fill="rgba(59,130,246,0.06)" stroke="rgba(59,130,246,0.16)" stroke-width="1.5"/><polygon points="256,80 120,240 80,120" fill="rgba(99,102,241,0.08)" stroke="rgba(99,102,241,0.20)" stroke-width="1.5"/><polygon points="256,80 392,240 432,120" fill="rgba(99,102,241,0.05)" stroke="rgba(99,102,241,0.14)" stroke-width="1.5"/><polygon points="256,440 120,240 256,200" fill="rgba(59,130,246,0.07)" stroke="rgba(59,130,246,0.16)" stroke-width="1.5"/><polygon points="256,440 392,240 256,200" fill="rgba(59,130,246,0.04)" stroke="rgba(59,130,246,0.10)" stroke-width="1.5"/>
+    <g filter="url(#g)"><polygon points="256,80 120,240 256,280" fill="rgba(59,130,246,0.28)" stroke="rgba(96,165,250,0.50)" stroke-width="1.5"/><polygon points="256,80 392,240 256,280" fill="rgba(99,102,241,0.22)" stroke="rgba(129,140,248,0.40)" stroke-width="1.5"/><polygon points="256,80 120,240 60,260" fill="rgba(59,130,246,0.20)" stroke="rgba(96,165,250,0.38)" stroke-width="1.5"/><polygon points="256,80 392,240 460,260" fill="rgba(99,102,241,0.18)" stroke="rgba(129,140,248,0.32)" stroke-width="1.5"/><polygon points="256,440 120,240 256,280" fill="rgba(59,130,246,0.18)" stroke="rgba(96,165,250,0.34)" stroke-width="1.5"/><polygon points="256,440 392,240 256,280" fill="rgba(99,102,241,0.14)" stroke="rgba(129,140,248,0.28)" stroke-width="1.5"/><polygon points="256,440 120,240 60,260" fill="rgba(59,130,246,0.14)" stroke="rgba(96,165,250,0.26)" stroke-width="1.5"/><polygon points="256,440 392,240 460,260" fill="rgba(99,102,241,0.10)" stroke="rgba(129,140,248,0.22)" stroke-width="1.5"/><text x="256" y="275" text-anchor="middle" dominant-baseline="central" font-family="Inter,sans-serif" font-weight="800" font-size="130" fill="#e0e7ff" filter="url(#g)">N</text></g>
+    <polygon points="256,80 256,440" fill="none" stroke="rgba(129,140,248,0.10)" stroke-width="1"/><polygon points="120,240 392,240" fill="none" stroke="rgba(129,140,248,0.10)" stroke-width="1"/>
+    </svg>
+  </div>
+
+  <!-- Left agents -->
+  <div class="agents-left">
+    <div class="agent-row"><div class="logo-box"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='8' fill='%23111827' stroke='%236366f1' stroke-width='1.5'/%3E%3Ctext x='24' y='30' text-anchor='middle' font-family='monospace' font-weight='800' font-size='18' fill='%23818cf8'%3EKi%3C/text%3E%3C/svg%3E"></div><div class="info"><span class="aname">Kilo</span><span class="adesc">Your AI Researcher</span></div></div>
+    <div class="agent-row"><div class="logo-box"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='8' fill='%23111827' stroke='%2310b981' stroke-width='1.5'/%3E%3Ctext x='24' y='30' text-anchor='middle' font-family='monospace' font-weight='700' font-size='20' fill='%2334d399'%3ECo%3C/text%3E%3C/svg%3E"></div><div class="info"><span class="aname">Codex</span><span class="adesc">Your Code Assistant</span></div></div>
+    <div class="agent-row"><div class="logo-box"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='8' fill='%23111827' stroke='%23a78bfa' stroke-width='1.5'/%3E%3Ctext x='24' y='30' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='16' fill='%23a78bfa'%3EHe%3C/text%3E%3C/svg%3E"></div><div class="info"><span class="aname">Hermes</span><span class="adesc">Your Speed Optimizer</span></div></div>
+  </div>
+
+  <!-- Right agents -->
+  <div class="agents-right">
+    <div class="agent-row"><div class="logo-box"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='8' fill='%23111827' stroke='%232563eb' stroke-width='1.5'/%3E%3Ctext x='24' y='30' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='16' fill='%2360a5fa'%3EOd%3C/text%3E%3C/svg%3E"></div><div class="info"><span class="aname">Odysseus</span><span class="adesc">Your Navigator</span></div></div>
+    <div class="agent-row"><div class="logo-box"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='8' fill='%23111827' stroke='%23f97316' stroke-width='1.5'/%3E%3Ctext x='24' y='30' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='16' fill='%23fb923c'%3ECC%3C/text%3E%3C/svg%3E"></div><div class="info"><span class="aname">Claude Code</span><span class="adesc">Your Developer Partner</span></div></div>
+    <div class="agent-row"><div class="logo-box"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='8' fill='%23111827' stroke='%23ec4899' stroke-width='1.5'/%3E%3Ctext x='24' y='30' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='15' fill='%23f472b6'%3EOC%3C/text%3E%3C/svg%3E"></div><div class="info"><span class="aname">OpenClaw</span><span class="adesc">Your Security Guard</span></div></div>
+  </div>
+
+  <!-- Connectors SVG -->
+  <svg class="connectors" viewBox="0 0 1200 420">
+    <defs><radialGradient id="dotg"><stop offset="0%" stop-color="#60a5fa" stop-opacity="0.8"/><stop offset="100%" stop-color="#60a5fa" stop-opacity="0"/></radialGradient></defs>
+    <g fill="none" stroke="rgba(59,130,246,0.35)" stroke-width="1.8" stroke-linecap="round">
+      <!-- Left side connectors -->
+      <path d="M600,225 Q440,195 320,165"/><circle cx="320" cy="165" r="2.5" fill="url(#dotg)"/>
+      <path d="M600,225 Q440,240 320,240"/><circle cx="320" cy="240" r="2.5" fill="url(#dotg)"/>
+      <path d="M600,225 Q440,295 320,325"/><circle cx="320" cy="325" r="2.5" fill="url(#dotg)"/>
+      <!-- Right side connectors -->
+      <path d="M600,225 Q760,195 880,165"/><circle cx="880" cy="165" r="2.5" fill="url(#dotg)"/>
+      <path d="M600,225 Q760,240 880,240"/><circle cx="880" cy="240" r="2.5" fill="url(#dotg)"/>
+      <path d="M600,225 Q760,295 880,325"/><circle cx="880" cy="325" r="2.5" fill="url(#dotg)"/>
+    </g>
+  </svg>
+
+  <div class="mcp-label"><div class="mcp">✦ MCP ✦</div><div class="nm">Nexus Memory</div></div>
+</div>
+
+<div class="content">
+  <div class="headline"><span class="w">One Memory</span><span class="p">for All Your Agents</span></div>
+  <div class="sub">Universal memory layer for AI agents — self-hosted, secure, and <b>MCP-based</b>.<br>What one agent learns, every agent remembers.</div>
+  <div class="tagline">Agents come. Agents go. <b>Nexus Memory stays.</b></div>
+  <div class="footer">github.com/Neboy72/nexus-memory</div>
+</div>
+</div>
+
+<script>
+// Stars
+const poster = document.getElementById('poster');
+for (let i = 0; i < 120; i++) {
+  const s = document.createElement('div');
+  s.className = 'star';
+  s.style.left = Math.random() * 100 + '%';
+  s.style.top = Math.random() * 100 + '%';
+  const size = 0.4 + Math.random() * 2.2;
+  s.style.width = size + 'px';
+  s.style.height = size + 'px';
+  s.style.opacity = 0.15 + Math.random() * 0.6;
+  poster.appendChild(s);
+}
+</script>
+</body>
+</html>
