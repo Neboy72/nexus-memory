@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus Memory — One Memory for All Your Agents</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #06080f;
+  display: flex; justify-content: center; align-items: center;
+  min-height: 100vh;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  overflow: hidden;
+}
+.poster {
+  width: 1200px; height: 628px;
+  background: radial-gradient(ellipse at 50% 30%, #0d1525 0%, #06080f 60%, #030510 100%);
+  position: relative;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 40px 60px;
+}
+/* Grid background */
+.grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+/* Glow orbs */
+.glow { position: absolute; border-radius: 50%; pointer-events: none; }
+.glow-1 { top: -150px; right: -100px; width: 500px; height: 500px;
+  background: radial-gradient(circle, rgba(59,130,246,0.06) 0%, transparent 70%); }
+.glow-2 { bottom: -120px; left: -80px; width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(139,92,246,0.05) 0%, transparent 70%); }
+.glow-3 { top: 40%; left: 50%; transform: translate(-50%, -50%); width: 300px; height: 300px;
+  background: radial-gradient(circle, rgba(59,130,246,0.04) 0%, transparent 70%); }
+
+/* Crystal center */
+.crystal-center {
+  position: absolute; top: 180px; left: 50%; transform: translateX(-50%);
+  width: 120px; height: 120px; z-index: 2;
+  filter: drop-shadow(0 0 30px rgba(59,130,246,0.4)) drop-shadow(0 0 60px rgba(139,92,246,0.2));
+}
+.crystal-center svg { width: 100%; height: 100%; overflow: visible; }
+
+/* Agent logos around crystal */
+.agent-ring { position: absolute; top: 180px; left: 50%; transform: translateX(-50%); width: 700px; height: 0; z-index: 1; }
+.agent-node {
+  position: absolute;
+  display: flex; align-items: center; gap: 8px;
+  transform: translate(-50%, -50%);
+}
+.agent-node .logo-circle {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: rgba(15,23,42,0.9); border: 1.5px solid rgba(99,102,241,0.25);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 15px rgba(59,130,246,0.1);
+}
+.agent-node .logo-circle img { width: 22px; height: 22px; opacity: 0.85; }
+.agent-node .logo-circle .initials {
+  font-size: 11px; font-weight: 800; color: #818cf8; letter-spacing: -0.5px;
+}
+.agent-node .name { font-size: 13px; color: #94a3b8; font-weight: 500; white-space: nowrap; }
+
+/* Positions: 6 nodes around center */
+.n-0 { left: 50%; top: -160px; }  /* top */
+.n-1 { left: 80%; top: -90px; }   /* top-right */
+.n-2 { left: 90%; top: 50px; }    /* right */
+.n-3 { left: 70%; top: 170px; }   /* bottom-right */
+.n-4 { left: 30%; top: 170px; }   /* bottom-left */
+.n-5 { left: 10%; top: 50px; }    /* left */
+.n-6 { left: 20%; top: -90px; }   /* top-left */
+.n-7 { left: 50%; top: 220px; }   /* bottom */
+
+/* Connecting lines */
+.connectors {
+  position: absolute; top: 180px; left: 50%; transform: translateX(-50%);
+  width: 700px; height: 400px; z-index: 0; pointer-events: none;
+}
+
+/* Headline & text */
+.content { z-index: 3; text-align: center; margin-top: 240px; }
+.badge {
+  display: inline-block; padding: 5px 14px; border-radius: 20px;
+  background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.2);
+  color: #818cf8; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 16px;
+}
+.headline {
+  font-size: 46px; font-weight: 800; color: #fff; letter-spacing: -1px; line-height: 1.1; margin-bottom: 6px;
+}
+.headline span {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.subtitle {
+  font-size: 16px; color: #64748b; font-weight: 400; margin-bottom: 20px; line-height: 1.4;
+}
+.subtitle b { color: #818cf8; font-weight: 600; }
+.tagline {
+  font-size: 15px; color: #475569; font-style: italic; margin-bottom: 24px;
+}
+.mcp-row {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+}
+.mcp-row img { height: 20px; opacity: 0.35; filter: grayscale(0.5); }
+.mcp-row span { font-size: 12px; color: #475569; }
+.footer { position: absolute; bottom: 24px; font-size: 11px; color: #334155; }
+</style>
+</head>
+<body>
+<div class="poster">
+  <div class="grid"></div>
+  <div class="glow glow-1"></div><div class="glow glow-2"></div><div class="glow glow-3"></div>
+
+  <!-- Crystal -->
+  <div class="crystal-center">
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="nG" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#818cf8"/>
+          <stop offset="100%" stop-color="#a78bfa"/>
+        </linearGradient>
+        <filter id="glowF"><feGaussianBlur stdDeviation="6"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <!-- Back facets -->
+      <polygon points="256,80 120,240 256,200" fill="rgba(99,102,241,0.06)" stroke="rgba(99,102,241,0.15)" stroke-width="1"/>
+      <polygon points="256,80 392,240 256,200" fill="rgba(99,102,241,0.04)" stroke="rgba(99,102,241,0.12)" stroke-width="1"/>
+      <polygon points="256,80 120,240 80,120" fill="rgba(139,92,246,0.06)" stroke="rgba(139,92,246,0.15)" stroke-width="1"/>
+      <polygon points="256,80 392,240 432,120" fill="rgba(139,92,246,0.04)" stroke="rgba(139,92,246,0.12)" stroke-width="1"/>
+      <polygon points="256,440 120,240 256,200" fill="rgba(99,102,241,0.05)" stroke="rgba(99,102,241,0.12)" stroke-width="1"/>
+      <polygon points="256,440 392,240 256,200" fill="rgba(99,102,241,0.03)" stroke="rgba(99,102,241,0.10)" stroke-width="1"/>
+      <!-- Front facets -->
+      <g filter="url(#glowF)">
+        <polygon points="256,80 120,240 256,280" fill="rgba(129,140,248,0.20)" stroke="rgba(129,140,248,0.4)" stroke-width="1.5"/>
+        <polygon points="256,80 392,240 256,280" fill="rgba(167,139,250,0.18)" stroke="rgba(167,139,250,0.35)" stroke-width="1.5"/>
+        <polygon points="256,80 120,240 60,260" fill="rgba(129,140,248,0.15)" stroke="rgba(129,140,248,0.3)" stroke-width="1.5"/>
+        <polygon points="256,80 392,240 460,260" fill="rgba(167,139,250,0.15)" stroke="rgba(167,139,250,0.3)" stroke-width="1.5"/>
+        <polygon points="256,440 120,240 256,280" fill="rgba(129,140,248,0.15)" stroke="rgba(129,140,248,0.3)" stroke-width="1.5"/>
+        <polygon points="256,440 392,240 256,280" fill="rgba(167,139,250,0.12)" stroke="rgba(167,139,250,0.25)" stroke-width="1.5"/>
+        <polygon points="256,440 120,240 60,260" fill="rgba(129,140,248,0.12)" stroke="rgba(129,140,248,0.25)" stroke-width="1.5"/>
+        <polygon points="256,440 392,240 460,260" fill="rgba(167,139,250,0.12)" stroke="rgba(167,139,250,0.25)" stroke-width="1.5"/>
+      </g>
+      <!-- N letter -->
+      <text x="256" y="275" font-family="Inter,-apple-system,sans-serif" font-weight="800" font-size="160" text-anchor="middle" dominant-baseline="central" fill="#e0e7ff" filter="url(#glowF)">N</text>
+    </svg>
+  </div>
+
+  <!-- Agent nodes -->
+  <div class="agent-ring">
+    <div class="agent-node n-0"><div class="logo-circle"><span class="initials">Ki</span></div><span class="name">Kilo</span></div>
+    <div class="agent-node n-1"><div class="logo-circle"><span class="initials">Od</span></div><span class="name">Odysseus</span></div>
+    <div class="agent-node n-2"><div class="logo-circle"><span class="initials">Co</span></div><span class="name">Codex</span></div>
+    <div class="agent-node n-3"><div class="logo-circle"><span class="initials">CC</span></div><span class="name">Claude Code</span></div>
+    <div class="agent-node n-4"><div class="logo-circle"><span class="initials">He</span></div><span class="name">Hermes</span></div>
+    <div class="agent-node n-5"><div class="logo-circle"><span class="initials">OC</span></div><span class="name">OpenClaw</span></div>
+    <div class="agent-node n-6"><div class="logo-circle"><span class="initials">+</span></div><span class="name">Cursor</span></div>
+    <div class="agent-node n-7"><div class="logo-circle"><span class="initials">+</span></div><span class="name">and more</span></div>
+  </div>
+
+  <!-- SVG Connectors -->
+  <svg class="connectors" viewBox="0 0 700 400">
+    <style>
+      line { stroke: rgba(99,102,241,0.3); stroke-width: 1.2; stroke-dasharray: 4 3; }
+      path { fill: none; stroke: rgba(99,102,241,0.25); stroke-width: 1.2; }
+    </style>
+    <!-- Bezier curves from each agent to center (350,200) -->
+    <path d="M350,40  Q350,120 350,200" />
+    <path d="M560,110 Q455,155 350,200" />
+    <path d="M630,250 Q490,225 350,200" />
+    <path d="M490,370 Q420,285 350,200" />
+    <path d="M210,370 Q280,285 350,200" />
+    <path d="M70,250  Q210,225 350,200" />
+    <path d="M140,110 Q245,155 350,200" />
+    <path d="M350,420 Q350,310 350,200" />
+  </svg>
+
+  <!-- Content -->
+  <div class="content">
+    <div class="badge">✦ Universal Memory Layer</div>
+    <h1 class="headline">One Memory<br><span>for All Your Agents</span></h1>
+    <p class="subtitle">
+      Universal memory layer for AI agents — self-hosted, secure, and <b>MCP-based</b>.<br>
+      What one agent learns, every agent remembers.
+    </p>
+    <p class="tagline">Agents come. Agents go. <b style="color:#818cf8">Nexus Memory stays.</b></p>
+    <div class="mcp-row">
+      <span>✦ MCP</span><span>✦ Local-first</span><span>✦ Open Source</span>
+    </div>
+  </div>
+
+  <div class="footer">github.com/Neboy72/nexus-memory</div>
+</div>
+</body>
+</html>
