@@ -18,7 +18,7 @@ const API = {
     if (filters.drift && filters.drift !== 'all') params.set('drift', filters.drift);
     if (filters.source) params.set('source', filters.source);
     if (filters.limit) params.set('limit', filters.limit);
-    params.set('limit', '100');
+    if (!params.has('limit')) params.set('limit', '500');
     return this.fetch(`/api/memories?${params}`);
   },
 
