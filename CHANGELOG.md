@@ -1,214 +1,235 @@
 # Changelog
 
-## Unreleased
+All notable changes to **Nexus Memory** are documented in this file.
 
-**Webhook Subscriptions: Drei neue Tools (`subscribe`, `unsubscribe`, `list_subscriptions`) feuern HTTP-POSTs an registrierte URLs, wenn sich der Memory-Store ändert.**
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-### MCP Server
+## [v0.4.0] — 2026-06-19
 
-- **`subscribe(event_type, webhook_url)`** — registriert einen HTTP-Webhook für einen Memory-Event-Typ. Gibt eine Subscription-ID (UUID) zurück. Persistiert in `~/.nexus-webhooks.json` (kein Qdrant, keine SQLite, keine neue Dependency).
-- **`unsubscribe(subscription_id)`** — entfernt eine Subscription anhand ihrer ID. Antwortet `unsubscribed` (removed=true) oder `not_found`.
-- **`list_subscriptions()`** — listet alle registrierten Subscriptions (id, event_type, webhook_url, created_at).
-- **Event-Dispatching in `remember` / `update` / `forget`** — nach erfolgreichem Tool-Call feuert der Server `asyncio.create_task(_post_webhook(url, payload))` für jede passende Subscription.
-  - Body: `{"event": "...", "memory_id": "<uuid>", "timestamp": "ISO-8601"}`
-  - **Fire-and-forget** — blockiert den Tool-Call nicht.
-  - **Fehler-Tolerant** — Timeouts (5s), 4xx/5xx, DNS-Fehler werden geloggt, nicht gecrasht.
-  - Event-Typen: `memory.remember`, `memory.update`, `memory.forget`.
-- **Validierung** — `event_type` muss im geschlossenen Enum sein, `webhook_url` muss `http://` oder `https://` sein. Ungültige Werte → Error-Envelope.
+### Added
 
-### Code-Struktur
+- **OpenClaw native plugin** — Auto-Recall (memories injected before every turn) and Auto-Capture (facts extracted after every turn) powered by local Qdrant
+- **`install_openclaw_plugin.sh`** — one-command install script that detects OpenClaw, configures `plugins.load.paths`, sets `plugins.slots.memory`, auto-detects embedding provider, and restarts the gateway
+- **3-way architecture** — Hermes Plugin · OpenClaw Plugin · MCP Server, all sharing the same Qdrant collection
+- **"Which path should I use?" table** in AGENTS.md and README.md
 
-- **`WebhookStore`-Klasse** (`src/nexus_memory/mcp_server.py`) — kapselt die JSON-Datei-IO, mit `asyncio.Lock` für race-freie subscribe/unsubscribe-Operationen. Atomare Schreibvorgänge via `.tmp` + `replace()`.
-- **`dispatch_event(event_type, memory_id)`** — Modul-Funktion, die passende Subscriptions ermittelt und pro URL einen Background-Task startet.
-- **`_post_webhook(url, payload)`** — interner HTTP-POST; nutzt `httpx` falls vorhanden, fällt zurück auf `urllib.request` im Thread-Pool. Jede Exception wird geloggt und geschluckt.
-- **Singletons `get_store()` / `get_webhook_store()`** — gleiche Pattern; tests monkey-padden `_webhook_store` direkt.
+### Changed
 
-### Tests
+- README.md completely rewritten — 3-way architecture diagram, all 3 install paths, release history table, GitHub Sponsors badge
+- Version badge updated to v0.4.0
 
-- 27 neue Tests in `tests/test_mcp_server.py`:
-  - **`TestWebhookStore`** (9 Tests) — Persistenz, subscribe/unsubscribe, unknown id, list, matching, ungültige Event-Typen/URLs, leere/korrupte JSON-Datei.
-  - **`TestWebhookTools`** (9 Tests) — MCP-Tool-Dispatcher: subscribe/unsubscribe/list-Success- und Error-Pfade, Tool-Schema-Validierung.
-  - **`TestWebhookEventDispatch`** (6 Tests) — remember feuert Webhook bei Subscription, NICHT ohne Subscription, nur passende Event-Typen, Webhook-Fehler crashen nicht, Unbekannte Events werden ignoriert, Persistence über mehrere Store-Instanzen.
-- Alle 351 bestehenden Tests bleiben grün → **379 / 379 pass**.
+### Notes
 
-### Docs
+- No breaking changes — same Qdrant collection, same API, same tools
+- OpenClaw plugin uses Qdrant REST via `fetch()` (no Python dependency on the OpenClaw side)
 
-- `AGENTS.md` — Tool-Tabelle auf 10 Tools erweitert, neue Sektion „Webhook Subscriptions" mit Event-Typen-Tabelle, Tool-Beispielen, Payload-Schema, Storage- und Delivery-Semantik.
-- `CHANGELOG.md` — dieser Unreleased-Eintrag.
+---
 
+## [v0.3.0] — 2026-06-18
 
+### Added
 
-**Provenance-Standard: `source_url` + `confidence` als empfohlene Pflichtfelder im `remember`-Tool.**
+- **Hermes native MemoryProvider plugin** — direct Qdrant access with zero MCP overhead
+  - Auto-prefetch: relevant memories injected into context before every turn
+  - Auto-sync: user + assistant turns saved as memories automatically
+  - 3 manual tools: `nexus_recall`, `nexus_remember`, `nexus_forget`
+  - Dimension-mismatch protection warns if embedding provider changed
+- **`install_hermes_plugin.sh`** — one-command install: symlinks plugin, sets `memory.provider`, verifies
+- **Embedding Provider Selection wizard** — `nexus-memory-init` interactive CLI
+  - Scans system for all 6 providers
+  - Shows quality ranking (excellent / good / basic)
+  - Auto-selects best available as default
+  - API key URL hints for cloud providers
+- **Separate landing page server** + marketing assets (poster, references)
 
-### MCP Server
+### Changed
 
-- **Tool-Schema** — `category` ist in `required: ["text", "category"]` aufgenommen. Der Server wendet `"fact"` als Default an, wenn der Client das Feld weglässt oder einen unbekannten Wert sendet → ältere Clients funktionieren weiter.
-- **Dispatcher-Validierung** — `handle_call_tool` für `remember` prüft `category` jetzt explizit gegen `MemoryCategory._value2member_map_` und coerced ungültige / leere Werte auf `MemoryCategory.FACT.value`.
-- **Recall-Pfade** — `category` aus dem Qdrant-Payload wird in beiden Suchpfaden (Hybrid + Vector-Fallback) auf `MemoryCategory.FACT.value` normalisiert, falls der Eintrag vor diesem Release ohne `category` geschrieben wurde. Konsumenten sehen damit immer einen gültigen Enum-Wert.
-- **Provenance-Schema-Doku** — `source_url` und `confidence` bleiben optional (kein Eintrag in `required`), aber die Tool-Schema-Beschreibungen erklären jetzt explizit:
-  - `source_url` aktiviert Justification-Check (Rung 2) — async HTTP HEAD bei jedem Recall, `verification: "verified" | "unreachable"` statt `"unchecked"`.
-  - `confidence` bekommt eine Empfehlungs-Skala (0.9+ für verifizierte Fakten, 0.5-0.8 für Beliefs, <0.5 für Spekulation).
-  - Server-Defaults (`0.7` für Confidence) bleiben rückwärtskompatibel.
+- `pyproject.toml` version bumped to 0.3.0
+- AGENTS.md restructured with Hermes Plugin and OpenClaw Plugin sections
 
-### Docs
+### Notes
 
-- `AGENTS.md` — Memory-Categories-Sektion umgeschrieben (State-Prefixing-Tabelle, Legacy-Data-Hinweis, Pflichtfeld-Vermerk in der Tool-Übersicht).
-- `AGENTS.md` — Provenance-Sektion komplett überarbeitet: "Recommended call"-Beispiel, Parametertabelle (source_url / confidence / source), Verifikationsstatus-Tabelle mit "When"-Spalte, "Why this matters"-Sektion mit Spivakovsky-Referenz.
+- Hermes plugin shares the same Qdrant collection with the MCP server
+- No breaking changes to the MCP server API
 
-## v0.2.5 (2026-06-13)
+---
 
-**Bugfix: `is_success()` statt rohem `status_code == 200` — Qdrant 201/204 werden nicht mehr fälschlich als Fehler gewertet.**
+## [v0.2.5] — 2026-06-13
 
-### Bugfixes (29 Stellen in 10 Dateien)
+### Fixed
 
-- **is_success() Helper** in `nexus/config.py` — zentrale Prüfung `200 <= code < 300` statt überall `== 200`
-- **apply.py** (9 Stellen) — Batch-Operationen sicher
-- **events.py** (7 Stellen) — Event-CRUD sicher
-- **staging.py** (3 Stellen) — Stage/Promote sicher
-- **nexus/__init__.py** (2 Stellen) — API-Interface sicher
-- **provenance/__init__.py** (3 Stellen) — Provenance-Tracking sicher
-- **cli.py** (1 Stelle) — CLI-verify sicher
-- **mcp_server.py** (1 Stelle) — Embedding-Detection sicher
-- **retrieval/__init__.py** (1 Stelle) — Rerank-Abbruch sicher
-- **examples/nexus-sica-analyzer.py + nexus_search.py** (2 Stellen)
+- **`is_success()` helper** replaces raw `status_code == 200` across 29 sites in 10 files — Qdrant 201/204 responses no longer falsely treated as errors
+  - `apply.py` (9 sites), `events.py` (7 sites), `staging.py` (3 sites), `nexus/__init__.py` (2 sites), `provenance/__init__.py` (3 sites), `cli.py` (1 site), `mcp_server.py` (1 site), `retrieval/__init__.py` (1 site), examples (2 sites)
+- **5 bugs from Verifier audit** — Google async, try/except handlers, missing if-condition, deps, version drift
 
-### Code-Qualität (simplify-code)
+### Changed
 
-- **TRUST_EPSILON konsolidiert** — gleicher Wert (0.01) in recompute_trust + recompute_all (vorher 0.01 vs 1e-9)
-- **EVENT_TYPES aus Enum abgeleitet** — single source of truth statt Duplikat
-- **Deprecated `asyncio.get_event_loop()`** durch `get_running_loop()` ersetzt
-- **Re-Embedding bei Hybrid-Fallback eliminiert** — ein API-Call statt zwei
-- **Unused imports entfernt** (json, Any, datetime, timezone, sys locales)
-- **Unused constants entfernt** (STATUS_CONTESTED, RETRACTED, HISTORICAL, VALID_STATUSES)
+- **TRUST_EPSILON consolidated** — same value (0.01) in `recompute_trust` + `recompute_all` (previously 0.01 vs 1e-9)
+- **EVENT_TYPES derived from Enum** — single source of truth instead of duplicate
+- **Deprecated `asyncio.get_event_loop()`** replaced with `get_running_loop()`
+- **Re-embedding on hybrid fallback eliminated** — one API call instead of two
+- **Unused imports removed** (json, Any, datetime, timezone, sys locales)
+- **Unused constants removed** (STATUS_CONTESTED, RETRACTED, HISTORICAL, VALID_STATUSES)
+- **`config.py` docstring corrected** — says "nexus" instead of "hermes-memory"
 
-### CI / Qualitätssicherung
+### Added
 
-- **Audit GitHub Action** — automatischer Check bei jedem Push:
-  - Collection-Name-Check (findet `openclaw-memory`, `hermes-memory-1024d` etc.)
-  - Status-Code-Check (findet rohe `== 200`)
-  - Python Compile-Check (alle Dateien kompilierbar)
+- **Audit GitHub Action** — automatic check on every push:
+  - Collection-name check (finds `openclaw-memory`, `hermes-memory-1024d` etc.)
+  - Status-code check (finds raw `== 200`)
+  - Python compile check
   - pytest
+- **SECURITY.md** — contact, supported versions, reporting process
+- **Webhook subscriptions** — 3 new tools: `subscribe`, `unsubscribe`, `list_subscriptions`
+  - Fire-and-forget HTTP POST to registered URLs on memory events
+  - Persisted in `~/.nexus-webhooks.json` (no Qdrant, no SQLite, no new dependency)
+  - Event types: `memory.remember`, `memory.update`, `memory.forget`
+  - 27 new tests (379 total, all passing)
 
-### config.py
+### Notes
 
-- **Docstring korrigiert** — sagt "nexus" statt "hermes-memory" (Code war bereits korrekt)
+- No breaking changes — same Qdrant collection, same API
 
-### Migration
+---
 
-No change — same Qdrant collection, same API. Zero breaking changes.
+## [v0.2.4] — 2026-06-12
 
-## v0.2.3 (2026-06-08)
+### Added
 
-**Auto-Update — Agent managed: check, ask, update, restart.**
+- **Web UI** with live D3.js v7 force-directed graph
+  - Interactive node graph of all memories
+  - Clustering and category-mapping
+  - Detail view on node click
+  - Drift ampel (traffic light) for belief health
+  - Stats cards with tooltips
+  - Filter by category, full-text search
+- **`nexus-memory webui` CLI command** — launches dashboard at `http://127.0.0.1:9120`
+- **Ko-fi integration** in Web UI header and footer
 
-### New Tools (2)
+### Fixed
 
-- **`check_update`** — Check if a newer version is available on GitHub. Returns local vs latest version, release URL, and whether an update is available.
-- **`do_update`** — Pull the latest version from GitHub, reinstall via pip, and restart the server. Requires `confirm: true` as safety guard. The server self-terminates after a successful update; the MCP client automatically reconnects.
+- Graph.js crash on `d.full` → `fullText` property
+- Safari reader mode prevention, marked as web app
+- Cache-bust all assets (`?v=20260612`)
+- Graph edges visibility (4px / 75% opacity, hover 5px / 100%)
+- Node sizing (7 + 15×confidence), thicker edges, larger labels
 
-### Self-Restart
+### Changed
 
-- After a successful `do_update`, the server exits cleanly. The MCP client (Hermes gateway, Claude Code, Cursor, etc.) detects the disconnection and restarts the server with the new version — zero manual steps for the user.
+- WebUI refactored to graph-only landing page, removed marketing clutter
+- `cli()` cleaned up after patch damage, proper argparse restored
 
-### Agent Workflow (Language-Neutral)
+---
 
-1. Agent calls `check_update` → sees `update_available: true`
-2. Agent asks user in their language: "Update available. Install?"
-3. User says "yes"
-4. Agent calls `do_update(confirm: true)` → git pull + pip install + server restart
-5. Client reconnects automatically — new version is live
+## [v0.2.3] — 2026-06-08
 
-## v0.2.2 (2026-06-08)
+### Added
 
-**Justification Check (Rung 2) — Source URL Verification on Recall.**
+- **`check_update` tool** — checks if a newer version is available on GitHub. Returns local vs latest version, release URL, and whether an update is available
+- **`do_update` tool** — pulls latest version from GitHub, reinstalls via pip, and restarts the server. Requires `confirm: true` as safety guard
+- **Self-restart** — after successful `do_update`, the server exits cleanly; the MCP client automatically reconnects with the new version
 
-### New Feature
+### Fixed
 
-- **`verification` field in recall results** — each result now includes a `verification` status:
-  - `verified` — source URL is reachable (HTTP HEAD < 400)
-  - `unreachable` — source URL unreachable or blocks HEAD requests
-  - `unchecked` — no `source_url` was set
-- **`_check_sources()` async method** — parallel HTTP HEAD checks on all source URLs in result set
-- **Payload enrichment** — hybrid search results now include `source_url`, `access_level`, `category`, `source`, `created_at`, `provenance` from Qdrant payload (previously only score + text)
+- **macOS setup.sh** — `grep -oP` → `-oE` compatibility fix
+- **uv --system** flag added for venv creation
 
-### Documentation
+### Notes
 
-- **AGENTS.md:** Justification Check section, recall tool description updated
+- Agent workflow: `check_update` → ask user → `do_update(confirm: true)` → automatic reconnect
+- Language-neutral — agent communicates in whatever language the user speaks
 
-### Implementation Notes
+---
 
-Follows Rung 2 (Justification Verification) from Spivakovsky's Ladder of Checks: schema-valid is not answer-correct. Memory sources are verified at recall time, not just at storage time.
+## [v0.2.2] — 2026-06-08
 
-## v0.2.1 (2026-06-08)
+### Added
 
-**Breaking: hardcoded `~/.hermes/.env` removed for generic MCP compatibility.**
+- **Justification Check (Rung 2)** — source URL verification on recall
+  - `verification` field in recall results: `verified`, `unreachable`, or `unchecked`
+  - `_check_sources()` async method — parallel HTTP HEAD checks on all source URLs
+  - Payload enrichment — hybrid search results now include `source_url`, `access_level`, `category`, `source`, `created_at`, `provenance`
 
-### Breaking Changes
+### Fixed
 
-- **Removed hardcoded `~/.hermes/.env` path** from `src/nexus_memory/mcp_server.py`. The server no longer assumes Hermes Agent. Use one of:
-  - MCP config `env:` block (recommended) — works with every agent
-  - `NEXUS_ENV_FILE` env var pointing to your `.env` file
-  - `cwd/.env` fallback (unchanged)
+- **Score key** — `rrf_score` instead of `score` in HybridRetriever
+- **Score normalization** — relative instead of fixed `/10`
+- **Hybrid search embedding pass-through** + shim correction
+- **HybridRetriever.search() shim** — resolves recall crash (`AttributeError`)
+- **Default collection** → `nexus` (was: `hermes-memory`)
+- **Voyage API key detection** — support both `pa-` and `vo-` prefix
+- **Health check** — `model_name` property added to EmbeddingProvider
+- **pyproject.toml** — `where=['src', '.']` finds both `nexus/` (root) and `nexus_memory/` (src/)
+- **CLI sync** — `cli()` wrapper for async `main()` (entrypoint bug)
 
-### Migration
+### Changed
 
-If you relied on `~/.hermes/.env`:
+- **Privacy** — author name `Nebojsa Kacavenda` → `Nebo` in all public files
+- **Headline** — "One brain for all your agents" (pain-first positioning)
 
-| Old | New |
-|-----|-----|
-| Keys in `~/.hermes/.env` | Move keys to MCP config `env:` block or set `NEXUS_ENV_FILE` in agent config |
-| No explicit env config | Add `env: { VOYAGE_API_KEY: "..." }` to your MCP server config |
+### Removed
 
-### Upgraded Config Documentation
+- **Hardcoded `~/.hermes/.env` path** — replaced with generic MCP `env:` block, `NEXUS_ENV_FILE`, or `cwd/.env` fallback
 
-- **AGENTS.md:** Configure section rewritten — three options (`env:` block, NEXUS_ENV_FILE, `.env` file), `~/.hermes/.env` usage removed
-- **README.md:** Embedding provider table no longer references `~/.hermes/.env`; OpenClaw config corrected to JSON + `mcp.servers` schema
-- **CHANGELOG.md:** Deprecation notices added to v0.2.0 and v0.1.0 entries
+---
 
-## v0.2.0 (2026-06-07)
+## [v0.2.0] — 2026-06-07
 
-**Full v2.8.0 integration — all features ported.**
+### Added
 
-### Features from v2.8.0
+- **MemoryCategory Enum** — 6 scopes: `fact`, `belief`, `session`, `rule`, `preference`, `temp`
+- **Provenance tracking** — `source_url`, `confidence`, `attach_source()`
+- **Guardrails** — content-length warnings (>5,000 chars), PII detection hints
+- **Access Control** — `public` / `trusted` / `private` levels
+- **Hybrid Search** — BM25 + Vector + Reciprocal Rank Fusion
+- **Health monitoring** — Qdrant + embedding provider health checks
+- **Drift detection** — scored 0–10 with healthy/attention/action thresholds
+- **Auto-Discovery** — zero-token relation discovery between canonical facts
+- **Graph Analytics** — hub scores, isolation scores, knowledge gaps, connected components
+- **Skill Export** — `export_skill()` generates `SKILL.md` from canonical facts
+- **`update` tool** — in-place metadata-preserving memory updates
+- **5 MCP tools** — `remember`, `recall`, `forget`, `update`, `health`
 
-- MemoryCategory Enum: fact, belief, session, rule, preference, temp
-- Provenance tracking: source_url, confidence, attach_source()
-- Guardrails: content-length warnings, PII detection hints
-- Access Control: public / trusted / private levels
-- Hybrid Search: BM25 + Vector + Reciprocal Rank Fusion
-- Health monitoring: Qdrant + Voyage health checks
-- Drift detection, AutoDiscovery, Graph Analytics, Export API
-- nexus_update — in-place metadata-preserving updates
+### Changed
 
-### MCP Server
-
-- 5 tools: remember, recall, forget, update, health
-- Hybrid search with automatic vector fallback
-- Auto .env loading (`~/.hermes/.env` [deprecated since v0.2.1] and local .env)
+- Full v2.8.0 feature parity ported from `hermes-nexus-memory`
+- 224 tests passing
 - Single collection for all agents (no per-agent silos)
 
-### Quality
+### Notes
 
-- 224 tests passing (ported from hermes-nexus-memory v2.8.0)
+- Backward-compatible with `hermes-nexus-memory` data
 - All existing memories preserved in Qdrant
-- Backward-compatible with hermes-nexus-memory data
 
-## v0.1.0 (2026-06-07)
+---
 
-**Initial release — Universal Memory Layer for AI Agents**
+## [v0.1.0] — 2026-06-07
 
-### Features
+### Added
 
-- MCP Server with 4 tools: `remember`, `recall`, `forget`, `health`
-- Access control: `public` / `trusted` / `private` levels
-- Qdrant-backed vector storage (1024d, voyage-3-large)
-- Automatic .env loading (`~/.hermes/.env` [deprecated since v0.2.1] and `./.env`)
-- Security: local-only server, no cloud dependencies
-- Single collection for all agents (no per-agent silos)
+- **Initial release** — Universal Memory Layer for AI Agents
+- **MCP Server** with 4 tools: `remember`, `recall`, `forget`, `health`
+- **Access control** — `public` / `trusted` / `private` levels
+- **Qdrant-backed vector storage** (1024d, voyage-3-large)
+- **Automatic `.env` loading** — `~/.hermes/.env` [deprecated since v0.2.1] and `./.env`
+- **Security** — local-only server, no cloud dependencies
+- **Single collection** for all agents (no per-agent silos)
 
-### Known limitations
+### Known Limitations
 
 - No hybrid search yet (BM25 planned)
 - No encryption at rest
 - No Web UI
 - Qdrant must be running separately
+
+---
+
+[v0.4.0]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.4.0
+[v0.3.0]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.3.0
+[v0.2.5]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.2.5
+[v0.2.4]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.2.4
+[v0.2.3]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.2.3
+[v0.2.2]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.2.2
+[v0.2.0]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.2.0
+[v0.1.0]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.1.0
