@@ -6,7 +6,72 @@
 
 Nexus Memory is a **universal memory layer** for AI agents. One memory for all your agents — Hermes, OpenClaw, Claude Code, Cursor, or any MCP-compatible agent.
 
-## Quick Install
+## Hermes Native Plugin (Recommended for Hermes Agent)
+
+If you use **Hermes Agent**, install Nexus Memory as a native MemoryProvider plugin. This gives you direct Qdrant access with zero MCP overhead — Hermes reads/writes memories as part of its core loop.
+
+### One-Command Install
+
+```bash
+cd ~/nexus-memory
+./scripts/install_hermes_plugin.sh
+```
+
+This script:
+1. Symlinks the `nexus` plugin into `~/.hermes/hermes-agent/plugins/memory/`
+2. Sets `memory.provider` to `nexus` in Hermes config
+3. Verifies the installation
+
+### Manual Setup
+
+Or, run these commands yourself:
+
+```bash
+# Link the plugin
+ln -s ~/nexus-memory/plugins/memory/nexus ~/.hermes/hermes-agent/plugins/memory/nexus
+
+# Activate it
+hermes config set memory.provider nexus
+```
+
+### Verify
+
+```bash
+hermes config get memory.provider
+# → nexus
+```
+
+Restart Hermes Gateway. Nexus tools appear as `nexus_recall`, `nexus_remember`, `nexus_forget`.
+
+## Shared Store: One Qdrant, Two Access Paths
+
+Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. Both the Hermes native plugin and the MCP server read/write the **same store** — same vectors, same metadata, same access levels.
+
+```
+┌──────────────────────┐     ┌──────────────────────┐
+│   Hermes Agent       │     │  Claude Code / Cursor│
+│   (Native Plugin)    │     │  OpenClaw / Codex    │
+│                      │     │  (MCP Client)        │
+└──────────┬───────────┘     └──────────┬───────────┘
+           │ qdrant_client             │ stdio
+           │ (direct)                  │
+           ▼                           ▼
+    ┌──────────────────────────────────────────┐
+    │              Qdrant (localhost:6333)      │
+    │            Collection: "nexus"            │
+    └──────────────────────────────────────────┘
+```
+
+> **Key insight:** A memory stored by Hermes via the native plugin is immediately visible to Claude Code via MCP — and vice versa. One brain, many agents.
+
+### Which path should I use?
+
+| Path | Best for | Setup | Overhead |
+|------|----------|-------|----------|
+| **Native Plugin** | Hermes Agent | `./scripts/install_hermes_plugin.sh` | None — direct Qdrant access |
+| **MCP Server** | Claude Code, Cursor, Codex, OpenClaw, any MCP agent | `nexus-memory` (stdio) | Light — one Python process |
+
+## Quick Install (MCP Server)
 
 ### Prerequisites
 
