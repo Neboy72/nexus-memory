@@ -43,33 +43,114 @@ hermes config get memory.provider
 
 Restart Hermes Gateway. Nexus tools appear as `nexus_recall`, `nexus_remember`, `nexus_forget`.
 
-## Shared Store: One Qdrant, Two Access Paths
+## OpenClaw Native Plugin (Recommended for OpenClaw)
 
-Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. Both the Hermes native plugin and the MCP server read/write the **same store** — same vectors, same metadata, same access levels.
+If you use **OpenClaw**, install Nexus Memory as a native memory plugin. This gives you Auto-Recall (memories injected before every turn) and Auto-Capture (facts extracted after every turn) — all powered by your local Qdrant.
 
-```
-┌──────────────────────┐     ┌──────────────────────┐
-│   Hermes Agent       │     │  Claude Code / Cursor│
-│   (Native Plugin)    │     │  OpenClaw / Codex    │
-│                      │     │  (MCP Client)        │
-└──────────┬───────────┘     └──────────┬───────────┘
-           │ qdrant_client             │ stdio
-           │ (direct)                  │
-           ▼                           ▼
-    ┌──────────────────────────────────────────┐
-    │              Qdrant (localhost:6333)      │
-    │            Collection: "nexus"            │
-    └──────────────────────────────────────────┘
+### One-Command Install
+
+```bash
+cd ~/nexus-memory
+./scripts/install_openclaw_plugin.sh
 ```
 
-> **Key insight:** A memory stored by Hermes via the native plugin is immediately visible to Claude Code via MCP — and vice versa. One brain, many agents.
+This script:
+1. Detects your OpenClaw installation
+2. Adds the plugin to `plugins.load.paths` in `~/.openclaw/openclaw.json`
+3. Sets `plugins.slots.memory = "nexus-memory"`
+4. Auto-detects your embedding provider (Voyage > OpenAI > Google > Jina > Ollama)
+5. Restarts OpenClaw gateway
+
+### Manual Setup
+
+Or, run these commands yourself:
+
+1. Add plugin path to `~/.openclaw/openclaw.json`:
+```json
+{
+  "plugins": {
+    "load": {
+      "paths": ["/path/to/nexus-memory/plugins/openclaw"]
+    },
+    "slots": { "memory": "nexus-memory" },
+    "entries": {
+      "nexus-memory": {
+        "enabled": true,
+        "hooks": {
+          "allowPromptInjection": true,
+          "allowConversationAccess": true
+        },
+        "config": {
+          "qdrantUrl": "http://localhost:6333",
+          "collection": "nexus",
+          "embedding": {
+            "provider": "voyage",
+            "model": "voyage-3-large",
+            "apiKey": "${VOYAGE_API_KEY}"
+          },
+          "autoRecall": true,
+          "autoCapture": true,
+          "maxRecallResults": 10,
+          "accessLevel": "private"
+        }
+      }
+    }
+  }
+}
+```
+
+2. Restart OpenClaw:
+```bash
+openclaw gateway restart
+```
+
+### Verify
+
+```bash
+openclaw plugins list
+# → nexus-memory should appear
+
+openclaw gateway status
+# → should show nexus-memory in loaded plugins
+```
+
+Restart OpenClaw Gateway. Nexus tools appear as `nexus_search`, `nexus_store`, `nexus_forget`.
+
+### How it works
+
+- **Auto-Recall**: Before every agent turn, the plugin searches Qdrant for relevant memories and injects them as a `<nexus-context>` block in the system prompt.
+- **Auto-Capture**: After every agent turn, the plugin extracts the conversation and stores it in Qdrant.
+- **Tools**: `nexus_search`, `nexus_store`, `nexus_forget` available to the agent.
+- **Shared store**: Same Qdrant collection as Hermes plugin and MCP server — one brain, many agents.
+
+## Shared Store: One Qdrant, Three Access Paths
+
+Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. The Hermes native plugin, the OpenClaw native plugin, and the MCP server all read/write the **same store** — same vectors, same metadata, same access levels.
+
+```
+┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
+│   Hermes Agent       │  │   OpenClaw           │  │  Claude Code / Cursor│
+│   (Native Plugin)    │  │   (Native Plugin)    │  │  Codex / Any MCP     │
+│                      │  │                      │  │  (MCP Client)        │
+└──────────┬───────────┘  └──────────┬───────────┘  └──────────┬───────────┘
+           │ qdrant_client             │ TS+fetch()              │ stdio
+           │ (direct)                  │ (Qdrant REST)           │
+           ▼                           ▼                         ▼
+    ┌──────────────────────────────────────────────────────────────────┐
+    │              Qdrant (localhost:6333)                              │
+    │            Collection: "nexus"                                    │
+    └──────────────────────────────────────────────────────────────────┘
+```
+
+> **Key insight:** A memory stored by Hermes via the native plugin is immediately visible to OpenClaw via its plugin and to Claude Code via MCP — and vice versa. One brain, many agents.
 
 ### Which path should I use?
 
 | Path | Best for | Setup | Overhead |
 |------|----------|-------|----------|
-| **Native Plugin** | Hermes Agent | `./scripts/install_hermes_plugin.sh` | None — direct Qdrant access |
-| **MCP Server** | Claude Code, Cursor, Codex, OpenClaw, any MCP agent | `nexus-memory` (stdio) | Light — one Python process |
+| **Hermes Plugin** | Hermes Agent | `./scripts/install_hermes_plugin.sh` | None — direct Qdrant access |
+| **OpenClaw Plugin** | OpenClaw | `./scripts/install_openclaw_plugin.sh` | None — Qdrant REST via fetch() |
+| **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | Light — one Python process |
 
 ## Quick Install (MCP Server)
 
