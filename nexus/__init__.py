@@ -79,7 +79,7 @@ from nexus.graph.schema import EdgeRelation, EdgeStatus
 
 from nexus.config import get_collection, is_success
 
-__version__ = "0.2.3"
+__version__ = "0.3.0"
 
 _logger = logging.getLogger(__name__)
 
