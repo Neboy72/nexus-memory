@@ -1,0 +1,98 @@
+{
+  "id": "nexus-memory",
+  "kind": "memory",
+  "contracts": {
+    "tools": [
+      "nexus_search",
+      "nexus_store",
+      "nexus_forget"
+    ]
+  },
+  "uiHints": {
+    "qdrantUrl": {
+      "label": "Qdrant URL",
+      "placeholder": "http://localhost:6333",
+      "help": "Qdrant REST API endpoint. Defaults to http://localhost:6333."
+    },
+    "collection": {
+      "label": "Collection",
+      "placeholder": "nexus",
+      "help": "Qdrant collection name. Defaults to 'nexus'.",
+      "advanced": true
+    },
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "placeholder": "voyage",
+      "help": "One of: voyage, openai, ollama, google, jina. Auto-detected from env vars if not set.",
+      "advanced": true
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "help": "Model name for the embedding provider. Defaults are picked based on provider.",
+      "advanced": true
+    },
+    "embedding.apiKey": {
+      "label": "Embedding API Key",
+      "sensitive": true,
+      "help": "API key for the embedding provider. Auto-detected from env vars if not set."
+    },
+    "embedding.baseUrl": {
+      "label": "Embedding Base URL",
+      "help": "Base URL for Ollama or self-hosted embeddings. Defaults to http://localhost:11434 for ollama.",
+      "advanced": true
+    },
+    "embedding.dimensions": {
+      "label": "Embedding Dimensions",
+      "help": "Vector dimensions. Auto-detected from provider if not set.",
+      "advanced": true
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Inject relevant memories before every AI turn"
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically store conversation turns to Qdrant"
+    },
+    "maxRecallResults": {
+      "label": "Max Recall Results",
+      "placeholder": "10",
+      "help": "Maximum memories injected into context per turn",
+      "advanced": true
+    },
+    "accessLevel": {
+      "label": "Access Level",
+      "help": "Agent access level: public, trusted, or private. Controls which memories are visible.",
+      "advanced": true
+    },
+    "debug": {
+      "label": "Debug Logging",
+      "help": "Enable verbose debug logs for Qdrant and embedding API calls",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "qdrantUrl": { "type": "string" },
+      "collection": { "type": "string" },
+      "embedding": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "enum": ["voyage", "openai", "ollama", "google", "jina"] },
+          "model": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "baseUrl": { "type": "string" },
+          "dimensions": { "type": "number" }
+        }
+      },
+      "autoRecall": { "type": "boolean" },
+      "autoCapture": { "type": "boolean" },
+      "maxRecallResults": { "type": "number", "minimum": 1, "maximum": 20 },
+      "accessLevel": { "type": "string", "enum": ["public", "trusted", "private"] },
+      "debug": { "type": "boolean" }
+    },
+    "required": []
+  }
+}

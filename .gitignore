@@ -4,3 +4,6 @@ __pycache__/
 dist/
 build/
 .env
+plugins/openclaw/node_modules/
+plugins/openclaw/dist/
+plugins/openclaw/package-lock.json
