@@ -328,7 +328,7 @@ collection or database is required.
 
 `category` is a **required** parameter on `remember` (declared in the tool schema).
 The server applies `"fact"` as a backward-compatible default if a client omits it
-or sends an unknown value, so older clients keep working. The six scopes map to
+or sends an unknown value, so older clients keep working. The seven scopes map to
 the State-Prefixing pattern from Agentic Design Patterns (Ch8):
 
 | Category | Scope | Lifetime / Notes |
