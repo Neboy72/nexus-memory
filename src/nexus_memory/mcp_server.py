@@ -418,7 +418,7 @@ class MemoryStore:
                     self._do_backup()
                 except Exception as e:
                     logging.warning(f"Auto-backup failed: {e}")
-                for _ in range(1440):  # 24h, check every 60s
+                for _ in range(360):  # 6h, check every 60s
                     time.sleep(60)
         threading.Thread(target=_backup_loop, name="nexus-backup", daemon=True).start()
 
@@ -942,6 +942,14 @@ async def _do_update(confirm: bool = False) -> dict:
 
     try:
         loop = asyncio.get_running_loop()
+
+        # Pre-update backup: always backup before updating
+        try:
+            store = get_store()
+            backup_path = store._do_backup()
+            logging.info(f"💾 Pre-update backup: {backup_path}")
+        except Exception as e:
+            logging.warning(f"Pre-update backup failed (continuing): {e}")
 
         # git pull --ff-only (fetch + merge in einem)
         pull = await loop.run_in_executor(None, lambda: subprocess.run(

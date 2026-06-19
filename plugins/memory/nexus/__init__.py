@@ -104,7 +104,7 @@ class NexusMemoryProvider:
                 except Exception as e:
                     logger.warning(f"Auto-backup failed: {e}")
                 # Sleep 24h (check stop flag every 60s for responsive shutdown)
-                for _ in range(1440):
+                for _ in range(360):  # 6h, check every 60s
                     if self._write_stop.is_set():
                         return
                     time.sleep(60)
