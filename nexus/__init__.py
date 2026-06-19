@@ -46,6 +46,7 @@ class MemoryCategory(str, Enum):
     SESSION = "session"    # Session-spezifisch (Episodic Memory)
     RULE = "rule"          # Betriebsregeln
     PREFERENCE = "preference"  # User-Präferenzen
+    PROCEDURE = "procedure"    # Workflow/prozedurale Memory mit Schritt-Reihenfolge
     TEMP = "temp"          # Temporär, verfällt nach TTL
 
 # -- Lifecycle API (v1.8.0+) --
@@ -79,7 +80,7 @@ from nexus.graph.schema import EdgeRelation, EdgeStatus
 
 from nexus.config import get_collection, is_success
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 _logger = logging.getLogger(__name__)
 

@@ -447,10 +447,10 @@ pytest tests/ -v
 
 All memories live in a single Qdrant collection called **`nexus`**:
 
-- **12,700+ points** — memories, beliefs, events, paperless documents
+- **Memories, beliefs, events, documents** — all in one collection
 - **Hybrid search** — BM25 full-text + vector similarity + RRF re-ranking
 - **Access levels** — public / trusted / private (enforced by MCP tools)
-- **Categories** — fact, belief, session, rule, preference, temp
+- **Categories** — fact, belief, session, rule, preference, procedure, temp
 
 > **Migration complete.** Old collections (`hermes-memory`, `openclaw-memory`, `nexus_beliefs`) have been consolidated into `nexus`. If you're migrating from a previous version, your data is already there — simply point your MCP client at the `nexus` collection.
 

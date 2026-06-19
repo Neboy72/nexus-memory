@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Optional
 
 import requests
@@ -29,6 +30,168 @@ from nexus.lifecycle import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# ── Embedding helper (lightweight, avoids importing src/ package) ──────────
+#
+# The staging module lives in the ``nexus/`` core package while the full
+# ``EmbeddingProvider`` is in ``src/nexus_memory/embeddings.py``.  To avoid a
+# cross-package import we implement a minimal embedding function here that
+# mirrors the same provider priority: Voyage → sentence-transformers → Ollama.
+
+_EMBED_DIM_CACHE: Optional[int] = None
+_EMBED_PROVIDER: Optional[str] = None
+_VOYAGE_CLIENT: Any = None
+_ST_MODEL: Any = None
+
+
+def _detect_vector_size() -> int:
+    """Auto-detect embedding dimension from available provider.
+
+    Priority (mirrors EmbeddingProvider):
+      1. Voyage AI  → 1024
+      2. OpenAI     → 1536
+      3. Google     → 768
+      4. Jina       → 1024
+      5. Ollama     → 768
+      6. sentence-transformers → 384
+
+    Defaults to 1024 (Voyage) when no provider is available, matching the
+    main ``nexus`` collection dimension.
+    """
+    global _EMBED_DIM_CACHE, _EMBED_PROVIDER, _VOYAGE_CLIENT, _ST_MODEL
+
+    if _EMBED_DIM_CACHE is not None:
+        return _EMBED_DIM_CACHE
+
+    # 1. Voyage
+    voyage_key = os.environ.get("VOYAGE_API_KEY", "")
+    if voyage_key and (voyage_key.startswith("vo-") or voyage_key.startswith("pa-")):
+        try:
+            import voyageai
+            _VOYAGE_CLIENT = voyageai.Client(api_key=voyage_key)
+            _EMBED_PROVIDER = "voyage"
+            _EMBED_DIM_CACHE = 1024
+            _logger.info("Staging embeddings: voyage-3-large (1024d)")
+            return _EMBED_DIM_CACHE
+        except Exception:
+            pass
+
+    # 2. OpenAI
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if openai_key and openai_key.startswith("sk-"):
+        try:
+            from openai import OpenAI
+            _VOYAGE_CLIENT = OpenAI(api_key=openai_key)  # reuse var for client
+            _EMBED_PROVIDER = "openai"
+            _EMBED_DIM_CACHE = 1536
+            _logger.info("Staging embeddings: text-embedding-3-small (1536d)")
+            return _EMBED_DIM_CACHE
+        except Exception:
+            pass
+
+    # 3. Google
+    google_key = os.environ.get("GOOGLE_API_KEY", "")
+    if google_key and google_key.startswith("AIza"):
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=google_key)
+            _VOYAGE_CLIENT = genai  # reuse var
+            _EMBED_PROVIDER = "google"
+            _EMBED_DIM_CACHE = 768
+            _logger.info("Staging embeddings: text-embedding-004 (768d)")
+            return _EMBED_DIM_CACHE
+        except Exception:
+            pass
+
+    # 4. Jina
+    jina_key = os.environ.get("JINA_API_KEY", "")
+    if jina_key:
+        _EMBED_PROVIDER = "jina"
+        _EMBED_DIM_CACHE = 1024
+        _logger.info("Staging embeddings: jina-embeddings-v3 (1024d)")
+        return _EMBED_DIM_CACHE
+
+    # 5. Ollama (local, 768d)
+    try:
+        r = requests.get("http://localhost:11434/api/tags", timeout=2)
+        if r.status_code < 400:
+            models = [m["name"] for m in r.json().get("models", [])]
+            emb_model = next((m for m in models if "embed" in m.lower()), None)
+            if emb_model:
+                _EMBED_PROVIDER = "ollama"
+                _EMBED_DIM_CACHE = 768
+                _logger.info("Staging embeddings: Ollama/%s (768d)", emb_model)
+                return _EMBED_DIM_CACHE
+    except Exception:
+        pass
+
+    # 6. sentence-transformers (local, 384d)
+    try:
+        from sentence_transformers import SentenceTransformer
+        _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        _EMBED_PROVIDER = "sentence-transformers"
+        _EMBED_DIM_CACHE = 384
+        _logger.info("Staging embeddings: all-MiniLM-L6-v2 (384d)")
+        return _EMBED_DIM_CACHE
+    except Exception:
+        pass
+
+    # No provider found — default to 1024 (Voyage) to match main collection
+    _EMBED_PROVIDER = "none"
+    _EMBED_DIM_CACHE = 1024
+    _logger.warning(
+        "No embedding provider detected for staging — using 1024d zero vectors. "
+        "Set VOYAGE_API_KEY or install sentence-transformers for real embeddings."
+    )
+    return _EMBED_DIM_CACHE
+
+
+def _embed_content(text: str) -> list[float]:
+    """Generate a real embedding vector for the given text.
+
+    Uses the detected provider from ``_detect_vector_size()``.  Falls back
+    to a zero vector of the correct dimension if no provider is available
+    or embedding fails — this preserves backward compatibility while
+    logging a warning.
+    """
+    dim = _detect_vector_size()
+
+    if _EMBED_PROVIDER == "none":
+        return [0.0] * dim
+
+    try:
+        if _EMBED_PROVIDER == "voyage":
+            result = _VOYAGE_CLIENT.embed([text], model="voyage-3-large")
+            return result.embeddings[0]
+        elif _EMBED_PROVIDER == "openai":
+            result = _VOYAGE_CLIENT.embeddings.create(model="text-embedding-3-small", input=[text])
+            return result.data[0].embedding
+        elif _EMBED_PROVIDER == "google":
+            result = _VOYAGE_CLIENT.embed_content(model="text-embedding-004", content=text)
+            return result["embedding"]
+        elif _EMBED_PROVIDER == "jina":
+            jina_key = os.environ.get("JINA_API_KEY", "")
+            r = requests.post(
+                "https://api.jina.ai/v1/embeddings",
+                json={"model": "jina-embeddings-v3", "input": [text]},
+                headers={"Authorization": f"Bearer {jina_key}"},
+                timeout=30,
+            )
+            return r.json()["data"][0]["embedding"]
+        elif _EMBED_PROVIDER == "ollama":
+            r = requests.post(
+                "http://localhost:11434/api/embeddings",
+                json={"model": "nomic-embed-text", "prompt": text},
+                timeout=30,
+            )
+            return r.json()["embedding"]
+        elif _EMBED_PROVIDER == "sentence-transformers":
+            vector = _ST_MODEL.encode(text)
+            return vector.tolist()
+    except Exception as exc:
+        _logger.warning("Embedding failed (%s): %s — using zero vector", _EMBED_PROVIDER, exc)
+
+    return [0.0] * dim
 
 # ── Collection Layout (v1.8.0+) ────────────────────────────────────────────
 #
@@ -84,7 +247,7 @@ _collections_ensured: bool = False
 def ensure_collections(
     host: str = "localhost",
     port: int = 6333,
-    vector_size: int = 512,
+    vector_size: Optional[int] = None,
     distance: str = "Cosine",
 ) -> dict[str, bool]:
     """Ensure required Qdrant collections exist.
@@ -95,7 +258,15 @@ def ensure_collections(
     Must be called at least once before promote() or any
     canonical-collection write.  Auto-called on first create_pending()
     and promote() via ``_auto_ensure_collections()``.
+
+    When ``vector_size`` is None (default), auto-detects from the
+    available embedding provider (1024 for Voyage, 1536 for OpenAI,
+    768 for Google/Ollama, 384 for sentence-transformers).  Defaults
+    to 1024 (Voyage) when no provider is detected.
     """
+    if vector_size is None:
+        vector_size = _detect_vector_size()
+
     results: dict[str, bool] = {}
     for name in (_collection_all(), _collection_canonical()):
         # Check if already exists
@@ -119,7 +290,7 @@ def ensure_collections(
         try:
             r = requests.put(create_url, json=create_data, timeout=30)
             if r.status_code in (200, 201):
-                _logger.info("Created Qdrant collection: %s (512D, %s)", name, distance)
+                _logger.info("Created Qdrant collection: %s (%dD, %s)", name, vector_size, distance)
                 results[name] = True
             else:
                 _logger.error(
@@ -171,10 +342,13 @@ def _upsert_point(
     """
     url = f"{_qdrant_url(host, port, _collection_all())}/points?wait=true"
     payload = version.to_dict()
+    # Generate real embedding from the content text field
+    content_text = version.content.get("content", "") if isinstance(version.content, dict) else str(version.content)
+    vector = _embed_content(content_text)
     data = {
         "points": [{
             "id": version.version_id,
-            "vector": [0.0] * 512,   # Placeholder - real vectors from embedder
+            "vector": vector,
             "payload": payload,
         }]
     }
@@ -196,11 +370,13 @@ def _write_canonical(
     """
     url = f"{_qdrant_url(host, port, _collection_canonical())}/points?wait=true"
     payload = version.to_dict()
-    # Use a minimal placeholder vector (collection requires one)
+    # Generate real embedding from the content text field
+    content_text = version.content.get("content", "") if isinstance(version.content, dict) else str(version.content)
+    vector = _embed_content(content_text)
     data = {
         "points": [{
             "id": version.fact_id,
-            "vector": [0.0] * 512,
+            "vector": vector,
             "payload": payload,
         }]
     }

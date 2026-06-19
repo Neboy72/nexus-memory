@@ -561,6 +561,9 @@ class HybridRetriever:
         # Tier boost
         fused = self._tier_boost(fused)
 
+        # Time decay (v0.4.0) - recent memories get slight boost, old ones fade
+        fused = self._time_decay(fused)
+
         # Graph boost (v2.1.0)
         if graph_boost:
             fused = self._graph_boost(fused)
@@ -805,6 +808,57 @@ class HybridRetriever:
 
             item["tier"] = tier
             item["rrf_score"] *= boost
+
+        return sorted(ranked, key=lambda x: x["rrf_score"], reverse=True)
+
+    def _time_decay(self, ranked: list[dict]) -> list[dict]:
+        """Apply Gauss-shaped time decay to ranked results (v0.4.0).
+
+        Recent memories get a slight boost, old memories fade.
+        Formula: score *= exp(-0.5 * ((age_days - offset) / scale)^2)
+
+        Defaults (conservative, from Atlas Memory paper):
+        - offset = 30 days (no penalty for first month)
+        - scale = 365 days (half-life at ~1 year)
+        - decay = 0.5 at scale distance
+
+        Entries without a timestamp are not penalized (backwards compat).
+        """
+        import math
+        from datetime import datetime, timezone
+
+        offset_days = 30
+        scale_days = 365
+        now = datetime.now(timezone.utc)
+
+        for item in ranked:
+            # Try to find a timestamp in the item
+            ts_str = (
+                item.get("created_at")
+                or item.get("timestamp")
+                or (item.get("metadata") or {}).get("created_at")
+                or (item.get("metadata") or {}).get("timestamp")
+            )
+            if not ts_str:
+                continue  # No timestamp = no penalty
+
+            try:
+                # Parse ISO timestamp (handle Z suffix and timezone offsets)
+                ts_str = ts_str.replace("Z", "+00:00")
+                ts = datetime.fromisoformat(ts_str)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+
+                age_days = (now - ts).total_seconds() / 86400
+                if age_days < 0:
+                    age_days = 0  # Future timestamps (clock skew)
+
+                # Gauss decay
+                decay = math.exp(-0.5 * ((age_days - offset_days) / scale_days) ** 2)
+                item["rrf_score"] *= decay
+                item["age_days"] = round(age_days, 1)
+            except (ValueError, TypeError):
+                continue  # Unparseable timestamp = no penalty
 
         return sorted(ranked, key=lambda x: x["rrf_score"], reverse=True)
 
