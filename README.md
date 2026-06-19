@@ -490,6 +490,8 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.4.3** | 2026-06-19 | Confidence scores + brain pages in recall (trust, evidence_count, confidence_label, lifecycle_status) |
+| **v0.4.2** | 2026-06-19 | Auto TTL/expiry per memory category (FACT=365d, BELIEF=180d, SESSION=7d, TEMP=24h), expired memories filtered in recall |
 | **v0.4.1** | 2026-06-19 | Auto-backup (every 6h), update notifications, pre-update backup safety, backup + restore MCP tools |
 | **v0.4.0** | 2026-06-19 | OpenClaw native plugin, 3-way architecture, MCP server → core engine integration (SkillGraph, Auto-Discovery, lifecycle, events), time decay, PROCEDURE category, staging with real embeddings |
 | **v0.3.0** | 2026-06-18 | Hermes native MemoryProvider plugin + embedding wizard (`nexus-memory-init`), auto-prefetch & auto-sync |
