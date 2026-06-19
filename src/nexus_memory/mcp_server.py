@@ -1,5 +1,5 @@
 """
-nexus-memory — MCP Server (v0.4.1)
+nexus-memory — MCP Server (v0.4.0)
 Universal Memory Layer for AI Agents
 
 Integrates all nexus v2.8.0 features:
@@ -563,7 +563,7 @@ class MemoryStore:
         source_url: str = "",
         confidence: Optional[float] = None,
     ) -> dict:
-        """Store a memory with full v2.8.0 metadata support."""
+        """Store a memory with full v2.8.0 metadata support + auto TTL."""
         # Validate category against MemoryCategory
         valid_categories = [c.value for c in MemoryCategory]
         if category not in valid_categories:
@@ -572,6 +572,27 @@ class MemoryStore:
         entry_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
         vector = await self._embed(text)
+
+        # Auto-assign expiry policy based on category
+        CATEGORY_EXPIRY = {
+            "fact": "static",       # Facts don't expire
+            "rule": "static",       # Rules don't expire
+            "preference": "static", # Preferences don't expire
+            "procedure": "static",  # Procedures don't expire
+            "belief": "normal",     # Beliefs expire after 90 days (may drift)
+            "session": "volatile",  # Sessions expire after 7 days
+            "temp": "volatile",     # Temp expires after 7 days
+        }
+        expiry_policy = CATEGORY_EXPIRY.get(category, "normal")
+
+        # Compute expiry
+        from datetime import timedelta
+        if expiry_policy == "static":
+            valid_until = None
+        elif expiry_policy == "volatile":
+            valid_until = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        else:  # normal
+            valid_until = (datetime.now(timezone.utc) + timedelta(days=90)).isoformat()
 
         # Build provenance (v2.8.0 feature)
         provenance = {
@@ -595,6 +616,8 @@ class MemoryStore:
             "created_at": created_at,
             "provenance": provenance,
             "lifecycle_status": "canonical",  # New facts are canonical by default
+            "expiry_policy": expiry_policy,
+            "valid_until": valid_until,
         }
 
         self.client.upsert(
@@ -753,6 +776,34 @@ class MemoryStore:
             r for r in raw_results
             if r.get("lifecycle_status") not in _suppressed_statuses
         ]
+
+        # ── TTL/Expiry filtering: skip expired memories ────
+        # Memories with valid_until in the past are filtered out.
+        # Backwards compatible: entries without valid_until pass through.
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        expired_count = 0
+        filtered_results = []
+        for r in raw_results:
+            vu = r.get("valid_until")
+            if not vu:
+                filtered_results.append(r)
+                continue
+            try:
+                vu = vu.replace("Z", "+00:00")
+                expiry = datetime.fromisoformat(vu)
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if expiry < now:
+                    expired_count += 1
+                    logging.debug(f"TTL: expired memory filtered (valid_until={vu})")
+                else:
+                    filtered_results.append(r)
+            except (ValueError, TypeError):
+                filtered_results.append(r)  # Unparseable = keep
+        if expired_count:
+            logging.info(f"TTL: filtered {expired_count} expired memories from results")
+        raw_results = filtered_results
 
         # Normalize scores relative to max score in results
         # Handles both RRF scores (0.001-0.1) and Qdrant scores (0.0-1.0)
