@@ -47,13 +47,10 @@ _ST_MODEL: Any = None
 def _detect_vector_size() -> int:
     """Auto-detect embedding dimension from available provider.
 
-    Priority (mirrors EmbeddingProvider):
-      1. Voyage AI  → 1024
-      2. OpenAI     → 1536
-      3. Google     → 768
-      4. Jina       → 1024
-      5. Ollama     → 768
-      6. sentence-transformers → 384
+    Respects user's preferred provider (same logic as EmbeddingProvider):
+      1. NEXUS_EMBEDDING_PROVIDER env var
+      2. ~/.nexus-memory/config.json or $HERMES_HOME/nexus/config.json
+      3. Auto-detect: Voyage → OpenAI → Google → Jina → Ollama → sentence-transformers
 
     Defaults to 1024 (Voyage) when no provider is available, matching the
     main ``nexus`` collection dimension.
@@ -63,78 +60,33 @@ def _detect_vector_size() -> int:
     if _EMBED_DIM_CACHE is not None:
         return _EMBED_DIM_CACHE
 
-    # 1. Voyage
-    voyage_key = os.environ.get("VOYAGE_API_KEY", "")
-    if voyage_key and (voyage_key.startswith("vo-") or voyage_key.startswith("pa-")):
-        try:
-            import voyageai
-            _VOYAGE_CLIENT = voyageai.Client(api_key=voyage_key)
-            _EMBED_PROVIDER = "voyage"
-            _EMBED_DIM_CACHE = 1024
-            _logger.info("Staging embeddings: voyage-3-large (1024d)")
+    # 0. Check user preference first (same logic as EmbeddingProvider)
+    preferred = _read_preferred_provider()
+
+    # Provider dimension map
+    PROVIDER_DIMS = {
+        "voyage": 1024,
+        "openai": 1536,
+        "google": 768,
+        "jina": 1024,
+        "ollama": 768,
+        "sentence-transformers": 384,
+        "sentence_transformers": 384,
+    }
+
+    if preferred and preferred in PROVIDER_DIMS:
+        # Try to init the preferred provider
+        if _try_init_provider(preferred):
+            _EMBED_DIM_CACHE = PROVIDER_DIMS[preferred]
+            _logger.info("Staging embeddings: %s (%dd) [user-selected]", preferred, _EMBED_DIM_CACHE)
             return _EMBED_DIM_CACHE
-        except Exception:
-            pass
 
-    # 2. OpenAI
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if openai_key and openai_key.startswith("sk-"):
-        try:
-            from openai import OpenAI
-            _VOYAGE_CLIENT = OpenAI(api_key=openai_key)  # reuse var for client
-            _EMBED_PROVIDER = "openai"
-            _EMBED_DIM_CACHE = 1536
-            _logger.info("Staging embeddings: text-embedding-3-small (1536d)")
+    # Auto-detect fallback (same priority as EmbeddingProvider)
+    for provider in ["voyage", "openai", "google", "jina", "ollama", "sentence-transformers"]:
+        if _try_init_provider(provider):
+            _EMBED_DIM_CACHE = PROVIDER_DIMS[provider]
+            _logger.info("Staging embeddings: %s (%dd) [auto-detected]", provider, _EMBED_DIM_CACHE)
             return _EMBED_DIM_CACHE
-        except Exception:
-            pass
-
-    # 3. Google
-    google_key = os.environ.get("GOOGLE_API_KEY", "")
-    if google_key and google_key.startswith("AIza"):
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=google_key)
-            _VOYAGE_CLIENT = genai  # reuse var
-            _EMBED_PROVIDER = "google"
-            _EMBED_DIM_CACHE = 768
-            _logger.info("Staging embeddings: text-embedding-004 (768d)")
-            return _EMBED_DIM_CACHE
-        except Exception:
-            pass
-
-    # 4. Jina
-    jina_key = os.environ.get("JINA_API_KEY", "")
-    if jina_key:
-        _EMBED_PROVIDER = "jina"
-        _EMBED_DIM_CACHE = 1024
-        _logger.info("Staging embeddings: jina-embeddings-v3 (1024d)")
-        return _EMBED_DIM_CACHE
-
-    # 5. Ollama (local, 768d)
-    try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=2)
-        if r.status_code < 400:
-            models = [m["name"] for m in r.json().get("models", [])]
-            emb_model = next((m for m in models if "embed" in m.lower()), None)
-            if emb_model:
-                _EMBED_PROVIDER = "ollama"
-                _EMBED_DIM_CACHE = 768
-                _logger.info("Staging embeddings: Ollama/%s (768d)", emb_model)
-                return _EMBED_DIM_CACHE
-    except Exception:
-        pass
-
-    # 6. sentence-transformers (local, 384d)
-    try:
-        from sentence_transformers import SentenceTransformer
-        _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
-        _EMBED_PROVIDER = "sentence-transformers"
-        _EMBED_DIM_CACHE = 384
-        _logger.info("Staging embeddings: all-MiniLM-L6-v2 (384d)")
-        return _EMBED_DIM_CACHE
-    except Exception:
-        pass
 
     # No provider found — default to 1024 (Voyage) to match main collection
     _EMBED_PROVIDER = "none"
@@ -144,6 +96,100 @@ def _detect_vector_size() -> int:
         "Set VOYAGE_API_KEY or install sentence-transformers for real embeddings."
     )
     return _EMBED_DIM_CACHE
+
+
+def _read_preferred_provider() -> str:
+    """Read preferred embedding provider (mirrors EmbeddingProvider logic)."""
+    # 1. Environment variable
+    provider = os.environ.get("NEXUS_EMBEDDING_PROVIDER", "")
+    if provider:
+        return provider.strip().lower()
+
+    # 2. Config files
+    for config_path in [
+        os.path.join(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")), "nexus", "config.json"),
+        os.path.expanduser("~/.nexus-memory/config.json"),
+    ]:
+        try:
+            if os.path.exists(config_path):
+                import json as _json
+                with open(config_path) as f:
+                    cfg = _json.load(f)
+                p = cfg.get("embedding_provider", cfg.get("provider", ""))
+                if p:
+                    return p.strip().lower()
+        except Exception:
+            pass
+
+    return ""
+
+
+def _try_init_provider(provider: str) -> bool:
+    """Try to initialize a specific embedding provider. Returns True on success."""
+    global _EMBED_PROVIDER, _VOYAGE_CLIENT, _ST_MODEL
+
+    if provider == "voyage":
+        voyage_key = os.environ.get("VOYAGE_API_KEY", "")
+        if voyage_key and (voyage_key.startswith("vo-") or voyage_key.startswith("pa-")):
+            try:
+                import voyageai
+                _VOYAGE_CLIENT = voyageai.Client(api_key=voyage_key)
+                _EMBED_PROVIDER = "voyage"
+                return True
+            except Exception:
+                pass
+
+    elif provider == "openai":
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        if openai_key and openai_key.startswith("sk-"):
+            try:
+                from openai import OpenAI
+                _VOYAGE_CLIENT = OpenAI(api_key=openai_key)
+                _EMBED_PROVIDER = "openai"
+                return True
+            except Exception:
+                pass
+
+    elif provider == "google":
+        google_key = os.environ.get("GOOGLE_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+        if google_key and google_key.startswith("AIza"):
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=google_key)
+                _VOYAGE_CLIENT = genai
+                _EMBED_PROVIDER = "google"
+                return True
+            except Exception:
+                pass
+
+    elif provider == "jina":
+        jina_key = os.environ.get("JINA_API_KEY", "")
+        if jina_key:
+            _EMBED_PROVIDER = "jina"
+            return True
+
+    elif provider == "ollama":
+        try:
+            r = requests.get("http://localhost:11434/api/tags", timeout=2)
+            if r.status_code < 400:
+                models = [m["name"] for m in r.json().get("models", [])]
+                emb_model = next((m for m in models if "embed" in m.lower()), None)
+                if emb_model:
+                    _EMBED_PROVIDER = "ollama"
+                    return True
+        except Exception:
+            pass
+
+    elif provider in ("sentence-transformers", "sentence_transformers"):
+        try:
+            from sentence_transformers import SentenceTransformer
+            _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+            _EMBED_PROVIDER = "sentence-transformers"
+            return True
+        except Exception:
+            pass
+
+    return False
 
 
 def _embed_content(text: str) -> list[float]:
