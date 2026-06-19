@@ -25,9 +25,9 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 
 ---
 
-## 🏗️ Architecture — Three Paths, One Brain
+## 🏗️ Architecture — Two Paths, One Brain
 
-Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. The Hermes native plugin, the OpenClaw native plugin, and the MCP server all read/write the **same store** — same vectors, same metadata, same access levels.
+Nexus Memory offers two integration paths — **Native Plugin** (auto-memory) and **MCP Server** (manual tools). Both read/write the **same Qdrant collection** — same vectors, same metadata, same access levels.
 
 [![Nexus Memory Architecture](docs/images/nexus-infographic-v0.4.0.png)](docs/images/nexus-infographic-v0.4.0.png)
 
@@ -35,11 +35,10 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
 
 ### Which path should I use?
 
-| Path | Best for | Setup | Overhead |
-|------|----------|-------|----------|
-| **Hermes Plugin** | Hermes Agent | `./scripts/install_hermes_plugin.sh` | None — direct Qdrant access |
-| **OpenClaw Plugin** | OpenClaw | `./scripts/install_openclaw_plugin.sh` | None — Qdrant REST via fetch() |
-| **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | Light — one Python process |
+| Path | Best for | Setup | Memory mode |
+|------|----------|-------|-------------|
+| **Native Plugin** | Hermes Agent, OpenClaw | `./scripts/install_hermes_plugin.sh` or `./scripts/install_openclaw_plugin.sh` | **Automatic** — Auto-Recall + Auto-Capture, no manual tool calls |
+| **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | **Manual** — agent calls `nexus_recall`, `nexus_remember` explicitly |
 
 ---
 
