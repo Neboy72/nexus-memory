@@ -13,8 +13,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.4.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-379%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.4.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-389%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -301,9 +301,11 @@ Standard MCP stdio config:
 | `subscribe` 🔔 | Register a webhook for memory events | `event_type` (req), `webhook_url` (req) |
 | `unsubscribe` 🔕 | Remove a webhook subscription | `subscription_id` (req) |
 | `list_subscriptions` 📋 | List all active webhooks |: `GOOGLE_API_KEY`|
-| `health` ❤️ | Check server status |: `GOOGLE_API_KEY`|
-| `check_update` 🔄 | Check for newer version on GitHub |: `GOOGLE_API_KEY`|
-| `do_update` ⬆️ | Pull + install + restart server | `confirm` (req, must be `true`) |
+| `health` ❤️ | Check server status, embedding, update availability | none |
+| `check_update` 🔄 | Check for newer version on GitHub | none |
+| `do_update` ⬆️ | Backup + pull + install + restart | `confirm` (req, must be `true`) |
+| `backup` 💾 | Manual backup of all memories to JSON | none |
+| `restore` 📦 | Restore memories from backup JSON | `backup_path` (req), `reembed` (optional) |
 
 ### Memory Categories (State-Prefixing)
 
@@ -316,6 +318,7 @@ Standard MCP stdio config:
 | `session` 🔄 | Ephemeral | Current conversation context |
 | `rule` 📏 | Permanent | Operating rules, policies |
 | `preference` ❤️ | Permanent | User likes, dislikes, habits |
+| `procedure` 🔧 | Permanent | Workflow steps, how-to sequences |
 | `temp` ⏳ | Temporary | Short-lived notes, TTL-managed |
 
 ### Access Levels 🛡️
@@ -362,7 +365,7 @@ Query → ┌─ BM25 Index ──────→ Keyword Rankings
 
 ### MemoryCategory Enum 🏷️
 
-Six scopes from Agentic Design Patterns (Ch8): `fact`, `belief`, `session`, `rule`, `preference`, `temp`. Every memory knows its purpose.
+Seven scopes from Agentic Design Patterns (Ch8): `fact`, `belief`, `session`, `rule`, `preference`, `procedure`, `temp`. Every memory knows its purpose.
 
 ### Provenance Tracking 📎
 
@@ -413,7 +416,23 @@ Zero-token relation discovery between canonical facts via Qdrant (O(n·k)) + heu
 | 🟡 1–3 | Attention needed |
 | 🔴 > 3 | Action required |
 
-Detects stale entries, old patterns (`"X running as fallback"`: `GOOGLE_API_KEY`but X was replaced), age thresholds. Weighted 0–10 scoring.
+Detects stale entries, old patterns, age thresholds. Weighted 0-10 scoring.
+
+### Time Decay in Retrieval ⏰
+
+Gauss-shaped score decay: recent memories rank higher, old ones fade gracefully. Configurable offset (30 days, no penalty) and scale (365 days, half-life). Only applies when timestamps are present - backwards compatible.
+
+### Auto-Backup 💾
+
+Fully automatic daily backup every 6 hours. All memories (payload + vectors) exported as JSON to `~/.nexus-memory/backups/`. Keeps last 7 backups. No user action needed.
+
+### Update Notifications 📦
+
+On startup, checks GitHub for new releases. If an update is available, the agent proactively tells the user in chat: "Nexus Memory v0.X.X is available - shall I update?" Non-blocking, fails silently if GitHub is unreachable.
+
+### Pre-Update Safety Backup 🛡️
+
+Before any `do_update()`, a full backup is created automatically. If the update fails or breaks something, memories are safe in the backup file and can be restored via the `restore` tool.
 
 ---
 
@@ -426,14 +445,18 @@ Detects stale entries, old patterns (`"X running as fallback"`: `GOOGLE_API_KEY`
 | 🩺 **Drift detection** | **✅ Scored 0–10** | ❌ | ❌ * | ❌ | ❌ | ❌ |
 | 🛡️ **Anti-poisoning** | **✅ Source tiers** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🔗 **Multi-Level Provenance** | **✅ Source + Corroboration + Dep.** | ✅ On-chain | ❌ | ❌ | ❌ | ❌ |
-| 🏷️ **MemoryCategory Enum** | **✅ 6 scopes** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🏷️ **MemoryCategory Enum** | **✅ 7 scopes** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧬 **Fact Lifecycle** | **✅ Append-only** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🔄 **Staging + Rollback** | **✅ Promote/Deprecate/Rollback** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Skill Export** | **✅ Facts → SKILL.md** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| 🔗 **SkillGraph** | **✅ 5 relation types, BFS/DFS** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🔗 **SkillGraph** | **✅ 6 relation types, BFS/DFS** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🔄 **Auto-Discovery** | **✅ 0 token cost** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 📊 **Graph Analytics** | **✅ Hub scores, gaps** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🚀 **Graph Boost** | **✅ Search ranking boost** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| ⏰ **Time Decay** | **✅ Gauss-shaped** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 💾 **Auto-Backup** | **✅ Every 6h** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 📦 **Update Notifications** | **✅ Auto-check GitHub** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Access Control** | **✅ public/trusted/private** | ✅ Permissions | ❌ | ❌ | ❌ | ❌ |
 | 🧠 **Native Plugins** | **✅ Hermes + OpenClaw** | ❌ | ✅ OpenClaw | ✅ OpenClaw | ✅ Hermes | ❌ |
 | 🔌 **MCP Server** | **✅ Any MCP agent** | ❌ | ❌ | ❌ | ✅ | ❌ |
@@ -467,7 +490,8 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v0.4.0** | 2026-06-19 | OpenClaw native plugin + auto-detect install script, 3-way architecture (Hermes Plugin · OpenClaw Plugin · MCP Server) |
+| **v0.4.1** | 2026-06-19 | Auto-backup (every 6h), update notifications, pre-update backup safety, backup + restore MCP tools |
+| **v0.4.0** | 2026-06-19 | OpenClaw native plugin, 3-way architecture, MCP server → core engine integration (SkillGraph, Auto-Discovery, lifecycle, events), time decay, PROCEDURE category, staging with real embeddings |
 | **v0.3.0** | 2026-06-18 | Hermes native MemoryProvider plugin + embedding wizard (`nexus-memory-init`), auto-prefetch & auto-sync |
 | **v0.2.5** | 2026-06-13 | Bugfix: `is_success()` replaces raw `status_code == 200` (29 sites), CI audit workflow, code simplification |
 | **v0.2.4** | 2026-06-12 | Web UI with live D3.js graph, drift ampel, stats cards, Ko-fi integration |
@@ -493,7 +517,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v   # 379 tests ✅
+pytest tests/ -v   # 389 tests ✅
 ```
 
 ---
@@ -522,4 +546,4 @@ MIT: `GOOGLE_API_KEY`use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026 · v0.4.0: `GOOGLE_API_KEY`One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026 · v0.4.1 · One memory for all your agents</sub>
