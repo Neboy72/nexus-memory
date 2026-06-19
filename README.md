@@ -17,7 +17,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![Tests](https://img.shields.io/badge/tests-379%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
-> **Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
+> **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
 
 👉 [![Bot Self-Install](https://img.shields.io/badge/Bot%20Self--Install-blue?style=for-the-badge)](AGENTS.md)
 
@@ -42,7 +42,7 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
 
 ---
 
-## Quick Start
+## 🤖 Quick Start
 
 ### Tell your agent to install it
 
@@ -89,7 +89,7 @@ Pick **one**: `GOOGLE_API_KEY`the server auto-detects at runtime:
 - **☁️ OpenAI**: `GOOGLE_API_KEY``OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
 - **🏠 Local (default)**: `GOOGLE_API_KEY``pip install nexus-memory[local]` (sentence-transformers, no key)
 
-### Web UI (optional)
+### 🌐 Web UI (optional)
 
 Nexus Memory comes with a live graph visualization: `GOOGLE_API_KEY`your memories as an interactive force-directed graph.
 
@@ -376,7 +376,7 @@ Three levels: `public` (all agents), `trusted` (approved agents), `private` (own
 
 Register HTTP endpoints to receive notifications when memories change. Three event types: `memory.remember`, `memory.update`, `memory.forget`. Fire-and-forget delivery with 5s timeout. Subscriptions persist in `~/.nexus-webhooks.json`.
 
-### Web UI
+### 🌐 Web UI
 
 Live graph visualization with D3.js: `GOOGLE_API_KEY`interactive force-directed graph of your memory network. Filter by category, search, inspect node details, and see drift status at a glance.
 
@@ -401,7 +401,7 @@ Append-only state machine: `pending → canonical | deprecated | rolled_back`. E
 
 Zero-token relation discovery between canonical facts via Qdrant (O(n·k)) + heuristic classification. Graph analytics: hub scores, isolation scores, knowledge gaps, connected components. **Facts connect themselves: `GOOGLE_API_KEY`no manual edges needed.**
 
-### Skill Export
+### 🎯 Skill Export
 
 `export_skill()` searches canonical facts → clusters into Steps/Pitfalls/Prerequisites/Verification → generates complete `SKILL.md`. **Turn learned facts into reusable agent skills.**
 
