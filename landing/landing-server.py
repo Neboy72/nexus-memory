@@ -169,7 +169,7 @@ async def demo_stats():
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9121
     print(f"🚀 Nexus Memory Landing Page → http://127.0.0.1:{port}")
-    tailscale_ip = "100.69.110.5"
+    tailscale_ip = os.environ.get("TAILSCALE_IP", "100.64.0.1")  # placeholder
     print(f"   (Graph remains untouched on 9120)")
     print(f"   🌐 Local:  http://127.0.0.1:{port}")
     print(f"   🌐 Tailnet: http://{tailscale_ip}:{port}")

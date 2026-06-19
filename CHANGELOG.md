@@ -13,16 +13,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`install_openclaw_plugin.sh`** — one-command install script that detects OpenClaw, configures `plugins.load.paths`, sets `plugins.slots.memory`, auto-detects embedding provider, and restarts the gateway
 - **3-way architecture** — Hermes Plugin · OpenClaw Plugin · MCP Server, all sharing the same Qdrant collection
 - **"Which path should I use?" table** in AGENTS.md and README.md
+- **MCP Server → Core Engine integration** — SkillGraph initialization, Auto-Discovery after remember(), lifecycle status filtering in recall(), supersession in update(), Events on remember/update/forget
+- **Time Decay in retrieval** — Gauss-shaped score decay (offset=30d, scale=365d) so recent memories rank higher, old ones fade gracefully
+- **PROCEDURE memory category** — new `MemoryCategory.PROCEDURE` for workflow/procedural memory with step ordering
+- **Staging with real embeddings** — replaced placeholder zero vectors with actual embedding provider calls (auto-detect Voyage → OpenAI → Google → Jina → Ollama → sentence-transformers)
 
 ### Changed
 
 - README.md completely rewritten — 3-way architecture diagram, all 3 install paths, release history table, GitHub Sponsors badge
 - Version badge updated to v0.4.0
+- All version numbers synchronized (pyproject.toml, nexus.__version__, plugin.yaml, mcp_server.py)
+- Staging `ensure_collections()` auto-detects vector dimension from embedding provider (was hardcoded 512d)
+- AGENTS.md categories updated to include `procedure`
+
+### Fixed
+
+- **Staging placeholder vectors** — `[0.0] * 512` replaced with real embeddings via `_detect_vector_size()` and `_embed_content()`
+- **Personal data removed** from public files (internal IPs, names, addresses)
+- **Test suite** — updated for new category count and dimension detection
 
 ### Notes
 
 - No breaking changes — same Qdrant collection, same API, same tools
 - OpenClaw plugin uses Qdrant REST via `fetch()` (no Python dependency on the OpenClaw side)
+- Lifecycle filtering is backwards compatible — entries without `lifecycle_status` field pass through
+- Time decay only applies when timestamps are present — entries without timestamps are not penalized
 
 ---
 

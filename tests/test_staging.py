@@ -36,7 +36,7 @@ class TestEnsureCollections:
     @patch("nexus.staging.requests.get")
     @patch("nexus.staging.requests.put")
     def test_creates_missing_collections(self, mock_put: MagicMock, mock_get: MagicMock):
-        """Collections missing → PUT creates them with 512D Cosine."""
+        """Collections missing → PUT creates them with correct dimension Cosine."""
         mock_get.return_value.status_code = 404  # Not found
         mock_put.return_value.status_code = 201
 
@@ -48,7 +48,7 @@ class TestEnsureCollections:
 
         # Verify create payload has correct vector dimension
         call_data = mock_put.call_args_list[0][1]["json"]
-        assert call_data["vectors"]["size"] == 512
+        assert call_data["vectors"]["size"] >= 384  # At least sentence-transformers dim
         assert call_data["vectors"]["distance"] == "Cosine"
 
     @patch("nexus.staging.requests.get")

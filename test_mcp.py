@@ -39,7 +39,7 @@ async def test():
 
             # Remember
             result = await session.call_tool("remember", {
-                "text": "Nebo wohnt in Eltville und mag Döner.",
+                "text": "Test user lives in a city and likes food.",
                 "access_level": "trusted",
                 "category": "fact",
                 "source": "test",
@@ -50,7 +50,7 @@ async def test():
 
             # Recall (public → should NOT find the trusted memory)
             result = await session.call_tool("recall", {
-                "query": "Nebo Eltville",
+                "query": "test user city",
                 "filter_level": "public",
                 "limit": 5,
             })
@@ -59,7 +59,7 @@ async def test():
 
             # Recall (trusted → should find it)
             result = await session.call_tool("recall", {
-                "query": "Nebo Eltville",
+                "query": "test user city",
                 "filter_level": "trusted",
                 "limit": 5,
             })
