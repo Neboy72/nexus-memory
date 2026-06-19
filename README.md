@@ -435,7 +435,7 @@ Detects stale entries, old patterns (`"X running as fallback"`: `GOOGLE_API_KEY`
 | 📊 **Graph Analytics** | **✅ Hub scores, gaps** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🚀 **Graph Boost** | **✅ Search ranking boost** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Access Control** | **✅ public/trusted/private** | ✅ Permissions | ❌ | ❌ | ❌ | ❌ |
-| 🧠 **Native Plugins** | **✅ Hermes + OpenClaw** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🧠 **Native Plugins** | **✅ Hermes + OpenClaw** | ❌ | ✅ OpenClaw | ❌ | ❌ | ❌ |
 | 🏠 **Self-hosted** | **✅ Your machine** | ❌ Blockchain | ❌ Cloud | ❌ Cloud | ❌ Cloud | ✅ Local |
 | 💰 **Cost** | **🆓 Free** | WAL token | Subscription | Subscription | API costs | Free |
 | 📦 **Code size** | ~9.6K Python | Managed service | Managed service | Managed service | ~50K TS | ~1.5K Python |
@@ -443,7 +443,7 @@ Detects stale entries, old patterns (`"X running as fallback"`: `GOOGLE_API_KEY`
 
 *\*Mem0 lists staleness as an "open problem" in their 2026 report but does not ship a solution.*
 
-**Nexus Memory is the only solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, access control, and native plugins: `GOOGLE_API_KEY`all self-hosted, all in one package.**
+**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, and access control: all in one package. It is also the only memory layer with a native Hermes plugin, and one of two (alongside mem0) with a native OpenClaw plugin.**
 
 ---
 
