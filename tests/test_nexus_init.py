@@ -189,9 +189,9 @@ class TestNexusRememberCategory:
 class TestMemoryCategoryEnum:
     """The enum that backs the State-Prefixing pattern."""
 
-    def test_all_six_values_present(self):
+    def test_all_seven_values_present(self):
         values = {c.value for c in MemoryCategory}
-        assert values == {"fact", "belief", "session", "rule", "preference", "temp"}
+        assert values == {"fact", "belief", "session", "rule", "preference", "procedure", "temp"}
 
     def test_member_lookup_by_value(self):
         # The coercion check uses ``category not in MemoryCategory._value2member_map_``

@@ -1,5 +1,5 @@
 """
-nexus-memory — MCP Server (v0.2.0)
+nexus-memory — MCP Server (v0.4.0)
 Universal Memory Layer for AI Agents
 
 Integrates all nexus v2.8.0 features:
@@ -362,8 +362,10 @@ class MemoryStore:
         self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
         self._embedder = EmbeddingProvider()
         self._hybrid_retriever = None
+        self._skill_graph = None
         self._ensure_collection()
         self._init_hybrid()
+        self._init_skill_graph()
 
     def _ensure_collection(self):
         collections = [c.name for c in self.client.get_collections().collections]
@@ -398,6 +400,25 @@ class MemoryStore:
         except Exception as e:
             logging.warning(f"Hybrid retriever not available: {e}")
             self._hybrid_retriever = None
+
+    def _init_skill_graph(self):
+        """Initialize SkillGraph from nexus.graph.graph if available.
+
+        Same defensive pattern as _init_hybrid(): if networkx is not
+        installed or the graph package cannot be imported, log a warning
+        and set _skill_graph to None so the rest of the server works
+        without graph features.
+        """
+        try:
+            from nexus.graph.graph import SkillGraph
+            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+                            collection=COLLECTION_NAME)
+            sg.initialize()
+            self._skill_graph = sg
+            logging.info("SkillGraph initialized (networkx-backed edge queries)")
+        except Exception as e:
+            logging.warning(f"SkillGraph not available: {e}")
+            self._skill_graph = None
 
     async def _check_sources(self, source_urls: list[str]) -> dict[str, str]:
         """Check source URLs via async HTTP HEAD. Returns dict mapping url -> status."""
@@ -469,6 +490,7 @@ class MemoryStore:
             "source_url": source_url,
             "created_at": created_at,
             "provenance": provenance,
+            "lifecycle_status": "canonical",  # New facts are canonical by default
         }
 
         self.client.upsert(
@@ -480,6 +502,39 @@ class MemoryStore:
             )],
         )
         logging.info(f"Stored memory {entry_id[:8]} [{access_level}] cat={category}")
+
+        # ── Auto-Discovery: find related facts via SkillGraph ───────────
+        # Lightweight: if the graph is available, discover edges for the
+        # newly stored fact. Wrapped in try/except so a discovery failure
+        # never breaks the remember() call.
+        if self._skill_graph is not None:
+            try:
+                from nexus.discovery import AutoDiscovery
+                ad = AutoDiscovery(
+                    qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+                    collection=COLLECTION_NAME,
+                )
+                candidates = ad.discover_for_fact(
+                    fact_id=entry_id,
+                    content=text,
+                    category=category,
+                    vector=vector,
+                )
+                if candidates:
+                    logging.info(
+                        f"Auto-discovery found {len(candidates)} edge(s) "
+                        f"for memory {entry_id[:8]}"
+                    )
+            except Exception as disc_err:
+                logging.warning(f"Auto-discovery failed for {entry_id[:8]}: {disc_err}")
+
+        # ── Events: fire a CREATED event for audit trail ────────────────
+        # Events are nice-to-have, not critical — swallow all errors.
+        try:
+            from nexus.events import create_event, EventType
+            create_event(entry_id, EventType.CREATED, {"text": text[:100]})
+        except Exception:
+            pass  # Events are nice-to-have, not critical
 
         return {
             "status": "ok",
@@ -554,6 +609,8 @@ class MemoryStore:
                                         r["created_at"] = pl.get("created_at")
                                     if not r.get("provenance"):
                                         r["provenance"] = pl.get("provenance", {})
+                                    if not r.get("lifecycle_status"):
+                                        r["lifecycle_status"] = pl.get("lifecycle_status")
                         except Exception as enrich_err:
                             logging.warning(f"Payload enrichment failed: {enrich_err}")
         except Exception as e:
@@ -580,8 +637,18 @@ class MemoryStore:
                     "source_url": payload.get("source_url"),
                     "provenance": payload.get("provenance", {}),
                     "created_at": payload.get("created_at"),
+                    "lifecycle_status": payload.get("lifecycle_status"),
                     "score": point.score,
                 })
+
+        # ── Lifecycle filtering: skip deprecated / rolled_back facts ────
+        # Only "canonical" or missing lifecycle_status entries are included
+        # (missing = backwards compat with old entries written before Phase 2).
+        _suppressed_statuses = {"deprecated", "rolled_back"}
+        raw_results = [
+            r for r in raw_results
+            if r.get("lifecycle_status") not in _suppressed_statuses
+        ]
 
         # Normalize scores relative to max score in results
         # Handles both RRF scores (0.001-0.1) and Qdrant scores (0.0-1.0)
@@ -1074,6 +1141,13 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             if success:
                 # Fire-and-forget: dispatch "memory.forget" to subscribers.
                 await dispatch_event("memory.forget", memory_id)
+                # ── Events: fire a STATUS_CHANGED event for audit trail ──
+                try:
+                    from nexus.events import create_event, EventType
+                    create_event(memory_id, EventType.STATUS_CHANGED,
+                                 {"action": "forgotten"})
+                except Exception:
+                    pass  # Events are nice-to-have, not critical
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": "deleted" if success else "not_found"}),
@@ -1090,10 +1164,25 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             new_text = arguments.get("text", "")
             modified_by = arguments.get("modified_by", "")
 
+            # ── Supersession: mark the old version as deprecated ──────
+            # Before updating, set the existing point's lifecycle_status
+            # to "deprecated" so recall() filters it out. The updated
+            # content gets lifecycle_status: "canonical" via new_metadata.
+            try:
+                store.client.set_payload(
+                    collection_name=COLLECTION_NAME,
+                    payload={"lifecycle_status": "deprecated"},
+                    points=[memory_id],
+                )
+                logging.info(f"Supersession: marked {memory_id[:8]} as deprecated")
+            except Exception as sup_err:
+                logging.warning(f"Supersession (deprecate old) failed: {sup_err}")
+
             from nexus import nexus_update
             result = nexus_update(
                 point_id=memory_id,
                 new_content=new_text if new_text else None,
+                new_metadata={"lifecycle_status": "canonical"},
                 modified_by=modified_by if modified_by else None,
                 qdrant_host=QDRANT_HOST,
                 qdrant_port=QDRANT_PORT,
@@ -1104,6 +1193,15 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             # result detail from nexus_update already encodes its own
             # success / noop state, and dispatching a noop is harmless.
             await dispatch_event("memory.update", memory_id)
+
+            # ── Events: fire an UPDATED event for audit trail ──────
+            try:
+                from nexus.events import create_event, EventType
+                create_event(memory_id, EventType.UPDATED,
+                             {"text": new_text[:100] if new_text else ""})
+            except Exception:
+                pass  # Events are nice-to-have, not critical
+
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": "updated", "detail": result}),
