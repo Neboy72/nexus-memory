@@ -738,6 +738,13 @@ class MemoryStore:
                                         r["provenance"] = pl.get("provenance", {})
                                     if not r.get("lifecycle_status"):
                                         r["lifecycle_status"] = pl.get("lifecycle_status")
+                                    # Confidence enrichment (Brain Pages feature)
+                                    if not r.get("trust"):
+                                        r["trust"] = pl.get("trust")
+                                    if not r.get("evidences"):
+                                        r["evidences"] = pl.get("evidences", [])
+                                    if not r.get("valid_until"):
+                                        r["valid_until"] = pl.get("valid_until")
                         except Exception as enrich_err:
                             logging.warning(f"Payload enrichment failed: {enrich_err}")
         except Exception as e:
@@ -843,6 +850,38 @@ class MemoryStore:
                 match_type = "low"
             
             prov = r.get("provenance", {})
+            
+            # Confidence score: combine provenance confidence + belief trust + evidence count
+            # This gives users a single "how reliable is this memory?" signal
+            prov_conf = prov.get("confidence")
+            belief_trust = r.get("trust")
+            evidence_count = len(r.get("evidences", [])) if r.get("evidences") else 0
+            
+            # Compute composite confidence (0.0-1.0)
+            # Priority: belief trust > provenance confidence > default 0.7
+            if belief_trust is not None:
+                composite_confidence = belief_trust
+            elif prov_conf is not None:
+                composite_confidence = prov_conf
+            else:
+                composite_confidence = 0.7
+            
+            # Evidence boost: +0.05 per evidence, max +0.2
+            if evidence_count > 0:
+                composite_confidence = min(1.0, composite_confidence + min(evidence_count * 0.05, 0.2))
+            
+            # Confidence label for user readability
+            if composite_confidence >= 0.9:
+                confidence_label = "very high"
+            elif composite_confidence >= 0.7:
+                confidence_label = "high"
+            elif composite_confidence >= 0.5:
+                confidence_label = "medium"
+            elif composite_confidence >= 0.3:
+                confidence_label = "low"
+            else:
+                confidence_label = "very low"
+            
             entry = {
                 "id": r.get("id"),
                 "text": text[:2000],  # Cap for readability
@@ -854,8 +893,12 @@ class MemoryStore:
                 "doc_id": doc_id,
                 "access_level": mem_level,
                 "category": r.get("category"),
-                "confidence": prov.get("confidence"),
+                "confidence": round(composite_confidence, 2),
+                "confidence_label": confidence_label,
+                "evidence_count": evidence_count,
+                "lifecycle_status": r.get("lifecycle_status", "canonical"),
                 "created_at": r.get("created_at"),
+                "valid_until": r.get("valid_until"),
             }
             
             # If same doc_id already in results, append text instead of duplicate
