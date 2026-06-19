@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="webui/static/assets/logo-transparent.png" width="72" height="72" alt=""/>&nbsp;
-  <img src="docs/images/nexus-banner.svg" alt="Nexus Memory" height="72"/>
+ <img src="webui/static/assets/logo-transparent.png" width="72" height="72" alt=""/>&nbsp;
+ <img src="docs/images/nexus-banner.svg" alt="Nexus Memory" height="72"/>
 </p>
 
 Your agents forget. Your context gets lost. Your setup knowledge is scattered across chats, tools and repos.
@@ -54,7 +54,7 @@ Read https://raw.githubusercontent.com/Neboy72/nexus-memory/main/AGENTS.md and f
 
 Your agent will check prerequisites, install everything, configure the provider, and verify. Zero manual steps.
 
-### Path 1: `GOOGLE_API_KEY`Hermes Native Plugin
+### Path 1: Hermes Native Plugin
 
 ```bash
 git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
@@ -62,7 +62,7 @@ cd ~/nexus-memory && pip install -e .
 ./scripts/install_hermes_plugin.sh
 ```
 
-### Path 2: `GOOGLE_API_KEY`OpenClaw Native Plugin
+### Path 2: OpenClaw Native Plugin
 
 ```bash
 git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
@@ -70,7 +70,7 @@ cd ~/nexus-memory && pip install -e .
 ./scripts/install_openclaw_plugin.sh
 ```
 
-### Path 3: `GOOGLE_API_KEY`MCP Server (any MCP-compatible agent)
+### Path 3: MCP Server (any MCP-compatible agent)
 
 ```bash
 git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
@@ -80,25 +80,25 @@ nexus-memory
 
 ### 🛠️ Embedding Provider (auto-detected)
 
-Pick **one**: `GOOGLE_API_KEY`the server auto-detects at runtime:
+Pick **one**: the server auto-detects at runtime:
 
-- **💚 Google / Vertex AI**: `GOOGLE_API_KEY``GOOGLE_API_KEY` in `.env` (768d)
-- **💜 Jina**: `GOOGLE_API_KEY``JINA_API_KEY` in `.env` (1024d)
-- **🦙 Ollama**: `GOOGLE_API_KEY``ollama pull nomic-embed-text`
-- **☁️ Voyage**: `GOOGLE_API_KEY``VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d)
-- **☁️ OpenAI**: `GOOGLE_API_KEY``OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
-- **🏠 Local (default)**: `GOOGLE_API_KEY``pip install nexus-memory[local]` (sentence-transformers, no key)
+- **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
+- **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
+- **🦙 Ollama**: `ollama pull nomic-embed-text`
+- **☁️ Voyage**: `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d)
+- **☁️ OpenAI**: `OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
+- **🏠 Local (default)**: `pip install nexus-memory[local]` (sentence-transformers, no key)
 
 ### 🌐 Web UI (optional)
 
-Nexus Memory comes with a live graph visualization: `GOOGLE_API_KEY`your memories as an interactive force-directed graph.
+Nexus Memory comes with a live graph visualization: your memories as an interactive force-directed graph.
 
 ```bash
 pip install nexus-memory[webui]
 nexus-memory webui
 ```
 
-Opens a dashboard at `http://127.0.0.1:9120`: `GOOGLE_API_KEY`filter by category, search, click nodes to inspect details, and see drift status at a glance.
+Opens a dashboard at `http://127.0.0.1:9120`: filter by category, search, click nodes to inspect details, and see drift status at a glance.
 
 ### 🔌 Platform Configuration
 
@@ -111,8 +111,8 @@ Choose your agent:
 
 ```yaml
 mcp_servers:
-  nexus:
-    command: nexus-memory
+ nexus:
+ command: nexus-memory
 ```
 
 Restart: `hermes gateway restart`
@@ -121,18 +121,18 @@ Restart: `hermes gateway restart`
 <details>
 <summary>🔷 OpenClaw</summary>
 
-`~/.openclaw/openclaw.json` (`mcp.servers.<name>.env`: `GOOGLE_API_KEY`nested, not top-level):
+`~/.openclaw/openclaw.json` (`mcp.servers.<name>.env`: nested, not top-level):
 
 ```json
 {
-  "mcp": {
-    "servers": {
-      "nexus-memory": {
-        "command": "nexus-memory",
-        "env": { "VOYAGE_API_KEY": "vo-your-key-here" }
-      }
-    }
-  }
+ "mcp": {
+ "servers": {
+ "nexus-memory": {
+ "command": "nexus-memory",
+ "env": { "VOYAGE_API_KEY": "vo-your-key-here" }
+ }
+ }
+ }
 }
 ```
 </details>
@@ -144,12 +144,12 @@ Restart: `hermes gateway restart`
 
 ```json
 {
-  "mcpServers": {
-    "nexus": {
-      "command": "python3",
-      "args": ["-m", "nexus_memory.mcp_server"]
-    }
-  }
+ "mcpServers": {
+ "nexus": {
+ "command": "python3",
+ "args": ["-m", "nexus_memory.mcp_server"]
+ }
+ }
 }
 ```
 </details>
@@ -173,12 +173,12 @@ args = ["-m", "nexus_memory.mcp_server"]
 
 ```json
 {
-  "mcpServers": {
-    "nexus": {
-      "command": "python3",
-      "args": ["-m", "nexus_memory.mcp_server"]
-    }
-  }
+ "mcpServers": {
+ "nexus": {
+ "command": "python3",
+ "args": ["-m", "nexus_memory.mcp_server"]
+ }
+ }
 }
 ```
 </details>
@@ -200,12 +200,12 @@ MCP Server Config:
 
 ```json
 {
-  "mcpServers": {
-    "nexus": {
-      "command": "python3",
-      "args": ["-m", "nexus_memory.mcp_server"]
-    }
-  }
+ "mcpServers": {
+ "nexus": {
+ "command": "python3",
+ "args": ["-m", "nexus_memory.mcp_server"]
+ }
+ }
 }
 ```
 </details>
@@ -217,12 +217,12 @@ MCP Server Config:
 
 ```json
 {
-  "mcpServers": {
-    "nexus": {
-      "command": "python3",
-      "args": ["-m", "nexus_memory.mcp_server"]
-    }
-  }
+ "mcpServers": {
+ "nexus": {
+ "command": "python3",
+ "args": ["-m", "nexus_memory.mcp_server"]
+ }
+ }
 }
 ```
 </details>
@@ -234,12 +234,12 @@ MCP Server Config:
 
 ```json
 {
-  "mcpServers": {
-    "nexus": {
-      "command": "python3",
-      "args": ["-m", "nexus_memory.mcp_server"]
-    }
-  }
+ "mcpServers": {
+ "nexus": {
+ "command": "python3",
+ "args": ["-m", "nexus_memory.mcp_server"]
+ }
+ }
 }
 ```
 </details>
@@ -251,12 +251,12 @@ MCP Server Config:
 
 ```json
 {
-  "mcpServers": {
-    "nexus": {
-      "command": "python3",
-      "args": ["-m", "nexus_memory.mcp_server"]
-    }
-  }
+ "mcpServers": {
+ "nexus": {
+ "command": "python3",
+ "args": ["-m", "nexus_memory.mcp_server"]
+ }
+ }
 }
 ```
 </details>
@@ -278,12 +278,12 @@ Standard MCP stdio config:
 
 ```json
 {
-  "mcpServers": {
-    "nexus": {
-      "command": "python3",
-      "args": ["-m", "nexus_memory.mcp_server"]
-    }
-  }
+ "mcpServers": {
+ "nexus": {
+ "command": "python3",
+ "args": ["-m", "nexus_memory.mcp_server"]
+ }
+ }
 }
 ```
 </details>
@@ -300,7 +300,7 @@ Standard MCP stdio config:
 | `update` ✏️ | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `subscribe` 🔔 | Register a webhook for memory events | `event_type` (req), `webhook_url` (req) |
 | `unsubscribe` 🔕 | Remove a webhook subscription | `subscription_id` (req) |
-| `list_subscriptions` 📋 | List all active webhooks |: `GOOGLE_API_KEY`|
+| `list_subscriptions` 📋 | List all active webhooks |none |
 | `health` ❤️ | Check server status, embedding, update availability | none |
 | `check_update` 🔄 | Check for newer version on GitHub | none |
 | `do_update` ⬆️ | Backup + pull + install + restart | `confirm` (req, must be `true`) |
@@ -335,25 +335,25 @@ Standard MCP stdio config:
 
 ### Auto-Recall & Auto-Capture 🔄
 
-**Native plugins** (Hermes & OpenClaw) automatically inject relevant memories before every turn and extract new facts after every turn: `GOOGLE_API_KEY`zero manual tool calls needed. The MCP server provides the same capabilities via explicit `recall` / `remember` tools.
+**Native plugins** (Hermes & OpenClaw) automatically inject relevant memories before every turn and extract new facts after every turn: zero manual tool calls needed. The MCP server provides the same capabilities via explicit `recall` / `remember` tools.
 
 ### Hybrid Retrieval 🛡️
 
-Pure vector search is vulnerable to **RAG poisoning**: `GOOGLE_API_KEY`adversarial documents that rank high semantically but contain garbage. Nexus Memory blends **BM25 + Vector + Reciprocal Rank Fusion**:
+Pure vector search is vulnerable to **RAG poisoning**: adversarial documents that rank high semantically but contain garbage. Nexus Memory blends **BM25 + Vector + Reciprocal Rank Fusion**:
 
 ```
 Query → ┌─ BM25 Index ──────→ Keyword Rankings
-         │                          │
-         └─ Vector Embeddings ──→ Semantic Rankings
-                                        │
-                               RRF Fusion ───→ Combined Rankings
+ │ │
+ └─ Vector Embeddings ──→ Semantic Rankings
+ │
+ RRF Fusion ───→ Combined Rankings
 ```
 
 | Method | Strengths | Weaknesses |
 |--------|----------|------------|
 | **BM25** 🔤 | Keyword-exact, poison-resistant | Misses semantics |
 | **Vector** 🧠 | Semantic matching, fuzzy queries | Vulnerable to poisoning |
-| **Hybrid (RRF)** 🏆 | Best of both |: `GOOGLE_API_KEY`|
+| **Hybrid (RRF)** 🏆 | Best of both |none |
 
 ### Source-Tier Boosting 🏷️
 
@@ -369,7 +369,7 @@ Seven scopes from Agentic Design Patterns (Ch8): `fact`, `belief`, `session`, `r
 
 ### Provenance Tracking 📎
 
-Every memory carries its origin: `source_url`, `confidence` (0.0–1.0), `modified_by`, timestamps. Full audit trail from creation to today. Source URLs are verified via async HTTP HEAD on every recall: `GOOGLE_API_KEY``verified`, `unreachable`, or `unchecked`.
+Every memory carries its origin: `source_url`, `confidence` (0.0–1.0), `modified_by`, timestamps. Full audit trail from creation to today. Source URLs are verified via async HTTP HEAD on every recall: `verified`, `unreachable`, or `unchecked`.
 
 ### Access Levels 🛡️
 
@@ -381,7 +381,7 @@ Register HTTP endpoints to receive notifications when memories change. Three eve
 
 ### 🌐 Web UI
 
-Live graph visualization with D3.js: `GOOGLE_API_KEY`interactive force-directed graph of your memory network. Filter by category, search, inspect node details, and see drift status at a glance.
+Live graph visualization with D3.js: interactive force-directed graph of your memory network. Filter by category, search, inspect node details, and see drift status at a glance.
 
 ### Guardrails 🛡️
 
@@ -402,7 +402,7 @@ Append-only state machine: `pending → canonical | deprecated | rolled_back`. E
 
 ### Auto-Discovery + Graph Analytics 🔄
 
-Zero-token relation discovery between canonical facts via Qdrant (O(n·k)) + heuristic classification. Graph analytics: hub scores, isolation scores, knowledge gaps, connected components. **Facts connect themselves: `GOOGLE_API_KEY`no manual edges needed.**
+Zero-token relation discovery between canonical facts via Qdrant (O(n·k)) + heuristic classification. Graph analytics: hub scores, isolation scores, knowledge gaps, connected components. **Facts connect themselves: no manual edges needed.**
 
 ### 🎯 Skill Export
 
@@ -496,9 +496,9 @@ One server. Multiple backends. Same API.
 | **v0.2.5** | 2026-06-13 | Bugfix: `is_success()` replaces raw `status_code == 200` (29 sites), CI audit workflow, code simplification |
 | **v0.2.4** | 2026-06-12 | Web UI with live D3.js graph, drift ampel, stats cards, Ko-fi integration |
 | **v0.2.3** | 2026-06-08 | Auto-update tools (`check_update`, `do_update`), agent-managed self-restart, macOS setup fixes |
-| **v0.2.2** | 2026-06-08 | Justification Check (Rung 2): `GOOGLE_API_KEY`source URL verification on recall, hybrid search score fixes |
-| **v0.2.0** | 2026-06-07 | Full v2.8.0 feature parity: MemoryCategory, provenance, guardrails, access control, hybrid search, drift detection, graph analytics, skill export: `GOOGLE_API_KEY`224 tests |
-| **v0.1.0** | 2026-06-07 | Initial release: `GOOGLE_API_KEY`MCP server with 4 tools, Qdrant vector storage, access control, local-only security |
+| **v0.2.2** | 2026-06-08 | Justification Check (Rung 2): source URL verification on recall, hybrid search score fixes |
+| **v0.2.0** | 2026-06-07 | Full v2.8.0 feature parity: MemoryCategory, provenance, guardrails, access control, hybrid search, drift detection, graph analytics, skill export: 224 tests |
+| **v0.1.0** | 2026-06-07 | Initial release: MCP server with 4 tools, Qdrant vector storage, access control, local-only security |
 
 ---
 
@@ -517,7 +517,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v   # 389 tests ✅
+pytest tests/ -v # 389 tests ✅
 ```
 
 ---
@@ -527,22 +527,22 @@ pytest tests/ -v   # 389 tests ✅
 - Python 3.11+
 - Qdrant v1.12+ running on `localhost:6333`
 - One embedding provider (auto-detected):
-  - **💚 Google / Vertex AI**: `GOOGLE_API_KEY``GOOGLE_API_KEY` in `.env` (768d)
-  - **💜 Jina**: `GOOGLE_API_KEY``JINA_API_KEY` in `.env` (1024d)
-  - **🦙 Ollama**: `GOOGLE_API_KEY``ollama pull nomic-embed-text`
-  - **☁️ Voyage**: `GOOGLE_API_KEY``VOYAGE_API_KEY` in `.env` (1024d)
-  - **☁️ OpenAI**: `GOOGLE_API_KEY``OPENAI_API_KEY` in `.env` (1536d)
-  - **🏠 Local**: `GOOGLE_API_KEY``pip install sentence-transformers`
+ - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
+ - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
+ - **🦙 Ollama**: `ollama pull nomic-embed-text`
+ - **☁️ Voyage**: `VOYAGE_API_KEY` in `.env` (1024d)
+ - **☁️ OpenAI**: `OPENAI_API_KEY` in `.env` (1536d)
+ - **🏠 Local**: `pip install sentence-transformers`
 
 ---
 
 ## 📜 License
 
-MIT: `GOOGLE_API_KEY`use it, modify it, ship it.
+MIT: use it, modify it, ship it.
 
 ---
 
-⭐️ Found it useful? [Give it a star on GitHub](https://github.com/Neboy72/nexus-memory): `GOOGLE_API_KEY`it helps others find it!
+⭐️ Found it useful? [Give it a star on GitHub](https://github.com/Neboy72/nexus-memory): it helps others find it!
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
