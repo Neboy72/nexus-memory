@@ -123,7 +123,7 @@ Restart OpenClaw Gateway. Nexus tools appear as `nexus_search`, `nexus_store`, `
 - **Tools**: `nexus_search`, `nexus_store`, `nexus_forget` available to the agent.
 - **Shared store**: Same Qdrant collection as Hermes plugin and MCP server — one brain, many agents.
 
-## Shared Store: One Qdrant, Three Access Paths
+## Shared Store: One Qdrant, Two Access Paths
 
 Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. The Hermes native plugin, the OpenClaw native plugin, and the MCP server all read/write the **same store** — same vectors, same metadata, same access levels.
 
@@ -146,11 +146,10 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
 
 ### Which path should I use?
 
-| Path | Best for | Setup | Overhead |
-|------|----------|-------|----------|
-| **Hermes Plugin** | Hermes Agent | `./scripts/install_hermes_plugin.sh` | None — direct Qdrant access |
-| **OpenClaw Plugin** | OpenClaw | `./scripts/install_openclaw_plugin.sh` | None — Qdrant REST via fetch() |
-| **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | Light — one Python process |
+| Path | Best for | Setup | Memory mode |
+|------|----------|-------|-------------|
+| **Native Plugin** | Hermes Agent, OpenClaw | `./scripts/install_hermes_plugin.sh` or `./scripts/install_openclaw_plugin.sh` | **Automatic** — Auto-Recall + Auto-Capture |
+| **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | **Manual** — explicit tool calls |
 
 ## Quick Install (MCP Server)
 
