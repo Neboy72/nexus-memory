@@ -369,7 +369,11 @@ class MemoryStore:
         self._update_check_result: dict | None = None
         self._update_check_time: float = 0
         self._update_nudged: bool = False  # Only nudge once per server lifetime
+        self._backup_nudged: bool = False
+        self._last_backup_path: str = ""
+        self._last_backup_time: float = 0
         self._check_for_updates_async()
+        self._start_auto_backup()
 
     def _check_for_updates_async(self):
         """Check GitHub for new releases on startup (non-blocking, cached 24h)."""
@@ -403,6 +407,69 @@ class MemoryStore:
                 self._update_check_time = time.time()
         t = threading.Thread(target=_bg_check, daemon=True)
         t.start()
+
+    def _start_auto_backup(self):
+        """Start automatic daily backup of all memories."""
+        import threading, time
+        def _backup_loop():
+            time.sleep(60)  # Wait 60s after startup
+            while True:
+                try:
+                    self._do_backup()
+                except Exception as e:
+                    logging.warning(f"Auto-backup failed: {e}")
+                for _ in range(1440):  # 24h, check every 60s
+                    time.sleep(60)
+        threading.Thread(target=_backup_loop, name="nexus-backup", daemon=True).start()
+
+    def _do_backup(self) -> str:
+        """Create a full backup of all memories as JSON. Returns backup file path."""
+        import os, time
+        from datetime import datetime
+
+        backup_dir = os.path.expanduser("~/.nexus-memory/backups")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        all_points = []
+        offset = None
+        while True:
+            results, offset = self.client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=100, offset=offset,
+                with_payload=True, with_vectors=True,
+            )
+            for p in results:
+                vec = p.vector if isinstance(p.vector, list) else None
+                all_points.append({"id": str(p.id), "payload": p.payload or {}, "vector": vec})
+            if not offset:
+                break
+
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_path = os.path.join(backup_dir, f"nexus-backup-{ts}.json")
+        backup_data = {
+            "version": nexus_version,
+            "collection": COLLECTION_NAME,
+            "created_at": datetime.now().isoformat(),
+            "point_count": len(all_points),
+            "points": all_points,
+        }
+        with open(backup_path, "w") as f:
+            json.dump(backup_data, f, default=str)
+
+        self._last_backup_time = time.time()
+        self._last_backup_path = backup_path
+
+        # Keep only last 7 backups
+        backups = sorted(
+            [f for f in os.listdir(backup_dir) if f.startswith("nexus-backup-")],
+            reverse=True
+        )
+        for old in backups[7:]:
+            try: os.remove(os.path.join(backup_dir, old))
+            except OSError: pass
+
+        logging.info(f"💾 Auto-backup: {len(all_points)} memories → {backup_path}")
+        return backup_path
 
     def _ensure_collection(self):
         collections = [c.name for c in self.client.get_collections().collections]
@@ -1135,6 +1202,38 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {},
             },
         ),
+        types.Tool(
+            name="backup",
+            description=(
+                "Create a full backup of all memories as JSON file. "
+                "Includes payloads + vectors. Saved to ~/.nexus-memory/backups/. "
+                "Runs automatically every 24h - use this for manual backup on demand."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="restore",
+            description=(
+                "Restore memories from a backup JSON file. "
+                "By default reuses stored vectors (zero API cost). "
+                "Set reembed=true to re-embed with current provider (for provider changes)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "backup_path": {
+                        "type": "string",
+                        "description": "Path to the backup JSON file",
+                    },
+                    "reembed": {
+                        "type": "boolean",
+                        "description": "If true, re-embed all texts with current provider instead of reusing stored vectors",
+                        "default": False,
+                    },
+                },
+                "required": ["backup_path"],
+            },
+        ),
     ]
 
 
@@ -1365,6 +1464,75 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 text=json.dumps({
                     "subscriptions": subs,
                     "count": len(subs),
+                }),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
+
+    elif name == "backup":
+        try:
+            backup_path = store._do_backup()
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "status": "success",
+                    "backup_path": backup_path,
+                    "message": "Backup created. Tell your user: 'Backup saved. I recommend copying it to external storage for extra safety.'",
+                }),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
+
+    elif name == "restore":
+        try:
+            backup_path = arguments.get("backup_path", "")
+            reembed = arguments.get("reembed", False)
+            if not backup_path or not os.path.exists(backup_path):
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({"status": "error", "error": f"Backup file not found: {backup_path}"}),
+                )]
+
+            with open(backup_path) as f:
+                data = json.load(f)
+
+            points = data.get("points", [])
+            restored = 0
+            skipped = 0
+
+            for p in points:
+                pid = _to_point_id(p["id"])
+                payload = p.get("payload", {})
+                vec = p.get("vector")
+
+                if reembed or not vec:
+                    text = payload.get("content", "")
+                    if text:
+                        vec = await store._embed(text)
+                    else:
+                        skipped += 1
+                        continue
+
+                store.client.upsert(
+                    collection_name=COLLECTION_NAME,
+                    points=[qmodels.PointStruct(id=pid, vector=vec, payload=payload)],
+                )
+                restored += 1
+
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "status": "success",
+                    "restored": restored,
+                    "skipped": skipped,
+                    "reembedded": reembed,
+                    "message": f"Restored {restored} memories from {backup_path}",
                 }),
             )]
         except Exception as e:
