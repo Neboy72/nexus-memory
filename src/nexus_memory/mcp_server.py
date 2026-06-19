@@ -366,6 +366,43 @@ class MemoryStore:
         self._ensure_collection()
         self._init_hybrid()
         self._init_skill_graph()
+        self._update_check_result: dict | None = None
+        self._update_check_time: float = 0
+        self._update_nudged: bool = False  # Only nudge once per server lifetime
+        self._check_for_updates_async()
+
+    def _check_for_updates_async(self):
+        """Check GitHub for new releases on startup (non-blocking, cached 24h)."""
+        import threading, time
+        def _bg_check():
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/Neboy72/nexus-memory/releases/latest",
+                    headers={"Accept": "application/vnd.github.v3+json",
+                             "User-Agent": f"nexus-memory/{nexus_version}"}
+                )
+                data = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
+                latest_tag = data.get("tag_name", "").lstrip("v")
+                latest_name = data.get("name", latest_tag)
+                html_url = data.get("html_url", "")
+                from packaging.version import parse
+                is_newer = parse(latest_tag) > parse(nexus_version) if latest_tag else False
+                self._update_check_result = {
+                    "update_available": is_newer,
+                    "latest_version": latest_tag,
+                    "latest_name": latest_name,
+                    "release_url": html_url,
+                    "local_version": nexus_version,
+                }
+                if is_newer:
+                    logging.info(f"📦 Nexus Memory update available: v{nexus_version} → v{latest_tag}")
+            except Exception as e:
+                logging.debug(f"Update check failed: {e}")
+            finally:
+                self._update_check_time = time.time()
+        t = threading.Thread(target=_bg_check, daemon=True)
+        t.start()
 
     def _ensure_collection(self):
         collections = [c.name for c in self.client.get_collections().collections]
@@ -716,6 +753,26 @@ class MemoryStore:
                 results.append(entry)
 
         results.sort(key=lambda x: x["score"], reverse=True)
+        
+        # One-time update nudge: if update available and not yet nudged, append a note
+        if (self._update_check_result and 
+            self._update_check_result.get("update_available") and 
+            not self._update_nudged):
+            self._update_nudged = True
+            results.append({
+                "id": "update-notice",
+                "score": 0,
+                "text": (
+                    f"📦 Nexus Memory update available: v{self._update_check_result['latest_version']} "
+                    f"(you have v{nexus_version}). "
+                    f"Tell your user about this update and ask if they want to upgrade. "
+                    f"Use the do_update tool with confirm=true to update."
+                ),
+                "category": "system",
+                "source": "nexus-memory-server",
+                "_is_update_notice": True,
+            })
+        
         return results[:limit]
 
     async def forget(self, memory_id: str) -> bool:
@@ -729,14 +786,29 @@ class MemoryStore:
         try:
             collections = self.client.get_collections().collections
             nexus_exists = COLLECTION_NAME in [c.name for c in collections]
-            return {
+            result = {
                 "status": "ok",
                 "qdrant": "connected",
                 "collection": COLLECTION_NAME,
                 "exists": nexus_exists,
                 "embedding": self._embedder.model_name if self._embedder.available else "none",
                 "embedding_available": self._embedder.available,
+                "version": nexus_version,
             }
+            # Include update info if available
+            if self._update_check_result and self._update_check_result.get("update_available"):
+                result["update_available"] = True
+                result["latest_version"] = self._update_check_result["latest_version"]
+                result["latest_name"] = self._update_check_result["latest_name"]
+                result["release_url"] = self._update_check_result["release_url"]
+                result["update_message"] = (
+                    f"📦 Nexus Memory v{self._update_check_result['latest_version']} is available "
+                    f"(you have v{nexus_version}). Tell your user: 'Nexus Memory has an update available - "
+                    f"shall I run do_update(confirm=true) to upgrade?'"
+                )
+            else:
+                result["update_available"] = False
+            return result
         except Exception as e:
             return {"status": "error", "error": str(e)}
 

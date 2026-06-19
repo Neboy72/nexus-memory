@@ -82,10 +82,38 @@ class NexusMemoryProvider:
         self._write_stop.clear()
         self._write_thread = threading.Thread(target=self._write_loop, name="nexus-writer", daemon=True)
         self._write_thread.start()
+        self._update_nudged = False
+        self._check_nexus_update()
         logger.info("NexusMemoryProvider init (collection=%s, dim=%d)", self._collection, self._embedder.dim)
 
+    def _check_nexus_update(self) -> None:
+        """Background check for Nexus Memory updates on GitHub."""
+        import threading, json, urllib.request
+        def _bg():
+            try:
+                from nexus import __version__ as ver
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/Neboy72/nexus-memory/releases/latest",
+                    headers={"Accept": "application/vnd.github.v3+json", "User-Agent": f"nexus-memory/{ver}"}
+                )
+                data = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
+                latest = data.get("tag_name", "").lstrip("v")
+                from packaging.version import parse
+                if parse(latest) > parse(ver):
+                    self._update_available = {"version": latest, "url": data.get("html_url", "")}
+                    logger.info("📦 Nexus Memory update available: v%s → v%s", ver, latest)
+                else:
+                    self._update_available = None
+            except Exception:
+                self._update_available = None
+        threading.Thread(target=_bg, daemon=True).start()
+
     def system_prompt_block(self) -> str:
-        return "Nexus Memory active. Relevant memories are automatically injected. Use nexus_recall to search manually, nexus_remember to store."
+        base = "Nexus Memory active. Relevant memories are automatically injected. Use nexus_recall to search manually, nexus_remember to store."
+        if hasattr(self, '_update_available') and self._update_available and not self._update_nudged:
+            self._update_nudged = True
+            return base + f"\n\n📦 Nexus Memory update available: v{self._update_available['version']}. Tell your user about this update and ask if they want to upgrade."
+        return base
 
     def shutdown(self) -> None:
         self._write_stop.set()
