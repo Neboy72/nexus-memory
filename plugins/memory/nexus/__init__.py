@@ -59,6 +59,9 @@ class NexusMemoryProvider:
         self._prefetch_lock = threading.Lock(); self._write_queue: List[Dict[str, Any]] = []
         self._write_lock = threading.Lock(); self._write_stop = threading.Event()
         self._write_thread: Optional[threading.Thread] = None
+        self._backup_nudged = False
+        self._last_backup_time: float = 0
+        self._last_backup_path: str = ""
 
     @property
     def name(self) -> str: return "nexus"
@@ -84,7 +87,88 @@ class NexusMemoryProvider:
         self._write_thread.start()
         self._update_nudged = False
         self._check_nexus_update()
+        self._start_auto_backup()
         logger.info("NexusMemoryProvider init (collection=%s, dim=%d)", self._collection, self._embedder.dim)
+
+    def _start_auto_backup(self) -> None:
+        """Start automatic daily backup of all memories."""
+        import threading, time, json, os
+        from datetime import datetime
+
+        def _backup_loop():
+            # Wait 60s after startup before first backup
+            time.sleep(60)
+            while not self._write_stop.is_set():
+                try:
+                    self._do_backup()
+                except Exception as e:
+                    logger.warning(f"Auto-backup failed: {e}")
+                # Sleep 24h (check stop flag every 60s for responsive shutdown)
+                for _ in range(1440):
+                    if self._write_stop.is_set():
+                        return
+                    time.sleep(60)
+
+        threading.Thread(target=_backup_loop, name="nexus-backup", daemon=True).start()
+
+    def _do_backup(self) -> str:
+        """Create a full backup of all memories as JSON. Returns backup file path."""
+        import json, os, time
+        from datetime import datetime
+
+        backup_dir = os.path.expanduser("~/.nexus-memory/backups")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        # Scroll all points from Qdrant
+        all_points = []
+        offset = None
+        while True:
+            from qdrant_client import models as qm
+            results, offset = self._qdrant.scroll(
+                collection_name=self._collection,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+                with_vectors=True,  # Include vectors for zero-cost restore
+            )
+            for p in results:
+                all_points.append({
+                    "id": str(p.id),
+                    "payload": p.payload or {},
+                    "vector": p.vector if isinstance(p.vector, list) else None,
+                })
+            if not offset:
+                break
+
+        # Write backup file
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_path = os.path.join(backup_dir, f"nexus-backup-{ts}.json")
+        backup_data = {
+            "version": "0.4.0",
+            "collection": self._collection,
+            "created_at": datetime.now().isoformat(),
+            "point_count": len(all_points),
+            "points": all_points,
+        }
+        with open(backup_path, "w") as f:
+            json.dump(backup_data, f, default=str)
+
+        self._last_backup_time = time.time()
+        self._last_backup_path = backup_path
+
+        # Keep only last 7 backups
+        backups = sorted(
+            [f for f in os.listdir(backup_dir) if f.startswith("nexus-backup-")],
+            reverse=True
+        )
+        for old in backups[7:]:
+            try:
+                os.remove(os.path.join(backup_dir, old))
+            except OSError:
+                pass
+
+        logger.info("💾 Auto-backup: %d memories → %s", len(all_points), backup_path)
+        return backup_path
 
     def _check_nexus_update(self) -> None:
         """Background check for Nexus Memory updates on GitHub."""
@@ -110,9 +194,21 @@ class NexusMemoryProvider:
 
     def system_prompt_block(self) -> str:
         base = "Nexus Memory active. Relevant memories are automatically injected. Use nexus_recall to search manually, nexus_remember to store."
+        # Update nudge (once per lifetime)
         if hasattr(self, '_update_available') and self._update_available and not self._update_nudged:
             self._update_nudged = True
-            return base + f"\n\n📦 Nexus Memory update available: v{self._update_available['version']}. Tell your user about this update and ask if they want to upgrade."
+            base += f"\n\n📦 Nexus Memory update available: v{self._update_available['version']}. Tell your user about this update and ask if they want to upgrade."
+        # Backup info nudge (once per lifetime)
+        if not self._backup_nudged:
+            self._backup_nudged = True
+            base += (
+                "\n\n💾 Nexus Memory has automatic daily backups enabled. "
+                "Backups are saved to ~/.nexus-memory/backups/. "
+                "Tell your user: 'Nexus Memory backs up your memories automatically every day. "
+                "I recommend copying the backup to external storage (USB, NAS, cloud) for extra safety. "
+                "Latest backup: " + (self._last_backup_path or "pending (first backup runs 60s after startup)") + ". "
+                "Shall I help you set up external backup?'"
+            )
         return base
 
     def shutdown(self) -> None:
