@@ -1,5 +1,5 @@
 """
-nexus-memory — MCP Server (v0.4.0)
+nexus-memory — MCP Server (v0.4.1)
 Universal Memory Layer for AI Agents
 
 Integrates all nexus v2.8.0 features:
