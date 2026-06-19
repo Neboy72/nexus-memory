@@ -29,20 +29,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 
 Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. The Hermes native plugin, the OpenClaw native plugin, and the MCP server all read/write the **same store** — same vectors, same metadata, same access levels.
 
-```
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│   Hermes Agent       │  │   OpenClaw           │  │  Claude Code / Cursor│
-│   (Native Plugin)    │  │   (Native Plugin)    │  │  Codex / Any MCP     │
-│                      │  │                      │  │  (MCP Client)        │
-└──────────┬───────────┘  └──────────┬───────────┘  └──────────┬───────────┘
-           │ qdrant_client             │ TS+fetch()              │ stdio
-           │ (direct)                  │ (Qdrant REST)           │
-           ▼                           ▼                         ▼
-    ┌──────────────────────────────────────────────────────────────────┐
-    │              Qdrant (localhost:6333)                              │
-    │            Collection: "nexus"                                    │
-    └──────────────────────────────────────────────────────────────────┘
-```
+[![Nexus Memory Architecture](docs/images/nexus-infographic-v0.4.0.png)](docs/images/nexus-infographic-v0.4.0.png)
 
 > **Key insight:** A memory stored by Hermes via the native plugin is immediately visible to OpenClaw via its plugin and to Claude Code via MCP — and vice versa. One brain, many agents.
 
