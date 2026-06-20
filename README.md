@@ -1,6 +1,5 @@
 <p align="center">
- <img src="webui/static/assets/logo-transparent.png" width="72" height="72" alt=""/>&nbsp;
- <img src="docs/images/nexus-banner.svg" alt="Nexus Memory" height="72"/>
+ <img src="docs/images/nexus-logo-horizontal-no-slogan.png" alt="Nexus Memory" width="400"/>
 </p>
 
 Your agents forget. Your context gets lost. Your setup knowledge is scattered across chats, tools and repos.
