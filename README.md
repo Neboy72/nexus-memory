@@ -376,6 +376,15 @@ Every memory carries its origin: `source_url`, `confidence` (0.0–1.0), `modifi
 
 Three levels: `public` (all agents), `trusted` (approved agents), `private` (owner only). Enforced at the MCP tool level.
 
+### Active Guardrails 🛡️
+
+**The only memory system that doesn't just store knowledge — it guards it.** Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`), the guardrail checks Qdrant for stored protection rules and blocks if the target matches a protected path or collection.
+
+- **Memory-driven**: Storing "NIEMALS ~/nexus-memory-test/ löschen" as a rule automatically registers it as protected
+- **Pattern detection**: rm, rmdir, del, drop, truncate, kill/pkill/killall, recreate_collection, write_file, pip uninstall, find -delete, git clean -fdx, dd
+- **Fail-open**: Qdrant outage degrades to ALLOW (never blocks agent work by accident)
+- **Override with audit trail**: Explicit reasoning required (min 10 chars), stored as private session memory
+
 ### Webhooks 🔔
 
 Register HTTP endpoints to receive notifications when memories change. Three event types: `memory.remember`, `memory.update`, `memory.forget`. Fire-and-forget delivery with 5s timeout. Subscriptions persist in `~/.nexus-webhooks.json`.
@@ -466,6 +475,7 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 📦 **Update Notifications** | **✅ Auto-check GitHub** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Access Control** | **✅ public/trusted/private** | ✅ Permissions | ❌ | ❌ | ❌ | ❌ |
+| 🛡️ **Active Guardrails** | **✅ Memory-driven** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧠 **Native Plugins** | **✅ Hermes + OpenClaw** | ❌ | ✅ OpenClaw | ✅ OpenClaw | ✅ Hermes | ❌ |
 | 🔌 **MCP Server** | **✅ Any MCP agent** | ❌ | ❌ | ❌ | ✅ | ❌ |
 | 🏠 **Self-hosted** | **✅ Your machine** | ❌ Blockchain | ❌ Cloud | ❌ Cloud | ❌ Cloud | ✅ Local |
@@ -475,7 +485,7 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 
 *\*Mem0 lists staleness as an "open problem" in their 2026 report but does not ship a solution.*
 
-**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, and access control: all in one package. It is also the only memory layer that offers native plugins for both Hermes and OpenClaw, plus an MCP server for every other agent: one brain, two paths, all agents.**
+**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, access control, and active guardrails: all in one package. It is also the only memory layer that actively prevents destructive actions by checking protection rules before execution — not just storing knowledge, but guarding it. Plus native plugins for both Hermes and OpenClaw, plus an MCP server for every other agent: one brain, two paths, all agents.**
 
 ---
 
