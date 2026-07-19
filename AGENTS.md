@@ -244,7 +244,7 @@ nexus-memory webui
 
 Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory network visually.
 
-## Available Tools (10)
+## Available Tools (12)
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
@@ -258,6 +258,32 @@ Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory 
 | `subscribe` | Register a webhook for a memory event | `event_type` (req), `webhook_url` (req) |
 | `unsubscribe` | Remove a webhook subscription | `subscription_id` (req) |
 | `list_subscriptions` | List all registered webhook subscriptions | — |
+| `backup` | Manual backup of all memories to JSON | — |
+| `restore` | Restore memories from backup JSON | `backup_path` (req), `reembed` (optional) |
+| `guardrail_check` | Check if an action is safe before executing (queries protection rules in memory) | `command` (req), `tool_name`, `tool_input` |
+| `guardrail_override` | Record a guardrail override with audit trail (requires explicit reasoning) | `command` (req), `reasoning` (req, min 10 chars), `matched_rules`, `agent_id` |
+
+## Active Guardrails
+
+**New in v0.5.0.** Nexus Memory doesn't just store and retrieve — it actively prevents destructive actions.
+
+Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`), the guardrail checks Qdrant for stored protection rules (category=`rule` with protection keywords like "niemals", "never delete", "protected"). If the target matches a protected path or collection, the action is **blocked**.
+
+### How it works
+
+1. Store a protection rule: `remember(text="NIEMALS ~/nexus-memory-test/ löschen - Testgelände", category="rule")`
+2. Before a destructive command, call: `guardrail_check(command="rm -rf ~/nexus-memory-test/")`
+3. If blocked, the agent must call `guardrail_override(command="...", reasoning="User explicitly authorized cleanup after backup")` to proceed with an audit trail
+
+### Pattern detection
+
+`rm -rf`, `rmdir`, `del /f`, `drop`, `truncate`, `kill -9`, `pkill`, `killall`, `recreate_collection`, `write_file` (overwrite), `pip uninstall`, `find -delete`, `git clean -fdx`, `dd of=`
+
+### Design principles
+
+- **Memory-driven, not hardcoded**: Protection rules live in Qdrant, not in a static config
+- **Fail-open**: If Qdrant is unreachable, guardrails degrade to ALLOW (never block agent work by accident)
+- **Override with audit**: Explicit reasoning required, stored as private session memory for full audit trail
 
 ## Webhook Subscriptions
 
