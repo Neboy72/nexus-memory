@@ -380,7 +380,7 @@ Three levels: `public` (all agents), `trusted` (approved agents), `private` (own
 
 **The only memory system that doesn't just store knowledge — it guards it.** Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`), the guardrail checks Qdrant for stored protection rules and blocks if the target matches a protected path or collection.
 
-- **Memory-driven**: Storing "NIEMALS ~/nexus-memory-test/ löschen" as a rule automatically registers it as protected
+- **Memory-driven**: Storing a protection rule like "Never delete ~/nexus-memory-test/" automatically registers it as protected
 - **Pattern detection**: rm, rmdir, del, drop, truncate, kill/pkill/killall, recreate_collection, write_file, pip uninstall, find -delete, git clean -fdx, dd
 - **Fail-open**: Qdrant outage degrades to ALLOW (never blocks agent work by accident)
 - **Override with audit trail**: Explicit reasoning required (min 10 chars), stored as private session memory
@@ -397,7 +397,7 @@ Live graph visualization with D3.js: interactive force-directed graph of your me
 
 **Active Guardrails** (v0.5.0): Memory-driven prevention of destructive actions. Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`, `find -delete`, `git clean -fdx`), the guardrail checks Qdrant for stored protection rules and blocks if the target matches a protected path or collection.
 
-- **Memory-driven, not hardcoded**: Storing a rule like "NIEMALS ~/nexus-memory-test/ löschen" in Nexus Memory automatically registers it as a protected resource
+- **Memory-driven, not hardcoded**: Storing a rule like "Never delete ~/nexus-memory-test/" in Nexus Memory automatically registers it as a protected resource
 - **Fail-open**: Qdrant outage degrades to ALLOW (guardrails never block agent work by accident)
 - **Override with audit trail**: Explicit reasoning required (min 10 chars), stored as private session memory for audit
 - **Pattern detection**: rm, rmdir, del, drop, truncate, kill/pkill/killall, recreate_collection, write_file, pip uninstall, find -delete, git clean, dd

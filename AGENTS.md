@@ -267,11 +267,11 @@ Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory 
 
 **New in v0.5.0.** Nexus Memory doesn't just store and retrieve — it actively prevents destructive actions.
 
-Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`), the guardrail checks Qdrant for stored protection rules (category=`rule` with protection keywords like "niemals", "never delete", "protected"). If the target matches a protected path or collection, the action is **blocked**.
+Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`), the guardrail checks Qdrant for stored protection rules (category=`rule` with protection keywords like "never delete", "protected", "do not remove"). If the target matches a protected path or collection, the action is **blocked**.
 
 ### How it works
 
-1. Store a protection rule: `remember(text="NIEMALS ~/nexus-memory-test/ löschen - Testgelände", category="rule")`
+1. Store a protection rule: `remember(text="Never delete ~/nexus-memory-test/ - sandbox test environment", category="rule")`
 2. Before a destructive command, call: `guardrail_check(command="rm -rf ~/nexus-memory-test/")`
 3. If blocked, the agent must call `guardrail_override(command="...", reasoning="User explicitly authorized cleanup after backup")` to proceed with an audit trail
 
