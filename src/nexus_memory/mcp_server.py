@@ -1336,6 +1336,70 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["backup_path"],
             },
         ),
+        types.Tool(
+            name="guardrail_check",
+            description=(
+                "Active Guardrails: Check if an action is safe before executing it. "
+                "Queries Nexus Memory for protection rules (category='rule' with "
+                "protection keywords like 'niemals', 'never delete', 'protected'). "
+                "Returns allow/block/override verdict. Use before destructive "
+                "operations (rm, drop, kill, overwrite, recreate)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The command string to check (e.g. 'rm -rf ~/nexus-memory-test/')",
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "description": "The tool being called (e.g. 'terminal', 'write_file')",
+                        "default": "",
+                    },
+                    "tool_input": {
+                        "type": "object",
+                        "description": "Full tool input dict for path-based checks",
+                        "default": {},
+                    },
+                },
+                "required": ["command"],
+            },
+        ),
+        types.Tool(
+            name="guardrail_override",
+            description=(
+                "Active Guardrails: Record a guardrail override with full audit trail. "
+                "Required when guardrail_check returns 'block' but the action is "
+                "explicitly authorized. The override is stored as a private session "
+                "memory entry for audit. Requires explicit reasoning (min 10 chars)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The command that was blocked",
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters.",
+                    },
+                    "matched_rules": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "The matched_rules array from the guardrail_check response",
+                        "default": [],
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent identifier for audit trail",
+                        "default": "unknown",
+                    },
+                },
+                "required": ["command", "reasoning"],
+            },
+        ),
     ]
 
 
@@ -1635,6 +1699,66 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                     "skipped": skipped,
                     "reembedded": reembed,
                     "message": f"Restored {restored} memories from {backup_path}",
+                }),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
+
+    elif name == "guardrail_check":
+        try:
+            from nexus_memory.guardrails import GuardrailEngine
+            command = arguments.get("command", "")
+            tool_name = arguments.get("tool_name", "")
+            tool_input = arguments.get("tool_input", {})
+
+            vector_dim = getattr(store, "_embedder", None)
+            vector_dim = vector_dim.dim if vector_dim else 384
+            engine = GuardrailEngine(store.client, COLLECTION_NAME, vector_dim=vector_dim)
+            result = engine.check_action(command, tool_name, tool_input)
+
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result.to_dict()),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
+
+    elif name == "guardrail_override":
+        try:
+            from nexus_memory.guardrails import GuardrailEngine
+            command = arguments.get("command", "")
+            reasoning = arguments.get("reasoning", "").strip()
+            matched_rules = arguments.get("matched_rules", [])
+            agent_id = arguments.get("agent_id", "unknown")
+
+            if not reasoning or len(reasoning) < 10:
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({"status": "error", "error": "Override requires explicit reasoning (min 10 chars, no whitespace-only). State WHY this action is safe despite the guardrail."}),
+                )]
+
+            vector_dim = getattr(store, "_embedder", None)
+            vector_dim = vector_dim.dim if vector_dim else 384
+            engine = GuardrailEngine(store.client, COLLECTION_NAME, vector_dim=vector_dim)
+            override_id = engine.record_override(
+                command=command,
+                matched_rules=matched_rules,
+                reasoning=reasoning,
+                agent_id=agent_id,
+            )
+
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "status": "override_recorded",
+                    "override_id": override_id,
+                    "message": "Override recorded with audit trail. Action may now proceed.",
                 }),
             )]
         except Exception as e:
