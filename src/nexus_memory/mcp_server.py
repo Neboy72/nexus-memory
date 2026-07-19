@@ -563,7 +563,13 @@ class MemoryStore:
         source_url: str = "",
         confidence: Optional[float] = None,
     ) -> dict:
-        """Store a memory with full v2.8.0 metadata support + auto TTL."""
+        """Store a memory with full v2.8.0 metadata support + auto TTL + auto supersession.
+
+        Auto-Supersession: If a similar canonical fact already exists (similarity > 0.90
+        and same category), the old fact is automatically deprecated and the new one
+        marked as canonical with a 'supersedes' reference. This prevents contradictions
+        without requiring the agent to manually call update().
+        """
         # Validate category against MemoryCategory
         valid_categories = [c.value for c in MemoryCategory]
         if category not in valid_categories:
@@ -572,6 +578,47 @@ class MemoryStore:
         entry_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
         vector = await self._embed(text)
+
+        # ── Auto-Supersession: check for existing similar canonical facts ──
+        superseded_ids: list[str] = []
+        if category in ("fact", "rule", "preference", "procedure"):
+            try:
+                existing = self.client.query_points(
+                    collection_name=COLLECTION_NAME,
+                    query=vector,
+                    query_filter=qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(
+                                key="category",
+                                match=qmodels.MatchValue(value=category),
+                            ),
+                            qmodels.FieldCondition(
+                                key="lifecycle_status",
+                                match=qmodels.MatchValue(value="canonical"),
+                            ),
+                        ],
+                    ),
+                    limit=3,
+                    score_threshold=0.90,
+                )
+                for point in existing.points:
+                    if float(point.score or 0.0) >= 0.90:
+                        old_id = str(point.id)
+                        # Deprecate the old fact
+                        self.client.set_payload(
+                            collection_name=COLLECTION_NAME,
+                            payload={"lifecycle_status": "deprecated",
+                                     "superseded_by": entry_id,
+                                     "superseded_at": created_at},
+                            points=[old_id],
+                        )
+                        superseded_ids.append(old_id)
+                        logging.info(
+                            f"Auto-supersession: deprecated {old_id[:8]} "
+                            f"(score={float(point.score):.3f}) for new {entry_id[:8]}"
+                        )
+            except Exception as sup_err:
+                logging.warning(f"Auto-supersession check failed (non-blocking): {sup_err}")
 
         # Auto-assign expiry policy based on category
         CATEGORY_EXPIRY = {
@@ -619,6 +666,8 @@ class MemoryStore:
             "expiry_policy": expiry_policy,
             "valid_until": valid_until,
         }
+        if superseded_ids:
+            payload["supersedes"] = superseded_ids
 
         self.client.upsert(
             collection_name=COLLECTION_NAME,
@@ -668,6 +717,7 @@ class MemoryStore:
             "id": entry_id,
             "access_level": access_level,
             "category": category,
+            "superseded": superseded_ids if superseded_ids else None,
         }
 
     async def recall(
