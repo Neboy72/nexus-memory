@@ -628,9 +628,10 @@ class TestEmbeddingProviderDetection:
         monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
 
         # The MCP server caches the env var at import time → also patch
-        # the module-level constant.
+        # the module-level constant in BOTH modules (mcp_server and embeddings).
         monkeypatch.setenv("VOYAGE_API_KEY", "vo-test-1234567890")
         monkeypatch.setattr(mcp, "VOYAGE_API_KEY", "vo-test-1234567890")
+        monkeypatch.setattr("nexus_memory.embeddings.VOYAGE_API_KEY", "vo-test-1234567890")
 
         ep = mcp.EmbeddingProvider()
         assert ep.name == "voyage-3-large"
