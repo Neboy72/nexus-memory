@@ -78,6 +78,14 @@ def isolated_env(monkeypatch):
     monkeypatch.setattr("nexus_memory.mcp_server.VOYAGE_API_KEY", "")
     monkeypatch.setattr("nexus_memory.mcp_server.OPENAI_API_KEY", "")
     monkeypatch.setattr("nexus_memory.mcp_server.GOOGLE_API_KEY", "")
+
+    # Also clear the constants in embeddings.py — it has its own
+    # import-time bindings that EmbeddingProvider._detect() reads
+    # directly (line 148: `if not VOYAGE_API_KEY`). Without this,
+    # the developer's real ~/.hermes/.env leaks into test assertions.
+    monkeypatch.setattr("nexus_memory.embeddings.VOYAGE_API_KEY", "")
+    monkeypatch.setattr("nexus_memory.embeddings.OPENAI_API_KEY", "")
+    monkeypatch.setattr("nexus_memory.embeddings.GOOGLE_API_KEY", "")
     return monkeypatch
 
 
