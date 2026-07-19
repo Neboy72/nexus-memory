@@ -36,7 +36,7 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
 
 | Path | Best for | Setup | Memory mode |
 |------|----------|-------|-------------|
-| **Native Plugin** | Hermes Agent, OpenClaw | `./scripts/install_hermes_plugin.sh` or `./scripts/install_openclaw_plugin.sh` | **Automatic**: Auto-Recall + Auto-Capture, no manual tool calls |
+| **Native Plugin** | Hermes Agent, OpenClaw, Claude Code | `./scripts/install_hermes_plugin.sh`, `./scripts/install_openclaw_plugin.sh`, or `./scripts/install_claude_plugin.sh` | **Automatic**: Auto-Recall + Auto-Capture + Guardrails, no manual tool calls |
 | **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | **Manual**: agent calls `nexus_recall`, `nexus_remember` explicitly |
 
 ---
@@ -476,7 +476,7 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Access Control** | **✅ public/trusted/private** | ✅ Permissions | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Active Guardrails** | **✅ Memory-driven** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| 🧠 **Native Plugins** | **✅ Hermes + OpenClaw** | ❌ | ✅ OpenClaw | ✅ OpenClaw | ✅ Hermes | ❌ |
+| 🧠 **Native Plugins** | **✅ Hermes + OpenClaw + Claude Code** | ❌ | ✅ OpenClaw | ✅ OpenClaw | ✅ Hermes | ❌ |
 | 🔌 **MCP Server** | **✅ Any MCP agent** | ❌ | ❌ | ❌ | ✅ | ❌ |
 | 🏠 **Self-hosted** | **✅ Your machine** | ❌ Blockchain | ❌ Cloud | ❌ Cloud | ❌ Cloud | ✅ Local |
 | 💰 **Cost** | **🆓 Free** | WAL token | Subscription | Subscription | API costs | Free |
@@ -485,7 +485,7 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 
 *\*Mem0 lists staleness as an "open problem" in their 2026 report but does not ship a solution.*
 
-**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, access control, and active guardrails: all in one package. It is also the only memory layer that actively prevents destructive actions by checking protection rules before execution — not just storing knowledge, but guarding it. Plus native plugins for both Hermes and OpenClaw, plus an MCP server for every other agent: one brain, two paths, all agents.**
+**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, access control, and active guardrails: all in one package. It is also the only memory layer that actively prevents destructive actions by checking protection rules before execution — not just storing knowledge, but guarding it. Plus native plugins for Hermes, OpenClaw, and Claude Code, plus an MCP server for every other agent: one brain, three paths, all agents.**
 
 ---
 

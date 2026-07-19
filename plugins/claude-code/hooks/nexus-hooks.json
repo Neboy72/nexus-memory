@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/auto_recall.py\"",
+            "timeout": 10,
+            "statusMessage": "Nexus: recalling memories..."
+          }
+        ]
+      }
+    ],
+    "PreToolExecution": [
+      {
+        "matcher": "Bash|Terminal|Write|Edit|Delete",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/guardrail_check.py\"",
+            "timeout": 5,
+            "statusMessage": "Nexus: checking guardrails..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/auto_capture.py\"",
+            "timeout": 15,
+            "statusMessage": "Nexus: capturing facts..."
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py\"",
+            "timeout": 10,
+            "statusMessage": "Nexus: loading session context..."
+          }
+        ]
+      }
+    ]
+  }
+}
