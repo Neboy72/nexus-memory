@@ -12,8 +12,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.4.3-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-389%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.5.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-445%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -305,6 +305,8 @@ Standard MCP stdio config:
 | `do_update` ⬆️ | Backup + pull + install + restart | `confirm` (req, must be `true`) |
 | `backup` 💾 | Manual backup of all memories to JSON | none |
 | `restore` 📦 | Restore memories from backup JSON | `backup_path` (req), `reembed` (optional) |
+| `guardrail_check` 🛡️ | Check if an action is safe before executing (queries protection rules) | `command` (req), `tool_name`, `tool_input` |
+| `guardrail_override` 🔓 | Record a guardrail override with audit trail (requires reasoning) | `command` (req), `reasoning` (req, min 10 chars), `matched_rules`, `agent_id` |
 
 ### Memory Categories (State-Prefixing)
 
@@ -383,6 +385,13 @@ Register HTTP endpoints to receive notifications when memories change. Three eve
 Live graph visualization with D3.js: interactive force-directed graph of your memory network. Filter by category, search, inspect node details, and see drift status at a glance.
 
 ### Guardrails 🛡️
+
+**Active Guardrails** (v0.5.0): Memory-driven prevention of destructive actions. Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`, `find -delete`, `git clean -fdx`), the guardrail checks Qdrant for stored protection rules and blocks if the target matches a protected path or collection.
+
+- **Memory-driven, not hardcoded**: Storing a rule like "NIEMALS ~/nexus-memory-test/ löschen" in Nexus Memory automatically registers it as a protected resource
+- **Fail-open**: Qdrant outage degrades to ALLOW (guardrails never block agent work by accident)
+- **Override with audit trail**: Explicit reasoning required (min 10 chars), stored as private session memory for audit
+- **Pattern detection**: rm, rmdir, del, drop, truncate, kill/pkill/killall, recreate_collection, write_file, pip uninstall, find -delete, git clean, dd
 
 Content-length warnings for entries >5,000 chars. PII detection hints for emails and phone numbers in non-private entries.
 
@@ -489,6 +498,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.5.0** | 2026-07-19 | Active Guardrails: memory-driven prevention of destructive actions (guardrail_check + guardrail_override MCP tools), pattern matching for rm/drop/kill/recreate/find-delete/git-clean, override with audit trail, 445 tests |
 | **v0.4.3** | 2026-06-19 | Confidence scores + brain pages in recall (trust, evidence_count, confidence_label, lifecycle_status) |
 | **v0.4.2** | 2026-06-19 | Auto TTL/expiry per memory category (FACT=365d, BELIEF=180d, SESSION=7d, TEMP=24h), expired memories filtered in recall |
 | **v0.4.1** | 2026-06-19 | Auto-backup (every 6h), update notifications, pre-update backup safety, backup + restore MCP tools |
@@ -518,7 +528,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 389 tests ✅
+pytest tests/ -v # 445 tests ✅
 ```
 
 ---
