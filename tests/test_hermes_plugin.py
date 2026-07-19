@@ -98,9 +98,10 @@ class TestProviderBasics:
     def test_tool_schemas(self, provider):
         """get_tool_schemas returns exactly 3 tools with the expected names."""
         schemas = provider.get_tool_schemas()
-        assert len(schemas) == 3
+        assert len(schemas) == 5  # recall, remember, forget, guardrail_check, guardrail_override
         names = {s["name"] for s in schemas}
-        assert names == {"nexus_recall", "nexus_remember", "nexus_forget"}
+        assert names == {"nexus_recall", "nexus_remember", "nexus_forget",
+                         "nexus_guardrail_check", "nexus_guardrail_override"}
 
     def test_config_schema(self, provider):
         """get_config_schema returns qdrant_url, voyage_api_key, collection_name."""

@@ -246,6 +246,8 @@ Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory 
 
 ## Available Tools (12)
 
+> **3 integration paths, all with guardrails:** Native Plugin (Hermes, OpenClaw, Claude Code) | MCP Server (any MCP agent)
+
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `remember` | Store a memory | `text` (req), `category` (req, default `fact`), `access_level`, `source`, `source_url`, `confidence` |

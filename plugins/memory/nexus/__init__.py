@@ -19,6 +19,8 @@ _COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
 RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5}}, "required": ["query"]}}
 REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "public"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}}, "required": ["text"]}}
 FORGET_SCHEMA = {"name": "nexus_forget", "description": "Delete a memory from Nexus Memory by ID.", "parameters": {"type": "object", "properties": {"memory_id": {"type": "string", "description": "The memory ID to delete."}}, "required": ["memory_id"]}}
+GUARDRAIL_CHECK_SCHEMA = {"name": "nexus_guardrail_check", "description": "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (rm, drop, kill, overwrite).", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command string to check (e.g. 'rm -rf ~/project/')"}, "tool_name": {"type": "string", "description": "The tool being called (e.g. 'terminal', 'write_file')", "default": ""}, "tool_input": {"type": "object", "description": "Full tool input dict for path-based checks", "default": {}}}, "required": ["command"]}}
+GUARDRAIL_OVERRIDE_SCHEMA = {"name": "nexus_guardrail_override", "description": "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command that was blocked"}, "reasoning": {"type": "string", "description": "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters."}, "matched_rules": {"type": "array", "items": {"type": "object"}, "description": "The matched_rules array from the guardrail_check response", "default": []}, "agent_id": {"type": "string", "description": "Agent identifier for audit trail", "default": "unknown"}}, "required": ["command", "reasoning"]}}
 
 
 class _Embedder:
@@ -291,8 +293,44 @@ class NexusMemoryProvider:
                             points_selector=qmodels.PointIdsList(points=[memory_id]))
         return {"status": "ok", "id": memory_id}
 
+    def _guardrail_check(self, command: str, tool_name: str = "",
+                         tool_input: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Check if an action is safe before executing it."""
+        if not command:
+            return {"verdict": "allow", "reason": "Empty command"}
+        try:
+            from nexus_memory.guardrails import GuardrailEngine
+            if not self._qdrant: raise RuntimeError("Provider not initialized")
+            vector_dim = self._embedder.dim if self._embedder else 384
+            engine = GuardrailEngine(self._qdrant, self._collection, vector_dim=vector_dim)
+            result = engine.check_action(command, tool_name, tool_input or {})
+            return result.to_dict()
+        except Exception as exc:
+            logger.warning("Guardrail check failed (fail-open): %s", exc)
+            return {"verdict": "allow", "reason": f"Guardrail check failed (fail-open): {exc}"}
+
+    def _guardrail_override(self, command: str, matched_rules: List[Dict[str, Any]],
+                            reasoning: str, agent_id: str = "unknown") -> Dict[str, Any]:
+        """Record a guardrail override with audit trail."""
+        try:
+            from nexus_memory.guardrails import GuardrailEngine
+            if not self._qdrant: raise RuntimeError("Provider not initialized")
+            vector_dim = self._embedder.dim if self._embedder else 384
+            engine = GuardrailEngine(self._qdrant, self._collection, vector_dim=vector_dim)
+            override_id = engine.record_override(
+                command=command,
+                matched_rules=matched_rules,
+                reasoning=reasoning,
+                agent_id=agent_id,
+            )
+            return {"status": "override_recorded", "override_id": override_id}
+        except Exception as exc:
+            logger.warning("Guardrail override failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [RECALL_SCHEMA, REMEMBER_SCHEMA, FORGET_SCHEMA]
+        return [RECALL_SCHEMA, REMEMBER_SCHEMA, FORGET_SCHEMA,
+                GUARDRAIL_CHECK_SCHEMA, GUARDRAIL_OVERRIDE_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> str:
         try:
@@ -304,6 +342,23 @@ class NexusMemoryProvider:
                                       source=args.get("source", ""))
             elif tool_name == "nexus_forget":
                 result = self._forget(args.get("memory_id", ""))
+            elif tool_name == "nexus_guardrail_check":
+                result = self._guardrail_check(
+                    args.get("command", ""),
+                    args.get("tool_name", ""),
+                    args.get("tool_input", {}),
+                )
+            elif tool_name == "nexus_guardrail_override":
+                reasoning = args.get("reasoning", "").strip()
+                if not reasoning or len(reasoning) < 10:
+                    result = {"status": "error", "error": "Override requires explicit reasoning (min 10 chars)."}
+                else:
+                    result = self._guardrail_override(
+                        args.get("command", ""),
+                        args.get("matched_rules", []),
+                        reasoning,
+                        args.get("agent_id", "unknown"),
+                    )
             else: return json.dumps({"error": f"Unknown tool: {tool_name}"})
             return json.dumps(result)
         except Exception as exc:

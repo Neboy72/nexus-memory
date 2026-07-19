@@ -9,8 +9,9 @@ import { buildMemoryRuntime, buildPromptSection } from "./runtime.ts"
 import { registerForgetTool } from "./tools/forget.ts"
 import { registerSearchTool } from "./tools/search.ts"
 import { registerStoreTool } from "./tools/store.ts"
+import { registerGuardrailCheckTool, registerGuardrailOverrideTool } from "./tools/guardrail_check.ts"
 
-const PLUGIN_VERSION = "0.1.0"
+const PLUGIN_VERSION = "0.5.0"
 
 export default {
   id: "nexus-memory",
@@ -78,6 +79,8 @@ export default {
     registerSearchTool(api, embedder, qdrantClient, cfg)
     registerStoreTool(api, embedder, qdrantClient, cfg)
     registerForgetTool(api, embedder, qdrantClient, cfg)
+    registerGuardrailCheckTool(api, qdrantClient, cfg)
+    registerGuardrailOverrideTool(api, qdrantClient, cfg, embedder)
 
     // Register hooks
     if (cfg.autoRecall) {

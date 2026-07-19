@@ -5,7 +5,9 @@
     "tools": [
       "nexus_search",
       "nexus_store",
-      "nexus_forget"
+      "nexus_forget",
+      "nexus_guardrail_check",
+      "nexus_guardrail_override"
     ]
   },
   "uiHints": {
