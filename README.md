@@ -12,8 +12,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.7.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-524%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.8.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-558%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -532,6 +532,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.8.0** | 2026-07-25 | Cost-Aware Routing: tier-based embedding provider selection (premium/standard/economy), category→tier mapping (fact→premium, session→economy), cost estimation, routing stats + explain tools, auto-enables when 2+ providers available, 558 tests |
 | **v0.7.0** | 2026-07-25 | Knowledge Graph Layer: entity extraction (device/service/person/location/protocol), 11 typed relationships (manages, runs_on, connected_to, etc.), multi-hop graph traversal via NetworkX, entities as Qdrant points, 524 tests |
 | **v0.6.0** | 2026-07-25 | Session→Memory Pipeline: native fact extraction in on_session_end (LLM + heuristic fallback), categorization (fact/rule/preference/belief), confidence scoring, non-blocking background thread, 476 tests |
 | **v0.5.1** | 2026-07-19 | Auto-Supersession: automatic deprecation of similar facts at similarity >0.90, superseded_by + supersedes tracking, non-blocking, 452 tests |
@@ -565,7 +566,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 524 tests ✅
+pytest tests/ -v # 558 tests ✅
 ```
 
 ---
