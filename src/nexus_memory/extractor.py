@@ -101,6 +101,21 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
     return config
 
 
+def _quick_health_check(base_url: str, timeout: float = 1.0) -> bool:
+    """TCP probe the LLM endpoint. Returns True if reachable within timeout."""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        import socket
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.close()
+        return True
+    except Exception:
+        return False
+
+
 def _llm_extract(
     messages: List[Dict[str, Any]],
     hermes_home: str,
@@ -109,6 +124,12 @@ def _llm_extract(
     config = _load_llm_config(hermes_home)
     if not config["model"]:
         logger.debug("SessionExtractor: no model configured, skipping LLM")
+        return []
+
+    # Quick health check — 1s TCP probe. If unreachable, skip to heuristic
+    # immediately instead of waiting 30s for the API timeout.
+    if not _quick_health_check(config["base_url"]):
+        logger.debug("SessionExtractor: LLM endpoint unreachable, using heuristic")
         return []
 
     # Build conversation text
@@ -147,6 +168,7 @@ def _llm_extract(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=500,
+            timeout=10,
         )
         if response.choices:
             text = response.choices[0].message.content or ""
