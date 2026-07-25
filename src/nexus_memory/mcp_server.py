@@ -1450,10 +1450,118 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["command", "reasoning"],
             },
         ),
+
+        # ── Knowledge Graph Layer (v0.7.0) ──────────────────────────────
+
+        types.Tool(
+            name="graph_traverse",
+            description=(
+                "Knowledge Graph: Multi-hop traversal from a starting fact. "
+                "Answers 'what is connected to X?' across the entity graph. "
+                "Returns a list of {fact_id, depth, relation, path} dicts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "fact_id": {
+                        "type": "string",
+                        "description": "The Qdrant point ID to start traversal from",
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Maximum hops (default 3)",
+                        "default": 3,
+                        "minimum": 1,
+                        "maximum": 10,
+                    },
+                    "relation": {
+                        "type": "string",
+                        "description": "Only follow edges with this relation (e.g. 'manages', 'runs_on')",
+                        "default": "",
+                    },
+                    "target_type": {
+                        "type": "string",
+                        "description": "Only return targets with this entity_type (e.g. 'device', 'service')",
+                        "default": "",
+                    },
+                },
+                "required": ["fact_id"],
+            },
+        ),
+
+        types.Tool(
+            name="find_entities",
+            description=(
+                "Knowledge Graph: Find all entity-typed memories in Qdrant. "
+                "Returns a list of {id, name, entity_type, content, attributes} dicts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Filter by entity type: device, service, person, location, organization, concept, software, protocol",
+                        "default": "",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 50)",
+                        "default": 50,
+                        "minimum": 1,
+                        "maximum": 200,
+                    },
+                },
+            },
+        ),
+
+        types.Tool(
+            name="get_subgraph",
+            description=(
+                "Knowledge Graph: Get a subgraph centered on a fact for visualization. "
+                "Returns {nodes, edges} where nodes have {id, depth} and edges have {source, target, relation}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "fact_id": {
+                        "type": "string",
+                        "description": "The Qdrant point ID to center the subgraph on",
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Maximum hops (default 2)",
+                        "default": 2,
+                        "minimum": 1,
+                        "maximum": 5,
+                    },
+                },
+                "required": ["fact_id"],
+            },
+        ),
+
+        types.Tool(
+            name="get_related",
+            description=(
+                "Knowledge Graph: Get directly related facts (1-hop, bidirectional). "
+                "Returns a list of {fact_id, relation, edge_id, direction} dicts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "fact_id": {
+                        "type": "string",
+                        "description": "The Qdrant point ID to find neighbors for",
+                    },
+                    "relation": {
+                        "type": "string",
+                        "description": "Only return edges with this relation (e.g. 'manages')",
+                        "default": "",
+                    },
+                },
+                "required": ["fact_id"],
+            },
+        ),
     ]
-
-
-@server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     store = get_store()
 
@@ -1816,6 +1924,72 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 type="text",
                 text=json.dumps({"status": "error", "error": str(e)}),
             )]
+
+    elif name == "graph_traverse":
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}", collection=COLLECTION_NAME)
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            results = gt.traverse(
+                arguments["fact_id"],
+                max_depth=arguments.get("max_depth", 3),
+                relation=arguments.get("relation") or None,
+                target_type=arguments.get("target_type") or None,
+            )
+            sg.store.close()
+            return [types.TextContent(type="text", text=json.dumps({"results": results}))]
+        except Exception as e:
+            return [types.TextContent(type="text", text=json.dumps({"status": "error", "error": str(e)}))]
+
+    elif name == "find_entities":
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}", collection=COLLECTION_NAME)
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            results = gt.find_entities(
+                entity_type=arguments.get("entity_type") or None,
+                limit=arguments.get("limit", 50),
+            )
+            sg.store.close()
+            return [types.TextContent(type="text", text=json.dumps({"entities": results}))]
+        except Exception as e:
+            return [types.TextContent(type="text", text=json.dumps({"status": "error", "error": str(e)}))]
+
+    elif name == "get_subgraph":
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}", collection=COLLECTION_NAME)
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            result = gt.get_subgraph(
+                arguments["fact_id"],
+                max_depth=arguments.get("max_depth", 2),
+            )
+            sg.store.close()
+            return [types.TextContent(type="text", text=json.dumps(result))]
+        except Exception as e:
+            return [types.TextContent(type="text", text=json.dumps({"status": "error", "error": str(e)}))]
+
+    elif name == "get_related":
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}", collection=COLLECTION_NAME)
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            results = gt.get_related(
+                arguments["fact_id"],
+                relation=arguments.get("relation") or None,
+            )
+            sg.store.close()
+            return [types.TextContent(type="text", text=json.dumps({"results": results}))]
+        except Exception as e:
+            return [types.TextContent(type="text", text=json.dumps({"status": "error", "error": str(e)}))]
 
     else:
         raise ValueError(f"Unknown tool: {name}")
