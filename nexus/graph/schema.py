@@ -29,6 +29,7 @@ class EdgeRelation(str, Enum):
     Core: v2.0.0
     Extended: v2.1.0 — added ``references`` (auto-discovered similarity).
     v2.2.0: unchanged.
+    v0.7.0: Knowledge Graph Layer — added typed entity relations.
     """
 
     SUPERSEDES = "supersedes"        # A replaces B (B is obsolete)
@@ -37,6 +38,19 @@ class EdgeRelation(str, Enum):
     ALTERNATIVE_TO = "alternative_to"  # A is a viable alternative to B
     DEPENDS_ON = "depends_on"        # A requires B (dependency)
     REFERENCES = "references"        # A is related / similar to B (auto-discovered)
+
+    # ── Knowledge Graph Layer (v0.7.0) — typed entity relations ──────────
+    INSTALLED_AT = "installed_at"          # device installed at location
+    CONNECTED_TO = "connected_to"          # device/service connected to service
+    MANAGES = "manages"                    # service manages device
+    RUNS_ON = "runs_on"                    # service runs on device
+    PART_OF = "part_of"                    # entity is part of another entity
+    OWNS = "owns"                           # person/org owns device/service
+    LOCATED_AT = "located_at"              # device located at location
+    DEPENDS_ON_SERVICE = "depends_on_service"  # device depends on service
+    USES = "uses"                          # entity uses protocol/service
+    PROVIDES = "provides"                  # service provides capability
+    CONTROLS = "controls"                  # service controls device
 
 
 class EdgeStatus(str, Enum):
