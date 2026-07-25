@@ -399,11 +399,23 @@ Live graph visualization with D3.js: interactive force-directed graph of your me
 
 - **Two-tier extraction**: LLM extraction (preferred, uses the configured model) with heuristic pattern-based fallback (always works, no external dependencies)
 - **Categorization**: fact, rule, preference, belief — with confidence scores (0.0-1.0)
-- **Non-blocking**: Runs in a background thread, never delays session teardown
+- **Inline execution**: Runs in MemoryManager's background executor (no race condition with shutdown)
 - **Auto-Supersession**: Extracted facts go through the existing similarity-based dedup
 - **Zero config**: Uses the existing model/provider config from Hermes, no extra setup
 
 Before v0.6.0, `on_session_end` stored raw conversation text as a single "session" memory. Now it extracts structured, durable facts.
+
+### Knowledge Graph Layer 🔗
+
+**Knowledge Graph Layer** (v0.7.0): Entity extraction and typed relationships alongside Qdrant vectors. Not just "what is similar" (vector search) but "how things connect" (graph traversal).
+
+- **Entity extraction**: Two-tier (LLM + heuristic) extraction of named entities from conversations
+- **Entity types**: device, service, person, location, organization, concept, software, protocol
+- **Typed relationships**: 11 new relation types (installed_at, connected_to, manages, runs_on, part_of, owns, located_at, depends_on_service, uses, provides, controls)
+- **Graph traversal**: Multi-hop BFS queries via NetworkX — "what connects to the Wallbox?"
+- **Entities as Qdrant points**: `category="entity"` with `entity_type`, `entity_name`, `entity_attributes` in payload
+- **Automatic**: Entities extracted alongside facts in `on_session_end`
+- **No new database**: Uses existing Qdrant + NetworkX. Neo4j can be added later at scale.
 
 ### Guardrails 🛡️
 
@@ -520,6 +532,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.7.0** | 2026-07-25 | Knowledge Graph Layer: entity extraction (device/service/person/location/protocol), 11 typed relationships (manages, runs_on, connected_to, etc.), multi-hop graph traversal via NetworkX, entities as Qdrant points, 524 tests |
 | **v0.6.0** | 2026-07-25 | Session→Memory Pipeline: native fact extraction in on_session_end (LLM + heuristic fallback), categorization (fact/rule/preference/belief), confidence scoring, non-blocking background thread, 476 tests |
 | **v0.5.1** | 2026-07-19 | Auto-Supersession: automatic deprecation of similar facts at similarity >0.90, superseded_by + supersedes tracking, non-blocking, 452 tests |
 | **v0.5.0** | 2026-07-19 | Active Guardrails: memory-driven prevention of destructive actions (guardrail_check + guardrail_override MCP tools), pattern matching for rm/drop/kill/recreate/find-delete/git-clean, override with audit trail, 445 tests |
@@ -552,7 +565,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 476 tests ✅
+pytest tests/ -v # 524 tests ✅
 ```
 
 ---
