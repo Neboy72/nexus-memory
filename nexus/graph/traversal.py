@@ -26,6 +26,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Any, Dict, List, Optional, Set
 
 from nexus.graph.graph import SkillGraph
@@ -88,10 +89,10 @@ class GraphTraversal:
         visited: Set[str] = {start_fact_id}
 
         # BFS with depth tracking
-        queue = [(start_fact_id, 0, [])]
+        queue: deque = deque([(start_fact_id, 0, [])])
 
         while queue:
-            current, depth, path = queue.pop(0)
+            current, depth, path = queue.popleft()
 
             if depth >= max_depth:
                 continue

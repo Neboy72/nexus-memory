@@ -261,7 +261,7 @@ def _llm_extract_entities(
         for e in data.get("entities", []):
             if not isinstance(e, dict):
                 continue
-            name = e.get("name", "").strip()
+            name = (e.get("name") or "").strip()
             if not name:
                 continue
             entities.append(Entity(
@@ -276,8 +276,8 @@ def _llm_extract_entities(
         for r in data.get("relationships", []):
             if not isinstance(r, dict):
                 continue
-            source = r.get("source", "").strip()
-            target = r.get("target", "").strip()
+            source = (r.get("source") or "").strip()
+            target = (r.get("target") or "").strip()
             if not source or not target:
                 continue
             # Only keep relationships between extracted entities
