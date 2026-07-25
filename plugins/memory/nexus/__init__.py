@@ -27,6 +27,8 @@ GRAPH_TRAVERSE_SCHEMA = {"name": "nexus_graph_traverse", "description": "Knowled
 FIND_ENTITIES_SCHEMA = {"name": "nexus_find_entities", "description": "Knowledge Graph: Find all entity-typed memories. Returns list of {id, name, entity_type, content, attributes}.", "parameters": {"type": "object", "properties": {"entity_type": {"type": "string", "description": "Filter by entity type: device, service, person, location, organization, concept, software, protocol", "default": ""}, "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50}}, "required": []}}
 GET_SUBGRAPH_SCHEMA = {"name": "nexus_get_subgraph", "description": "Knowledge Graph: Get a subgraph centered on a fact for visualization. Returns {nodes, edges}.", "parameters": {"type": "object", "properties": {"fact_id": {"type": "string", "description": "The Qdrant point ID to center the subgraph on"}, "max_depth": {"type": "integer", "description": "Maximum hops (default 2)", "default": 2}}, "required": ["fact_id"]}}
 GET_RELATED_SCHEMA = {"name": "nexus_get_related", "description": "Knowledge Graph: Get directly related facts (1-hop, bidirectional). Returns list of {fact_id, relation, direction}.", "parameters": {"type": "object", "properties": {"fact_id": {"type": "string", "description": "The Qdrant point ID to find neighbors for"}, "relation": {"type": "string", "description": "Only return edges with this relation (e.g. 'manages')", "default": ""}}, "required": ["fact_id"]}}
+COST_ROUTING_STATS_SCHEMA = {"name": "nexus_cost_routing_stats", "description": "Cost-Aware Routing: Get statistics about embedding provider routing.", "parameters": {"type": "object", "properties": {}, "required": []}}
+COST_ROUTING_EXPLAIN_SCHEMA = {"name": "nexus_cost_routing_explain", "description": "Cost-Aware Routing: Explain the routing decision for a memory category.", "parameters": {"type": "object", "properties": {"category": {"type": "string", "description": "Memory category: fact, rule, preference, belief, session, temp, entity, procedure"}}, "required": ["category"]}}
 
 
 class _Embedder:
@@ -413,11 +415,34 @@ class NexusMemoryProvider:
             logger.warning("Get related failed: %s", exc)
             return {"status": "error", "error": str(exc)}
 
+    def _cost_routing_stats(self) -> Dict[str, Any]:
+        """Get cost-aware routing statistics."""
+        try:
+            from nexus_memory.cost_router import CostAwareRouter
+            router = CostAwareRouter(hermes_home=self._hermes_home)
+            router.initialize()
+            return router.stats()
+        except Exception as exc:
+            logger.warning("Cost routing stats failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
+    def _cost_routing_explain(self, category: str) -> Dict[str, Any]:
+        """Explain the routing decision for a memory category."""
+        try:
+            from nexus_memory.cost_router import CostAwareRouter
+            router = CostAwareRouter(hermes_home=self._hermes_home)
+            router.initialize()
+            return {"explanation": router.explain(category)}
+        except Exception as exc:
+            logger.warning("Cost routing explain failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [RECALL_SCHEMA, REMEMBER_SCHEMA, FORGET_SCHEMA,
                 GUARDRAIL_CHECK_SCHEMA, GUARDRAIL_OVERRIDE_SCHEMA,
                 GRAPH_TRAVERSE_SCHEMA, FIND_ENTITIES_SCHEMA,
-                GET_SUBGRAPH_SCHEMA, GET_RELATED_SCHEMA]
+                GET_SUBGRAPH_SCHEMA, GET_RELATED_SCHEMA,
+                COST_ROUTING_STATS_SCHEMA, COST_ROUTING_EXPLAIN_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> str:
         try:
@@ -468,6 +493,10 @@ class NexusMemoryProvider:
                     args.get("fact_id", ""),
                     args.get("relation") or None,
                 )
+            elif tool_name == "nexus_cost_routing_stats":
+                result = self._cost_routing_stats()
+            elif tool_name == "nexus_cost_routing_explain":
+                result = self._cost_routing_explain(args.get("category", "fact"))
             else: return json.dumps({"error": f"Unknown tool: {tool_name}"})
             return json.dumps(result)
         except Exception as exc:
