@@ -388,19 +388,14 @@ class NexusMemoryProvider:
         Called by MemoryManager when a session ends (CLI exit, /reset, gateway
         session expiry). Uses the Session→Memory Pipeline (extractor.py) to
         identify durable facts, then stores them with proper categorization
-        and confidence. Non-blocking via background thread.
+        and confidence. Runs inline (MemoryManager already provides background
+        execution via its single-worker executor for /new and /reset paths).
         """
         if self._agent_context != "primary":
             return
         if not messages:
             return
-        # Run extraction in background to avoid blocking session teardown
-        threading.Thread(
-            target=self._extract_and_store,
-            args=(list(messages),),
-            name="nexus-session-extract",
-            daemon=True,
-        ).start()
+        self._extract_and_store(list(messages))
 
     def _extract_and_store(self, messages: List[Dict[str, Any]]) -> None:
         """Background extraction: LLM first, heuristic fallback, store in Qdrant."""
