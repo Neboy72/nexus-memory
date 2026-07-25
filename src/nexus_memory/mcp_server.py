@@ -1561,6 +1561,38 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["fact_id"],
             },
         ),
+
+        # ── Cost-Aware Routing (v0.8.0) ──────────────────────────────────
+
+        types.Tool(
+            name="cost_routing_stats",
+            description=(
+                "Cost-Aware Routing: Get statistics about embedding provider routing. "
+                "Shows available providers, routing decisions per provider, and tier configuration."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+
+        types.Tool(
+            name="cost_routing_explain",
+            description=(
+                "Cost-Aware Routing: Explain the routing decision for a memory category. "
+                "Returns a human-readable explanation of which provider will be used and why."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Memory category: fact, rule, preference, belief, session, temp, entity, procedure",
+                    },
+                },
+                "required": ["category"],
+            },
+        ),
     ]
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     store = get_store()
@@ -1988,6 +2020,26 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             )
             sg.store.close()
             return [types.TextContent(type="text", text=json.dumps({"results": results}))]
+        except Exception as e:
+            return [types.TextContent(type="text", text=json.dumps({"status": "error", "error": str(e)}))]
+
+    elif name == "cost_routing_stats":
+        try:
+            from nexus_memory.cost_router import CostAwareRouter
+            router = CostAwareRouter()
+            router.initialize()
+            return [types.TextContent(type="text", text=json.dumps(router.stats()))]
+        except Exception as e:
+            return [types.TextContent(type="text", text=json.dumps({"status": "error", "error": str(e)}))]
+
+    elif name == "cost_routing_explain":
+        try:
+            from nexus_memory.cost_router import CostAwareRouter
+            category = arguments.get("category", "fact")
+            router = CostAwareRouter()
+            router.initialize()
+            explanation = router.explain(category)
+            return [types.TextContent(type="text", text=json.dumps({"explanation": explanation}))]
         except Exception as e:
             return [types.TextContent(type="text", text=json.dumps({"status": "error", "error": str(e)}))]
 
