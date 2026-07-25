@@ -10,7 +10,12 @@ import { registerForgetTool } from "./tools/forget.ts"
 import { registerSearchTool } from "./tools/search.ts"
 import { registerStoreTool } from "./tools/store.ts"
 import { registerGuardrailCheckTool, registerGuardrailOverrideTool } from "./tools/guardrail_check.ts"
-import { graphTraverseTool, findEntitiesTool, getSubgraphTool, getRelatedTool } from "./tools/graph_traverse.ts"
+import {
+  registerGraphTraverseTool,
+  registerFindEntitiesTool,
+  registerGetSubgraphTool,
+  registerGetRelatedTool,
+} from "./tools/graph_traverse.ts"
 
 const PLUGIN_VERSION = "0.7.0"
 
@@ -84,10 +89,10 @@ export default {
     registerGuardrailOverrideTool(api, qdrantClient, cfg, embedder)
 
     // Register Knowledge Graph tools (v0.7.0)
-    api.registerTool(graphTraverseTool)
-    api.registerTool(findEntitiesTool)
-    api.registerTool(getSubgraphTool)
-    api.registerTool(getRelatedTool)
+    registerGraphTraverseTool(api, qdrantClient, cfg)
+    registerFindEntitiesTool(api, qdrantClient, cfg)
+    registerGetSubgraphTool(api, qdrantClient, cfg)
+    registerGetRelatedTool(api, qdrantClient, cfg)
 
     // Register hooks
     if (cfg.autoRecall) {
