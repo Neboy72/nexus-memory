@@ -449,20 +449,67 @@ class NexusMemoryProvider:
                 if conv_text:
                     result = extract_entities(conv_text, hermes_home=self._hermes_home)
                     if not result.is_empty():
+                        # Store entities
+                        entity_ids: Dict[str, str] = {}  # name → point_id
                         entity_stored = 0
                         for entity in result.entities:
                             if self._write_stop.is_set() or not self._qdrant:
                                 break
                             try:
-                                self._upsert_entity(entity)
+                                store_result = self._upsert_entity(entity)
                                 entity_stored += 1
+                                entity_ids[entity.name] = store_result["id"]
                             except Exception as exc:
                                 logger.warning("Entity store failed: %s", exc)
-                        if entity_stored:
+
+                        # Store relationships as graph edges
+                        rel_stored = 0
+                        for rel in result.relationships:
+                            if self._write_stop.is_set() or not self._qdrant:
+                                break
+                            source_id = entity_ids.get(rel.source)
+                            target_id = entity_ids.get(rel.target)
+                            if not source_id or not target_id:
+                                continue
+                            try:
+                                from nexus.graph.store import EdgeStore
+                                from nexus.graph.schema import EdgeRelation
+                                # Map relation string to EdgeRelation enum
+                                rel_map = {
+                                    "installed_at": EdgeRelation.INSTALLED_AT,
+                                    "connected_to": EdgeRelation.CONNECTED_TO,
+                                    "manages": EdgeRelation.MANAGES,
+                                    "runs_on": EdgeRelation.RUNS_ON,
+                                    "part_of": EdgeRelation.PART_OF,
+                                    "owns": EdgeRelation.OWNS,
+                                    "located_at": EdgeRelation.LOCATED_AT,
+                                    "depends_on_service": EdgeRelation.DEPENDS_ON_SERVICE,
+                                    "uses": EdgeRelation.USES,
+                                    "provides": EdgeRelation.PROVIDES,
+                                    "controls": EdgeRelation.CONTROLS,
+                                }
+                                edge_rel = rel_map.get(rel.relation, EdgeRelation.REFERENCES)
+                                store = EdgeStore(
+                                    qdrant_url=f"{_HOST}:{_PORT}",
+                                    collection=self._collection,
+                                )
+                                store.add_edge(
+                                    source_fact_id=source_id,
+                                    target_fact_id=target_id,
+                                    relation=edge_rel.value,
+                                    reason="session-end-entity-extraction",
+                                    metadata={"confidence": rel.confidence},
+                                )
+                                store.close()
+                                rel_stored += 1
+                            except Exception as exc:
+                                logger.warning("Relationship store failed: %s", exc)
+
+                        if entity_stored or rel_stored:
                             logger.info(
                                 "NexusMemoryProvider on_session_end: extracted+stored "
                                 "%d entities, %d relationships",
-                                entity_stored, len(result.relationships),
+                                entity_stored, rel_stored,
                             )
             except Exception as exc:
                 logger.warning("Entity extraction in on_session_end failed: %s", exc)
@@ -471,10 +518,16 @@ class NexusMemoryProvider:
             logger.warning("on_session_end extraction failed: %s", exc)
 
     def _upsert_entity(self, entity: Any) -> Dict[str, Any]:
-        """Store an entity as a Qdrant point with category='entity'."""
+        """Store an entity as a Qdrant point with category='entity'.
+
+        Uses uuid5 (deterministic) so re-extracting the same entity across
+        sessions updates the existing point instead of creating duplicates.
+        """
         if not self._embedder or not self._qdrant:
             raise RuntimeError("Provider not initialized")
-        eid = str(uuid.uuid4())
+        # Deterministic ID: same entity_type + name → same point ID
+        entity_key = f"{entity.entity_type}:{entity.name}"
+        eid = str(uuid.uuid5(uuid.NAMESPACE_DNS, entity_key))
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         text = f"{entity.entity_type}: {entity.name}"
         if entity.attributes:
