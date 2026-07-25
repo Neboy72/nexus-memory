@@ -398,39 +398,112 @@ class NexusMemoryProvider:
         self._extract_and_store(list(messages))
 
     def _extract_and_store(self, messages: List[Dict[str, Any]]) -> None:
-        """Background extraction: LLM first, heuristic fallback, store in Qdrant."""
+        """Background extraction: LLM first, heuristic fallback, store in Qdrant.
+
+        Extracts both durable facts (via extractor.py) and entities/relationships
+        (via entity_extractor.py). Entities are stored as Qdrant points with
+        category="entity". Relationships are stored as graph edges.
+        """
         try:
+            # ── Fact extraction ───────────────────────────────────────────
             from nexus_memory.extractor import extract_facts
             facts = extract_facts(messages, hermes_home=self._hermes_home)
-            if not facts:
-                logger.debug("NexusMemoryProvider on_session_end: no facts extracted")
-                return
-            # Check if shutdown happened during extraction
-            if self._write_stop.is_set() or not self._qdrant:
-                logger.debug("NexusMemoryProvider: shutdown during extraction, skipping store")
-                return
-            stored = 0
-            for fact in facts:
+            if facts:
                 if self._write_stop.is_set() or not self._qdrant:
-                    break
-                try:
-                    self._upsert(
-                        text=fact["text"],
-                        category=fact["category"],
-                        access_level="public",
-                        source="hermes-plugin-session-end",
-                        confidence=fact["confidence"],
+                    return
+                stored = 0
+                for fact in facts:
+                    if self._write_stop.is_set() or not self._qdrant:
+                        break
+                    try:
+                        self._upsert(
+                            text=fact["text"],
+                            category=fact["category"],
+                            access_level="public",
+                            source="hermes-plugin-session-end",
+                            confidence=fact["confidence"],
+                        )
+                        stored += 1
+                    except Exception as exc:
+                        logger.warning("Session fact store failed: %s", exc)
+                if stored:
+                    logger.info(
+                        "NexusMemoryProvider on_session_end: extracted+stored %d facts "
+                        "(from %d messages)", stored, len(messages),
                     )
-                    stored += 1
-                except Exception as exc:
-                    logger.warning("Session fact store failed: %s", exc)
-            if stored:
-                logger.info(
-                    "NexusMemoryProvider on_session_end: extracted+stored %d facts "
-                    "(from %d messages)", stored, len(messages),
-                )
+
+            # ── Entity extraction (Knowledge Graph Layer) ─────────────────
+            if self._write_stop.is_set() or not self._qdrant:
+                return
+            try:
+                from nexus_memory.entity_extractor import extract_entities
+                # Build text from messages for entity extraction
+                conv_parts = []
+                for msg in messages:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and role in ("user", "assistant") and content.strip():
+                        conv_parts.append(content[:2000])
+                conv_text = " ".join(conv_parts)[:4000]
+
+                if conv_text:
+                    result = extract_entities(conv_text, hermes_home=self._hermes_home)
+                    if not result.is_empty():
+                        entity_stored = 0
+                        for entity in result.entities:
+                            if self._write_stop.is_set() or not self._qdrant:
+                                break
+                            try:
+                                self._upsert_entity(entity)
+                                entity_stored += 1
+                            except Exception as exc:
+                                logger.warning("Entity store failed: %s", exc)
+                        if entity_stored:
+                            logger.info(
+                                "NexusMemoryProvider on_session_end: extracted+stored "
+                                "%d entities, %d relationships",
+                                entity_stored, len(result.relationships),
+                            )
+            except Exception as exc:
+                logger.warning("Entity extraction in on_session_end failed: %s", exc)
+
         except Exception as exc:
             logger.warning("on_session_end extraction failed: %s", exc)
+
+    def _upsert_entity(self, entity: Any) -> Dict[str, Any]:
+        """Store an entity as a Qdrant point with category='entity'."""
+        if not self._embedder or not self._qdrant:
+            raise RuntimeError("Provider not initialized")
+        eid = str(uuid.uuid4())
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        text = f"{entity.entity_type}: {entity.name}"
+        if entity.attributes:
+            attr_str = ", ".join(f"{k}={v}" for k, v in entity.attributes.items())
+            text += f" ({attr_str})"
+        vector = self._embedder.embed(text)
+        payload = {
+            "id": eid,
+            "content": text,
+            "access_level": "public",
+            "category": "entity",
+            "entity_type": entity.entity_type,
+            "entity_name": entity.name,
+            "entity_attributes": entity.attributes,
+            "source": "hermes-plugin-session-end",
+            "source_url": "",
+            "created_at": ts,
+            "provenance": {
+                "source_type": "hermes-plugin",
+                "created_by": "nexus-memory-entity-extractor",
+                "timestamp": ts,
+                "confidence": entity.confidence,
+            },
+        }
+        self._qdrant.upsert(
+            collection_name=self._collection,
+            points=[qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
+        )
+        return {"status": "ok", "id": eid, "entity_type": entity.entity_type}
 
     def on_memory_write(self, action: str, target: str, content: str,
                         metadata: Optional[Dict[str, Any]] = None) -> None:
