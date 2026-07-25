@@ -5,6 +5,20 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.8.0] — 2026-07-25
+
+### Added
+
+- **Cost-Aware Routing** — tier-based embedding provider selection based on memory category
+- **cost_router.py** — `CostAwareRouter` class with tier mapping, provider detection, routing decisions
+- **Tier system**: premium (Voyage/OpenAI for facts, rules, entities), standard (Google/Jina for preferences, beliefs, procedures), economy (Ollama/sentence-transformers for sessions, temp)
+- **Cost estimation**: per-provider cost per 1M tokens, `estimate_cost()` method
+- **Routing stats + explain**: MCP tools `cost_routing_stats` and `cost_routing_explain`, Hermes plugin tools `nexus_cost_routing_stats` and `nexus_cost_routing_explain`
+- **Auto-enable**: routing activates when 2+ providers are available, disabled with single provider
+- **Graceful fallback**: if recommended tier has no provider, falls up (economy→standard→premium)
+- **Config support**: `cost_aware_routing` flag in config.json, `NEXUS_EMBEDDING_PROVIDER` env var
+- 34 new tests (558 total)
+
 ## [v0.7.0] — 2026-07-25
 
 ### Added
