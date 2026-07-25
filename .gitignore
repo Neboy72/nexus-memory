@@ -7,3 +7,21 @@ build/
 plugins/openclaw/node_modules/
 plugins/openclaw/dist/
 plugins/openclaw/package-lock.json
+
+# macOS
+.DS_Store
+
+# Backups + dashboard (local runtime data)
+backups/
+dashboard/
+
+# Unused/experimental scripts
+src/nexus_memory/agent_detect.py
+src/nexus_memory/chat_wizard.py
+src/nexus_memory/setup.py
+
+# Old session files
+20260630_100157_88b366a4
+
+# Logo drafts
+docs/logo/

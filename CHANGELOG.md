@@ -5,6 +5,71 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.0] — 2026-07-25
+
+### Added
+
+- **Knowledge Graph Layer** — entity extraction and typed relationships alongside Qdrant vectors
+- **entity_extractor.py** — two-tier entity extraction (LLM preferred, heuristic pattern-based fallback)
+- **Entity types**: device, service, person, location, organization, concept, software, protocol
+- **11 new EdgeRelation types** for typed entity relationships: installed_at, connected_to, manages, runs_on, part_of, owns, located_at, depends_on_service, uses, provides, controls
+- **graph/traversal.py** — multi-hop BFS traversal via NetworkX (deque-based, O(1) per pop), configurable depth, relation filter, entity_type filter
+- **Graph queries**: traverse(), find_entities(), get_subgraph(), get_related(), stats()
+- **KG tools for all 4 plugins**: MCP Server (4 tools), Hermes Plugin (4 tools), OpenClaw (TypeScript), Claude Code (CLI script)
+- **Plugin integration**: on_session_end now extracts entities alongside facts, deterministic uuid5 entity IDs, relationships stored as graph edges via EdgeStore
+- **Quick health check**: 1s TCP probe before LLM call, 10s API timeout
+- 48 new tests (entity_extractor: 35, traversal: 13), 524 total
+
+### Fixed
+
+- None.strip() crash fix for LLM null values: `(e.get('name') or '').strip()`
+- Deterministic entity IDs: uuid5 instead of uuid4 (no duplicates across sessions)
+- Relationship storage: extracted relationships now stored as graph edges (was silently dropped)
+- BFS performance: deque.popleft() instead of list.pop(0) (O(n) → O(1))
+- OpenClaw KG tools adapted to SDK API by Miosha (TypeBox schemas, registerTool pattern)
+
+## [v0.6.0] — 2026-07-25
+
+### Added
+
+- **Session→Memory Pipeline** — native fact extraction in on_session_end (no more raw text dumps)
+- **extractor.py** — two-tier fact extraction: LLM (preferred, uses configured model) with heuristic pattern-based fallback (always works, no external dependencies)
+- **Categorization**: fact, rule, preference, belief with confidence scores (0.0-1.0)
+- **Inline execution**: runs in MemoryManager's background executor (no race condition with shutdown)
+- **Race condition guard**: checks _write_stop before each Qdrant write
+- **Stateless recovery**: each on_session_end probes LLM fresh, auto-recovers when endpoint comes back
+- 24 new tests, 476 total
+
+### Fixed
+
+- JSON code block parsing: case-insensitive `json|JSON` tag matching
+- Empty response.choices guard: no IndexError on empty API responses
+- Correction patterns: fix `ne\d+` typo → `nee?` (German colloquial "nee")
+- Fact patterns: remove overly broad `ist|is`, add word boundaries
+- Remove password/token pattern (security: never extract secrets)
+
+## [v0.5.1] — 2026-07-19
+
+### Added
+
+- **Auto-Supersession** — automatic deprecation of similar facts at similarity > 0.90
+- `superseded_by` + `supersedes` tracking in payload
+- Non-blocking: if check fails, fact is still stored
+- Only for fact/rule/preference/procedure (not session/belief/temp)
+- 452 tests
+
+## [v0.5.0] — 2026-07-19
+
+### Added
+
+- **Active Guardrails** — memory-driven prevention of destructive actions
+- guardrail_check + guardrail_override MCP tools
+- Pattern matching for rm/drop/kill/recreate/find-delete/git-clean/dd
+- Override with audit trail (min 10 chars reasoning, stored as private session memory)
+- Fail-open: Qdrant outage degrades to ALLOW (never blocks agent work by accident)
+- All 4 integration paths (MCP Server, Hermes Plugin, OpenClaw Plugin, Claude Code Plugin)
+- 445 tests
+
 ## [v0.4.0] — 2026-06-19
 
 ### Added
