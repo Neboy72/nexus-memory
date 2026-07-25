@@ -212,14 +212,14 @@ _PREFERENCE_PATTERNS = [
     r"(?:bitte|please)\s+(?:immer|nie|nicht)\s+",   # "bitte immer" / "please don't"
 ]
 _FACT_PATTERNS = [
-    r"(?:ist|is|lauft|läuft|running on|IP|URL)\s+",   # "ist" / "running on" / "IP"
-    r"(?:version|v\d+\.\d+)",                        # "version 0.5.1"
-    r"(?:passwort|password|token|key)\s+",           # "passwort" / "token" (mask!)
+    r"\b(?:lauft|läuft|running on)\s+",               # "läuft" / "running on"
+    r"\b(?:version|v\d+\.\d+)\s*",                     # "version 0.5.1"
+    r"\b(?:IP|URL|port)\s*[=:]\s*\S+",                 # "IP: 192.168.1.1" / "URL = ..."
 ]
 
 # Corrections: user corrects agent → rule
 _CORRECTION_PATTERNS = [
-    r"^(?:nein|nö|falsch|wrong|nope|ne\d+)\s*[,.!]",   # "nein, das ist..."
+    r"^(?:nein|nee?|nö|falsch|wrong|nope)\s*[,.!]",  # "nein" / "nee" / "nö" / "wrong"
     r"^(?:das stimmt nicht|that.?s wrong|incorrect)\s*[,.!]",
     r"(?:hab ich dir schon gesagt|told you before|schon gesagt)\s*",
 ]
