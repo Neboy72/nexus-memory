@@ -382,6 +382,56 @@ class NexusMemoryProvider:
                         "collection_name": values.get("collection_name", _COLLECTION)}, f, indent=2)
         logger.info("Nexus config saved to %s/nexus/config.json", hermes_home)
 
+    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+        """Extract and persist durable facts at session end.
+
+        Called by MemoryManager when a session ends (CLI exit, /reset, gateway
+        session expiry). Uses the Session→Memory Pipeline (extractor.py) to
+        identify durable facts, then stores them with proper categorization
+        and confidence. Runs inline (MemoryManager already provides background
+        execution via its single-worker executor for /new and /reset paths).
+        """
+        if self._agent_context != "primary":
+            return
+        if not messages:
+            return
+        self._extract_and_store(list(messages))
+
+    def _extract_and_store(self, messages: List[Dict[str, Any]]) -> None:
+        """Background extraction: LLM first, heuristic fallback, store in Qdrant."""
+        try:
+            from nexus_memory.extractor import extract_facts
+            facts = extract_facts(messages, hermes_home=self._hermes_home)
+            if not facts:
+                logger.debug("NexusMemoryProvider on_session_end: no facts extracted")
+                return
+            # Check if shutdown happened during extraction
+            if self._write_stop.is_set() or not self._qdrant:
+                logger.debug("NexusMemoryProvider: shutdown during extraction, skipping store")
+                return
+            stored = 0
+            for fact in facts:
+                if self._write_stop.is_set() or not self._qdrant:
+                    break
+                try:
+                    self._upsert(
+                        text=fact["text"],
+                        category=fact["category"],
+                        access_level="public",
+                        source="hermes-plugin-session-end",
+                        confidence=fact["confidence"],
+                    )
+                    stored += 1
+                except Exception as exc:
+                    logger.warning("Session fact store failed: %s", exc)
+            if stored:
+                logger.info(
+                    "NexusMemoryProvider on_session_end: extracted+stored %d facts "
+                    "(from %d messages)", stored, len(messages),
+                )
+        except Exception as exc:
+            logger.warning("on_session_end extraction failed: %s", exc)
+
     def on_memory_write(self, action: str, target: str, content: str,
                         metadata: Optional[Dict[str, Any]] = None) -> None:
         if action in ("add", "replace") and content:

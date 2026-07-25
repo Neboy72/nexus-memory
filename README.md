@@ -393,6 +393,18 @@ Register HTTP endpoints to receive notifications when memories change. Three eve
 
 Live graph visualization with D3.js: interactive force-directed graph of your memory network. Filter by category, search, inspect node details, and see drift status at a glance.
 
+### Session→Memory Pipeline 🧠
+
+**Session→Memory Pipeline** (v0.6.0): Native fact extraction at session end. When a session ends (CLI exit, /reset, gateway session expiry), the plugin automatically extracts 1-5 durable facts from the conversation and stores them with proper categorization.
+
+- **Two-tier extraction**: LLM extraction (preferred, uses the configured model) with heuristic pattern-based fallback (always works, no external dependencies)
+- **Categorization**: fact, rule, preference, belief — with confidence scores (0.0-1.0)
+- **Non-blocking**: Runs in a background thread, never delays session teardown
+- **Auto-Supersession**: Extracted facts go through the existing similarity-based dedup
+- **Zero config**: Uses the existing model/provider config from Hermes, no extra setup
+
+Before v0.6.0, `on_session_end` stored raw conversation text as a single "session" memory. Now it extracts structured, durable facts.
+
 ### Guardrails 🛡️
 
 **Active Guardrails** (v0.5.0): Memory-driven prevention of destructive actions. Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`, `find -delete`, `git clean -fdx`), the guardrail checks Qdrant for stored protection rules and blocks if the target matches a protected path or collection.
@@ -508,6 +520,8 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.6.0** | 2026-07-25 | Session→Memory Pipeline: native fact extraction in on_session_end (LLM + heuristic fallback), categorization (fact/rule/preference/belief), confidence scoring, non-blocking background thread, 476 tests |
+| **v0.5.1** | 2026-07-19 | Auto-Supersession: automatic deprecation of similar facts at similarity >0.90, superseded_by + supersedes tracking, non-blocking, 452 tests |
 | **v0.5.0** | 2026-07-19 | Active Guardrails: memory-driven prevention of destructive actions (guardrail_check + guardrail_override MCP tools), pattern matching for rm/drop/kill/recreate/find-delete/git-clean, override with audit trail, 445 tests |
 | **v0.4.3** | 2026-06-19 | Confidence scores + brain pages in recall (trust, evidence_count, confidence_label, lifecycle_status) |
 | **v0.4.2** | 2026-06-19 | Auto TTL/expiry per memory category (FACT=365d, BELIEF=180d, SESSION=7d, TEMP=24h), expired memories filtered in recall |
@@ -538,7 +552,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 445 tests ✅
+pytest tests/ -v # 476 tests ✅
 ```
 
 ---
