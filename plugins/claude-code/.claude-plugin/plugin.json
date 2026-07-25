@@ -1,6 +1,6 @@
 {
   "name": "nexus-memory",
-  "version": "0.5.0",
+  "version": "0.7.0",
   "description": "Persistent memory for Claude Code via Qdrant. Auto-Recall injects relevant memories before each prompt. Auto-Capture stores facts after each turn. Self-hosted, private, universal.",
   "author": {
     "name": "Neboy72",
