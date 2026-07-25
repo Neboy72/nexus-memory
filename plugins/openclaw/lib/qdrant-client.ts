@@ -225,6 +225,116 @@ export class QdrantClient {
   }
 
   /**
+   * Scroll a single point by ID — returns the point with payload, or null.
+   * Uses POST /collections/{collection}/points/scroll with positive IDs only.
+   */
+  async scrollPoint(id: string): Promise<{ id: string; payload?: Record<string, unknown> } | null> {
+    try {
+      const resp = await fetch(
+        `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filter: { must: [{ key: "id", match: { value: id } }] },
+            limit: 1,
+            with_payload: true,
+            with_vector: false,
+          }),
+        },
+      )
+      if (!resp.ok) return null
+      const data = await resp.json() as { result?: { points?: Array<{ id: string | number; payload?: Record<string, unknown> }> } }
+      const points = data.result?.points ?? []
+      if (points.length === 0) return null
+      return { id: String(points[0].id), payload: points[0].payload }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Scroll points with a Qdrant filter — returns points with payload.
+   */
+  async scrollFiltered(
+    filter: Record<string, unknown>,
+    limit: number,
+  ): Promise<Array<{ id: string; payload?: Record<string, unknown> }>> {
+    try {
+      const resp = await fetch(
+        `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filter,
+            limit,
+            with_payload: true,
+            with_vector: false,
+          }),
+        },
+      )
+      if (!resp.ok) return []
+      const data = await resp.json() as { result?: { points?: Array<{ id: string | number; payload?: Record<string, unknown> }> } }
+      return (data.result?.points ?? []).map((p) => ({ id: String(p.id), payload: p.payload }))
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * Find incoming edges — points where target_fact_id == factId in their edges payload.
+   * Returns array of { source_id, relation, edge_id }.
+   */
+  async findIncomingEdges(
+    factId: string,
+    relation?: string,
+  ): Promise<Array<{ source_id: string; relation: string; edge_id: string }>> {
+    try {
+      // Search for points that have an edge with target_fact_id == factId
+      // Qdrant doesn't support nested object filtering well, so we scroll entity-typed
+      // points and check their edges array in-memory
+      const resp = await fetch(
+        `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filter: { must: [{ key: "category", match: { value: "entity" } }] },
+            limit: 250,
+            with_payload: true,
+            with_vector: false,
+          }),
+        },
+      )
+      if (!resp.ok) return []
+      const data = await resp.json() as { result?: { points?: Array<{ id: string | number; payload?: Record<string, unknown> }> } }
+      const points = data.result?.points ?? []
+      const incoming: Array<{ source_id: string; relation: string; edge_id: string }> = []
+
+      for (const pt of points) {
+        const edges = (pt.payload?.edges ?? []) as Array<Record<string, unknown>>
+        for (const edge of edges) {
+          if (edge.target_fact_id === factId) {
+            const edgeStatus = edge.status as string
+            if (edgeStatus && edgeStatus !== "active") continue
+            const edgeRelation = edge.relation as string
+            if (relation && edgeRelation !== relation) continue
+            incoming.push({
+              source_id: String(pt.id),
+              relation: edgeRelation,
+              edge_id: String(edge.edge_id ?? ""),
+            })
+          }
+        }
+      }
+      return incoming
+    } catch {
+      return []
+    }
+  }
+
+  /**
    * Search by query text (convenience — embeds then searches).
    * Used by forget-by-query: searches and returns the first result.
    */
