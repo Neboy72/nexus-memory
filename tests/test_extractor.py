@@ -146,21 +146,24 @@ class TestLLMExtraction:
 
     def test_llm_parses_json_response(self):
         """Verify that the JSON parsing logic handles markdown code blocks."""
-        from nexus_memory.extractor import re as _re_module
         import re as stdlib_re
 
-        # Simulate a typical LLM response with code blocks
-        fake_response = """```json
-{"facts": [{"text": "Server runs on port 8123", "category": "fact", "confidence": 0.9}]}
-```"""
+        # Simulate LLM responses with code blocks (lowercase and uppercase)
+        for tag in ["json", "JSON", ""]:
+            if tag:
+                fake_response = f"```{tag}\n" + '{"facts": [{"text": "Test", "category": "fact", "confidence": 0.9}]}\n```'
+            else:
+                fake_response = '{"facts": [{"text": "Test", "category": "fact", "confidence": 0.9}]}'
 
-        # Extract JSON from code block
-        text = fake_response.strip()
-        match = stdlib_re.search(r"```(?:json)?\s*(.*?)```", text, stdlib_re.DOTALL)
-        assert match is not None
-        parsed = json.loads(match.group(1).strip())
-        assert len(parsed["facts"]) == 1
-        assert parsed["facts"][0]["category"] == "fact"
+            text = fake_response.strip()
+            if "```" in text:
+                match = stdlib_re.search(r"```(?:json|JSON)?\s*(.*?)```", text, stdlib_re.DOTALL)
+                assert match is not None, f"Failed to extract from tag={tag!r}"
+                parsed = json.loads(match.group(1).strip())
+            else:
+                parsed = json.loads(text)
+            assert len(parsed["facts"]) == 1
+            assert parsed["facts"][0]["category"] == "fact"
 
     def test_llm_parses_plain_json(self):
         """Verify parsing of plain JSON without code blocks."""
