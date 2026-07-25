@@ -23,6 +23,12 @@ GUARDRAIL_CHECK_SCHEMA = {"name": "nexus_guardrail_check", "description": "Activ
 GUARDRAIL_OVERRIDE_SCHEMA = {"name": "nexus_guardrail_override", "description": "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command that was blocked"}, "reasoning": {"type": "string", "description": "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters."}, "matched_rules": {"type": "array", "items": {"type": "object"}, "description": "The matched_rules array from the guardrail_check response", "default": []}, "agent_id": {"type": "string", "description": "Agent identifier for audit trail", "default": "unknown"}}, "required": ["command", "reasoning"]}}
 
 
+GRAPH_TRAVERSE_SCHEMA = {"name": "nexus_graph_traverse", "description": "Knowledge Graph: Multi-hop traversal from a starting fact. Answers 'what is connected to X?' across the entity graph.", "parameters": {"type": "object", "properties": {"fact_id": {"type": "string", "description": "The Qdrant point ID to start traversal from"}, "max_depth": {"type": "integer", "description": "Maximum hops (default 3)", "default": 3}, "relation": {"type": "string", "description": "Only follow edges with this relation (e.g. 'manages', 'runs_on')", "default": ""}, "target_type": {"type": "string", "description": "Only return targets with this entity_type (e.g. 'device', 'service')", "default": ""}}, "required": ["fact_id"]}}
+FIND_ENTITIES_SCHEMA = {"name": "nexus_find_entities", "description": "Knowledge Graph: Find all entity-typed memories. Returns list of {id, name, entity_type, content, attributes}.", "parameters": {"type": "object", "properties": {"entity_type": {"type": "string", "description": "Filter by entity type: device, service, person, location, organization, concept, software, protocol", "default": ""}, "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50}}, "required": []}}
+GET_SUBGRAPH_SCHEMA = {"name": "nexus_get_subgraph", "description": "Knowledge Graph: Get a subgraph centered on a fact for visualization. Returns {nodes, edges}.", "parameters": {"type": "object", "properties": {"fact_id": {"type": "string", "description": "The Qdrant point ID to center the subgraph on"}, "max_depth": {"type": "integer", "description": "Maximum hops (default 2)", "default": 2}}, "required": ["fact_id"]}}
+GET_RELATED_SCHEMA = {"name": "nexus_get_related", "description": "Knowledge Graph: Get directly related facts (1-hop, bidirectional). Returns list of {fact_id, relation, direction}.", "parameters": {"type": "object", "properties": {"fact_id": {"type": "string", "description": "The Qdrant point ID to find neighbors for"}, "relation": {"type": "string", "description": "Only return edges with this relation (e.g. 'manages')", "default": ""}}, "required": ["fact_id"]}}
+
+
 class _Embedder:
     """Auto-detect embedding provider — reuses the shared EmbeddingProvider.
 
@@ -328,9 +334,90 @@ class NexusMemoryProvider:
             logger.warning("Guardrail override failed: %s", exc)
             return {"status": "error", "error": str(exc)}
 
+    def _graph_traverse(self, fact_id: str, max_depth: int = 3,
+                        relation: Optional[str] = None,
+                        target_type: Optional[str] = None) -> Dict[str, Any]:
+        """Multi-hop graph traversal from a starting fact."""
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            if not self._qdrant: raise RuntimeError("Provider not initialized")
+            sg = SkillGraph(
+                qdrant_url=f"http://{_HOST}:{_PORT}",
+                collection=self._collection,
+            )
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            results = gt.traverse(fact_id, max_depth=max_depth, relation=relation, target_type=target_type)
+            sg.store.close()
+            return {"results": results}
+        except Exception as exc:
+            logger.warning("Graph traverse failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
+    def _find_entities(self, entity_type: Optional[str] = None,
+                       limit: int = 50) -> Dict[str, Any]:
+        """Find all entity-typed memories in Qdrant."""
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            if not self._qdrant: raise RuntimeError("Provider not initialized")
+            sg = SkillGraph(
+                qdrant_url=f"http://{_HOST}:{_PORT}",
+                collection=self._collection,
+            )
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            results = gt.find_entities(entity_type=entity_type, limit=limit)
+            sg.store.close()
+            return {"entities": results}
+        except Exception as exc:
+            logger.warning("Find entities failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
+    def _get_subgraph(self, fact_id: str, max_depth: int = 2) -> Dict[str, Any]:
+        """Get a subgraph centered on a fact."""
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            if not self._qdrant: raise RuntimeError("Provider not initialized")
+            sg = SkillGraph(
+                qdrant_url=f"http://{_HOST}:{_PORT}",
+                collection=self._collection,
+            )
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            result = gt.get_subgraph(fact_id, max_depth=max_depth)
+            sg.store.close()
+            return result
+        except Exception as exc:
+            logger.warning("Get subgraph failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
+    def _get_related(self, fact_id: str, relation: Optional[str] = None) -> Dict[str, Any]:
+        """Get directly related facts (1-hop)."""
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            if not self._qdrant: raise RuntimeError("Provider not initialized")
+            sg = SkillGraph(
+                qdrant_url=f"http://{_HOST}:{_PORT}",
+                collection=self._collection,
+            )
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            results = gt.get_related(fact_id, relation=relation)
+            sg.store.close()
+            return {"results": results}
+        except Exception as exc:
+            logger.warning("Get related failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [RECALL_SCHEMA, REMEMBER_SCHEMA, FORGET_SCHEMA,
-                GUARDRAIL_CHECK_SCHEMA, GUARDRAIL_OVERRIDE_SCHEMA]
+                GUARDRAIL_CHECK_SCHEMA, GUARDRAIL_OVERRIDE_SCHEMA,
+                GRAPH_TRAVERSE_SCHEMA, FIND_ENTITIES_SCHEMA,
+                GET_SUBGRAPH_SCHEMA, GET_RELATED_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> str:
         try:
@@ -359,6 +446,28 @@ class NexusMemoryProvider:
                         reasoning,
                         args.get("agent_id", "unknown"),
                     )
+            elif tool_name == "nexus_graph_traverse":
+                result = self._graph_traverse(
+                    args.get("fact_id", ""),
+                    args.get("max_depth", 3),
+                    args.get("relation") or None,
+                    args.get("target_type") or None,
+                )
+            elif tool_name == "nexus_find_entities":
+                result = self._find_entities(
+                    args.get("entity_type") or None,
+                    args.get("limit", 50),
+                )
+            elif tool_name == "nexus_get_subgraph":
+                result = self._get_subgraph(
+                    args.get("fact_id", ""),
+                    args.get("max_depth", 2),
+                )
+            elif tool_name == "nexus_get_related":
+                result = self._get_related(
+                    args.get("fact_id", ""),
+                    args.get("relation") or None,
+                )
             else: return json.dumps({"error": f"Unknown tool: {tool_name}"})
             return json.dumps(result)
         except Exception as exc:

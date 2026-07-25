@@ -10,8 +10,9 @@ import { registerForgetTool } from "./tools/forget.ts"
 import { registerSearchTool } from "./tools/search.ts"
 import { registerStoreTool } from "./tools/store.ts"
 import { registerGuardrailCheckTool, registerGuardrailOverrideTool } from "./tools/guardrail_check.ts"
+import { graphTraverseTool, findEntitiesTool, getSubgraphTool, getRelatedTool } from "./tools/graph_traverse.ts"
 
-const PLUGIN_VERSION = "0.5.0"
+const PLUGIN_VERSION = "0.7.0"
 
 export default {
   id: "nexus-memory",
@@ -81,6 +82,12 @@ export default {
     registerForgetTool(api, embedder, qdrantClient, cfg)
     registerGuardrailCheckTool(api, qdrantClient, cfg)
     registerGuardrailOverrideTool(api, qdrantClient, cfg, embedder)
+
+    // Register Knowledge Graph tools (v0.7.0)
+    api.registerTool(graphTraverseTool)
+    api.registerTool(findEntitiesTool)
+    api.registerTool(getSubgraphTool)
+    api.registerTool(getRelatedTool)
 
     // Register hooks
     if (cfg.autoRecall) {
