@@ -96,7 +96,7 @@ class TestProviderBasics:
         assert provider.is_available() is True
 
     def test_tool_schemas(self, provider):
-        """get_tool_schemas returns exactly 3 tools with the expected names."""
+        """get_tool_schemas returns all expected tools."""
         schemas = provider.get_tool_schemas()
         assert len(schemas) == 12  # recall, remember, forget, guardrail_check, guardrail_override + 4 KG + 2 cost routing + 1 SICA
         names = {s["name"] for s in schemas}
