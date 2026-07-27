@@ -96,7 +96,7 @@ async function graphBoost(
         const edgeStatus = edge.status as string
         if (edgeStatus && edgeStatus !== "active") continue
 
-        const targetId = edge.target_fact_id as string
+        const targetId = String(edge.target_fact_id ?? "")
         if (!targetId || seenIds.has(targetId)) continue
         seenIds.add(targetId)
 
@@ -170,6 +170,7 @@ export function buildRecallHandler(
           score: 0,
           category: "graph",
           source: "graph-boost",
+          access_level: "public",
           created_at: "",
         } as SearchResult)
       }
