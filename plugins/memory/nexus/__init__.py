@@ -521,7 +521,9 @@ class NexusMemoryProvider:
         try:
             from nexus.sica import run_sica, _get_config
             if not self._qdrant: raise RuntimeError("Provider not initialized")
-            result = run_sica(client=self._qdrant, collection=self._collection, auto_patch=auto_patch)
+            # Pass our embedder to avoid dimension mismatch in session storage
+            result = run_sica(client=self._qdrant, collection=self._collection,
+                            auto_patch=auto_patch, embedder=self._embedder)
             cfg = _get_config()
             return result.to_dict(max_suggestions=cfg["max_suggestions"])
         except Exception as exc:
