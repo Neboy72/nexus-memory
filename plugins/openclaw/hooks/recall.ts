@@ -62,6 +62,60 @@ function stripInboundMetadata(text: string): string {
   return cleaned
 }
 
+/**
+ * Graph-Boost: Fetch 1-hop graph neighbors for the top vector search results.
+ *
+ * For each of the top `maxBoost` results, reads the point's payload edges
+ * and fetches the connected facts' content. Returns formatted strings
+ * prefixed with [graph:<relation>] so the agent can distinguish graph-
+ * boosted results from pure vector hits.
+ *
+ * Failures are logged and silently skipped — vector results alone are
+ * always returned without the graph boost.
+ */
+async function graphBoost(
+  qdrantClient: QdrantClient,
+  topResults: SearchResult[],
+  maxBoost: number = 3,
+): Promise<string[]> {
+  const boosted: string[] = []
+  const seenIds = new Set<string>()
+
+  try {
+    for (const r of topResults.slice(0, maxBoost)) {
+      const pid = r.id
+      if (!pid || seenIds.has(pid)) continue
+      seenIds.add(pid)
+
+      const point = await qdrantClient.scrollPoint(pid)
+      if (!point) continue
+
+      const edges = (point.payload?.edges ?? []) as Array<Record<string, unknown>>
+      for (const edge of edges) {
+        const edgeStatus = edge.status as string
+        if (edgeStatus && edgeStatus !== "active") continue
+
+        const targetId = edge.target_fact_id as string
+        if (!targetId || seenIds.has(targetId)) continue
+        seenIds.add(targetId)
+
+        const targetPoint = await qdrantClient.scrollPoint(targetId)
+        if (!targetPoint) continue
+
+        const text = String((targetPoint.payload ?? {}).content ?? "")
+        if (text) {
+          const rel = (edge.relation as string) || "related"
+          boosted.push(`[graph:${rel}] ${text.slice(0, 400)}`)
+        }
+      }
+    }
+  } catch (err) {
+    log.debug("graph boost skipped:", err)
+  }
+
+  return boosted
+}
+
 export function buildRecallHandler(
   embedder: Embedder,
   qdrantClient: QdrantClient,
@@ -95,14 +149,30 @@ export function buildRecallHandler(
         cfg.accessLevel,
       )
 
-      const memoryContext = formatMemories(results, cfg.maxRecallResults)
+      // Graph-boost: add 1-hop neighbors from top 3 vector hits
+      const graphItems = await graphBoost(qdrantClient, results, 3)
+
+      // Merge vector results with graph-boosted items
+      const allItems: SearchResult[] = [...results]
+      for (const gi of graphItems) {
+        allItems.push({
+          id: "",
+          text: gi,
+          score: 0,
+          category: "graph",
+          source: "graph-boost",
+          created_at: "",
+        } as SearchResult)
+      }
+
+      const memoryContext = formatMemories(allItems, cfg.maxRecallResults + graphItems.length)
 
       if (!memoryContext) {
         log.info("nexus: no memories to inject")
         return
       }
 
-      log.info(`nexus: injecting context (${memoryContext.length} chars, ${results.length} memories)`)
+      log.info(`nexus: injecting context (${memoryContext.length} chars, ${allItems.length} memories, ${graphItems.length} graph-boosted)`)
       return { prependContext: memoryContext }
     } catch (err) {
       log.error("recall failed", err)

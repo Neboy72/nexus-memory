@@ -144,6 +144,84 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
 
     return filtered
 
+
+def graph_boost(top_results: list, max_boost: int = 3) -> list:
+    """Fetch 1-hop graph neighbors for the top vector search results.
+
+    For each of the top `max_boost` results, reads the point's payload edges
+    and fetches the connected facts' content. Returns formatted strings
+    prefixed with [graph:<relation>] so the agent can distinguish graph-
+    boosted results from pure vector hits.
+
+    Failures are silently skipped — vector results alone are always returned.
+    """
+    boosted = []
+    seen_ids = set()
+
+    try:
+        for hit in top_results[:max_boost]:
+            pid = hit.get("id", "")
+            if not pid or pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+
+            # Fetch the point to read its edges
+            scroll_req = urllib.request.Request(
+                f"{QDRANT_URL}/collections/{COLLECTION}/points/scroll",
+                data=json.dumps({
+                    "limit": 1,
+                    "with_payload": True,
+                    "with_vectors": False,
+                    "filter": {"must": [{"has_id": [pid]}]}
+                }).encode(),
+                headers={"Content-Type": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(scroll_req, timeout=5) as resp:
+                    data = json.loads(resp.read())
+                    points = data.get("result", {}).get("points", [])
+                    if not points:
+                        continue
+                    edges = (points[0].get("payload") or {}).get("edges", [])
+            except Exception:
+                continue
+
+            for edge in edges:
+                if edge.get("status", "active") != "active":
+                    continue
+                target_id = edge.get("target_fact_id", "")
+                if not target_id or target_id in seen_ids:
+                    continue
+                seen_ids.add(target_id)
+
+                # Fetch the target point's content
+                try:
+                    target_req = urllib.request.Request(
+                        f"{QDRANT_URL}/collections/{COLLECTION}/points/scroll",
+                        data=json.dumps({
+                            "limit": 1,
+                            "with_payload": True,
+                            "with_vectors": False,
+                            "filter": {"must": [{"has_id": [target_id]}]}
+                        }).encode(),
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(target_req, timeout=5) as resp:
+                        data = json.loads(resp.read())
+                        tpoints = data.get("result", {}).get("points", [])
+                        if not tpoints:
+                            continue
+                        text = (tpoints[0].get("payload") or {}).get("content", "")
+                        if text:
+                            rel = edge.get("relation", "related")
+                            boosted.append(f"[graph:{rel}] {text[:400]}")
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    return boosted
+
 def main():
     # Read hook input from stdin
     try:
@@ -175,11 +253,16 @@ def main():
         if text and score > 0.3:
             memories.append(f"[{category}] (score: {score:.2f}) {text[:200]}")
 
+    # Graph-boost: add 1-hop neighbors from top 3 vector hits
+    graph_items = graph_boost(results, max_boost=3)
+    for gi in graph_items:
+        memories.append(gi)
+
     if not memories:
         sys.exit(0)
 
     context = "\n--- Nexus Memory (Auto-Recall) ---\n"
-    context += f"Found {len(memories)} relevant memories:\n\n"
+    context += f"Found {len(memories)} relevant memories ({len(graph_items)} graph-boosted):\n\n"
     context += "\n\n".join(memories)
     context += "\n--- End Nexus Memory ---\n"
 
