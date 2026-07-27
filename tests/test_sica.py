@@ -44,11 +44,20 @@ def qdrant_client():
 def test_collection(qdrant_client):
     """Create a temporary test collection, yield its name, then delete it."""
     from qdrant_client import models as qm
+    # Use the real embedder dimension so SICA session storage works
+    from nexus_memory.embeddings import EmbeddingProvider
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        embedder = EmbeddingProvider()
+        dim = embedder.dim
+    finally:
+        loop.close()
 
     coll = f"sica_test_{uuid.uuid4().hex[:8]}"
     qdrant_client.create_collection(
         collection_name=coll,
-        vectors_config=qm.VectorParams(size=1024, distance=qm.Distance.COSINE),
+        vectors_config=qm.VectorParams(size=dim, distance=qm.Distance.COSINE),
     )
     yield coll
     try:
@@ -61,16 +70,28 @@ def test_collection(qdrant_client):
 def populated_collection(qdrant_client, test_collection):
     """Populate the test collection with known test points."""
     from qdrant_client import models as qm
+    from nexus_memory.embeddings import EmbeddingProvider
+    import asyncio
+
+    # Get the real embedder dimension
+    loop = asyncio.new_event_loop()
+    try:
+        embedder = EmbeddingProvider()
+        dim = embedder.dim
+    finally:
+        loop.close()
 
     now = datetime.now(timezone.utc)
     stale_ts = (now - timedelta(days=STALE_TEMP_DAYS + 5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     fresh_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    zero_vec = [0.0] * dim
+
     points = [
         # Stale temp memory (should be detected + auto-deleted)
         qm.PointStruct(
             id=str(uuid.uuid4()),
-            vector=[0.0] * 1024,
+            vector=zero_vec,
             payload={
                 "content": "stale temp memory",
                 "category": "temp",
@@ -81,7 +102,7 @@ def populated_collection(qdrant_client, test_collection):
         # Low confidence fact (should be detected, not auto-fixed)
         qm.PointStruct(
             id=str(uuid.uuid4()),
-            vector=[0.0] * 1024,
+            vector=zero_vec,
             payload={
                 "content": "low confidence fact",
                 "category": "fact",
@@ -92,7 +113,7 @@ def populated_collection(qdrant_client, test_collection):
         # Normal fact (should not be flagged)
         qm.PointStruct(
             id=str(uuid.uuid4()),
-            vector=[0.0] * 1024,
+            vector=zero_vec,
             payload={
                 "content": "normal fact",
                 "category": "fact",
@@ -103,7 +124,7 @@ def populated_collection(qdrant_client, test_collection):
         # Contradiction edge (should be detected)
         qm.PointStruct(
             id=str(uuid.uuid4()),
-            vector=[0.0] * 1024,
+            vector=zero_vec,
             payload={
                 "content": "fact with contradiction",
                 "category": "fact",

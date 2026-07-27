@@ -73,6 +73,8 @@ class NexusMemoryProvider:
         self._backup_nudged = False
         self._last_backup_time: float = 0
         self._last_backup_path: str = ""
+        self._skill_graph = None  # cached SkillGraph for graph-boost
+        self._skill_graph_lock = threading.Lock()
 
     @property
     def name(self) -> str: return "nexus"
@@ -226,6 +228,10 @@ class NexusMemoryProvider:
         self._write_stop.set()
         if self._write_thread and self._write_thread.is_alive():
             self._write_thread.join(timeout=5.0)
+        if self._skill_graph is not None:
+            try: self._skill_graph.store.close()
+            except Exception: pass
+            self._skill_graph = None
         if self._qdrant: self._qdrant.close(); self._qdrant = None
         logger.info("NexusMemoryProvider shut down")
 
@@ -235,6 +241,18 @@ class NexusMemoryProvider:
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         threading.Thread(target=self._do_prefetch, args=(query,), name="nexus-prefetch", daemon=True).start()
 
+    def _get_skill_graph(self):
+        """Get or create a cached SkillGraph instance."""
+        with self._skill_graph_lock:
+            if self._skill_graph is None:
+                from nexus.graph.graph import SkillGraph
+                self._skill_graph = SkillGraph(
+                    qdrant_url=f"http://{_HOST}:{_PORT}",
+                    collection=self._collection,
+                )
+                self._skill_graph.initialize()
+            return self._skill_graph
+
     def _graph_boost(self, top_points: list, max_boost: int = 3) -> List[str]:
         """Fetch 1-hop graph neighbors for the top vector search results.
 
@@ -243,20 +261,17 @@ class NexusMemoryProvider:
         context strings prefixed with ``[graph]`` so the agent can distinguish
         graph-boosted results from pure vector hits.
 
-        Failures are logged and silently skipped — vector results alone are
+        Access-level filtering: the Hermes plugin has full access as the
+        primary agent, so no filtering is needed here.
+
+        Failures are logged and silently skipped - vector results alone are
         always returned without the graph boost.
         """
         boosted: List[str] = []
         if not self._qdrant: return boosted
-        sg = None
         try:
-            from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
-            sg = SkillGraph(
-                qdrant_url=f"http://{_HOST}:{_PORT}",
-                collection=self._collection,
-            )
-            sg.initialize()
+            sg = self._get_skill_graph()
             gt = GraphTraversal(sg)
             seen_ids: set = set()
             for p in top_points[:max_boost]:
@@ -277,10 +292,6 @@ class NexusMemoryProvider:
                         boosted.append(f"[graph:{rel}] {text[:400]}")
         except Exception as exc:
             logger.debug("Graph boost skipped: %s", exc)
-        finally:
-            if sg is not None:
-                try: sg.store.close()
-                except Exception: pass
         return boosted
 
     def _do_prefetch(self, query: str) -> None:
@@ -362,6 +373,8 @@ class NexusMemoryProvider:
 
     def _forget(self, memory_id: str) -> Dict[str, Any]:
         if not self._qdrant: raise RuntimeError("Provider not initialized")
+        if not memory_id:
+            return {"status": "error", "error": "Empty memory_id - graph-boosted entries cannot be deleted"}
         self._qdrant.delete(collection_name=self._collection,
                             points_selector=qmodels.PointIdsList(points=[memory_id]))
         return {"status": "ok", "id": memory_id}
