@@ -187,7 +187,7 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
                 issues.append({
                     "id": p["id"],
                     "type": "contradiction",
-                    "detail": f"Contradicts {edge.get('target_fact_id', '?')[:8]}",
+                    "detail": f"Contradicts {str(edge.get('target_fact_id') or '?')[:8]}",
                     "auto_fixable": False,
                     "action": "review",
                     "category": payload.get("category", "fact"),
@@ -223,7 +223,7 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
     """Run a single SICA cycle.
 
     Args:
-        client: QdrantClient instance. If None, creates a new one.
+        client: QdrantClient instance. If None, creates a new one (and closes it).
         collection: Collection name. Defaults to the configured collection.
         auto_patch: If True, apply non-destructive patches automatically.
 
@@ -232,8 +232,9 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
     """
     result = SICAResult()
     coll = collection or _COLLECTION
+    _owns_client = client is None
 
-    if client is None:
+    if _owns_client:
         from qdrant_client import QdrantClient
         client = QdrantClient(url=_QDRANT_URL)
 
@@ -281,6 +282,10 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
     except Exception as exc:
         logger.error("SICA run failed: %s", exc)
         result.errors.append(str(exc))
+    finally:
+        if _owns_client and client is not None:
+            try: client.close()
+            except Exception: pass
 
     return result
 

@@ -150,7 +150,7 @@ export function buildRecallHandler(
       )
 
       // Graph-boost: add 1-hop neighbors from top 3 vector hits
-      const graphItems = await graphBoost(qdrantClient, results, 3)
+      const graphItems = (await graphBoost(qdrantClient, results, 3)).slice(0, 5)  // cap to prevent context bloat
 
       // Merge vector results with graph-boosted items
       const allItems: SearchResult[] = [...results]
