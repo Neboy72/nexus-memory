@@ -52,6 +52,29 @@ def _get_config() -> Dict[str, Any]:
     }
 
 
+def _load_env() -> None:
+    """Load .env file so API keys (VOYAGE_API_KEY etc.) are available."""
+    for env_path in [
+        os.path.expanduser("~/.hermes/.env"),
+        os.path.expanduser("~/.nexus-memory/.env"),
+        os.path.join(os.getcwd(), ".env"),
+    ]:
+        if os.path.exists(env_path):
+            try:
+                with open(env_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            key, _, val = line.partition("=")
+                            key = key.strip()
+                            val = val.strip().strip('"').strip("'")
+                            if key and key not in os.environ:
+                                os.environ[key] = val
+                logger.debug("Loaded env from %s", env_path)
+            except Exception:
+                pass
+
+
 class SICAResult:
     """Result of a single SICA cycle run."""
 
@@ -233,13 +256,16 @@ def _apply_auto_patch(client: Any, collection: str, issue: Dict[str, Any]) -> Op
     return None
 
 
-def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) -> SICAResult:
+def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
+             embedder: Any = None) -> SICAResult:
     """Run a single SICA cycle.
 
     Args:
         client: QdrantClient instance. If None, creates a new one (and closes it).
         collection: Collection name. Defaults to the configured collection.
         auto_patch: If True, apply non-destructive patches automatically.
+        embedder: Optional pre-initialized embedder with .embed() method. If provided,
+                   used for session storage to avoid dimension mismatch.
 
     Returns:
         SICAResult with issues, suggestions, and auto-patches.
@@ -288,7 +314,7 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
 
         # Phase 3: Learn — store SICA session as a memory
         if result.issues_found > 0 or result.auto_patches:
-            _store_sica_session(client, coll, result)
+            _store_sica_session(client, coll, result, embedder=embedder)
 
         logger.info(
             "SICA: scanned %d, found %d issues, %d auto-patched, %d suggestions",
@@ -328,19 +354,45 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult,
             f"{len(result.suggestions)} suggestions."
         )
 
-        _embedder = embedder or EmbeddingProvider()
+        # Use provided embedder, or create one. When creating standalone,
+        # load .env first so VOYAGE_API_KEY is available.
+        _embedder = embedder
+        if _embedder is None:
+            _load_env()
+            _embedder = EmbeddingProvider()
 
-        # Run embedding in a separate thread to avoid event loop conflicts
-        # when SICA is called from an async context (e.g. OpenClaw plugin).
-        def _embed():
-            loop = asyncio.new_event_loop()
-            try:
-                return loop.run_until_complete(_embedder.embed(summary))
-            finally:
-                loop.close()
+        # Verify dimension matches collection to avoid upsert failure
+        try:
+            coll_info = client.get_collection(collection_name=collection)
+            coll_dim = coll_info.config.params.vectors.size
+            embedder_dim = getattr(_embedder, 'dim', None) or getattr(_embedder, '_dim', None)
+            if embedder_dim and embedder_dim != coll_dim:
+                logger.warning(
+                    "SICA session storage skipped: embedder dim %d != collection dim %d",
+                    embedder_dim, coll_dim
+                )
+                return
+        except Exception:
+            pass  # if we can't check, try anyway
+
+        # Get embedding. Handle both sync (.embed() returns list) and
+        # async (.embed() returns coroutine) embedders.
+        def _get_embedding():
+            import asyncio
+            # Check if embed() is a coroutine function
+            import inspect
+            if inspect.iscoroutinefunction(_embedder.embed):
+                loop = asyncio.new_event_loop()
+                try:
+                    return loop.run_until_complete(_embedder.embed(summary))
+                finally:
+                    loop.close()
+            else:
+                # Sync embedder (e.g. Hermes plugin's _Embedder wrapper)
+                return _embedder.embed(summary)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_embed)
+            future = pool.submit(_get_embedding)
             try:
                 vector = future.result(timeout=30)
             except concurrent.futures.TimeoutError:
