@@ -253,8 +253,8 @@ def main():
         if text and score > 0.3:
             memories.append(f"[{category}] (score: {score:.2f}) {text[:200]}")
 
-    # Graph-boost: add 1-hop neighbors from top 3 vector hits
-    graph_items = graph_boost(results, max_boost=3)
+    # Graph-boost: add 1-hop neighbors from top 3 vector hits (max 5 to prevent context bloat)
+    graph_items = graph_boost(results, max_boost=3)[:5]
     for gi in graph_items:
         memories.append(gi)
 

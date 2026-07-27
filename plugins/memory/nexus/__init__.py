@@ -294,7 +294,7 @@ class NexusMemoryProvider:
                     items.append(f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}")
             # Graph-boost: add 1-hop neighbors from top 3 vector hits
             graph_items = self._graph_boost(pts, max_boost=3)
-            items.extend(graph_items)
+            items.extend(graph_items[:5])  # cap to prevent context bloat
             with self._prefetch_lock: self._prefetch_result = "\n".join(items) if items else ""
         except Exception as exc:
             logger.warning("Prefetch failed: %s", exc)
@@ -348,13 +348,16 @@ class NexusMemoryProvider:
                             "confidence": (pl.get("provenance") or {}).get("confidence"),
                             "created_at": pl.get("created_at")})
         # Graph-boost: add 1-hop neighbors from top 3 vector hits
+        # Graph items are APPENDED (not sorted into vector results) so they
+        # survive the limit slice regardless of their 0.0 score.
         graph_items = self._graph_boost(pts, max_boost=3)
+        vector_results = results[:limit]
         for gi in graph_items:
-            results.append({"id": "", "text": gi, "score": 0.0, "source": "graph-boost",
+            vector_results.append({"id": "", "text": gi, "score": 0.0, "source": "graph-boost",
                             "source_url": "", "access_level": "public",
                             "category": "graph", "confidence": None,
                             "created_at": ""})
-        results.sort(key=lambda r: r["score"], reverse=True); return results[:limit]
+        return vector_results
 
     def _forget(self, memory_id: str) -> Dict[str, Any]:
         if not self._qdrant: raise RuntimeError("Provider not initialized")
