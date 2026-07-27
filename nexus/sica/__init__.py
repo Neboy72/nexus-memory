@@ -89,7 +89,11 @@ def _scroll_all(client: Any, collection: str, filter_cond: Optional[Dict] = None
         if offset:
             scroll_params["offset"] = offset
         if filter_cond:
-            scroll_params["scroll_filter"] = qm.Filter(**filter_cond)
+            # Build Filter explicitly to avoid **kwargs mismatch
+            must = filter_cond.get("must")
+            must_not = filter_cond.get("must_not")
+            should = filter_cond.get("should")
+            scroll_params["scroll_filter"] = qm.Filter(must=must, must_not=must_not, should=should)
 
         results, offset = client.scroll(collection_name=collection, **scroll_params)
         for p in results:
@@ -103,10 +107,12 @@ def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
     """Detect temp-category memories older than STALE_TEMP_DAYS.
 
     Returns list of issue dicts with {id, type, detail, auto_fixable, action}.
+    Points with unparseable timestamps are logged and skipped.
     """
     issues = []
     now = datetime.now(timezone.utc)
     cutoff = now.timestamp() - (STALE_TEMP_DAYS * 86400)
+    skipped = 0
 
     for p in points:
         payload = p["payload"]
@@ -116,7 +122,9 @@ def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
         if not created:
             continue
         try:
-            ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+            # Handle both "Z" suffix and explicit timezone offsets
+            ts_str = created.replace("Z", "+00:00") if created.endswith("Z") else created
+            ts = datetime.fromisoformat(ts_str).timestamp()
             if ts < cutoff:
                 issues.append({
                     "id": p["id"],
@@ -127,8 +135,12 @@ def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
                     "category": payload.get("category", "temp"),
                     "confidence": (payload.get("provenance") or {}).get("confidence", 0.5),
                 })
-        except Exception:
+        except (ValueError, TypeError) as exc:
+            skipped += 1
+            logger.debug("Skipping unparseable timestamp '%s': %s", created, exc)
             continue
+    if skipped:
+        logger.info("SICA: skipped %d temp points with unparseable timestamps", skipped)
     return issues
 
 
@@ -279,6 +291,7 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult) -> Non
         from qdrant_client import models as qm
         from nexus_memory.embeddings import EmbeddingProvider
         import asyncio
+        import concurrent.futures
 
         summary = (
             f"SICA run {result.run_id[:8]}: scanned {result.total_scanned} memories, "
@@ -286,15 +299,18 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult) -> Non
             f"{len(result.suggestions)} suggestions."
         )
 
-        # SICA is synchronous. If called from an async context, the caller
-        # should run it in a thread. Here we create a fresh loop to avoid
-        # conflicts with any running event loop.
-        loop = asyncio.new_event_loop()
-        try:
-            embedder = EmbeddingProvider()
-            vector = loop.run_until_complete(embedder.embed(summary))
-        finally:
-            loop.close()
+        # Run embedding in a separate thread to avoid event loop conflicts
+        # when SICA is called from an async context (e.g. OpenClaw plugin).
+        def _embed():
+            loop = asyncio.new_event_loop()
+            try:
+                embedder = EmbeddingProvider()
+                return loop.run_until_complete(embedder.embed(summary))
+            finally:
+                loop.close()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            vector = pool.submit(_embed).result(timeout=30)
 
         eid = str(uuid.uuid4())
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
