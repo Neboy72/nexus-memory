@@ -195,11 +195,13 @@ class TestProviderInitialized:
         )
         result = json.loads(result_json)
         assert isinstance(result, list)
-        # If graph edges exist, some entries have category="graph"
-        # If not, that's also fine — vector results alone are valid
+        # Graph entries have category="graph" and source="graph-boost"
         graph_entries = [r for r in result if r.get("category") == "graph"]
-        # No assertion on count — graph may be empty in test env
-        assert isinstance(graph_entries, list)
+        for ge in graph_entries:
+            assert ge.get("source") == "graph-boost"
+            assert ge.get("score") == 0.0
+            assert isinstance(ge.get("text"), str)
+            assert ge["text"].startswith("[graph:")
 
     def test_handle_tool_call_remember(self, initialized_provider):
         """nexus_remember returns JSON with 'id' and 'status': 'ok'."""

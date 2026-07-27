@@ -21,13 +21,16 @@ if _SRC not in sys.path:
 from nexus.sica import (
     SICAResult,
     run_sica,
+    _get_config,
     _detect_stale_temp,
     _detect_low_confidence,
     _detect_contradictions,
-    LOW_CONFIDENCE_THRESHOLD,
-    STALE_TEMP_DAYS,
 )
 
+_CFG = _get_config()
+LOW_CONFIDENCE_THRESHOLD = _CFG["low_confidence_threshold"]
+STALE_TEMP_DAYS = _CFG["stale_temp_days"]
+MAX_SUGGESTIONS = _CFG["max_suggestions"]
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -286,9 +289,10 @@ class TestRunSICA:
         assert result.issues_found == 3  # stale_temp + low_confidence + contradiction
 
         types = {s["type"] for s in result.suggestions}
-        # stale_temp won't be in suggestions if auto_patch=False (it's auto_fixable but we disabled)
-        # Actually with auto_patch=False, auto_fixable issues become suggestions too
-        assert "stale_temp" in types or any(p["type"] == "stale_temp" for p in result.auto_patches)
+        # With auto_patch=False, auto_fixable issues become suggestions
+        assert "stale_temp" in types
+        assert "low_confidence" in types
+        assert "contradiction" in types
 
     def test_run_sica_auto_patches_stale_temp(self, qdrant_client, populated_collection):
         """SICA auto-deletes stale temp memories."""
