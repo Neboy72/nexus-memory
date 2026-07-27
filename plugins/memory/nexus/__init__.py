@@ -29,6 +29,7 @@ GET_SUBGRAPH_SCHEMA = {"name": "nexus_get_subgraph", "description": "Knowledge G
 GET_RELATED_SCHEMA = {"name": "nexus_get_related", "description": "Knowledge Graph: Get directly related facts (1-hop, bidirectional). Returns list of {fact_id, relation, direction}.", "parameters": {"type": "object", "properties": {"fact_id": {"type": "string", "description": "The Qdrant point ID to find neighbors for"}, "relation": {"type": "string", "description": "Only return edges with this relation (e.g. 'manages')", "default": ""}}, "required": ["fact_id"]}}
 COST_ROUTING_STATS_SCHEMA = {"name": "nexus_cost_routing_stats", "description": "Cost-Aware Routing: Get statistics about embedding provider routing.", "parameters": {"type": "object", "properties": {}, "required": []}}
 COST_ROUTING_EXPLAIN_SCHEMA = {"name": "nexus_cost_routing_explain", "description": "Cost-Aware Routing: Explain the routing decision for a memory category.", "parameters": {"type": "object", "properties": {"category": {"type": "string", "description": "Memory category: fact, rule, preference, belief, session, temp, entity, procedure"}}, "required": ["category"]}}
+SICA_RUN_SCHEMA = {"name": "nexus_sica_run", "description": "SICA Self-Improvement: Run a self-improvement cycle that scans memories for drift, stale facts, low confidence, and contradictions. Auto-patches non-destructive issues (stale temp deletion). Returns issues found, auto-patches applied, and suggestions for review.", "parameters": {"type": "object", "properties": {"auto_patch": {"type": "boolean", "description": "Apply non-destructive patches automatically (default true)", "default": True}}, "required": []}}
 
 
 class _Embedder:
@@ -493,12 +494,24 @@ class NexusMemoryProvider:
             logger.warning("Cost routing explain failed: %s", exc)
             return {"status": "error", "error": str(exc)}
 
+    def _sica_run(self, auto_patch: bool = True) -> Dict[str, Any]:
+        """Run a SICA self-improvement cycle."""
+        try:
+            from nexus.sica import run_sica
+            if not self._qdrant: raise RuntimeError("Provider not initialized")
+            result = run_sica(client=self._qdrant, collection=self._collection, auto_patch=auto_patch)
+            return result.to_dict()
+        except Exception as exc:
+            logger.warning("SICA run failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [RECALL_SCHEMA, REMEMBER_SCHEMA, FORGET_SCHEMA,
                 GUARDRAIL_CHECK_SCHEMA, GUARDRAIL_OVERRIDE_SCHEMA,
                 GRAPH_TRAVERSE_SCHEMA, FIND_ENTITIES_SCHEMA,
                 GET_SUBGRAPH_SCHEMA, GET_RELATED_SCHEMA,
-                COST_ROUTING_STATS_SCHEMA, COST_ROUTING_EXPLAIN_SCHEMA]
+                COST_ROUTING_STATS_SCHEMA, COST_ROUTING_EXPLAIN_SCHEMA,
+                SICA_RUN_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> str:
         try:
@@ -553,6 +566,8 @@ class NexusMemoryProvider:
                 result = self._cost_routing_stats()
             elif tool_name == "nexus_cost_routing_explain":
                 result = self._cost_routing_explain(args.get("category", "fact"))
+            elif tool_name == "nexus_sica_run":
+                result = self._sica_run(args.get("auto_patch", True))
             else: return json.dumps({"error": f"Unknown tool: {tool_name}"})
             return json.dumps(result)
         except Exception as exc:
