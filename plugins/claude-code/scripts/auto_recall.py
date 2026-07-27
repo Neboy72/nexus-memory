@@ -188,11 +188,14 @@ def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "publ
                     points = data.get("result", {}).get("points", [])
                     if not points:
                         continue
-                    edges = (points[0].get("payload") or {}).get("edges", [])
+                    edges = (points[0].get("payload") or {}).get("edges") or []
             except Exception:
                 continue
-
+            if not isinstance(edges, list):
+                continue
             for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
                 if edge.get("status", "active") != "active":
                     continue
                 target_id = edge.get("target_fact_id", "")

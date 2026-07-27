@@ -96,7 +96,7 @@ def _scroll_all(client: Any, collection: str, filter_cond: Optional[Dict] = None
 
         results, offset = client.scroll(collection_name=collection, **scroll_params)
         for p in results:
-            points.append({"id": str(p.id), "payload": p.payload or {}})
+            points.append({"id": p.id, "payload": p.payload or {}})
         if offset is None:
             break
     return points
@@ -123,7 +123,11 @@ def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
         try:
             # Handle both "Z" suffix and explicit timezone offsets
             ts_str = created.replace("Z", "+00:00") if created.endswith("Z") else created
-            ts = datetime.fromisoformat(ts_str).timestamp()
+            ts_dt = datetime.fromisoformat(ts_str)
+            # Treat naive datetimes as UTC to prevent local-tz interpretation
+            if ts_dt.tzinfo is None:
+                ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+            ts = ts_dt.timestamp()
             if ts < cutoff:
                 issues.append({
                     "id": p["id"],
@@ -214,7 +218,7 @@ def _apply_auto_patch(client: Any, collection: str, issue: Dict[str, Any]) -> Op
     from qdrant_client import models as qm
 
     try:
-        if issue["action"] == "delete" and issue["type"] == "stale_temp":
+        if issue.get("action") == "delete" and issue.get("type") == "stale_temp":
             client.delete(
                 collection_name=collection,
                 points_selector=qm.PointIdsList(points=[issue["id"]]),
@@ -323,7 +327,14 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult) -> Non
                 loop.close()
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            vector = pool.submit(_embed).result(timeout=30)
+            future = pool.submit(_embed)
+            try:
+                vector = future.result(timeout=30)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                pool.shutdown(wait=False, cancel_futures=True)
+                logger.warning("SICA session embedding timed out")
+                return
 
         eid = str(uuid.uuid4())
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
