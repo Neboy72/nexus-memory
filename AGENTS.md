@@ -244,7 +244,7 @@ nexus-memory webui
 
 Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory network visually.
 
-## Available Tools (12)
+## Available Tools (15)
 
 > **3 integration paths, all with guardrails:** Native Plugin (Hermes, OpenClaw, Claude Code) | MCP Server (any MCP agent)
 
@@ -264,6 +264,72 @@ Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory 
 | `restore` | Restore memories from backup JSON | `backup_path` (req), `reembed` (optional) |
 | `guardrail_check` | Check if an action is safe before executing (queries protection rules in memory) | `command` (req), `tool_name`, `tool_input` |
 | `guardrail_override` | Record a guardrail override with audit trail (requires explicit reasoning) | `command` (req), `reasoning` (req, min 10 chars), `matched_rules`, `agent_id` |
+| `cost_routing_stats` | Get statistics about embedding provider routing | — |
+| `cost_routing_explain` | Explain the routing decision for a memory category | `category` (req) |
+| `nexus_sica_run` | Run a SICA self-improvement cycle (scan for stale temp, low confidence, contradictions) | `auto_patch` (optional, default true) |
+
+## Graph-Boosted Auto-Recall
+
+**New in v0.9.0.** Auto-Recall now doesn't just search by vector similarity — it also fetches 1-hop graph neighbors from the top 3 vector search results via `GraphTraversal.get_related()`.
+
+### How it works
+
+1. Vector search runs normally (top-N results)
+2. For the top 3 results, the plugin fetches their graph edges (1-hop neighbors)
+3. Neighboring points are fetched and added to the context output with `[graph:<relation>]` tags
+4. Graph items are capped at 5 to prevent context bloat
+5. Access-level filtering applies to graph neighbors (OpenClaw + Claude Code plugins)
+
+### Available in
+
+- **Hermes plugin** (Python) — `_graph_boost()` in prefetch + recall
+- **OpenClaw plugin** (TypeScript) — `graphBoost()` in before_prompt_build hook
+- **Claude Code plugin** (Python) — `graph_boost()` in auto_recall hook
+
+### Example
+
+When you search for "Wallbox", you get:
+- Vector hits about the ABL Wallbox (similarity match)
+- Graph neighbors: Reev Backend (`[graph:connected_to]`), RFID cards (`[graph:uses]`), IP address (`[graph:located_at]`)
+
+This gives the agent **contextual relationships**, not just text similarity.
+
+## SICA Self-Improvement Cycle
+
+**New in v0.9.0.** SICA (Self-Improving Cycle for Agents) automatically scans memories for issues and patches them.
+
+### How it works
+
+```
+Detect → Reflect → Act → Learn
+```
+
+1. **Detect**: Scans all memories for:
+   - Stale temp memories (older than configurable threshold, default 7 days)
+   - Low-confidence memories (below 0.5 confidence)
+   - Contradictions (conflicting beliefs via graph edges)
+2. **Reflect**: Categorizes issues and generates suggestions
+3. **Act**: Auto-patches non-destructive issues (stale temp deletion). Other issues become suggestions for review.
+4. **Learn**: Stores the SICA session as a memory for future iterations
+
+### Usage
+
+```bash
+# Via Hermes plugin tool
+nexus_sica_run(auto_patch=True)
+
+# Via Python (harness-independent)
+from nexus.sica import run_sica
+result = run_sica(auto_patch=True)
+```
+
+### Configuration
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `SICA_STALE_TEMP_DAYS` | 7 | Days before temp memories are considered stale |
+| `SICA_LOW_CONFIDENCE` | 0.5 | Confidence threshold for low-confidence detection |
+| `SICA_MAX_SUGGESTIONS` | 10 | Maximum suggestions per SICA run |
 
 ## Active Guardrails
 

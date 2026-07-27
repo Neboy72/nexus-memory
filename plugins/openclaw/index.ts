@@ -17,7 +17,7 @@ import {
   registerGetRelatedTool,
 } from "./tools/graph_traverse.ts"
 
-const PLUGIN_VERSION = "0.9.0"
+const PLUGIN_VERSION = "0.9.1"
 
 export default {
   id: "nexus-memory",

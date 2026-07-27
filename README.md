@@ -12,7 +12,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.9.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.9.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-578%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -417,6 +417,32 @@ Before v0.6.0, `on_session_end` stored raw conversation text as a single "sessio
 - **Automatic**: Entities extracted alongside facts in `on_session_end`
 - **No new database**: Uses existing Qdrant + NetworkX. Neo4j can be added later at scale.
 
+### Graph-Boosted Auto-Recall 🚀
+
+**Graph-Boosted Auto-Recall** (v0.9.0): Auto-Recall now fetches 1-hop graph neighbors from the top 3 vector search results. Not just "what is similar" but "what is connected".
+
+- **All 3 plugins**: Hermes, OpenClaw, Claude Code
+- **How it works**: Vector search → top 3 results → graph edges → 1-hop neighbors → `[graph:<relation>]` tagged in context
+- **Access-level filtered**: Graph neighbors respect access levels (OpenClaw + Claude Code)
+- **Capped at 5**: Prevents context bloat
+- **Graceful fallback**: No edges = no graph items, no crash
+
+Example: Search for "Wallbox" → vector hits about ABL Wallbox + graph neighbors: Reev Backend (`[graph:connected_to]`), RFID cards (`[graph:uses]`), IP address (`[graph:located_at]`).
+
+### SICA Self-Improvement Cycle 🔄
+
+**SICA** (v0.9.0): Automatic memory hygiene. Scans all memories for issues and patches them.
+
+- **Detect**: Stale temp memories (>7 days), low-confidence (<0.5), contradictions via graph edges
+- **Act**: Auto-deletes stale temp memories. Other issues become suggestions for review.
+- **Learn**: Stores SICA session as memory for future iterations
+- **Harness-independent**: Any plugin can call `run_sica()` directly
+- **Configurable**: `SICA_STALE_TEMP_DAYS`, `SICA_LOW_CONFIDENCE`, `SICA_MAX_SUGGESTIONS` env vars
+
+### Cost-Aware Routing 💰
+
+**Cost-Aware Routing** (v0.8.0): Tier-based embedding provider selection. Premium memories (facts, rules, entities) use high-quality providers (Voyage/OpenAI). Economy memories (sessions, temp) use local providers (Ollama). Auto-enables when 2+ providers are available.
+
 ### Guardrails 🛡️
 
 **Active Guardrails** (v0.5.0): Memory-driven prevention of destructive actions. Before any destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`, `find -delete`, `git clean -fdx`), the guardrail checks Qdrant for stored protection rules and blocks if the target matches a protected path or collection.
@@ -493,7 +519,8 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 🔗 **SkillGraph** | **✅ 6 relation types, BFS/DFS** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🔄 **Auto-Discovery** | **✅ 0 token cost** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 📊 **Graph Analytics** | **✅ Hub scores, gaps** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| 🚀 **Graph Boost** | **✅ Search ranking boost** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🚀 **Graph-Boosted Auto-Recall** | **✅ All 3 plugins** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🔄 **SICA Self-Improvement** | **✅ Auto-cleanup** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | ⏰ **Time Decay** | **✅ Gauss-shaped** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 💾 **Auto-Backup** | **✅ Every 6h** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 📦 **Update Notifications** | **✅ Auto-check GitHub** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -532,6 +559,8 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.9.1** | 2026-07-27 | Fix: discovery content-dict handling, SICA session storage dimension mismatch (768d vs 1024d), 578 tests |
+| **v0.9.0** | 2026-07-27 | Graph-Boosted Auto-Recall (all 3 plugins: 1-hop graph neighbors from top-3 vector hits, `[graph:<relation>]` tagging, access-level filtering), SICA Self-Improvement Cycle (Detect → Reflect → Act → Learn, stale temp auto-deletion, low-confidence + contradiction detection, `nexus_sica_run` tool), SkillGraph caching, `SkillGraph.get_point()` public API, 64 code review fixes across 7 rounds, 578 tests |
 | **v0.8.0** | 2026-07-25 | Cost-Aware Routing: tier-based embedding provider selection (premium/standard/economy), category→tier mapping (fact→premium, session→economy), cost estimation, routing stats + explain tools, auto-enables when 2+ providers available, 558 tests |
 | **v0.7.0** | 2026-07-25 | Knowledge Graph Layer: entity extraction (device/service/person/location/protocol), 11 typed relationships (manages, runs_on, connected_to, etc.), multi-hop graph traversal via NetworkX, entities as Qdrant points, 524 tests |
 | **v0.6.0** | 2026-07-25 | Session→Memory Pipeline: native fact extraction in on_session_end (LLM + heuristic fallback), categorization (fact/rule/preference/belief), confidence scoring, non-blocking background thread, 476 tests |

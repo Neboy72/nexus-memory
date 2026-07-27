@@ -5,6 +5,14 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.1] — 2026-07-27
+
+### Fixed
+
+- **Discovery content-dict handling** — `nexus/discovery/__init__.py` now handles `content` field stored as dict (not string) in Qdrant payloads, fixing the Auto-Discovery crash that affected 23% of points
+- **SICA session storage dimension mismatch** — `_store_sica_session` now loads `.env` before creating EmbeddingProvider (was picking Ollama 768d instead of Voyage 1024d), accepts caller-provided embedder, and checks collection dimension before upsert
+- **Hermes plugin passes embedder to SICA** — `_sica_run()` now passes `self._embedder` to `run_sica()` to guarantee dimension match
+
 ## [v0.9.0] — 2026-07-27
 
 ### Added
