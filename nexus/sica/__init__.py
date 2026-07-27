@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import logging
 import os
-import json
 import time
 import uuid
 from datetime import datetime, timezone
@@ -95,7 +94,7 @@ def _scroll_all(client: Any, collection: str, filter_cond: Optional[Dict] = None
         results, offset = client.scroll(collection_name=collection, **scroll_params)
         for p in results:
             points.append({"id": str(p.id), "payload": p.payload or {}})
-        if not offset:
+        if offset is None:
             break
     return points
 
@@ -287,6 +286,9 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult) -> Non
             f"{len(result.suggestions)} suggestions."
         )
 
+        # SICA is synchronous. If called from an async context, the caller
+        # should run it in a thread. Here we create a fresh loop to avoid
+        # conflicts with any running event loop.
         loop = asyncio.new_event_loop()
         try:
             embedder = EmbeddingProvider()

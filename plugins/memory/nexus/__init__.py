@@ -248,6 +248,7 @@ class NexusMemoryProvider:
         """
         boosted: List[str] = []
         if not self._qdrant: return boosted
+        sg = None
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
@@ -273,9 +274,12 @@ class NexusMemoryProvider:
                     if text:
                         rel = n.get("relation", "related")
                         boosted.append(f"[graph:{rel}] {text[:400]}")
-            sg.store.close()
         except Exception as exc:
             logger.debug("Graph boost skipped: %s", exc)
+        finally:
+            if sg is not None:
+                try: sg.store.close()
+                except Exception: pass
         return boosted
 
     def _do_prefetch(self, query: str) -> None:
