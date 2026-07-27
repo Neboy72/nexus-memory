@@ -5,6 +5,36 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.0] — 2026-07-27
+
+### Added
+
+- **Graph-Boosted Auto-Recall** — all 3 plugins (Hermes, OpenClaw, Claude Code) now fetch 1-hop graph neighbors from the top 3 vector search results via `GraphTraversal.get_related()`. Graph-boosted entries are tagged `[graph:<relation>]` in context output.
+- **SICA Self-Improvement Cycle** — `nexus/sica/` module implementing Detect → Reflect → Act → Learn loop
+  - Detect: stale temp memories (configurable age threshold), low-confidence memories, contradictions via graph edges
+  - Act: auto-patches non-destructive issues (stale temp deletion), all other issues become suggestions
+  - Learn: stores SICA session as memory for future iterations
+  - `nexus_sica_run` tool in Hermes plugin (12 tools total)
+  - Harness-independent: any plugin can call `run_sica()` directly
+- **Access-level filtering in graph-boost** — OpenClaw and Claude Code plugins check target point access_level before including graph neighbors
+- **SkillGraph caching** — Hermes plugin caches SkillGraph instance across calls instead of per-call init+close
+- **`SkillGraph.get_point()`** — public API replacing private `_scroll_point` access
+- **`_load_env()`** in SICA — loads `.env` files before creating EmbeddingProvider to ensure correct provider detection
+- 20 new tests (578 total)
+
+### Fixed
+
+- 64 code review issues across 7 review rounds (bugs, edge cases, security, resource leaks, type safety)
+- Graph-boost `break` vs `continue` — suggestion cap no longer skips auto-fixable items
+- `or 0.5` truthiness — confidence=0.0 no longer silently becomes 0.5
+- `_scroll_all` offset check — `if offset is not None` instead of `if offset` (offset=0 is valid)
+- Shutdown race condition — `_skill_graph_lock` acquired before closing SkillGraph
+- ThreadPoolExecutor leak — futures cancelled on timeout
+- SICA session storage dimension mismatch — embedder from caller prevents 768d vs 1024d error
+- Naive datetime handling — timezone-naive timestamps treated as UTC
+- Confidence type coercion — `float()` guard for string confidence values in Qdrant payloads
+- Edges type guard — `isinstance(edges, list)` prevents TypeError on malformed payloads
+
 ## [v0.8.0] — 2026-07-25
 
 ### Added
