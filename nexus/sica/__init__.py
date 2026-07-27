@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -86,7 +85,7 @@ def _scroll_all(client: Any, collection: str, filter_cond: Optional[Dict] = None
     offset = None
     while True:
         scroll_params: Dict[str, Any] = {"limit": 100, "with_payload": True, "with_vectors": False}
-        if offset:
+        if offset is not None:
             scroll_params["offset"] = offset
         if filter_cond:
             # Build Filter explicitly to avoid **kwargs mismatch
@@ -133,7 +132,7 @@ def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
                     "auto_fixable": True,
                     "action": "delete",
                     "category": payload.get("category", "temp"),
-                    "confidence": (payload.get("provenance") or {}).get("confidence", 0.5),
+                    "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) or 0.5),
                 })
         except (ValueError, TypeError) as exc:
             skipped += 1
@@ -156,6 +155,11 @@ def _detect_low_confidence(points: List[Dict]) -> List[Dict[str, Any]]:
         prov = payload.get("provenance") or {}
         confidence = prov.get("confidence")
         if confidence is None:
+            continue
+        # Ensure confidence is numeric (Qdrant payloads may store strings)
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
             continue
         if confidence < LOW_CONFIDENCE_THRESHOLD:
             issues.append({
@@ -181,7 +185,9 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
     issues = []
     for p in points:
         payload = p["payload"]
-        edges = payload.get("edges", [])
+        edges = payload.get("edges") or []
+        if not isinstance(edges, list):
+            continue
         for edge in edges:
             if edge.get("relation") == "contradicts" and edge.get("status") == "active":
                 issues.append({
@@ -191,7 +197,7 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
                     "auto_fixable": False,
                     "action": "review",
                     "category": payload.get("category", "fact"),
-                    "confidence": (payload.get("provenance") or {}).get("confidence", 0.5),
+                    "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) or 0.5),
                     "target_id": edge.get("target_fact_id"),
                 })
     return issues
@@ -258,7 +264,9 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
                 if patch:
                     result.auto_patches.append(patch)
                     continue
-            # Not auto-fixable: add as suggestion
+            # Not auto-fixable: add as suggestion (respect MAX_SUGGESTIONS)
+            if len(result.suggestions) >= MAX_SUGGESTIONS:
+                break
             result.suggestions.append({
                 "type": issue["type"],
                 "priority": "high" if issue["type"] == "contradiction" else "medium",
@@ -318,7 +326,7 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult) -> Non
             vector = pool.submit(_embed).result(timeout=30)
 
         eid = str(uuid.uuid4())
-        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         payload = {
             "id": eid,
             "content": summary,
