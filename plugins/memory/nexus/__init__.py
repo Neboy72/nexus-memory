@@ -228,10 +228,11 @@ class NexusMemoryProvider:
         self._write_stop.set()
         if self._write_thread and self._write_thread.is_alive():
             self._write_thread.join(timeout=5.0)
-        if self._skill_graph is not None:
-            try: self._skill_graph.store.close()
-            except Exception: pass
-            self._skill_graph = None
+        with self._skill_graph_lock:
+            if self._skill_graph is not None:
+                try: self._skill_graph.store.close()
+                except Exception: pass
+                self._skill_graph = None
         if self._qdrant: self._qdrant.close(); self._qdrant = None
         logger.info("NexusMemoryProvider shut down")
 
@@ -291,7 +292,7 @@ class NexusMemoryProvider:
                         rel = n.get("relation", "related")
                         boosted.append(f"[graph:{rel}] {text[:400]}")
         except Exception as exc:
-            logger.debug("Graph boost skipped: %s", exc)
+            logger.warning("Graph boost skipped: %s", exc)
         return boosted
 
     def _do_prefetch(self, query: str) -> None:

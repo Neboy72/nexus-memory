@@ -232,8 +232,9 @@ def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "publ
                             boosted.append(f"[graph:{rel}] {text[:400]}")
                 except Exception:
                     continue
-    except Exception:
-        pass
+    except Exception as exc:
+        import sys
+        print(f"[nexus graph-boost] skipped: {exc}", file=sys.stderr)
 
     return boosted
 

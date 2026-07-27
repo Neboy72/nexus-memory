@@ -47,15 +47,9 @@ def qdrant_client():
 def test_collection(qdrant_client):
     """Create a temporary test collection, yield its name, then delete it."""
     from qdrant_client import models as qm
-    # Use the real embedder dimension so SICA session storage works
     from nexus_memory.embeddings import EmbeddingProvider
-    import asyncio
-    loop = asyncio.new_event_loop()
-    try:
-        embedder = EmbeddingProvider()
-        dim = embedder.dim
-    finally:
-        loop.close()
+    embedder = EmbeddingProvider()
+    dim = embedder.dim
 
     coll = f"sica_test_{uuid.uuid4().hex[:8]}"
     qdrant_client.create_collection(
@@ -74,15 +68,8 @@ def populated_collection(qdrant_client, test_collection):
     """Populate the test collection with known test points."""
     from qdrant_client import models as qm
     from nexus_memory.embeddings import EmbeddingProvider
-    import asyncio
-
-    # Get the real embedder dimension
-    loop = asyncio.new_event_loop()
-    try:
-        embedder = EmbeddingProvider()
-        dim = embedder.dim
-    finally:
-        loop.close()
+    embedder = EmbeddingProvider()
+    dim = embedder.dim
 
     now = datetime.now(timezone.utc)
     stale_ts = (now - timedelta(days=STALE_TEMP_DAYS + 5)).strftime("%Y-%m-%dT%H:%M:%SZ")
