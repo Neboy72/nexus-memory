@@ -37,8 +37,6 @@ from nexus.config import get_collection
 
 logger = logging.getLogger(__name__)
 
-_QDRANT_URL = os.environ.get("NEXUS_QDRANT_URL", "http://localhost:6333")
-
 
 def _get_config() -> Dict[str, Any]:
     """Read SICA config at call time (not import time).
@@ -47,6 +45,7 @@ def _get_config() -> Dict[str, Any]:
     """
     return {
         "collection": get_collection(),
+        "qdrant_url": os.environ.get("NEXUS_QDRANT_URL", "http://localhost:6333"),
         "low_confidence_threshold": float(os.environ.get("SICA_LOW_CONFIDENCE", "0.5")),
         "stale_temp_days": int(os.environ.get("SICA_STALE_TEMP_DAYS", "7")),
         "max_suggestions": int(os.environ.get("SICA_MAX_SUGGESTIONS", "10")),
@@ -93,10 +92,10 @@ def _scroll_all(client: Any, collection: str, filter_cond: Optional[Dict] = None
         if offset is not None:
             scroll_params["offset"] = offset
         if filter_cond:
-            # Build Filter explicitly to avoid **kwargs mismatch
-            must = filter_cond.get("must")
-            must_not = filter_cond.get("must_not")
-            should = filter_cond.get("should")
+            # Build Filter explicitly, only set non-None fields
+            must = filter_cond.get("must") or []
+            must_not = filter_cond.get("must_not") or []
+            should = filter_cond.get("should") or []
             scroll_params["scroll_filter"] = qm.Filter(must=must, must_not=must_not, should=should)
 
         results, offset = client.scroll(collection_name=collection, **scroll_params)
@@ -141,7 +140,7 @@ def _detect_stale_temp(points: List[Dict], stale_temp_days: int = 7) -> List[Dic
                     "auto_fixable": True,
                     "action": "delete",
                     "category": payload.get("category", "temp"),
-                    "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) or 0.5),
+                    "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) if (payload.get("provenance") or {}).get("confidence") is not None else 0.5),
                 })
         except (ValueError, TypeError) as exc:
             skipped += 1
@@ -206,7 +205,7 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
                     "auto_fixable": False,
                     "action": "review",
                     "category": payload.get("category", "fact"),
-                    "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) or 0.5),
+                    "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) if (payload.get("provenance") or {}).get("confidence") is not None else 0.5),
                     "target_id": edge.get("target_fact_id"),
                 })
     return issues
@@ -252,7 +251,7 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
 
     if _owns_client:
         from qdrant_client import QdrantClient
-        client = QdrantClient(url=_QDRANT_URL)
+        client = QdrantClient(url=cfg["qdrant_url"])
 
     try:
         # Phase 1: Detect
@@ -274,9 +273,9 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
                 if patch:
                     result.auto_patches.append(patch)
                     continue
-            # Not auto-fixable: add as suggestion (respect MAX_SUGGESTIONS)
+            # Not auto-fixable: add as suggestion (respect max_suggestions)
             if len(result.suggestions) >= cfg["max_suggestions"]:
-                break
+                continue  # skip further suggestions but keep processing auto-fixable
             result.suggestions.append({
                 "type": issue["type"],
                 "priority": "high" if issue["type"] == "contradiction" else "medium",
@@ -351,7 +350,7 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult,
                 return
 
         eid = str(uuid.uuid4())
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts = datetime.now(timezone.utc).isoformat()
         payload = {
             "id": eid,
             "content": summary,
