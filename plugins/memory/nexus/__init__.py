@@ -270,7 +270,8 @@ class NexusMemoryProvider:
                     seen_ids.add(nid)
                     pt = sg.store._scroll_point(nid)
                     if not pt: continue
-                    text = (pt.get("payload") or {}).get("content", "")
+                    pt_payload = pt.get("payload") or {}
+                    text = pt_payload.get("content", "")
                     if text:
                         rel = n.get("relation", "related")
                         boosted.append(f"[graph:{rel}] {text[:400]}")
