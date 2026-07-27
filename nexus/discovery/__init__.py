@@ -58,13 +58,29 @@ def classify_confidence(confidence: float) -> dict:
 
 
 def _extract_content(payload: dict) -> str:
-    """Extract content text from a Qdrant point payload."""
-    return payload.get("content", "") or payload.get("text", "")
+    """Extract content text from a Qdrant point payload.
+
+    Handles both plain-string and dict-wrapped content fields.
+    Some Qdrant points store content as {content: "...", category: "..."}
+    instead of a plain string — this unpacks those safely.
+    """
+    content = payload.get("content", "") or payload.get("text", "")
+    if isinstance(content, dict):
+        return content.get("content", "") or content.get("text", "")
+    return content
 
 
 def _extract_category(payload: dict) -> str:
-    """Extract category from a Qdrant point payload."""
-    return payload.get("category", "")
+    """Extract category from a Qdrant point payload.
+
+    Handles dict-wrapped content fields where category may be nested.
+    """
+    cat = payload.get("category", "")
+    if not cat:
+        content = payload.get("content", "")
+        if isinstance(content, dict):
+            return content.get("category", "")
+    return cat
 
 
 class AutoDiscovery:
