@@ -77,6 +77,7 @@ async function graphBoost(
   qdrantClient: QdrantClient,
   topResults: SearchResult[],
   maxBoost: number = 3,
+  accessLevel: string = "public",
 ): Promise<string[]> {
   const boosted: string[] = []
   const seenIds = new Set<string>()
@@ -102,7 +103,15 @@ async function graphBoost(
         const targetPoint = await qdrantClient.scrollPoint(targetId)
         if (!targetPoint) continue
 
-        const text = String((targetPoint.payload ?? {}).content ?? "")
+        const tpPayload = (targetPoint.payload ?? {}) as Record<string, unknown>
+        // Access-level check: skip memories the agent can't see
+        const tpAccess = (tpPayload.access_level as string) || "public"
+        const levelOrder = ["public", "trusted", "private"]
+        const agentIdx = levelOrder.indexOf(accessLevel)
+        const memIdx = levelOrder.indexOf(tpAccess)
+        if (memIdx > agentIdx) continue
+
+        const text = String(tpPayload.content ?? "")
         if (text) {
           const rel = (edge.relation as string) || "related"
           boosted.push(`[graph:${rel}] ${text.slice(0, 400)}`)
@@ -150,7 +159,7 @@ export function buildRecallHandler(
       )
 
       // Graph-boost: add 1-hop neighbors from top 3 vector hits
-      const graphItems = (await graphBoost(qdrantClient, results, 3)).slice(0, 5)  // cap to prevent context bloat
+      const graphItems = (await graphBoost(qdrantClient, results, 3, cfg.accessLevel)).slice(0, 5)  // cap to prevent context bloat
 
       // Merge vector results with graph-boosted items
       const allItems: SearchResult[] = [...results]

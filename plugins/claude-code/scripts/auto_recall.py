@@ -145,7 +145,7 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     return filtered
 
 
-def graph_boost(top_results: list, max_boost: int = 3) -> list:
+def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "public") -> list:
     """Fetch 1-hop graph neighbors for the top vector search results.
 
     For each of the top `max_boost` results, reads the point's payload edges
@@ -153,8 +153,14 @@ def graph_boost(top_results: list, max_boost: int = 3) -> list:
     prefixed with [graph:<relation>] so the agent can distinguish graph-
     boosted results from pure vector hits.
 
-    Failures are silently skipped — vector results alone are always returned.
+    Access-level filtering: only returns memories the agent is allowed
+    to see based on the resolved trust level.
+
+    Failures are silently skipped - vector results alone are always returned.
     """
+    level_order = ["public", "trusted", "private"]
+    agent_idx = level_order.index(access_level) if access_level in level_order else 0
+
     boosted = []
     seen_ids = set()
 
@@ -211,7 +217,13 @@ def graph_boost(top_results: list, max_boost: int = 3) -> list:
                         tpoints = data.get("result", {}).get("points", [])
                         if not tpoints:
                             continue
-                        text = (tpoints[0].get("payload") or {}).get("content", "")
+                        tp_payload = tpoints[0].get("payload") or {}
+                        # Access-level check
+                        tp_access = tp_payload.get("access_level", "public")
+                        mem_idx = level_order.index(tp_access) if tp_access in level_order else 2
+                        if mem_idx > agent_idx:
+                            continue
+                        text = tp_payload.get("content", "")
                         if text:
                             rel = edge.get("relation", "related")
                             boosted.append(f"[graph:{rel}] {text[:400]}")
@@ -254,7 +266,8 @@ def main():
             memories.append(f"[{category}] (score: {score:.2f}) {text[:200]}")
 
     # Graph-boost: add 1-hop neighbors from top 3 vector hits (max 5 to prevent context bloat)
-    graph_items = graph_boost(results, max_boost=3)[:5]
+    trust_level = _resolve_trust_level()
+    graph_items = graph_boost(results, max_boost=3, access_level=trust_level)[:5]
     for gi in graph_items:
         memories.append(gi)
 
