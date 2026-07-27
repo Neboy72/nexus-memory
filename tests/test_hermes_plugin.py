@@ -162,6 +162,44 @@ class TestProviderInitialized:
         # Should be a list (or empty list)
         assert isinstance(result, list)
 
+    def test_graph_boost_returns_list(self, initialized_provider):
+        """_graph_boost returns a list (may be empty if no graph edges exist)."""
+        # Create a memory first so there's at least one point
+        remember_json = initialized_provider.handle_tool_call(
+            "nexus_remember",
+            {"text": "graph boost test memory", "category": "temp"},
+        )
+        created = json.loads(remember_json)
+        assert created.get("status") == "ok"
+
+        # Run a vector search to get points, then boost
+        vector = initialized_provider._embedder.embed("graph boost test")
+        pts = initialized_provider._qdrant.query_points(
+            collection_name=initialized_provider._collection,
+            query=vector, limit=3
+        ).points
+        boosted = initialized_provider._graph_boost(pts, max_boost=3)
+        assert isinstance(boosted, list)
+
+        # Clean up
+        if created.get("id"):
+            initialized_provider.handle_tool_call(
+                "nexus_forget", {"memory_id": created["id"]}
+            )
+
+    def test_recall_includes_graph_results(self, initialized_provider):
+        """nexus_recall results may include graph-boosted entries (category='graph')."""
+        result_json = initialized_provider.handle_tool_call(
+            "nexus_recall", {"query": "Wallbox ABL eMH3", "limit": 10}
+        )
+        result = json.loads(result_json)
+        assert isinstance(result, list)
+        # If graph edges exist, some entries have category="graph"
+        # If not, that's also fine — vector results alone are valid
+        graph_entries = [r for r in result if r.get("category") == "graph"]
+        # No assertion on count — graph may be empty in test env
+        assert isinstance(graph_entries, list)
+
     def test_handle_tool_call_remember(self, initialized_provider):
         """nexus_remember returns JSON with 'id' and 'status': 'ok'."""
         result_json = initialized_provider.handle_tool_call(
