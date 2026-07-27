@@ -234,6 +234,49 @@ class NexusMemoryProvider:
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         threading.Thread(target=self._do_prefetch, args=(query,), name="nexus-prefetch", daemon=True).start()
 
+    def _graph_boost(self, top_points: list, max_boost: int = 3) -> List[str]:
+        """Fetch 1-hop graph neighbors for the top vector search results.
+
+        For each of the top ``max_boost`` points, queries the Knowledge Graph
+        for directly related facts (1-hop, bidirectional). Returns a list of
+        context strings prefixed with ``[graph]`` so the agent can distinguish
+        graph-boosted results from pure vector hits.
+
+        Failures are logged and silently skipped — vector results alone are
+        always returned without the graph boost.
+        """
+        boosted: List[str] = []
+        if not self._qdrant: return boosted
+        try:
+            from nexus.graph.graph import SkillGraph
+            from nexus.graph.traversal import GraphTraversal
+            sg = SkillGraph(
+                qdrant_url=f"http://{_HOST}:{_PORT}",
+                collection=self._collection,
+            )
+            sg.initialize()
+            gt = GraphTraversal(sg)
+            seen_ids: set = set()
+            for p in top_points[:max_boost]:
+                pid = str(p.id)
+                if pid in seen_ids: continue
+                seen_ids.add(pid)
+                neighbors = gt.get_related(pid)
+                for n in neighbors:
+                    nid = n.get("fact_id", "")
+                    if not nid or nid in seen_ids: continue
+                    seen_ids.add(nid)
+                    pt = sg.store._scroll_point(nid)
+                    if not pt: continue
+                    text = (pt.get("payload") or {}).get("content", "")
+                    if text:
+                        rel = n.get("relation", "related")
+                        boosted.append(f"[graph:{rel}] {text[:400]}")
+            sg.store.close()
+        except Exception as exc:
+            logger.debug("Graph boost skipped: %s", exc)
+        return boosted
+
     def _do_prefetch(self, query: str) -> None:
         if not self._embedder or not self._qdrant: return
         try:
@@ -244,6 +287,9 @@ class NexusMemoryProvider:
                 pl = p.payload or {}; text = pl.get("content", "")
                 if text:
                     items.append(f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}")
+            # Graph-boost: add 1-hop neighbors from top 3 vector hits
+            graph_items = self._graph_boost(pts, max_boost=3)
+            items.extend(graph_items)
             with self._prefetch_lock: self._prefetch_result = "\n".join(items) if items else ""
         except Exception as exc:
             logger.warning("Prefetch failed: %s", exc)
@@ -285,14 +331,24 @@ class NexusMemoryProvider:
         vector = self._embedder.embed(query)
         pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=max(limit, 1)).points
         results: List[Dict[str, Any]] = []
+        seen_ids: set = set()
         for p in pts:
             pl = p.payload or {}
-            results.append({"id": pl.get("id"), "text": (pl.get("content") or "")[:2000],
+            pid = pl.get("id") or str(p.id)
+            seen_ids.add(pid)
+            results.append({"id": pid, "text": (pl.get("content") or "")[:2000],
                             "score": round(float(p.score or 0.0), 3), "source": pl.get("source"),
                             "source_url": pl.get("source_url"), "access_level": pl.get("access_level"),
                             "category": pl.get("category", "fact"),
                             "confidence": (pl.get("provenance") or {}).get("confidence"),
                             "created_at": pl.get("created_at")})
+        # Graph-boost: add 1-hop neighbors from top 3 vector hits
+        graph_items = self._graph_boost(pts, max_boost=3)
+        for gi in graph_items:
+            results.append({"id": "", "text": gi, "score": 0.0, "source": "graph-boost",
+                            "source_url": "", "access_level": "public",
+                            "category": "graph", "confidence": None,
+                            "created_at": ""})
         results.sort(key=lambda r: r["score"], reverse=True); return results[:limit]
 
     def _forget(self, memory_id: str) -> Dict[str, Any]:
