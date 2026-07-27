@@ -37,15 +37,20 @@ from nexus.config import get_collection
 
 logger = logging.getLogger(__name__)
 
-_COLLECTION = get_collection()
 _QDRANT_URL = os.environ.get("NEXUS_QDRANT_URL", "http://localhost:6333")
 
-# Confidence below this triggers a review suggestion
-LOW_CONFIDENCE_THRESHOLD = float(os.environ.get("SICA_LOW_CONFIDENCE", "0.5"))
-# Memories older than this (days) with category="temp" are stale
-STALE_TEMP_DAYS = int(os.environ.get("SICA_STALE_TEMP_DAYS", "7"))
-# Max suggestions per SICA run (prevents flooding)
-MAX_SUGGESTIONS = int(os.environ.get("SICA_MAX_SUGGESTIONS", "10"))
+
+def _get_config() -> Dict[str, Any]:
+    """Read SICA config at call time (not import time).
+
+    Reads env vars on each call so changes after import take effect.
+    """
+    return {
+        "collection": get_collection(),
+        "low_confidence_threshold": float(os.environ.get("SICA_LOW_CONFIDENCE", "0.5")),
+        "stale_temp_days": int(os.environ.get("SICA_STALE_TEMP_DAYS", "7")),
+        "max_suggestions": int(os.environ.get("SICA_MAX_SUGGESTIONS", "10")),
+    }
 
 
 class SICAResult:
@@ -60,13 +65,13 @@ class SICAResult:
         self.auto_patches: List[Dict[str, Any]] = []
         self.errors: List[str] = []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, max_suggestions: int = 10) -> Dict[str, Any]:
         return {
             "run_id": self.run_id,
             "timestamp": self.timestamp,
             "total_scanned": self.total_scanned,
             "issues_found": self.issues_found,
-            "suggestions": self.suggestions[:MAX_SUGGESTIONS],
+            "suggestions": self.suggestions[:max_suggestions],
             "auto_patches": self.auto_patches,
             "errors": self.errors,
         }
@@ -102,7 +107,7 @@ def _scroll_all(client: Any, collection: str, filter_cond: Optional[Dict] = None
     return points
 
 
-def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
+def _detect_stale_temp(points: List[Dict], stale_temp_days: int = 7) -> List[Dict[str, Any]]:
     """Detect temp-category memories older than STALE_TEMP_DAYS.
 
     Returns list of issue dicts with {id, type, detail, auto_fixable, action}.
@@ -110,7 +115,7 @@ def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
     """
     issues = []
     now = datetime.now(timezone.utc)
-    cutoff = now.timestamp() - (STALE_TEMP_DAYS * 86400)
+    cutoff = now.timestamp() - (stale_temp_days * 86400)
     skipped = 0
 
     for p in points:
@@ -132,7 +137,7 @@ def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
                 issues.append({
                     "id": p["id"],
                     "type": "stale_temp",
-                    "detail": f"Temp memory older than {STALE_TEMP_DAYS} days",
+                    "detail": f"Temp memory older than {stale_temp_days} days",
                     "auto_fixable": True,
                     "action": "delete",
                     "category": payload.get("category", "temp"),
@@ -147,7 +152,7 @@ def _detect_stale_temp(points: List[Dict]) -> List[Dict[str, Any]]:
     return issues
 
 
-def _detect_low_confidence(points: List[Dict]) -> List[Dict[str, Any]]:
+def _detect_low_confidence(points: List[Dict], low_confidence_threshold: float = 0.5) -> List[Dict[str, Any]]:
     """Detect memories with confidence below threshold.
 
     Returns list of issue dicts. Auto-fixable: bump confidence to threshold
@@ -165,11 +170,11 @@ def _detect_low_confidence(points: List[Dict]) -> List[Dict[str, Any]]:
             confidence = float(confidence)
         except (TypeError, ValueError):
             continue
-        if confidence < LOW_CONFIDENCE_THRESHOLD:
+        if confidence < low_confidence_threshold:
             issues.append({
                 "id": p["id"],
                 "type": "low_confidence",
-                "detail": f"Confidence {confidence:.2f} < {LOW_CONFIDENCE_THRESHOLD}",
+                "detail": f"Confidence {confidence:.2f} < {low_confidence_threshold}",
                 "auto_fixable": False,
                 "action": "review",
                 "category": payload.get("category", "fact"),
@@ -241,7 +246,8 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
         SICAResult with issues, suggestions, and auto-patches.
     """
     result = SICAResult()
-    coll = collection or _COLLECTION
+    cfg = _get_config()
+    coll = collection or cfg["collection"]
     _owns_client = client is None
 
     if _owns_client:
@@ -255,8 +261,8 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
         result.total_scanned = len(points)
 
         all_issues: List[Dict[str, Any]] = []
-        all_issues.extend(_detect_stale_temp(points))
-        all_issues.extend(_detect_low_confidence(points))
+        all_issues.extend(_detect_stale_temp(points, stale_temp_days=cfg["stale_temp_days"]))
+        all_issues.extend(_detect_low_confidence(points, low_confidence_threshold=cfg["low_confidence_threshold"]))
         all_issues.extend(_detect_contradictions(points))
 
         result.issues_found = len(all_issues)
@@ -269,7 +275,7 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
                     result.auto_patches.append(patch)
                     continue
             # Not auto-fixable: add as suggestion (respect MAX_SUGGESTIONS)
-            if len(result.suggestions) >= MAX_SUGGESTIONS:
+            if len(result.suggestions) >= cfg["max_suggestions"]:
                 break
             result.suggestions.append({
                 "type": issue["type"],
@@ -302,8 +308,15 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True) 
     return result
 
 
-def _store_sica_session(client: Any, collection: str, result: SICAResult) -> None:
-    """Store the SICA run outcome as a memory for future iterations."""
+def _store_sica_session(client: Any, collection: str, result: SICAResult,
+                        embedder: Any = None) -> None:
+    """Store the SICA run outcome as a memory for future iterations.
+
+    Args:
+        embedder: Optional pre-initialized EmbeddingProvider. If None, creates
+                  a new one (avoid passing None in hot paths - reuse an
+                  instance from the caller).
+    """
     try:
         from qdrant_client import models as qm
         from nexus_memory.embeddings import EmbeddingProvider
@@ -316,13 +329,14 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult) -> Non
             f"{len(result.suggestions)} suggestions."
         )
 
+        _embedder = embedder or EmbeddingProvider()
+
         # Run embedding in a separate thread to avoid event loop conflicts
         # when SICA is called from an async context (e.g. OpenClaw plugin).
         def _embed():
             loop = asyncio.new_event_loop()
             try:
-                embedder = EmbeddingProvider()
-                return loop.run_until_complete(embedder.embed(summary))
+                return loop.run_until_complete(_embedder.embed(summary))
             finally:
                 loop.close()
 
