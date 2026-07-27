@@ -283,7 +283,7 @@ class NexusMemoryProvider:
                     nid = n.get("fact_id", "")
                     if not nid or nid in seen_ids: continue
                     seen_ids.add(nid)
-                    pt = sg.store._scroll_point(nid)
+                    pt = sg.get_point(nid)
                     if not pt: continue
                     pt_payload = pt.get("payload") or {}
                     text = pt_payload.get("content", "")
@@ -518,10 +518,11 @@ class NexusMemoryProvider:
     def _sica_run(self, auto_patch: bool = True) -> Dict[str, Any]:
         """Run a SICA self-improvement cycle."""
         try:
-            from nexus.sica import run_sica
+            from nexus.sica import run_sica, _get_config
             if not self._qdrant: raise RuntimeError("Provider not initialized")
             result = run_sica(client=self._qdrant, collection=self._collection, auto_patch=auto_patch)
-            return result.to_dict()
+            cfg = _get_config()
+            return result.to_dict(max_suggestions=cfg["max_suggestions"])
         except Exception as exc:
             logger.warning("SICA run failed: %s", exc)
             return {"status": "error", "error": str(exc)}

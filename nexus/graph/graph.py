@@ -112,6 +112,14 @@ class SkillGraph:
     def has_node(self, fact_id: str) -> bool:
         return self._graph.has_node(fact_id)
 
+    def get_point(self, point_id: str) -> dict | None:
+        """Retrieve a single point by ID. Delegates to EdgeStore._scroll_point.
+
+        Public API for graph-boost and other consumers that need to fetch
+        a point's payload without going through the EdgeStore private API.
+        """
+        return self._store._scroll_point(point_id)
+
     def get_neighbors(self, fact_id: str, relation: str | None = None) -> list[dict]:
         """List adjacent facts and edge attributes.
 
