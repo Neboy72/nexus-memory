@@ -1136,7 +1136,6 @@ async def _do_update(confirm: bool = False) -> dict:
 server = Server("nexus-memory")
 
 
-@server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
     return [
         types.Tool(
@@ -1596,7 +1595,6 @@ async def handle_list_tools() -> list[types.Tool]:
     ]
 
 
-@server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     store = get_store()
 
@@ -2048,6 +2046,30 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
     else:
         raise ValueError(f"Unknown tool: {name}")
+
+
+# ── MCP v2.0.0 Handler Registration ─────────────────────────────────
+# MCP SDK v2.0.0 removed @server.list_tools() / @server.call_tool() decorators.
+# Register handlers via add_request_handler with v2-compatible wrappers.
+
+async def _list_tools_wrapper(ctx, params):
+    """Wrap handle_list_tools for MCP v2 add_request_handler signature."""
+    tools = await handle_list_tools()
+    return types.ListToolsResult(tools=tools)
+
+async def _call_tool_wrapper(ctx, params):
+    """Wrap handle_call_tool for MCP v2 add_request_handler signature."""
+    try:
+        content = await handle_call_tool(params.name, params.arguments or {})
+        return types.CallToolResult(content=list(content))
+    except Exception as e:
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=json.dumps({"status": "error", "message": str(e)}))],
+            is_error=True,
+        )
+
+server.add_request_handler("tools/list", types.PaginatedRequestParams, _list_tools_wrapper)
+server.add_request_handler("tools/call", types.CallToolRequestParams, _call_tool_wrapper)
 
 
 async def main():
