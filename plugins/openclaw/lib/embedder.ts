@@ -4,7 +4,7 @@ export type EmbeddingProvider = "voyage" | "openai" | "ollama" | "google" | "jin
 
 /** Default models and dimensions per provider. */
 const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: number; baseUrl?: string }> = {
-  voyage: { model: "voyage-3-large", dimensions: 1024 },
+  voyage: { model: "voyage-4", dimensions: 1024 },
   openai: { model: "text-embedding-3-small", dimensions: 1536 },
   ollama: { model: "nomic-embed-text", dimensions: 768, baseUrl: "http://localhost:11434" },
   google: { model: "text-embedding-004", dimensions: 768 },

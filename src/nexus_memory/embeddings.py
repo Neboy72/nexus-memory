@@ -150,7 +150,7 @@ class EmbeddingProvider:
         try:
             import voyageai
             self._client = voyageai.Client(api_key=VOYAGE_API_KEY)
-            self._name = "voyage-3-large"
+            self._name = "voyage-4"
             self._dim = 1024
             logging.info(f"Embedding: {self._name} (1024d, cloud)")
             return True
