@@ -25,3 +25,14 @@ src/nexus_memory/setup.py
 
 # Logo drafts
 docs/logo/
+
+# Nexus snapshots / local backups (never in git)
+2026*_*
+2026*_*.md
+*-bak-*
+*.bak-*
+__pycache__/
+*.egg-info/
+
+# Accidental '~' directory from backup script bug
+~/

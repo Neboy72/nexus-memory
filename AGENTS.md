@@ -85,7 +85,7 @@ Or, run these commands yourself:
           "collection": "nexus",
           "embedding": {
             "provider": "voyage",
-            "model": "voyage-3-large",
+            "model": "voyage-4",
             "apiKey": "${VOYAGE_API_KEY}"
           },
           "autoRecall": true,
