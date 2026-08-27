@@ -143,20 +143,20 @@ class TestRememberToolSchema:
         tools = await mcp.handle_list_tools()
         remember = next(t for t in tools if t.name == "remember")
 
-        assert "category" in remember.inputSchema["required"], (
+        assert "category" in remember.input_schema["required"], (
             "category must be in the `required` list so clients are forced "
             "to declare the State-Prefixing scope."
         )
-        assert "text" in remember.inputSchema["required"]
+        assert "text" in remember.input_schema["required"]
         # Confidence is optional but bounded to [0, 1].
-        confidence = remember.inputSchema["properties"]["confidence"]
+        confidence = remember.input_schema["properties"]["confidence"]
         assert confidence["minimum"] == 0.0
         assert confidence["maximum"] == 1.0
 
     async def test_recall_tool_requires_query(self):
         tools = await mcp.handle_list_tools()
         recall = next(t for t in tools if t.name == "recall")
-        assert "query" in recall.inputSchema["required"]
+        assert "query" in recall.input_schema["required"]
 
 
 # ===========================================================================
@@ -634,7 +634,7 @@ class TestEmbeddingProviderDetection:
         monkeypatch.setattr("nexus_memory.embeddings.VOYAGE_API_KEY", "vo-test-1234567890")
 
         ep = mcp.EmbeddingProvider()
-        assert ep.name == "voyage-3-large"
+        assert ep.name == "voyage-4"
         assert ep.dim == 1024
         assert ep.available is True
 
@@ -819,16 +819,16 @@ class TestWebhookTools:
     async def test_subscribe_schema_marks_fields_required(self):
         tools = await mcp.handle_list_tools()
         sub = next(t for t in tools if t.name == "subscribe")
-        assert set(sub.inputSchema["required"]) == {"event_type", "webhook_url"}
+        assert set(sub.input_schema["required"]) == {"event_type", "webhook_url"}
         # event_type must be a closed enum of the three valid event types.
-        assert set(sub.inputSchema["properties"]["event_type"]["enum"]) == {
+        assert set(sub.input_schema["properties"]["event_type"]["enum"]) == {
             "memory.remember", "memory.update", "memory.forget"
         }
 
     async def test_unsubscribe_schema_marks_id_required(self):
         tools = await mcp.handle_list_tools()
         unsub = next(t for t in tools if t.name == "unsubscribe")
-        assert unsub.inputSchema["required"] == ["subscription_id"]
+        assert unsub.input_schema["required"] == ["subscription_id"]
 
 
 class TestWebhookEventDispatch:

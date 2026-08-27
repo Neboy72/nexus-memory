@@ -679,6 +679,21 @@ class MemoryStore:
         )
         logging.info(f"Stored memory {entry_id[:8]} [{access_level}] cat={category}")
 
+        # ── BM25 index: incremental update so new memories are immediately
+        # keyword-searchable (prevents stale-index / score=0 symptoms).
+        # Non-blocking: a BM25 failure must never break remember().
+        hybrid = getattr(self, "_hybrid_retriever", None)
+        if hybrid is not None:
+            try:
+                hybrid.update_index(
+                    memories_to_add=[(entry_id, text)]
+                )
+            except Exception as bm25_err:
+                logging.warning(
+                    f"BM25 incremental update failed for {entry_id[:8]} "
+                    f"(non-blocking): {bm25_err}"
+                )
+
         # ── Auto-Discovery: find related facts via SkillGraph ───────────
         # Lightweight: if the graph is available, discover edges for the
         # newly stored fact. Wrapped in try/except so a discovery failure

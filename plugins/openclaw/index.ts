@@ -4,6 +4,7 @@ import { QdrantClient } from "./lib/qdrant-client.ts"
 import { nexusConfigSchema, parseConfig } from "./lib/config.ts"
 import { buildCaptureHandler } from "./hooks/capture.ts"
 import { buildRecallHandler } from "./hooks/recall.ts"
+import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
 import { initLogger, log } from "./logger.ts"
 import { buildMemoryRuntime, buildPromptSection } from "./runtime.ts"
 import { registerForgetTool } from "./tools/forget.ts"
@@ -98,6 +99,9 @@ export default {
     if (cfg.autoRecall) {
       api.on("before_prompt_build", buildRecallHandler(embedder, qdrantClient, cfg))
     }
+
+    // Pre-Tool Gate: forces Nexus recall + plan before non-trivial actions
+    api.on("before_tool_call", buildPreToolGateHandler(embedder, qdrantClient, cfg))
 
     if (cfg.autoCapture) {
       api.on("agent_end", buildCaptureHandler(embedder, qdrantClient, cfg))

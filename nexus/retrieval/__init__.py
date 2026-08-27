@@ -484,6 +484,24 @@ class HybridRetriever:
         if not HAS_REQUESTS:
             return []
 
+        # Dimension guard: an embedding from the wrong provider (e.g. Ollama
+        # 768d) against a 1024d collection gets rejected by Qdrant with an
+        # HTTP error — which callers then swallow into empty results. Fail
+        # loudly instead so the mismatch is diagnosable.
+        try:
+            r_dim = requests.get(
+                f"{self.qdrant_url}/collections/{self.collection}",
+                timeout=5,
+            ).json()["result"]["config"]["params"]["vectors"]["size"]
+        except Exception:
+            r_dim = None  # Qdrant unreachable — let the search attempt decide
+        if r_dim is not None and query_vector and len(query_vector) != r_dim:
+            raise ValueError(
+                f"Embedding dimension mismatch: query vector is "
+                f"{len(query_vector)}d but collection '{self.collection}' "
+                f"is {r_dim}d — wrong embedding provider (fix NEXUS_EMBEDDING_PROVIDER)"
+            )
+
         r = requests.post(
             f"{self.qdrant_url}/collections/{self.collection}/points/search",
             json={
