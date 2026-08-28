@@ -243,6 +243,10 @@ def _llm_extract_entities(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=800,
+            # glm-5.3-flash ignores "reasoning_effort":"none" and still thinks
+            # (verified 28.08: content starts with reasoning text). "think":false
+            # (Ollama) properly disables thinking; other models ignore it safely.
+            extra_body={"think": False},
         )
         if response.choices:
             raw = response.choices[0].message.content or ""
