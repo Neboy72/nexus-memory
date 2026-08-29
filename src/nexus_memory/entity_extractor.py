@@ -242,11 +242,14 @@ def _llm_extract_entities(
             model=config["model"],
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=800,
-            # glm-5.3-flash ignores "reasoning_effort":"none" and still thinks
-            # (verified 28.08: content starts with reasoning text). "think":false
-            # (Ollama) properly disables thinking; other models ignore it safely.
+            # max_tokens includes the hidden reasoning field: glm-5.3-flash "thinks"
+            # even with think:false (reasoning moved to separate field, but tokens
+            # still count). 800 was exhausted by reasoning alone on long texts ->
+            # empty content -> JSON parse fail. 4000 verified 29.08 (worst-case
+            # reasoning beobachtet). Unused budget costs nothing.
+            max_tokens=4000,
             extra_body={"think": False},
+            timeout=30,
         )
         if response.choices:
             raw = response.choices[0].message.content or ""
