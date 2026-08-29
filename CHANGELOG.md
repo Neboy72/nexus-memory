@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rerank_pool` pool size; env overrides NEXUS_RERANK / NEXUS_RERANKER).
   Disabled by default; fail-open (rerank errors return the original
   vector order). 15 new tests.
+- **Reflect insights** (roadmap 2.1) - SICA synthesizes one
+  deterministic insight per contradiction group (confidence-based winner
+  + concrete resolution suggestion) instead of review-only suggestions,
+  stored in `SICAResult.reflect_insights`. LLM-free.
+- **Entity dedup detection** (roadmap 4.2) - SICA groups
+  category=entity memories by (entity_type, casefold-normalized name);
+  duplicates surface as `merge_review` suggestions (never auto-delete;
+  keeper = oldest point) and generate a keeper-focused insight.
 - **Per-category retention policies** (roadmap 2.2) - SICA `_detect_retention`
   replaces the temp-only scan: temp=1 day, session=7 days by default,
   override via SICA_RETENTION_<CATEGORY> env vars; unlisted categories and
