@@ -57,7 +57,8 @@ class TestLoadRerankConfig:
 
         cfg = load_rerank_config(str(tmp_path / "missing.yaml"))
         assert cfg["enabled"] is False
-        assert cfg["reranker"] == "voyage"
+        # "auto" adapts per user: voyage if they have a key, local otherwise.
+        assert cfg["reranker"] == "auto"
         assert cfg["pool_k"] == 20
 
     def test_reads_config_block(self, tmp_path):
@@ -244,3 +245,34 @@ class TestRecallRerankIntegration:
             prov._recall("q1", limit=1)
             prov._recall("q2", limit=1)
         assert loader.call_count == 1  # cached after first call
+
+class TestAutoMode:
+    """User-adaptive behavior: same code, different hardware/keys per user."""
+
+    def test_auto_with_voyage_key_uses_api(self, monkeypatch):
+        import nexus_memory.reranker as rr
+
+        assert rr._resolve_reranker("auto", "pv-key-123") == "voyage"
+
+    def test_auto_without_key_uses_local(self, monkeypatch):
+        import nexus_memory.reranker as rr
+
+        assert rr._resolve_reranker("auto", None) == "cross-encoder"
+        assert rr._resolve_reranker("auto", "") == "cross-encoder"
+
+    def test_explicit_choice_beats_auto(self):
+        from nexus_memory.reranker import _resolve_reranker
+
+        assert _resolve_reranker("cross-encoder", "has-key") == "cross-encoder"
+        assert _resolve_reranker("voyage", None) == "voyage"  # fail-open in caller
+
+    def test_load_config_default_is_auto(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+        import yaml
+
+        from nexus_memory.reranker import load_rerank_config
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.safe_dump({"nexus-memory": {"rerank": True}}))
+        cfg = load_rerank_config(str(cfg_file))
+        assert cfg["reranker"] == "auto"
