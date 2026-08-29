@@ -7,7 +7,11 @@
       "nexus_store",
       "nexus_forget",
       "nexus_guardrail_check",
-      "nexus_guardrail_override"
+      "nexus_guardrail_override",
+      "nexus_graph_traverse",
+      "nexus_find_entities",
+      "nexus_get_subgraph",
+      "nexus_get_related"
     ]
   },
   "uiHints": {
