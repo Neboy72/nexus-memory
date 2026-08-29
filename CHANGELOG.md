@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Cross-Encoder Reranking** (roadmap 1.2) - new `nexus_memory/reranker.py`;
   optional rerank step in the Hermes plugin `_recall` pipeline. Config-driven
-  via `nexus-memory.rerank` in `~/.hermes/config.yaml` (reranker: voyage
-  API or cross-encoder local, rerank_pool pool size; env overrides
-  NEXUS_RERANK / NEXUS_RERANKER). Disabled by default; fail-open (rerank
-  errors return the original vector order). 12 new tests.
+  via `nexus-memory.rerank` in `~/.hermes/config.yaml` (reranker: `auto`
+  default - adapts per user: Voyage API when a key is present, free local
+  CrossEncoder otherwise - or explicit `voyage` / `cross-encoder`;
+  `rerank_pool` pool size; env overrides NEXUS_RERANK / NEXUS_RERANKER).
+  Disabled by default; fail-open (rerank errors return the original
+  vector order). 15 new tests.
 - **Per-category retention policies** (roadmap 2.2) - SICA `_detect_retention`
   replaces the temp-only scan: temp=1 day, session=7 days by default,
   override via SICA_RETENTION_<CATEGORY> env vars; unlisted categories and
