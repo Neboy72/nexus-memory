@@ -44,8 +44,7 @@ function extractTargets(command: string): string[] {
 }
 
 function normalizePath(path: string): string {
-  let p = path.replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase()
-  if (p.length > 1) p = p.replace(/\/$/, "")
+  const p = path.replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase()
   return p
 }
 
@@ -67,17 +66,16 @@ interface ProtectionRule {
   sourceId: string
 }
 
-async function loadProtectionRules(qdrantClient: QdrantClient, collection: string): Promise<ProtectionRule[]> {
+async function loadProtectionRules(qdrantClient: QdrantClient, _collection: string): Promise<ProtectionRule[]> {
   try {
-    const results = await qdrantClient.scroll(collection, {
-      filter: { must: [{ key: "category", match: { value: "rule" } }] },
-      limit: 200,
-      withPayload: true,
-      withVector: false,
-    })
+    // QdrantClient is already bound to the configured collection.
+    const points = await qdrantClient.scrollFiltered(
+      { must: [{ key: "category", match: { value: "rule" } }] },
+      200,
+    )
 
     const rules: ProtectionRule[] = []
-    for (const point of results.points || []) {
+    for (const point of points) {
       const payload = (point.payload || {}) as Record<string, unknown>
       const text = (payload.content as string) || ""
       const textLower = text.toLowerCase()
@@ -113,105 +111,114 @@ export function registerGuardrailCheckTool(
   cfg: NexusConfig,
   toolName = "nexus_guardrail_check",
 ): void {
-  api.registerTool(
-    {
-      name: toolName,
-      label: "Nexus Guardrail Check",
-      description:
-        "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (rm, drop, kill, overwrite).",
-      parameters: Type.Object({
-        command: Type.String({ description: "The command string to check (e.g. 'rm -rf ~/project/')" }),
-        tool_name: Type.Optional(Type.String({ description: "The tool being called", default: "" })),
-        tool_input: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-      }),
-    },
-    async (params: { command: string; tool_name?: string; tool_input?: Record<string, unknown> }) => {
-      const { command, tool_name: toolName = "", tool_input: toolInput = {} } = params
+  api.registerTool({
+    name: toolName,
+    label: "Nexus Guardrail Check",
+    description:
+      "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (rm, drop, kill, overwrite).",
+    parameters: Type.Object({
+      command: Type.String({ description: "The command string to check (e.g. 'rm -rf ~/project/')" }),
+      tool_name: Type.Optional(Type.String({ description: "The tool being called", default: "" })),
+      tool_input: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { command: string; tool_name?: string; tool_input?: Record<string, unknown> },
+    ) {
+      const { command, tool_name: checkedToolName = "", tool_input: toolInput = {} } = params
+
+      let result: Record<string, unknown>
 
       if (!command) {
-        return { verdict: "allow", reason: "Empty command" }
-      }
+        result = { verdict: "allow", reason: "Empty command" }
+      } else {
+        const fullInput = `${checkedToolName} ${command} ${JSON.stringify(toolInput)}`
+        const action = classifyAction(fullInput)
 
-      const fullInput = `${toolName} ${command} ${JSON.stringify(toolInput)}`
-      const action = classifyAction(fullInput)
+        if (!action) {
+          result = { verdict: "allow", reason: "Non-destructive action" }
+        } else {
+          let targets = extractTargets(fullInput)
+          // Also check tool_input values for paths
+          if (toolInput && typeof toolInput === "object") {
+            for (const v of Object.values(toolInput)) {
+              if (typeof v === "string" && (v.includes("/") || v.includes("~"))) {
+                targets = targets.concat(extractTargets(v))
+              }
+            }
+          }
 
-      if (!action) {
-        return { verdict: "allow", reason: "Non-destructive action" }
-      }
+          if (targets.length === 0) {
+            result = { verdict: "allow", reason: `Destructive action (${action}) but no protected target` }
+          } else {
+            const rules = await loadProtectionRules(qdrantClient, cfg.collection || "nexus")
+            if (rules.length === 0) {
+              result = { verdict: "allow", reason: `Destructive action (${action}) but no protection rules` }
+            } else {
+              const matched: Array<Record<string, unknown>> = []
+              for (const target of targets) {
+                for (const rule of rules) {
+                  if (pathMatches(target, rule.path)) {
+                    matched.push({
+                      target,
+                      protected_path: rule.path,
+                      rule_text: rule.ruleText,
+                      source_memory_id: rule.sourceId,
+                      action,
+                    })
+                  }
+                }
+              }
 
-      let targets = extractTargets(fullInput)
-      // Also check tool_input values for paths
-      if (toolInput && typeof toolInput === "object") {
-        for (const v of Object.values(toolInput)) {
-          if (typeof v === "string" && (v.includes("/") || v.includes("~"))) {
-            targets = targets.concat(extractTargets(v))
+              if (matched.length > 0) {
+                result = {
+                  verdict: "block",
+                  reason: `Destructive action (${action}) on protected target`,
+                  matched_rules: matched,
+                }
+              } else {
+                result = { verdict: "allow", reason: `Destructive action (${action}) on unprotected target` }
+              }
+            }
           }
         }
       }
 
-      if (targets.length === 0) {
-        return { verdict: "allow", reason: `Destructive action (${action}) but no protected target` }
-      }
-
-      const rules = await loadProtectionRules(qdrantClient, cfg.collection || "nexus")
-      if (rules.length === 0) {
-        return { verdict: "allow", reason: `Destructive action (${action}) but no protection rules` }
-      }
-
-      const matched: Array<Record<string, unknown>> = []
-      for (const target of targets) {
-        for (const rule of rules) {
-          if (pathMatches(target, rule.path)) {
-            matched.push({
-              target,
-              protected_path: rule.path,
-              rule_text: rule.ruleText,
-              source_memory_id: rule.sourceId,
-              action,
-            })
-          }
-        }
-      }
-
-      if (matched.length > 0) {
-        return {
-          verdict: "block",
-          reason: `Destructive action (${action}) on protected target`,
-          matched_rules: matched,
-        }
-      }
-
-      return { verdict: "allow", reason: `Destructive action (${action}) on unprotected target` }
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }
     },
-  )
+  })
 }
 
 export function registerGuardrailOverrideTool(
   api: OpenClawPluginApi,
   qdrantClient: QdrantClient,
   cfg: NexusConfig,
-  embedder: { embed: (text: string) => Promise<number[]>; dim: number },
+  embedder: { embed: (text: string) => Promise<number[]> },
   toolName = "nexus_guardrail_override",
 ): void {
-  api.registerTool(
-    {
-      name: toolName,
-      label: "Nexus Guardrail Override",
-      description:
-        "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.",
-      parameters: Type.Object({
-        command: Type.String({ description: "The command that was blocked" }),
-        reasoning: Type.String({ description: "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters." }),
-        matched_rules: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()))),
-        agent_id: Type.Optional(Type.String({ default: "unknown" })),
-      }),
-    },
-    async (params: { command: string; reasoning: string; matched_rules?: unknown[]; agent_id?: string }) => {
+  api.registerTool({
+    name: toolName,
+    label: "Nexus Guardrail Override",
+    description:
+      "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.",
+    parameters: Type.Object({
+      command: Type.String({ description: "The command that was blocked" }),
+      reasoning: Type.String({ description: "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters." }),
+      matched_rules: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()))),
+      agent_id: Type.Optional(Type.String({ default: "unknown" })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { command: string; reasoning: string; matched_rules?: unknown[]; agent_id?: string },
+    ) {
       const { command, reasoning, matched_rules: matchedRules = [], agent_id: agentId = "unknown" } = params
 
       const trimmedReasoning = reasoning.trim()
       if (!trimmedReasoning || trimmedReasoning.length < 10) {
-        return { status: "error", error: "Override requires explicit reasoning (min 10 chars)." }
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({ status: "error", error: "Override requires explicit reasoning (min 10 chars)." }) }],
+        }
       }
 
       try {
@@ -219,31 +226,28 @@ export function registerGuardrailOverrideTool(
         const auditText = `GUARDRAIL OVERRIDE: ${command} | Reasoning: ${trimmedReasoning} | Agent: ${agentId}`
         const vector = await embedder.embed(auditText)
 
-        await qdrantClient.upsert(cfg.collection || "nexus", {
-          points: [
-            {
-              id: overrideId,
-              vector,
-              payload: {
-                content: auditText,
-                category: "session",
-                access_level: "private",
-                guardrail_override: true,
-                overridden_command: command,
-                reasoning: trimmedReasoning,
-                agent_id: agentId,
-                matched_rules: matchedRules,
-                timestamp: new Date().toISOString(),
-              },
-            },
-          ],
+        await qdrantClient.upsert(overrideId, vector, {
+          content: auditText,
+          category: "session",
+          access_level: "private",
+          guardrail_override: true,
+          overridden_command: command,
+          reasoning: trimmedReasoning,
+          agent_id: agentId,
+          matched_rules: matchedRules,
+          timestamp: new Date().toISOString(),
         })
 
-        return { status: "override_recorded", override_id: overrideId }
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ status: "override_recorded", override_id: overrideId }) }],
+        }
       } catch (exc) {
         log.warn(`Guardrail override failed: ${exc}`)
-        return { status: "error", error: String(exc) }
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({ status: "error", error: String(exc) }) }],
+        }
       }
     },
-  )
+  })
 }
