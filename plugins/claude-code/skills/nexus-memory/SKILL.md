@@ -34,7 +34,7 @@ Environment variables (set in `.env` or shell):
 | `NEXUS_COLLECTION` | `nexus` | Qdrant collection name |
 | `NEXUS_EMBEDDING_PROVIDER` | `voyage` | Embedding provider (voyage/ollama) |
 | `VOYAGE_API_KEY` | - | Voyage AI API key |
-| `NEXUS_EMBEDDING_MODEL` | `voyage-3-large` | Embedding model |
+| `NEXUS_EMBEDDING_MODEL` | `voyage-4` | Embedding model |
 | `NEXUS_MAX_RECALL` | `5` | Max memories to inject per prompt |
 | `NEXUS_OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Ollama embed model |
 

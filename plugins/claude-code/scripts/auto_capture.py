@@ -20,7 +20,7 @@ from pathlib import Path
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
-EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-3-large")
+EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 

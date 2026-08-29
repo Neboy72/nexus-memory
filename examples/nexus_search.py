@@ -41,7 +41,7 @@ if voyage_key:
         resp = requests.post(
             'https://api.voyageai.com/v1/embeddings',
             headers={'Authorization': f'Bearer {voyage_key}'},
-            json={'input': query, 'model': 'voyage-3-large'},
+            json={'input': query, 'model': 'voyage-4'},
             timeout=15
         )
         if 200 <= resp.status_code < 300:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-embed all Qdrant points from voyage-3-large to voyage-4.
+"""Re-embed all Qdrant points from legacy voyage-3-large to voyage-4.
 
 Reads all points from each collection, re-embeds the text content
 with voyage-4, and upserts the new vectors back.

@@ -82,9 +82,9 @@ mkdir -p "${OPENCLAW_STATE_DIR}"
 detect_embedding() {
     if [ -n "${VOYAGE_API_KEY:-}" ]; then
         EMBEDDING_PROVIDER="voyage"
-        EMBEDDING_MODEL="voyage-3-large"
+        EMBEDDING_MODEL="voyage-4"
         EMBEDDING_APIKEY='${VOYAGE_API_KEY}'
-        echo -e "${GREEN}✓${NC} Embedding: Voyage (voyage-3-large, 1024d)"
+        echo -e "${GREEN}✓${NC} Embedding: Voyage (voyage-4, 1024d)"
     elif [ -n "${OPENAI_API_KEY:-}" ]; then
         EMBEDDING_PROVIDER="openai"
         EMBEDDING_MODEL="text-embedding-3-small"
@@ -107,7 +107,7 @@ detect_embedding() {
         echo -e "${GREEN}✓${NC} Embedding: Ollama (nomic-embed-text, 768d) — local, no API key needed"
     else
         EMBEDDING_PROVIDER="voyage"
-        EMBEDDING_MODEL="voyage-3-large"
+        EMBEDDING_MODEL="voyage-4"
         EMBEDDING_APIKEY='${VOYAGE_API_KEY}'
         echo -e "${YELLOW}⚠${NC} No embedding provider detected. Defaulting to Voyage."
         echo "  Set one of: VOYAGE_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, JINA_API_KEY"

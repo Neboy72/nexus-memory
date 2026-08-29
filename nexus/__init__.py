@@ -947,7 +947,7 @@ def _embed_voyage(query: str) -> list[float] | None:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={"input": [query], "model": "voyage-3-large"},
+            json={"input": [query], "model": "voyage-4"},
             timeout=10,
         )
         data = r.json()
