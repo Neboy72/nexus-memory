@@ -12,7 +12,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.13.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.13.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-578%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -577,6 +577,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.13.1** | 2026-08-30 | OpenClaw plugin update-check (24h cache, semver, once-per-lifetime nudge) - update-notification parity across all 3 install paths |
 | **v0.13.0** | 2026-08-31 | Point-in-Time-Queries (as_of), supersede_reason in deprecated payload, skill-health monitor (review-only), 571 tests |
 | **v0.12.0** | 2026-08-30 | Latency benchmark (p50=485ms/p95=610ms honest baseline), EmbedCache L0 (repeated queries skip Voyage ~256ms), prefetch token budget (~65% context saved), data flywheel (access_count), autonomous SICA purge (3-of-3 rule), 568 tests |
 | **v0.11.0** | 2026-08-30 | Superseded-by recall skip (deprecated never surfaces), auto entity enrichment on nexus_remember (daemon, hash-dedup, opt-out), lifecycle filter before rerank, shared session-end entity path, 558 tests |
