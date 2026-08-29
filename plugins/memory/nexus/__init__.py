@@ -16,7 +16,8 @@ _PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 _COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
 
 # Tool schemas (OpenAI function-calling format)
-RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5}}, "required": ["query"]}}
+RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
+                  "as_of": {"type": "string", "description": "Point-in-time: YYYY-MM-DD - only memories created on/before this date.", "default": ""}}, "required": ["query"]}}
 REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "public"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}}, "required": ["text"]}}
 FORGET_SCHEMA = {"name": "nexus_forget", "description": "Delete a memory from Nexus Memory by ID.", "parameters": {"type": "object", "properties": {"memory_id": {"type": "string", "description": "The memory ID to delete."}}, "required": ["memory_id"]}}
 GUARDRAIL_CHECK_SCHEMA = {"name": "nexus_guardrail_check", "description": "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (rm, drop, kill, overwrite).", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command string to check (e.g. 'rm -rf ~/project/')"}, "tool_name": {"type": "string", "description": "The tool being called (e.g. 'terminal', 'write_file')", "default": ""}, "tool_input": {"type": "object", "description": "Full tool input dict for path-based checks", "default": {}}}, "required": ["command"]}}
@@ -395,7 +396,9 @@ class NexusMemoryProvider:
                             points=[qmodels.PointStruct(id=eid, vector=vector, payload=payload)])
         return {"status": "ok", "id": eid, "category": category}
 
-    def _recall(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+    def _recall(self, query: str, limit: int = 5, as_of: str = "") -> List[Dict[str, Any]]:
+        """Roadmap 4.5: as_of='YYYY-MM-DD' limits recall to memories
+        created on/before that date (point-in-time view). Empty = no filter."""
         if not self._embedder or not self._qdrant: return []
         flywheel: List[str] = []  # roadmap 4.9: top-3 recalled point ids
         # Rerank config is read once and cached (double-checked lock,
@@ -433,6 +436,9 @@ class NexusMemoryProvider:
             # audit but never surface in recall (mirrors MCP server filter).
             # Missing lifecycle_status (legacy points) stays visible.
             if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
+                continue
+            # Roadmap 4.5: point-in-time - skip memories newer than as_of
+            if as_of and (pl.get("created_at") or "")[:10] > as_of:
                 continue
             pid = pl.get("id") or str(p.id)
             seen_ids.add(pid)
@@ -659,7 +665,8 @@ class NexusMemoryProvider:
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> str:
         try:
             if tool_name == "nexus_recall":
-                result = self._recall(args.get("query", ""), args.get("limit", 5))
+                result = self._recall(args.get("query", ""), args.get("limit", 5),
+                                      as_of=args.get("as_of", ""))
             elif tool_name == "nexus_remember":
                 result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
                                       access_level=args.get("access_level", "public"),
