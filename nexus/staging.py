@@ -207,7 +207,7 @@ def _embed_content(text: str) -> list[float]:
 
     try:
         if _EMBED_PROVIDER == "voyage":
-            result = _VOYAGE_CLIENT.embed([text], model="voyage-3-large")
+            result = _VOYAGE_CLIENT.embed([text], model="voyage-4")
             return result.embeddings[0]
         elif _EMBED_PROVIDER == "openai":
             result = _VOYAGE_CLIENT.embeddings.create(model="text-embedding-3-small", input=[text])

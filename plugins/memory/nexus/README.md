@@ -22,7 +22,7 @@ Select **nexus** from the provider list. The wizard will guide you through confi
 | `voyage_api_key` | Voyage AI API key (secret, stored in `.env`) | No | — |
 | `collection_name` | Qdrant collection name | No | `nexus` |
 
-**Embedding auto-detection:** If `VOYAGE_API_KEY` is set (starts with `vo-` or `pa-`), the plugin uses Voyage AI's `voyage-3-large` (1024d, cloud). Otherwise it falls back to `sentence-transformers` with `all-MiniLM-L6-v2` (384d, local).
+**Embedding auto-detection:** If `VOYAGE_API_KEY` is set (starts with `vo-` or `pa-`), the plugin uses Voyage AI's `voyage-4` (1024d, cloud). Otherwise it falls back to `sentence-transformers` with `all-MiniLM-L6-v2` (384d, local).
 
 ## Shared Store
 
