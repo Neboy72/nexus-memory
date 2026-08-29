@@ -1,14 +1,14 @@
-"""SICA — Self-Improving Coding Agent Cycle for Nexus Memory.
+"""SICA - Self-Improving Coding Agent Cycle for Nexus Memory.
 
 The SICA module implements a self-improvement loop:
 
-1. **Detect** — Scan memories for drift, contradictions, stale facts,
+1. **Detect** - Scan memories for drift, contradictions, stale facts,
    and low-confidence beliefs.
-2. **Reflect** — Generate improvement suggestions (skill drafts, memory
+2. **Reflect** - Generate improvement suggestions (skill drafts, memory
    corrections, belief updates).
-3. **Act** — Apply non-destructive patches automatically (category fixes,
+3. **Act** - Apply non-destructive patches automatically (category fixes,
    confidence adjustments). Destructive changes require user confirmation.
-4. **Learn** — Store the outcome as a SICA session for the next iteration.
+4. **Learn** - Store the outcome as a SICA session for the next iteration.
 
 Design principles:
 - **Heuristic fallback always.** If the LLM is unavailable, SICA runs
@@ -17,7 +17,7 @@ Design principles:
 - **Non-destructive by default.** Automatic patches only change metadata
   (category, confidence, status). Content changes always require user
   confirmation.
-- **Stateless recovery.** Each SICA run is independent — no persistent
+- **Stateless recovery.** Each SICA run is independent - no persistent
   state between runs. The "memory" of past SICA runs lives in the
   ``sica_session`` memories stored in Qdrant itself.
 - **Harness-independent.** SICA runs as a Python module that any plugin
@@ -594,7 +594,7 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
                 "confidence": issue.get("confidence", 0),
             })
 
-        # Phase 3: Learn — store SICA session as a memory
+        # Phase 3: Learn - store SICA session as a memory
         if result.issues_found > 0 or result.auto_patches:
             _store_sica_session(client, coll, result, embedder=embedder)
 
