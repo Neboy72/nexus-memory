@@ -5,7 +5,34 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v0.11.0] - 2026-08-30
+## [v0.12.0] - 2026-08-30
+
+### Added
+
+- **Latency benchmark** (roadmap 3.3) - `scripts/bench_latency.py`:
+  p50/p95/p99 over 30 real queries (embed + qdrant + filter + rerank +
+  graph). Baseline: p50=485ms, p95=610ms. Breakdown: Voyage embed ~256ms
+  (53%), Qdrant ~9ms (2%), rerank+graph ~220ms (45%). The <100ms target
+  needs the cloud-roundtrip removal track, not query tuning. Honest
+  report, not aspirational numbers.
+- **EmbedCache L0** (roadmap 3.1) - new `nexus_memory/embed_cache.py`:
+  thread-safe LRU (256) for query vectors. `_recall` and `_do_prefetch`
+  reuse repeated queries - second hit skips the ~256ms Voyage roundtrip
+  and its API cost. Semantic no-op. 5 tests.
+- **Prefetch token budget** (roadmap 3.1b) - auto-injected memory context
+  was up to ~3.5k chars; now capped by `NEXUS_PREFETCH_CHARS` (default
+  1200) with item-boundary-aware trimming. ~65% context tokens saved per
+  message. 1 test.
+- **Data flywheel** (roadmap 4.9) - recall bumps `access_count` + sets
+  `last_accessed` on the top-3 hits in a fire-and-forget daemon thread;
+  results order never touched. SICA can use access_count as trust signal.
+  1 e2e test.
+- **Autonomous purge** (roadmap 4.8) - SICA `_detect_low_confidence` now
+  auto-deletes memories that are conf<0.2 **and** never accessed **and**
+  older than 30 days (3-of-3 rule; everything else stays review-only).
+  `_apply_auto_patch` accepts the new delete type. Unit + e2e tests.
+
+
 
 ### Added
 

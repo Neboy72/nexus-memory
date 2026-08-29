@@ -12,7 +12,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.11.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.12.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-578%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -538,7 +538,9 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 🧹 **Retention Policies** | **✅ Per-category TTL** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 💡 **Reflect Insights** | **✅ Conflict resolution hints** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧬 **Entity Dedup** | **✅ Merge-review, no data loss** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| 💾 **Auto-Backup** | **✅ Every 6h** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| ⚡ **Embed Cache (L0)** | **✅ Repeated queries free** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🎯 **Prefetch Token Budget** | **✅ Env-tunable** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 💾 **Auto-Backup** | **✅ Every 6h** | **✅ Every 6h** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 📦 **Update Notifications** | **✅ Auto-check GitHub** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Access Control** | **✅ public/trusted/private** | ✅ Permissions | ❌ | ❌ | ❌ | ❌ |
@@ -575,6 +577,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.12.0** | 2026-08-30 | Latency benchmark (p50=485ms/p95=610ms honest baseline), EmbedCache L0 (repeated queries skip Voyage ~256ms), prefetch token budget (~65% context saved), data flywheel (access_count), autonomous SICA purge (3-of-3 rule), 568 tests |
 | **v0.11.0** | 2026-08-30 | Superseded-by recall skip (deprecated never surfaces), auto entity enrichment on nexus_remember (daemon, hash-dedup, opt-out), lifecycle filter before rerank, shared session-end entity path, 558 tests |
 | **v0.10.0** | 2026-08-30 | Cross-Encoder Reranking (auto: Voyage if key, free local else), per-category retention policies, SICA reflect insights (one deterministic insight per contradiction group), entity dedup detection, 549 tests |
 | **v0.9.1** | 2026-07-27 | Fix: discovery content-dict handling, SICA session storage dimension mismatch (768d vs 1024d), 578 tests |
