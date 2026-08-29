@@ -76,6 +76,7 @@ class NexusMemoryProvider:
         self._skill_graph = None  # cached SkillGraph for graph-boost
         self._skill_graph_lock = threading.Lock()
         self._rerank_cfg = None  # cached rerank config (lazy, roadmap 1.2)
+        self._embed_cache = None  # roadmap 3.1 L0: lazy EmbedCache
         self._entity_extract_lock = threading.Lock()  # single-flight enrich (1.1)
         self._rerank_lock = threading.Lock()
 
@@ -245,6 +246,22 @@ class NexusMemoryProvider:
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         threading.Thread(target=self._do_prefetch, args=(query,), name="nexus-prefetch", daemon=True).start()
 
+    def _get_embed_cache(self):
+        """Roadmap 3.1 L0: lazy EmbedCache (repeated queries skip Voyage)."""
+        if getattr(self, "_embed_cache", None) is None:
+            from nexus_memory.embed_cache import EmbedCache
+            self._embed_cache = EmbedCache()
+        return self._embed_cache
+
+    def _embed_cached(self, text: str) -> List[float]:
+        """Embed with L0 cache: hit = no cloud call (~256ms saved)."""
+        cache = self._get_embed_cache()
+        vec = cache.get(text)
+        if vec is None:
+            vec = self._embedder.embed(text)
+            cache.put(text, vec)
+        return vec
+
     def _get_skill_graph(self):
         """Get or create a cached SkillGraph instance."""
         with self._skill_graph_lock:
@@ -304,7 +321,7 @@ class NexusMemoryProvider:
     def _do_prefetch(self, query: str) -> None:
         if not self._embedder or not self._qdrant: return
         try:
-            vector = self._embedder.embed(query)
+            vector = self._embed_cached(query)
             pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=5).points
             items: List[str] = []
             for p in pts:
@@ -363,7 +380,7 @@ class NexusMemoryProvider:
                 if self._rerank_cfg is None:
                     from nexus_memory.reranker import load_rerank_config
                     self._rerank_cfg = load_rerank_config()
-        vector = self._embedder.embed(query)
+        vector = self._embed_cached(query)
         cfg = self._rerank_cfg
         fetch_k = max(limit, 1)
         if cfg.get("enabled"):
