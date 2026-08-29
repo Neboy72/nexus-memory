@@ -7,7 +7,8 @@ import { buildRecallHandler } from "./hooks/recall.ts"
 import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
 import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts"
 import { initLogger, log } from "./logger.ts"
-import { buildMemoryRuntime, buildPromptSection } from "./runtime.ts"
+import { buildMemoryRuntime, buildPromptSection, setUpdateCheckResult } from "./runtime.ts"
+import { checkForUpdate } from "./lib/update-check.ts"
 import { registerForgetTool } from "./tools/forget.ts"
 import { registerSearchTool } from "./tools/search.ts"
 import { registerStoreTool } from "./tools/store.ts"
@@ -66,6 +67,11 @@ export default {
         `nexus: Qdrant collection not ready — will be created on first write. Make sure Qdrant is running at ${cfg.qdrantUrl}`,
       )
     })
+
+    // Roadmap v0.13.1: fire-and-forget update check (fail-open, 24h cache)
+    checkForUpdate()
+      .then((result) => setUpdateCheckResult(result))
+      .catch(() => setUpdateCheckResult({ available: false, latest: "", url: "" }))
 
     // Register memory capability
     const memoryRuntime = buildMemoryRuntime(qdrantClient)
