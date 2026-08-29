@@ -23,8 +23,20 @@ logger = logging.getLogger("nexus.hermes_plugin.rerank")
 
 # Defaults (conservative): rerank only the top pool, return at most this many.
 DEFAULT_POOL_K = 20
-DEFAULT_RERANKER = "voyage"
+DEFAULT_RERANKER = "auto"  # "auto" = voyage if key present, else local cross-encoder
 MAX_DOC_CHARS = 1000  # truncation cap for reranker documents
+
+
+def _resolve_reranker(reranker: str, voyage_api_key: Optional[str]) -> str:
+    """Resolve "auto" to a concrete reranker based on what the user HAS.
+
+    User with VOYAGE_API_KEY -> Voyage Rerank (best quality, API-cost).
+    Everyone else -> local CrossEncoder (free, CPU, ~50ms per 50 docs).
+    This is how the same code adapts from user to user without config.
+    """
+    if reranker != "auto":
+        return reranker
+    return "voyage" if voyage_api_key else "cross-encoder"
 
 
 def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
@@ -103,6 +115,7 @@ def rerank_points(
     if not results:
         return points
 
+    reranker = _resolve_reranker(reranker, voyage_api_key)
     try:
         if reranker == "voyage" and voyage_api_key:
             ranked = _rerank_voyage(query, results, voyage_api_key)
