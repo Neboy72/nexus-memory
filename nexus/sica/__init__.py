@@ -307,7 +307,12 @@ def _detect_low_confidence(points: List[Dict], low_confidence_threshold: float =
         if confidence < low_confidence_threshold:
             # Roadmap 4.8 autonomous: confidence < 0.2 + never accessed +
             # older than 30 days -> safe auto-delete. Everything else review.
-            never_used = int(payload.get("access_count", 0) or 0) == 0
+            # Legacy points ohne access_count-Feld gelten NICHT als never_used
+            # (review fix: fehlendes Feld = unbekannt = fail-safe review-only)
+            if "access_count" not in payload:
+                never_used = False
+            else:
+                never_used = int(payload.get("access_count", 0) or 0) == 0
             age = _age_days(payload.get("created_at"))
             purgeable = never_used and confidence < 0.2 and age > 30
             issues.append({
