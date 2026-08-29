@@ -357,6 +357,33 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
     return issues
 
 
+def _detect_skill_health(points: List[Dict], stale_days: int = 180) -> List[Dict[str, Any]]:
+    """Roadmap 4.10: skill-health monitor (review-only, never auto-delete).
+
+    Memories with category='skill' that have not been accessed in
+    ``stale_days`` become review suggestions. Skills decay by lack of
+    use, not by error - so deletion is never automatic.
+    """
+    issues: List[Dict[str, Any]] = []
+    for p in points:
+        payload = p.get("payload") or {}
+        if payload.get("category") != "skill":
+            continue
+        age = _age_days(payload.get("last_accessed") or payload.get("created_at"))
+        if age <= stale_days:
+            continue
+        issues.append({
+            "id": p["id"],
+            "type": "skill_stale",
+            "detail": f"Skill unused for {int(age)} days",
+            "auto_fixable": False,
+            "action": "review",
+            "category": "skill",
+            "confidence": 0.5,
+        })
+    return issues
+
+
 def _synthesize_insights(
     issues: List[Dict[str, Any]],
     points: List[Dict],
@@ -568,6 +595,8 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
         all_issues.extend(_detect_contradictions(points))
         # Roadmap 4.2: duplicate entities surface as merge-review issues
         all_issues.extend(_detect_entity_duplicates(points))
+        # Roadmap 4.10: skill health review (never auto-delete)
+        all_issues.extend(_detect_skill_health(points))
 
         result.issues_found = len(all_issues)
 
