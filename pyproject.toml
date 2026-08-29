@@ -1,6 +1,6 @@
 [project]
 name = "nexus-memory"
-version = "0.9.1"
+version = "0.10.0"
 description = "Universal Memory Layer for AI Agents — MCP-powered, self-hosted, secure."
 authors = [{ name = "Nebo" }]
 license = { file = "LICENSE" }

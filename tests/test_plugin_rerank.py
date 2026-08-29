@@ -35,7 +35,7 @@ def _pool() -> list:
         _pt("p3", "routing: how to route fallback providers", 0.85),
         _pt("p4", "cat pictures collection", 0.80),
         _pt("p5", "deepseek routing table for fallback", 0.77),
-        _pt("p6", "", 0.75),  # no content — must keep relative order at end
+        _pt("p6", "", 0.75),  # no content - must keep relative order at end
     ]
 
 
@@ -136,7 +136,7 @@ class TestRerankPoints:
         # p2/p3/p5 all match 2 terms; tie-break keeps original sequence.
         assert [p.id for p in out[:3]] == ["p2", "p3", "p5"]
         assert [p.id for p in out[3:5]] == ["p1", "p4"]
-        # p6 (no text) is beyond pool — appended at the end, preserved.
+        # p6 (no text) is beyond pool - appended at the end, preserved.
         assert out[-1].id == "p6"
 
     def test_fail_open_on_exception(self, monkeypatch):

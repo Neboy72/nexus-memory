@@ -1,4 +1,4 @@
-"""Tests for roadmap 2.1 Reflect-Verstärkung: _synthesize_insights.
+"""Tests for roadmap 2.1 reflect insights: _synthesize_insights.
 
 SICA's Reflect phase synthesizes ONE deterministic insight per
 contradiction group instead of only emitting review suggestions.
