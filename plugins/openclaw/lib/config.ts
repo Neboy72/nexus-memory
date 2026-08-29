@@ -16,6 +16,7 @@ export type NexusConfig = {
   embedding: EmbeddingConfig
   autoRecall: boolean
   autoCapture: boolean
+  thoughtFilter: boolean
   maxRecallResults: number
   accessLevel: AccessLevel
   debug: boolean
@@ -27,6 +28,7 @@ const ALLOWED_KEYS = [
   "embedding",
   "autoRecall",
   "autoCapture",
+  "thoughtFilter",
   "maxRecallResults",
   "accessLevel",
   "debug",
@@ -158,6 +160,7 @@ export function parseConfig(raw: unknown): NexusConfig {
     embedding,
     autoRecall: (cfg.autoRecall as boolean) ?? true,
     autoCapture: (cfg.autoCapture as boolean) ?? true,
+    thoughtFilter: (cfg.thoughtFilter as boolean) ?? true,
     maxRecallResults: (cfg.maxRecallResults as number) ?? 10,
     accessLevel,
     debug: (cfg.debug as boolean) ?? false,
@@ -183,6 +186,7 @@ export const nexusConfigSchema = {
       },
       autoRecall: { type: "boolean" },
       autoCapture: { type: "boolean" },
+      thoughtFilter: { type: "boolean" },
       maxRecallResults: { type: "number" },
       accessLevel: { type: "string", enum: VALID_ACCESS_LEVELS },
       debug: { type: "boolean" },

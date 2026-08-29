@@ -5,6 +5,7 @@ import { nexusConfigSchema, parseConfig } from "./lib/config.ts"
 import { buildCaptureHandler } from "./hooks/capture.ts"
 import { buildRecallHandler } from "./hooks/recall.ts"
 import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
+import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts"
 import { initLogger, log } from "./logger.ts"
 import { buildMemoryRuntime, buildPromptSection } from "./runtime.ts"
 import { registerForgetTool } from "./tools/forget.ts"
@@ -102,6 +103,14 @@ export default {
 
     // Pre-Tool Gate: forces Nexus recall + plan before non-trivial actions
     api.on("before_tool_call", buildPreToolGateHandler(embedder, qdrantClient, cfg))
+
+    // Thought-Filter (29.08.2026): GLM-5.x emittiert CoT als plain text
+    // (GitHub #42062) — filtert Reasoning-Blöcke vor dem Senden.
+    // Standard: an. Ausschaltbar via thoughtFilter: false in Plugin-Config.
+    if (cfg.thoughtFilter !== false) {
+      api.on("message_sending", buildThoughtFilterHandler())
+      log.info("thought-filter: message_sending hook aktiv")
+    }
 
     if (cfg.autoCapture) {
       api.on("agent_end", buildCaptureHandler(embedder, qdrantClient, cfg))
