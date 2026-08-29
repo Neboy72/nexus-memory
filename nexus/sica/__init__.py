@@ -38,18 +38,85 @@ from nexus.config import get_collection
 logger = logging.getLogger(__name__)
 
 
+def _safe_int(raw: str, fallback):
+    """Parse an int env value; return fallback on garbage (fail-open SICA)."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _safe_float(raw: str, fallback: float) -> float:
+    """Parse a float env value; return fallback on garbage (fail-open SICA)."""
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _get_config() -> Dict[str, Any]:
     """Read SICA config at call time (not import time).
 
     Reads env vars on each call so changes after import take effect.
+
+    Retention policies (roadmap 2.2): per-category max age in days.
+    Built-in categories: ``temp`` (SICA_RETENTION_TEMP, fallback legacy
+    SICA_STALE_TEMP_DAYS, default 7) and ``session``
+    (SICA_RETENTION_SESSION, default 7). Any other category can be set
+    via its own ``SICA_RETENTION_<CATEGORY>`` env var. Categories not
+    listed and without an env var default to ``default_retention_days``
+    (None = keep forever).
     """
-    return {
+    default_retention: Optional[int] = None
+    raw_default = os.environ.get("SICA_DEFAULT_RETENTION_DAYS", "")
+    if raw_default.strip():
+        try:
+            default_retention = int(raw_default)
+        except ValueError:
+            default_retention = None
+    # Generic SICA_RETENTION_<CATEGORY> overrides beyond the builtin two.
+    policies_extra: Dict[str, int] = {}
+    for env_name, env_val in os.environ.items():
+        if env_name.startswith("SICA_RETENTION_"):
+            cat = env_name[len("SICA_RETENTION_"):].lower()
+            if cat and cat not in ("temp", "session"):
+                try:
+                    policies_extra[cat] = int(env_val)
+                except (TypeError, ValueError):
+                    pass
+    cfg = {
         "collection": get_collection(),
         "qdrant_url": os.environ.get("NEXUS_QDRANT_URL", "http://localhost:6333"),
-        "low_confidence_threshold": float(os.environ.get("SICA_LOW_CONFIDENCE", "0.5")),
-        "stale_temp_days": int(os.environ.get("SICA_STALE_TEMP_DAYS", "7")),
-        "max_suggestions": int(os.environ.get("SICA_MAX_SUGGESTIONS", "10")),
+        "low_confidence_threshold": _safe_float(
+            os.environ.get("SICA_LOW_CONFIDENCE", "0.5"), 0.5
+        ),
+        # Legacy single-category knob (kept for backwards compatibility).
+        "stale_temp_days": _safe_int(
+            os.environ.get("SICA_STALE_TEMP_DAYS", "7"), 7
+        ),
+        # Roadmap 2.2: per-category retention (days). None = keep forever.
+        # Backwards-compat: SICA_RETENTION_TEMP wins; legacy SICA_STALE_TEMP_DAYS
+        # is the fallback so existing users keep their prior 7-day default.
+        "retention_policies": {
+            "temp": _safe_int(
+                os.environ.get(
+                    "SICA_RETENTION_TEMP",
+                    os.environ.get("SICA_STALE_TEMP_DAYS", "7"),
+                ),
+                7,
+            ),
+            "session": _safe_int(
+                os.environ.get("SICA_RETENTION_SESSION", "7"), 7
+            ),
+        },
+        "default_retention_days": default_retention,
+        "max_suggestions": _safe_int(
+            os.environ.get("SICA_MAX_SUGGESTIONS", "10"), 10
+        ),
     }
+    # Merge extra categories into the policy map (fault-tolerant).
+    cfg["retention_policies"].update(policies_extra)
+    return cfg
 
 
 def _load_env() -> None:
@@ -132,17 +199,45 @@ def _scroll_all(client: Any, collection: str, filter_cond: Optional[Dict] = None
 def _detect_stale_temp(points: List[Dict], stale_temp_days: int = 7) -> List[Dict[str, Any]]:
     """Detect temp-category memories older than STALE_TEMP_DAYS.
 
+    Kept for backwards compatibility; new code should prefer
+    ``_detect_retention`` which applies per-category policies.
+    Emitted issues carry type="retention_expired" (roadmap 2.2 unified
+    the issue type).
+
     Returns list of issue dicts with {id, type, detail, auto_fixable, action}.
     Points with unparseable timestamps are logged and skipped.
     """
+    return _detect_retention(
+        points, policies={"temp": stale_temp_days}, default_days=None
+    )
+
+
+def _detect_retention(
+    points: List[Dict],
+    policies: Dict[str, int],
+    default_days: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Detect memories older than their category's retention policy (roadmap 2.2).
+
+    Args:
+        points: Scrolled memory points ({id, payload} dicts).
+        policies: Map of category -> max age in days. Categories not in
+            the map fall back to ``default_days`` (None = never expire).
+        default_days: Fallback max age for unlisted categories.
+
+    Returns list of issue dicts with {id, type, detail, auto_fixable,
+    action, category}. Points with unparseable timestamps are logged
+    and skipped (never deleted on missing/invalid timestamps).
+    """
     issues = []
     now = datetime.now(timezone.utc)
-    cutoff = now.timestamp() - (stale_temp_days * 86400)
     skipped = 0
 
     for p in points:
         payload = p["payload"]
-        if payload.get("category") != "temp":
+        category = payload.get("category", "fact")
+        max_days = policies.get(category, default_days)
+        if max_days is None:
             continue
         created = payload.get("created_at", "")
         if not created:
@@ -154,15 +249,15 @@ def _detect_stale_temp(points: List[Dict], stale_temp_days: int = 7) -> List[Dic
             # Treat naive datetimes as UTC to prevent local-tz interpretation
             if ts_dt.tzinfo is None:
                 ts_dt = ts_dt.replace(tzinfo=timezone.utc)
-            ts = ts_dt.timestamp()
-            if ts < cutoff:
+            age_days = (now - ts_dt).total_seconds() / 86400
+            if age_days > max_days:
                 issues.append({
                     "id": p["id"],
-                    "type": "stale_temp",
-                    "detail": f"Temp memory older than {stale_temp_days} days",
+                    "type": "retention_expired",
+                    "detail": f"{category} memory older than {max_days} days",
                     "auto_fixable": True,
                     "action": "delete",
-                    "category": payload.get("category", "temp"),
+                    "category": category,
                     "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) if (payload.get("provenance") or {}).get("confidence") is not None else 0.5),
                 })
         except (ValueError, TypeError) as exc:
@@ -170,7 +265,7 @@ def _detect_stale_temp(points: List[Dict], stale_temp_days: int = 7) -> List[Dic
             logger.debug("Skipping unparseable timestamp '%s': %s", created, exc)
             continue
     if skipped:
-        logger.info("SICA: skipped %d temp points with unparseable timestamps", skipped)
+        logger.info("SICA: skipped %d points with unparseable timestamps", skipped)
     return issues
 
 
@@ -237,20 +332,26 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
 def _apply_auto_patch(client: Any, collection: str, issue: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Apply a non-destructive automatic patch for an issue.
 
-    Currently only handles stale_temp deletion. All other issues
-    generate suggestions for user review.
+    Currently handles deletion-type issues (stale_temp for backwards
+    compatibility, retention_expired from roadmap 2.2 policies). All
+    other issues generate suggestions for user review.
 
     Returns the patch dict on success, None on failure.
     """
     from qdrant_client import models as qm
 
     try:
-        if issue.get("action") == "delete" and issue.get("type") == "stale_temp":
+        # 'stale_temp' is kept for external/legacy issue producers
+        # (the built-in detector now always emits 'retention_expired').
+        if issue.get("action") == "delete" and issue.get("type") in (
+            "stale_temp",
+            "retention_expired",
+        ):
             client.delete(
                 collection_name=collection,
                 points_selector=qm.PointIdsList(points=[issue["id"]]),
             )
-            return {"id": issue["id"], "action": "deleted", "type": "stale_temp"}
+            return {"id": issue["id"], "action": "deleted", "type": issue.get("type")}
     except Exception as exc:
         logger.warning("Auto-patch failed for %s: %s", issue["id"], exc)
     return None
@@ -286,15 +387,52 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
         result.total_scanned = len(points)
 
         all_issues: List[Dict[str, Any]] = []
-        all_issues.extend(_detect_stale_temp(points, stale_temp_days=cfg["stale_temp_days"]))
+        # Roadmap 2.2: per-category retention policies replace the
+        # temp-only scan. The legacy stale_temp knob still feeds the
+        # temp policy so SICA_STALE_TEMP_DAYS keeps working.
+        policies = dict(cfg.get("retention_policies") or {})
+        policies.setdefault("temp", cfg["stale_temp_days"])
+        all_issues.extend(
+            _detect_retention(
+                points,
+                policies=policies,
+                default_days=cfg.get("default_retention_days"),
+            )
+        )
         all_issues.extend(_detect_low_confidence(points, low_confidence_threshold=cfg["low_confidence_threshold"]))
         all_issues.extend(_detect_contradictions(points))
 
         result.issues_found = len(all_issues)
 
-        # Phase 2: Reflect + Act
+        # Phase 2: Reflect + Act.
+        # Deletion-type issues are batched into a single Qdrant delete call
+        # (one RTT instead of one per expired point; roadmap 2.2 scale-up).
+        delete_ids: List[str] = []
+        delete_types: Dict[str, str] = {}
+        for issue in all_issues:
+            if issue["auto_fixable"] and auto_patch and issue.get("action") == "delete":
+                delete_ids.append(issue["id"])
+                delete_types[issue["id"]] = issue.get("type", "retention_expired")
+                continue
+        if delete_ids:
+            try:
+                from qdrant_client import models as qm
+                client.delete(
+                    collection_name=coll,
+                    points_selector=qm.PointIdsList(points=delete_ids),
+                )
+                for did in delete_ids:
+                    result.auto_patches.append(
+                        {"id": did, "action": "deleted", "type": delete_types[did]}
+                    )
+                logger.info("SICA: batch-deleted %d expired memories", len(delete_ids))
+            except Exception as exc:
+                logger.warning("SICA batch delete failed: %s", exc)
         for issue in all_issues:
             if issue["auto_fixable"] and auto_patch:
+                # Deletion-type issues were handled by the batch above.
+                if issue.get("action") == "delete" and issue["id"] in delete_ids:
+                    continue
                 patch = _apply_auto_patch(client, coll, issue)
                 if patch:
                     result.auto_patches.append(patch)

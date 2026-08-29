@@ -75,6 +75,8 @@ class NexusMemoryProvider:
         self._last_backup_path: str = ""
         self._skill_graph = None  # cached SkillGraph for graph-boost
         self._skill_graph_lock = threading.Lock()
+        self._rerank_cfg = None  # cached rerank config (lazy, roadmap 1.2)
+        self._rerank_lock = threading.Lock()
 
     @property
     def name(self) -> str: return "nexus"
@@ -346,8 +348,29 @@ class NexusMemoryProvider:
 
     def _recall(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         if not self._embedder or not self._qdrant: return []
+        # Rerank config is read once and cached (double-checked lock,
+        # mirrors the _skill_graph caching pattern in this class).
+        if self._rerank_cfg is None:
+            with self._rerank_lock:
+                if self._rerank_cfg is None:
+                    from nexus_memory.reranker import load_rerank_config
+                    self._rerank_cfg = load_rerank_config()
         vector = self._embedder.embed(query)
-        pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=max(limit, 1)).points
+        cfg = self._rerank_cfg
+        fetch_k = max(limit, 1)
+        if cfg.get("enabled"):
+            # Fetch a larger pool so the reranker can reorder beyond limit.
+            from nexus_memory.reranker import DEFAULT_POOL_K
+            fetch_k = max(limit, int(cfg.get("pool_k", DEFAULT_POOL_K)))
+        pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=fetch_k).points
+        if cfg.get("enabled"):
+            from nexus_memory.reranker import rerank_points, DEFAULT_POOL_K
+            pts = rerank_points(
+                query, pts,
+                reranker=cfg.get("reranker", "voyage"),
+                pool_k=int(cfg.get("pool_k", DEFAULT_POOL_K)),
+                voyage_api_key=cfg.get("voyage_api_key") or None,
+            )
         results: List[Dict[str, Any]] = []
         seen_ids: set = set()
         for p in pts:

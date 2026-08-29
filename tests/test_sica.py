@@ -177,7 +177,9 @@ class TestDetection:
         ]
         issues = _detect_stale_temp(points)
         assert len(issues) == 1
-        assert issues[0]["type"] == "stale_temp"
+        # Roadmap 2.2: unified issue type for retention deletions.
+        assert issues[0]["type"] == "retention_expired"
+        assert issues[0]["category"] == "temp"
         assert issues[0]["auto_fixable"] is True
         assert issues[0]["action"] == "delete"
 
@@ -276,8 +278,9 @@ class TestRunSICA:
         assert result.issues_found == 3  # stale_temp + low_confidence + contradiction
 
         types = {s["type"] for s in result.suggestions}
-        # With auto_patch=False, auto_fixable issues become suggestions
-        assert "stale_temp" in types
+        # With auto_patch=False, auto_fixable issues become suggestions.
+        # Roadmap 2.2: retention deletions use the unified type name.
+        assert "retention_expired" in types
         assert "low_confidence" in types
         assert "contradiction" in types
 
