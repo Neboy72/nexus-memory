@@ -175,3 +175,23 @@ def test_relationship_edge_stored():
     assert len(edges) == 1
     assert edges[0]["relation"] == "connected_to"
     assert edges[0]["reason"] == "nexus_remember"
+
+
+def test_second_recall_uses_cache():
+    prov, _client = _provider()
+    prov._embed_cache = None  # tests bypass __init__
+    """L0: 2. recall mit gleichem Query = kein zweiter Embed-Call."""
+    import importlib.util as ilu
+    prov = _provider()[0]
+    calls = {"n": 0}
+    class _E:
+        dim = 1024
+        def embed(self, t):
+            calls["n"] += 1
+            return [0.1] * 1024
+    prov._embedder = _E()
+    prov._recall("gleiche frage", limit=2)
+    prov._recall("gleiche frage", limit=2)
+    prov._recall("gleiche frage", limit=2)
+    assert calls["n"] == 1  # 1x embed, 2x cache hit
+    assert prov._get_embed_cache().hit_rate >= 0.6
