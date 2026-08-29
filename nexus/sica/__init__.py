@@ -152,6 +152,8 @@ class SICAResult:
         self.issues_found: int = 0
         self.suggestions: List[Dict[str, Any]] = []
         self.auto_patches: List[Dict[str, Any]] = []
+        # Roadmap 2.1: synthesized insights (one per contradiction group)
+        self.reflect_insights: List[Dict[str, Any]] = []
         self.errors: List[str] = []
 
     def to_dict(self, max_suggestions: int = 10) -> Dict[str, Any]:
@@ -162,6 +164,7 @@ class SICAResult:
             "issues_found": self.issues_found,
             "suggestions": self.suggestions[:max_suggestions],
             "auto_patches": self.auto_patches,
+            "reflect_insights": self.reflect_insights,
             "errors": self.errors,
         }
 
@@ -329,6 +332,148 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
     return issues
 
 
+def _synthesize_insights(
+    issues: List[Dict[str, Any]],
+    points: List[Dict],
+) -> List[Dict[str, Any]]:
+    """Roadmap 2.1: Reflect operation - synthesize insights from contradictions.
+
+    Groups active contradiction issues by their target pair and, for each
+    group, produces ONE deterministic insight: which side should win by
+    provenance (confidence + recency), what the conflicting content claims,
+    and a concrete resolution suggestion for review.
+
+    This upgrades SICA's Reflect phase from "there is a conflict, please
+    look" to "here is what I conclude and why - confirm or reject".
+
+    Returns a list of insight dicts (empty when no contradictions exist).
+    Pure/LLM-free: fully deterministic, no API calls, fail-soft.
+    """
+    by_target: Dict[str, List[Dict[str, Any]]] = {}
+    for issue in issues:
+        if issue.get("type") == "contradiction":
+            tgt = issue.get("target_id") or "unknown"
+            by_target.setdefault(tgt, []).append(issue)
+        elif issue.get("type") == "entity_duplicate":
+            # Roadmap 4.2: one insight per duplicate group (keeper wins).
+            tgt = f"entity::{issue.get('keeper_id') or 'unknown'}"
+            by_target.setdefault(tgt, []).append(issue)
+            # Keep keeper-first ordering stable by sorting each group so
+            # the keeper issue leads (confidence ties otherwise arbitrary).
+            by_target[tgt].sort(
+                key=lambda i: 0 if i.get("id") == issue.get("keeper_id") else 1
+            )
+
+    insights: List[Dict[str, Any]] = []
+    content_by_id: Dict[str, str] = {}
+    for p in points:
+        payload = p.get("payload") or {}
+        content_by_id[str(p.get("id"))] = (payload.get("content") or "")[:300]
+
+    for target_id, group in sorted(by_target.items()):
+        # The claimant with the highest confidence wins the "likely true"
+        # role; ties break by newest timestamp (fail-safe: review stays).
+        def _conf(i: Dict[str, Any]) -> float:
+            return float(i.get("confidence") or 0.0)
+
+        group_sorted = sorted(group, key=_conf, reverse=True)
+        winner = group_sorted[0]
+        if group_sorted[0].get("type") == "entity_duplicate" and group_sorted[0].get("keeper_id"):
+            # Roadmap 4.2: focus is the keeper point, not a duplicate.
+            winner = {
+                "id": group_sorted[0]["keeper_id"],
+                "type": "entity_duplicate",
+                "detail": group_sorted[0]["detail"],
+                "confidence": 0.0,
+                "target_id": group_sorted[0].get("keeper_id"),
+            }
+        winner_payload = next(
+            (
+                (p.get("payload") or {})
+                for p in points
+                if str(p.get("id")) == winner["id"]
+            ),
+            {},
+        )
+        winner_ts = str(winner_payload.get("created_at") or "")
+
+        insight = {
+            "type": "reflect_insight",
+            "focus_id": winner["id"],
+            "target_id": target_id,
+            "detail": (
+                f"{len(group)} contradicting memories on {target_id[:8]}; "
+                f"likely current truth: {winner['id'][:8]} "
+                f"(confidence {_conf(winner):.2f})"
+            ),
+            "suggested_resolution": "confirm_or_supersede",
+            "winner_confidence": round(_conf(winner), 3),
+            "involved_ids": sorted(
+                {i["id"] for i in group_sorted}
+                | {
+                    i["keeper_id"]
+                    for i in group_sorted
+                    if i.get("type") == "entity_duplicate" and i.get("keeper_id")
+                }
+            ),
+            "preview": content_by_id.get(winner["id"], ""),
+        }
+        insights.append(insight)
+    return insights
+
+
+def _detect_entity_duplicates(points: List[Dict]) -> List[Dict[str, Any]]:
+    """Roadmap 4.2: Detect duplicate entity memories.
+
+    Groups category='entity' points by (entity_type, normalized name) and
+    flags groups with more than one distinct point ID. Normalization is
+    deliberate: casefold + whitespace collapse, so 'ABL eMH3' and
+    'abl  emh3' collapse together; uuid5-based points are keyed on the raw
+    name, so a legacy or differently-normalized duplicate DOES surface here.
+
+    NEVER auto-deletes (merging foreign content is destructive) - emits
+    review suggestions; run_sica turns them into insights for review.
+    """
+    groups: Dict[str, List[Dict]] = {}
+    for p in points:
+        payload = p.get("payload") or {}
+        if payload.get("category") != "entity":
+            continue
+        etype = str(payload.get("entity_type") or "concept")
+        ename = str(payload.get("entity_name") or "")
+        if not ename:
+            continue
+        norm = " ".join(ename.casefold().split())
+        groups.setdefault(f"{etype}::{norm}", []).append(p)
+
+    issues: List[Dict[str, Any]] = []
+    for key, members in sorted(groups.items()):
+        if len({str(p["id"]) for p in members}) < 2:
+            continue
+        # Oldest point wins (created_at asc, missing ts sorts last);
+        # duplicates become suggestions, never auto-deletes.
+        def _ts(p: Dict) -> str:
+            return str((p.get("payload") or {}).get("created_at") or "9999")
+
+        members_sorted = sorted(members, key=_ts)
+        keeper = members_sorted[0]
+        dupes = [str(p["id"]) for p in members_sorted[1:]]
+        for did in dupes:
+            issues.append({
+                "id": did,
+                "type": "entity_duplicate",
+                "detail": (
+                    f"Duplicate entity '{key}' - keep {keeper['id'][:8]}"
+                ),
+                "auto_fixable": False,
+                "action": "merge_review",
+                "category": "entity",
+                "keeper_id": str(keeper["id"]),
+                "duplicate_ids": dupes,
+            })
+    return issues
+
+
 def _apply_auto_patch(client: Any, collection: str, issue: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Apply a non-destructive automatic patch for an issue.
 
@@ -401,8 +546,15 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
         )
         all_issues.extend(_detect_low_confidence(points, low_confidence_threshold=cfg["low_confidence_threshold"]))
         all_issues.extend(_detect_contradictions(points))
+        # Roadmap 4.2: duplicate entities surface as merge-review issues
+        all_issues.extend(_detect_entity_duplicates(points))
 
         result.issues_found = len(all_issues)
+
+        # Roadmap 2.1: Reflect - synthesize one insight per contradiction
+        # group (deterministic, no LLM call). Runs before suggestions are
+        # dedup-trimmed so insights survive max_suggestions caps.
+        result.reflect_insights = _synthesize_insights(all_issues, points)
 
         # Phase 2: Reflect + Act.
         # Deletion-type issues are batched into a single Qdrant delete call
@@ -450,8 +602,9 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
                 "confidence": issue.get("confidence", 0),
             })
 
-        # Phase 3: Learn — store SICA session as a memory
-        if result.issues_found > 0 or result.auto_patches:
+        # Phase 3: Learn — store SICA session as a memory (insights count
+        # as a learned outcome too, roadmap 2.1)
+        if result.issues_found > 0 or result.auto_patches or result.reflect_insights:
             _store_sica_session(client, coll, result, embedder=embedder)
 
         logger.info(
