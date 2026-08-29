@@ -251,7 +251,7 @@ Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory 
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `remember` | Store a memory | `text` (req), `category` (req, default `fact`), `access_level`, `source`, `source_url`, `confidence` |
-| `recall` | Hybrid search — returns results with `verification` status | `query` (req), `limit`, `filter_level` |
+| `recall` | Hybrid search — returns results with `verification` status | `query` (req), `limit`, `filter_level`, `as_of` (point-in-time: `YYYY-MM-DD`, optional) |
 | `forget` | Delete a memory | `memory_id` (req) |
 | `update` | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `health` | Check server status | — |
@@ -327,7 +327,13 @@ result = run_sica(auto_patch=True)
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `SICA_STALE_TEMP_DAYS` | 7 | Days before temp memories are considered stale |
+| `SICA_STALE_TEMP_DAYS` | 7 | Days before temp memories are considered stale (legacy; feeds SICA_RETENTION_TEMP as fallback) |
+| `SICA_RETENTION_TEMP` / `SICA_RETENTION_SESSION` / `SICA_RETENTION_<CATEGORY>` | 1 / 7 / — | Per-category retention in days (roadmap 2.2). Categories without a policy keep memories forever |
+| `SICA_DEFAULT_RETENTION_DAYS` | — | Fallback retention for categories without explicit policy |
+| `NEXUS_RERANK` / `NEXUS_RERANKER` / `NEXUS_RERANK_POOL` | off / auto / 20 | Cross-encoder reranking (roadmap 1.2): auto = Voyage when key present, free local cross-encoder otherwise |
+| `NEXUS_PREFETCH_CHARS` | 1200 | Token budget for auto-injected memory context (roadmap 3.1b) |
+| `NEXUS_AUTO_ENRICH` | 1 | Auto entity enrichment on nexus_remember (0 = off) |
+| `SICA_RETENTION_*` etc. also accept `SICA_STALE_TEMP_DAYS` | — | Legacy single-category knob still works |
 | `SICA_LOW_CONFIDENCE` | 0.5 | Confidence threshold for low-confidence detection |
 | `SICA_MAX_SUGGESTIONS` | 10 | Maximum suggestions per SICA run |
 
