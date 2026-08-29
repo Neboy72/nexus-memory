@@ -195,3 +195,28 @@ def test_second_recall_uses_cache():
     prov._recall("gleiche frage", limit=2)
     assert calls["n"] == 1  # 1x embed, 2x cache hit
     assert prov._get_embed_cache().hit_rate >= 0.6
+
+
+def test_prefetch_respects_budget():
+    """L1: prefetch total stays under NEXUS_PREFETCH_CHARS."""
+    prov, _c = _provider()
+    prov._embed_cache = None
+    import os
+    os.environ["NEXUS_PREFETCH_CHARS"] = "400"
+    try:
+        class _P:
+            id = "x"; score = 0.9
+            payload = {"content": "A" * 300 + " " + "B" * 300, "category": "fact"}
+
+        class _C:
+            def query_points(self, **kw):
+                return SimpleNamespace(points=[_P(i) for i in range(4)])
+        class _P:
+            def __init__(self, i):
+                self.id = f"p{i}"; self.score = 0.95 - i * 0.1
+                self.payload = {"content": ("word " * 120) + str(i), "category": "fact"}
+        prov._qdrant = _C()
+        prov._do_prefetch("test budget query")
+    finally:
+        del os.environ["NEXUS_PREFETCH_CHARS"]
+    assert len(prov._prefetch_result) <= 450  # budget + overhead
