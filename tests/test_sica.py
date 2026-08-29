@@ -323,3 +323,69 @@ class TestRunSICA:
         payload = points[0].payload or {}
         assert "sica_run_id" in payload
         assert payload["sica_issues"] == result.issues_found
+
+
+def test_autonomous_purge_rule():
+    """4.8: confidence<0.2 + never_accessed + age>30d => auto_delete.
+
+    Alle drei Bedingungen muessen erfuellt sein; sonst review.
+    """
+    from nexus.sica import _detect_low_confidence, _age_days as _ad
+
+    def _pt(pid, conf, access, created):
+        return {"id": pid, "payload": {
+            "category": "fact",
+            "provenance": {"confidence": conf},
+            "access_count": access,
+            "created_at": created,
+        }}
+
+    # purge: conf 0.1, never accessed, 60 Tage alt
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    fresh_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+    issues = _detect_low_confidence([
+        _pt("purge_me", 0.1, 0, old_ts),
+        _pt("fresh_zero", 0.1, 0, fresh_ts),      # zu jung -> review
+        _pt("used_low", 0.1, 5, old_ts),          # accessed -> review
+        _pt("high_conf", 0.45, 0, old_ts),        # conf OK -> gar kein issue
+    ], low_confidence_threshold=0.5)
+    by_id = {i["id"]: i for i in issues}
+    assert by_id["purge_me"]["action"] == "delete"
+    assert by_id["purge_me"]["auto_fixable"] is True
+    assert by_id["fresh_zero"]["action"] == "review"
+    assert by_id["used_low"]["action"] == "review"
+    assert by_id["high_conf"]["action"] == "review"
+    assert by_id["high_conf"]["auto_fixable"] is False
+
+
+def test_autonomous_purge_e2e_via_run_sica():
+    """4.8 e2e: run_sica mit auto_patch loescht den purge-Kandidaten."""
+    from types import SimpleNamespace
+    from nexus.sica import run_sica
+
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    points = [
+        SimpleNamespace(id="dead", payload={
+            "category": "fact", "content": "old weak fact",
+            "provenance": {"confidence": 0.1},
+            "access_count": 0, "created_at": old_ts,
+        }),
+        SimpleNamespace(id="healthy", payload={
+            "category": "fact", "content": "solid fact",
+            "provenance": {"confidence": 0.9},
+            "access_count": 3, "created_at": old_ts,
+        }),
+    ]
+    deleted = []
+    class _C:
+        def scroll(self, **kw):
+            return points, None
+        def delete(self, **kw):
+            deleted.extend(kw["points_selector"].points)
+        def upsert(self, **kw): pass
+    import nexus_memory.embeddings  # noqa: F401
+
+    res = run_sica(client=_C(), collection="c", auto_patch=True,
+                   embedder=SimpleNamespace(embed=lambda t: [0.0]*1024))
+    assert deleted == ["dead"]
+    assert any(p.get("type") == "low_confidence" for p in res.auto_patches)
