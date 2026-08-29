@@ -387,6 +387,7 @@ class NexusMemoryProvider:
 
     def _recall(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         if not self._embedder or not self._qdrant: return []
+        flywheel: List[str] = []  # roadmap 4.9: top-3 recalled point ids
         # Rerank config is read once and cached (double-checked lock,
         # mirrors the _skill_graph caching pattern in this class).
         if self._rerank_cfg is None:
@@ -425,12 +426,18 @@ class NexusMemoryProvider:
                 continue
             pid = pl.get("id") or str(p.id)
             seen_ids.add(pid)
+            if len(flywheel) < 3:
+                flywheel.append(pid)
             results.append({"id": pid, "text": (pl.get("content") or "")[:2000],
                             "score": round(float(p.score or 0.0), 3), "source": pl.get("source"),
                             "source_url": pl.get("source_url"), "access_level": pl.get("access_level"),
                             "category": pl.get("category", "fact"),
                             "confidence": (pl.get("provenance") or {}).get("confidence"),
                             "created_at": pl.get("created_at")})
+        # Roadmap 4.9: fire-and-forget access bump for the top recall hits
+        if flywheel and self._qdrant:
+            threading.Thread(target=self._flywheel_bump, args=(flywheel,),
+                             name="nexus-flywheel", daemon=True).start()
         # Graph-boost: add 1-hop neighbors from top 3 vector hits
         # Graph items are APPENDED (not sorted into vector results) so they
         # survive the limit slice regardless of their 0.0 score.
@@ -442,6 +449,28 @@ class NexusMemoryProvider:
                             "category": "graph", "confidence": None,
                             "created_at": ""})
         return vector_results
+
+    def _flywheel_bump(self, point_ids: List[str]) -> None:
+        """Roadmap 4.9: increment access_count on recalled points.
+
+        Fire-and-forget; missing point is ignored. SICA uses access_count
+        later as trust signal for retrieval weighting.
+        """
+        for pid in point_ids:
+            try:
+                pts = self._qdrant.retrieve(
+                    collection_name=self._collection, ids=[pid], with_payload=True)
+                if not pts:
+                    continue
+                pl = pts[0].payload or {}
+                count = int(pl.get("access_count", 0))
+                self._qdrant.set_payload(
+                    collection_name=self._collection,
+                    payload={"access_count": count + 1,
+                             "last_accessed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                    points=[pid], wait=False)
+            except Exception as exc:
+                logger.debug("flywheel bump skip %s: %s", str(pid)[:8], exc)
 
     def _forget(self, memory_id: str) -> Dict[str, Any]:
         if not self._qdrant: raise RuntimeError("Provider not initialized")
