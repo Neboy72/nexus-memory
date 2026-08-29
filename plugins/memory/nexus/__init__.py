@@ -76,6 +76,7 @@ class NexusMemoryProvider:
         self._skill_graph = None  # cached SkillGraph for graph-boost
         self._skill_graph_lock = threading.Lock()
         self._rerank_cfg = None  # cached rerank config (lazy, roadmap 1.2)
+        self._entity_extract_lock = threading.Lock()  # single-flight enrich (1.1)
         self._rerank_lock = threading.Lock()
 
     @property
@@ -289,6 +290,9 @@ class NexusMemoryProvider:
                     pt = sg.get_point(nid)
                     if not pt: continue
                     pt_payload = pt.get("payload") or {}
+                    # 4.6: deprecated neighbors never surface as graph-boost
+                    if (pt_payload.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
+                        continue
                     text = pt_payload.get("content", "")
                     if text:
                         rel = n.get("relation", "related")
@@ -305,6 +309,9 @@ class NexusMemoryProvider:
             items: List[str] = []
             for p in pts:
                 pl = p.payload or {}; text = pl.get("content", "")
+                # Roadmap 4.6: superseded facts never surface in prefetch.
+                if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
+                    continue
                 if text:
                     items.append(f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}")
             # Graph-boost: add 1-hop neighbors from top 3 vector hits
@@ -340,6 +347,7 @@ class NexusMemoryProvider:
         vector = self._embedder.embed(text)
         payload = {"id": eid, "content": text, "access_level": access_level, "category": category,
                     "source": source, "source_url": "", "created_at": ts,
+                    "lifecycle_status": "canonical",
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
         self._qdrant.upsert(collection_name=self._collection,
@@ -363,6 +371,10 @@ class NexusMemoryProvider:
             from nexus_memory.reranker import DEFAULT_POOL_K
             fetch_k = max(limit, int(cfg.get("pool_k", DEFAULT_POOL_K)))
         pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=fetch_k).points
+        # Roadmap 4.6 + review: filter BEFORE rerank so deprecated points
+        # don't burn rerank-pool slots (cost/latency) or shrink results.
+        _suppressed = {"deprecated", "rolled_back"}
+        pts = [p for p in pts if (p.payload or {}).get("lifecycle_status") not in _suppressed]
         if cfg.get("enabled"):
             from nexus_memory.reranker import rerank_points, DEFAULT_POOL_K
             pts = rerank_points(
@@ -375,6 +387,11 @@ class NexusMemoryProvider:
         seen_ids: set = set()
         for p in pts:
             pl = p.payload or {}
+            # Roadmap 4.6: superseded/rolled-back facts stay in Qdrant for
+            # audit but never surface in recall (mirrors MCP server filter).
+            # Missing lifecycle_status (legacy points) stays visible.
+            if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
+                continue
             pid = pl.get("id") or str(p.id)
             seen_ids.add(pid)
             results.append({"id": pid, "text": (pl.get("content") or "")[:2000],
@@ -569,6 +586,11 @@ class NexusMemoryProvider:
                 result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
                                       access_level=args.get("access_level", "public"),
                                       source=args.get("source", ""))
+                # Roadmap 1.1/4.1: auto-enrich with entities + edges (async, fail-open)
+                try:
+                    self._enqueue_entity_extraction(args.get("text", ""))
+                except Exception as exc:
+                    logger.warning("Auto entity enrichment skipped: %s", exc)
             elif tool_name == "nexus_forget":
                 result = self._forget(args.get("memory_id", ""))
             elif tool_name == "nexus_guardrail_check":
@@ -639,6 +661,110 @@ class NexusMemoryProvider:
                         "collection_name": values.get("collection_name", _COLLECTION)}, f, indent=2)
         logger.info("Nexus config saved to %s/nexus/config.json", hermes_home)
 
+    def _enqueue_entity_extraction(self, text: str, source: str = "nexus_remember") -> None:
+        """Roadmap 1.1/4.1: Auto-enrich nexus_remember with entities + edges.
+
+        Runs entity extraction in a daemon thread so the tool call returns
+        immediately. Fail-open: any extraction failure is logged and dropped.
+        Short texts are skipped (noise guard). Single-flight: only one
+        extraction runs at a time (skip instead of queue-storm).
+        """
+        if not text or len(text.strip()) < 80:
+            return
+        # Opt-out (review F7): NEXUS_AUTO_ENRICH=0 disables enrichment entirely
+        if os.environ.get("NEXUS_AUTO_ENRICH", "1").strip().lower() in ("0", "false", "no", "off"):
+            return
+        # Efficiency (review): hash-dedup BEFORE lock so duplicate texts don't
+        # block the single-flight slot with a no-op extraction.
+        import hashlib
+        h = hashlib.sha256(text.encode("utf-8", "ignore")[:4000]).hexdigest()[:16]
+        seen = getattr(self, "_extract_hashes", None)
+        if seen is None:
+            seen = self._extract_hashes = set()
+        if h in seen:
+            return
+        seen.add(h)
+        if len(seen) > 500:
+            seen.clear(); seen.add(h)
+        if not self._entity_extract_lock.acquire(blocking=False):
+            return  # one flight at a time; skipping is better than stacking
+
+        def _run():
+            try:
+                self._extract_entities_from_text(text, source=source)
+            except Exception as exc:
+                logger.warning("Auto entity extraction failed: %s", exc)
+            finally:
+                self._entity_extract_lock.release()
+        try:
+            threading.Thread(target=_run, name="nexus-entity-extract", daemon=True).start()
+        except Exception as exc:
+            # Thread spawn failed: release the lock or enrichment dies forever
+            logger.warning("Entity extraction thread start failed: %s", exc)
+            self._entity_extract_lock.release()
+
+    def _extract_entities_from_text(self, text: str, source: str = "nexus_remember",
+                                     access_level: str = "public") -> Dict[str, Any]:
+        """Roadmap 1.1/4.1: extract entities + edges from text and store them.
+
+        Shared by auto-enrich (nexus_remember) and session-end extraction.
+        access_level propagates from the source memory so private content
+        never leaks into public entity points (4-bot review F2).
+        Fail-open per item; returns summary dict.
+        """
+        if not text or not text.strip() or not self._qdrant:
+            return {"entities": 0, "edges": 0}
+        from nexus_memory.entity_extractor import extract_entities
+        result = extract_entities(text[:4000], hermes_home=self._hermes_home)
+        if result.is_empty():
+            return {"entities": 0, "edges": 0}
+        entity_ids: Dict[str, str] = {}
+        for entity in result.entities:
+            if self._write_stop.is_set() or not self._qdrant:
+                break
+            try:
+                store_result = self._upsert_entity(entity, access_level=access_level, source=source)
+                entity_ids[entity.name] = store_result["id"]
+            except Exception as exc:
+                logger.warning("Entity store failed: %s", exc)
+        edge_count = 0
+        store = None
+        try:
+            from nexus.graph.store import EdgeStore
+            store = EdgeStore(qdrant_url=f"{_HOST}:{_PORT}", collection=self._collection)
+        except Exception as exc:
+            logger.warning("EdgeStore init failed: %s", exc)
+        try:
+            for rel in result.relationships:
+                if self._write_stop.is_set() or not self._qdrant:
+                    break
+                source_id = entity_ids.get(rel.source)
+                target_id = entity_ids.get(rel.target)
+                if not source_id or not target_id:
+                    continue
+                if store is None:
+                    break
+                try:
+                    store.add_edge(
+                        source_fact_id=source_id,
+                        target_fact_id=target_id,
+                        relation=rel.relation,
+                        reason=source,
+                        metadata={"confidence": rel.confidence},
+                    )
+                    edge_count += 1
+                except Exception as exc:
+                    logger.warning("Relationship store failed: %s", exc)
+        finally:
+            if store is not None:
+                try:
+                    store.close()
+                except Exception:
+                    pass
+        if entity_ids or edge_count:
+            logger.info("Auto-enrich stored %d entities, %d edges", len(entity_ids), edge_count)
+        return {"entities": len(entity_ids), "edges": edge_count}
+
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Extract and persist durable facts at session end.
 
@@ -693,8 +819,6 @@ class NexusMemoryProvider:
             if self._write_stop.is_set() or not self._qdrant:
                 return
             try:
-                from nexus_memory.entity_extractor import extract_entities
-                # Build text from messages for entity extraction
                 conv_parts = []
                 for msg in messages:
                     role = msg.get("role", "")
@@ -702,79 +826,24 @@ class NexusMemoryProvider:
                     if isinstance(content, str) and role in ("user", "assistant") and content.strip():
                         conv_parts.append(content[:2000])
                 conv_text = " ".join(conv_parts)[:4000]
-
                 if conv_text:
-                    result = extract_entities(conv_text, hermes_home=self._hermes_home)
-                    if not result.is_empty():
-                        # Store entities
-                        entity_ids: Dict[str, str] = {}  # name → point_id
-                        entity_stored = 0
-                        for entity in result.entities:
-                            if self._write_stop.is_set() or not self._qdrant:
-                                break
-                            try:
-                                store_result = self._upsert_entity(entity)
-                                entity_stored += 1
-                                entity_ids[entity.name] = store_result["id"]
-                            except Exception as exc:
-                                logger.warning("Entity store failed: %s", exc)
-
-                        # Store relationships as graph edges
-                        rel_stored = 0
-                        for rel in result.relationships:
-                            if self._write_stop.is_set() or not self._qdrant:
-                                break
-                            source_id = entity_ids.get(rel.source)
-                            target_id = entity_ids.get(rel.target)
-                            if not source_id or not target_id:
-                                continue
-                            try:
-                                from nexus.graph.store import EdgeStore
-                                from nexus.graph.schema import EdgeRelation
-                                # Map relation string to EdgeRelation enum
-                                rel_map = {
-                                    "installed_at": EdgeRelation.INSTALLED_AT,
-                                    "connected_to": EdgeRelation.CONNECTED_TO,
-                                    "manages": EdgeRelation.MANAGES,
-                                    "runs_on": EdgeRelation.RUNS_ON,
-                                    "part_of": EdgeRelation.PART_OF,
-                                    "owns": EdgeRelation.OWNS,
-                                    "located_at": EdgeRelation.LOCATED_AT,
-                                    "depends_on_service": EdgeRelation.DEPENDS_ON_SERVICE,
-                                    "uses": EdgeRelation.USES,
-                                    "provides": EdgeRelation.PROVIDES,
-                                    "controls": EdgeRelation.CONTROLS,
-                                }
-                                edge_rel = rel_map.get(rel.relation, EdgeRelation.REFERENCES)
-                                store = EdgeStore(
-                                    qdrant_url=f"{_HOST}:{_PORT}",
-                                    collection=self._collection,
-                                )
-                                store.add_edge(
-                                    source_fact_id=source_id,
-                                    target_fact_id=target_id,
-                                    relation=edge_rel.value,
-                                    reason="session-end-entity-extraction",
-                                    metadata={"confidence": rel.confidence},
-                                )
-                                store.close()
-                                rel_stored += 1
-                            except Exception as exc:
-                                logger.warning("Relationship store failed: %s", exc)
-
-                        if entity_stored or rel_stored:
-                            logger.info(
-                                "NexusMemoryProvider on_session_end: extracted+stored "
-                                "%d entities, %d relationships",
-                                entity_stored, rel_stored,
-                            )
+                    er = self._extract_entities_from_text(
+                        conv_text, source="session-end-entity-extraction"
+                    )
+                    if er.get("entities") or er.get("edges"):
+                        logger.info(
+                            "NexusMemoryProvider on_session_end: extracted+stored "
+                            "%d entities, %d relationships",
+                            er.get("entities", 0), er.get("edges", 0),
+                        )
             except Exception as exc:
                 logger.warning("Entity extraction in on_session_end failed: %s", exc)
 
         except Exception as exc:
             logger.warning("on_session_end extraction failed: %s", exc)
 
-    def _upsert_entity(self, entity: Any) -> Dict[str, Any]:
+    def _upsert_entity(self, entity: Any, access_level: str = "public",
+                       source: str = "hermes-plugin-session-end") -> Dict[str, Any]:
         """Store an entity as a Qdrant point with category='entity'.
 
         Uses uuid5 (deterministic) so re-extracting the same entity across
@@ -794,12 +863,12 @@ class NexusMemoryProvider:
         payload = {
             "id": eid,
             "content": text,
-            "access_level": "public",
+            "access_level": access_level,
             "category": "entity",
             "entity_type": entity.entity_type,
             "entity_name": entity.name,
             "entity_attributes": entity.attributes,
-            "source": "hermes-plugin-session-end",
+            "source": source,
             "source_url": "",
             "created_at": ts,
             "provenance": {

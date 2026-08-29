@@ -5,6 +5,32 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.11.0] - 2026-08-30
+
+### Added
+
+- **Superseded-by recall skip** (roadmap 4.6) - deprecated and
+  rolled_back facts stay in Qdrant for audit but never surface in the
+  Hermes plugin recall or auto-prefetch (mirrors the MCP server filter).
+  Legacy points without lifecycle_status stay visible. Plugin upserts
+  now tag new memories lifecycle_status: canonical. 3 new tests.
+- **Auto entity enrichment on nexus_remember** (roadmaps 1.1/4.1) -
+  every nexus_remember with 80+ chars queues a fail-open entity
+  extraction pass in a daemon thread (single-flight): entities stored as
+  Qdrant points, relationships as graph edges. No tool-call latency.
+  Hash-dedup skips repeated texts, single-flight lock, NEXUS_AUTO_ENRICH
+  opt-out, access_level propagation (private stays private). 6 new tests.
+  Session-end extraction now shares the same code path (rel_map removed).
+
+### Changed
+
+- **Recall pipeline order (review)** - lifecycle filter now runs BEFORE
+  reranking so deprecated points don't burn rerank-pool slots; graph-boost
+  neighbors also skip deprecated facts.
+- **Entity edge store reuse (review)** - one EdgeStore instance per
+  extraction run instead of one per relationship; identity rel_map
+  removed.
+
 ## [v0.10.0] - 2026-08-30
 
 ### Added
