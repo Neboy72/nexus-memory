@@ -323,17 +323,31 @@ class NexusMemoryProvider:
         try:
             vector = self._embed_cached(query)
             pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=5).points
+            budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "1200"))
+            total = 0
             items: List[str] = []
             for p in pts:
+                if total >= budget:
+                    break
                 pl = p.payload or {}; text = pl.get("content", "")
                 # Roadmap 4.6: superseded facts never surface in prefetch.
                 if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
                     continue
                 if text:
-                    items.append(f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}")
+                    item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}"
+                    if total + len(item) > budget:
+                        item = item[: budget - total]
+                    items.append(item)
+                    total += len(item)
             # Graph-boost: add 1-hop neighbors from top 3 vector hits
             graph_items = self._graph_boost(pts, max_boost=3)
-            items.extend(graph_items[:5])  # cap to prevent context bloat
+            for gi in graph_items:
+                if total >= budget:
+                    break
+                item = gi[: budget - total]
+                if item:
+                    items.append(item)
+                    total += len(item)
             with self._prefetch_lock: self._prefetch_result = "\n".join(items) if items else ""
         except Exception as exc:
             logger.warning("Prefetch failed: %s", exc)
