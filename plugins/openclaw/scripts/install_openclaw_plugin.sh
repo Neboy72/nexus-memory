@@ -77,7 +77,7 @@ echo '          "qdrantUrl": "http://localhost:6333",'
 echo '          "collection": "nexus",'
 echo '          "embedding": {'
 echo '            "provider": "voyage",'
-echo '            "model": "voyage-3-large",'
+echo '            "model": "voyage-4",'
 echo '            "apiKey": "${VOYAGE_API_KEY}"'
 echo '          },'
 echo '          "autoRecall": true,'
@@ -98,7 +98,7 @@ echo "1. Qdrant running at http://localhost:6333"
 echo "   Quick start: docker run -p 6333:6333 qdrant/qdrant"
 echo ""
 echo "2. Embedding provider — set one of:"
-echo "   export VOYAGE_API_KEY=\"vo-...\"     (voyage-3-large, 1024d)"
+echo "   export VOYAGE_API_KEY=\"vo-...\"     (voyage-4, 1024d)"
 echo "   export OPENAI_API_KEY=\"sk-...\"     (text-embedding-3-small, 1536d)"
 echo "   export GOOGLE_API_KEY=\"AIza...\"    (text-embedding-004, 768d)"
 echo "   export JINA_API_KEY=\"jina_...\"     (jina-embeddings-v3, 1024d)"

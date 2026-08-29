@@ -54,7 +54,7 @@ PROVIDER_TIERS: Dict[str, str] = {
 
 # Provider → estimated cost per 1M tokens (USD, approximate)
 PROVIDER_COSTS: Dict[str, float] = {
-    "voyage": 0.02,        # voyage-3-large
+    "voyage": 0.02,        # voyage-4
     "openai": 0.13,        # text-embedding-3-large
     "google": 0.025,       # text-embedding-004
     "jina": 0.018,         # jina-embeddings-v3

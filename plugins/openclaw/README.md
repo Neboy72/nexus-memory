@@ -38,7 +38,7 @@ cp -r ~/nexus-memory/plugins/openclaw ~/.openclaw/plugins/nexus-memory
 
    | Provider | Env Var | Default Model | Dimensions |
    |----------|---------|---------------|------------|
-   | **Voyage** | `VOYAGE_API_KEY` | `voyage-3-large` | 1024 |
+   | **Voyage** | `VOYAGE_API_KEY` | `voyage-4` | 1024 |
    | **OpenAI** | `OPENAI_API_KEY` | `text-embedding-3-small` | 1536 |
    | **Google** | `GOOGLE_API_KEY` | `text-embedding-004` | 768 |
    | **Jina** | `JINA_API_KEY` | `jina-embeddings-v3` | 1024 |
@@ -72,7 +72,7 @@ Add to `~/.openclaw/openclaw.json`:
           "collection": "nexus",
           "embedding": {
             "provider": "voyage",
-            "model": "voyage-3-large",
+            "model": "voyage-4",
             "apiKey": "${VOYAGE_API_KEY}"
           },
           "autoRecall": true,
