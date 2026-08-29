@@ -220,3 +220,34 @@ def test_prefetch_respects_budget():
     finally:
         del os.environ["NEXUS_PREFETCH_CHARS"]
     assert len(prov._prefetch_result) <= 450  # budget + overhead
+
+
+def test_flywheel_bumps_access_count():
+    """4.9: recall erhöht access_count der Top-3-Treffer (fire-and-forget)."""
+    import time as _t
+    prov, _client = _provider()
+    prov._embed_cache = None
+    bumps = {}
+    class _P:
+        def __init__(self, pid):
+            self.id = pid
+            self.score = 0.9
+            self.payload = {"id": pid, "content": f"fact {pid}", "category": "fact",
+                            "access_count": 5}
+    store = {"p1": _P("p1"), "p2": _P("p2"), "p3": _P("p3"), "p4": _P("p4")}
+    class _C:
+        def query_points(self, **kw):
+            return SimpleNamespace(points=list(store.values()))
+        def retrieve(self, **kw):
+            pid = kw["ids"][0]
+            return [store[pid]] if pid in store else []
+        def set_payload(self, **kw):
+            bumps[kw["points"][0]] = kw["payload"]["access_count"]
+    prov._qdrant = _C()
+
+    prov._recall("flywheel test query", limit=5)
+    deadline = _t.time() + 3
+    while len(bumps) < 3 and _t.time() < deadline:
+        _t.sleep(0.05)
+    assert set(bumps) >= {"p1", "p2"}  # top hits versorgt
+    assert all(v >= 6 for v in bumps.values())  # 5+1
