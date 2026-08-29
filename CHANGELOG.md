@@ -5,6 +5,29 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.13.0] - 2026-08-31
+
+### Added
+
+- **Point-in-Time Queries** (roadmap 4.5) - `nexus_recall` accepts
+  `as_of: "YYYY-MM-DD"`: only memories created on/before that date are
+  returned ("what did we know on date X?"). Empty string (default) keeps
+  all memories visible. Lexicographic date compare, timezone-agnostic.
+- **Supersede reason** (roadmap 4.7) - auto-supersession now writes
+  `supersede_reason` ("replaced by fact X (similarity 0.93 >= 0.90)")
+  into the deprecated payload, making silent overwrites auditable.
+- **Skill health monitor** (roadmap 4.10) - SICA flags category=skill
+  memories unused for 180 days as review suggestions (never auto-delete;
+  skills decay by lack of use, not by error).
+
+### Not built (documented decision)
+
+- **Tiered Loading L2** (roadmap 3.1 remainder) - intentionally not
+  built: L0 (embed cache) + L1 (prefetch budget) already cover the real
+  need; a summary layer has no consumer at the current memory size.
+  Building it now would be overengineering. Revisit when the store
+  grows past ~50k points.
+
 ## [v0.12.0] - 2026-08-30
 
 ### Added
