@@ -8,7 +8,8 @@ declare module "openclaw/plugin-sdk" {
       debug: (msg: string) => void
     }
     // biome-ignore lint/suspicious/noExplicitAny: openclaw SDK does not ship types
-    registerTool(tool: any, options: any): void
+    /** Tool definition with in-object execute() (openclaw >= 2026.5). */
+    registerTool(tool: any, options?: any): void
     // biome-ignore lint/suspicious/noExplicitAny: openclaw SDK does not ship types
     registerCommand(command: any): void
     // biome-ignore lint/suspicious/noExplicitAny: openclaw SDK does not ship types
