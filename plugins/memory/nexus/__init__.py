@@ -76,6 +76,8 @@ class NexusMemoryProvider:
         self._skill_graph = None  # cached SkillGraph for graph-boost
         self._skill_graph_lock = threading.Lock()
         self._rerank_cfg = None  # cached rerank config (lazy, roadmap 1.2)
+        self._embed_cache = None  # roadmap 3.1 L0: lazy EmbedCache
+        self._embed_cache_lock = threading.Lock()
         self._entity_extract_lock = threading.Lock()  # single-flight enrich (1.1)
         self._rerank_lock = threading.Lock()
 
@@ -245,6 +247,25 @@ class NexusMemoryProvider:
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         threading.Thread(target=self._do_prefetch, args=(query,), name="nexus-prefetch", daemon=True).start()
 
+    def _get_embed_cache(self):
+        """Roadmap 3.1 L0: lazy EmbedCache (repeated queries skip Voyage)."""
+        if getattr(self, "_embed_cache", None) is None:
+            lock = getattr(self, "_embed_cache_lock", None) or threading.Lock()
+            with lock:
+                if getattr(self, "_embed_cache", None) is None:
+                    from nexus_memory.embed_cache import EmbedCache
+                    self._embed_cache = EmbedCache()
+        return self._embed_cache
+
+    def _embed_cached(self, text: str) -> List[float]:
+        """Embed with L0 cache: hit = no cloud call (~256ms saved)."""
+        cache = self._get_embed_cache()
+        vec = cache.get(text)
+        if vec is None:
+            vec = self._embedder.embed(text)
+            cache.put(text, vec)
+        return vec
+
     def _get_skill_graph(self):
         """Get or create a cached SkillGraph instance."""
         with self._skill_graph_lock:
@@ -257,7 +278,8 @@ class NexusMemoryProvider:
                 self._skill_graph.initialize()
             return self._skill_graph
 
-    def _graph_boost(self, top_points: list, max_boost: int = 3) -> List[str]:
+    def _graph_boost(self, top_points: list, max_boost: int = 3,
+                     out_pids: Optional[set] = None) -> List[str]:
         """Fetch 1-hop graph neighbors for the top vector search results.
 
         For each of the top ``max_boost`` points, queries the Knowledge Graph
@@ -297,6 +319,8 @@ class NexusMemoryProvider:
                     if text:
                         rel = n.get("relation", "related")
                         boosted.append(f"[graph:{rel}] {text[:400]}")
+                        if out_pids is not None:
+                            out_pids.add(nid)
         except Exception as exc:
             logger.warning("Graph boost skipped: %s", exc)
         return boosted
@@ -304,19 +328,36 @@ class NexusMemoryProvider:
     def _do_prefetch(self, query: str) -> None:
         if not self._embedder or not self._qdrant: return
         try:
-            vector = self._embedder.embed(query)
+            vector = self._embed_cached(query)
             pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=5).points
+            budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "1200"))
+            total = 0
             items: List[str] = []
             for p in pts:
+                if total >= budget:
+                    break
                 pl = p.payload or {}; text = pl.get("content", "")
                 # Roadmap 4.6: superseded facts never surface in prefetch.
                 if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
                     continue
                 if text:
-                    items.append(f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}")
+                    item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}"
+                    # Review fix R2: whole-item slicing (konsistent mit recall-Slice)
+                    if total + len(item) > budget:
+                        if budget - total < 80:
+                            break
+                        item = item[: budget - total].rstrip() + " …"
+                    items.append(item)
+                    total += len(item)
             # Graph-boost: add 1-hop neighbors from top 3 vector hits
             graph_items = self._graph_boost(pts, max_boost=3)
-            items.extend(graph_items[:5])  # cap to prevent context bloat
+            for gi in graph_items:
+                if total >= budget:
+                    break
+                item = gi[: budget - total]
+                if item:
+                    items.append(item)
+                    total += len(item)
             with self._prefetch_lock: self._prefetch_result = "\n".join(items) if items else ""
         except Exception as exc:
             logger.warning("Prefetch failed: %s", exc)
@@ -356,6 +397,7 @@ class NexusMemoryProvider:
 
     def _recall(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         if not self._embedder or not self._qdrant: return []
+        flywheel: List[str] = []  # roadmap 4.9: top-3 recalled point ids
         # Rerank config is read once and cached (double-checked lock,
         # mirrors the _skill_graph caching pattern in this class).
         if self._rerank_cfg is None:
@@ -363,7 +405,7 @@ class NexusMemoryProvider:
                 if self._rerank_cfg is None:
                     from nexus_memory.reranker import load_rerank_config
                     self._rerank_cfg = load_rerank_config()
-        vector = self._embedder.embed(query)
+        vector = self._embed_cached(query)
         cfg = self._rerank_cfg
         fetch_k = max(limit, 1)
         if cfg.get("enabled"):
@@ -394,6 +436,9 @@ class NexusMemoryProvider:
                 continue
             pid = pl.get("id") or str(p.id)
             seen_ids.add(pid)
+            if len(flywheel) < 3:
+                flywheel.append((pid, pl.get("access_count", 0) or 0,
+                                 (pl.get("lifecycle_status") or "canonical")))
             results.append({"id": pid, "text": (pl.get("content") or "")[:2000],
                             "score": round(float(p.score or 0.0), 3), "source": pl.get("source"),
                             "source_url": pl.get("source_url"), "access_level": pl.get("access_level"),
@@ -403,7 +448,19 @@ class NexusMemoryProvider:
         # Graph-boost: add 1-hop neighbors from top 3 vector hits
         # Graph items are APPENDED (not sorted into vector results) so they
         # survive the limit slice regardless of their 0.0 score.
-        graph_items = self._graph_boost(pts, max_boost=3)
+        graph_pids: set = set()
+        graph_items = self._graph_boost(pts, max_boost=3, out_pids=graph_pids)
+        # Review fix B1 (blocker): graph-boosted neighbors count as accessed -
+        # ohne Bump stuft autonomous purge aktiv genutzte Nachbarn als
+        # "never accessed" ein und loescht sie (Datenverlust).
+        for gpid in list(graph_pids)[:3]:
+            if len(flywheel) < 6:
+                flywheel.append((gpid, 0, "canonical"))
+        # Roadmap 4.9: fire-and-forget access bump for the top recall hits
+        # (payloads carried inline - no extra retrieve roundtrips, review fix)
+        if flywheel and self._qdrant:
+            threading.Thread(target=self._flywheel_bump, args=(flywheel,),
+                             name="nexus-flywheel", daemon=True).start()
         vector_results = results[:limit]
         for gi in graph_items:
             vector_results.append({"id": "", "text": gi, "score": 0.0, "source": "graph-boost",
@@ -411,6 +468,27 @@ class NexusMemoryProvider:
                             "category": "graph", "confidence": None,
                             "created_at": ""})
         return vector_results
+
+    def _flywheel_bump(self, entries: List[tuple]) -> None:
+        """Roadmap 4.9: increment access_count on recalled points.
+
+        Fire-and-forget ( payloads passed in - zero retrieve roundtrips
+        since _recall already had them). Skips points deprecated between
+        recall and this bump (review fix B2). SICA uses access_count
+        later as trust signal for retrieval weighting.
+        """
+        for pid, count, status in entries:
+            try:
+                # Review fix: skip facts deprecated after the recall snapshot
+                if status in ("deprecated", "rolled_back"):
+                    continue
+                self._qdrant.set_payload(
+                    collection_name=self._collection,
+                    payload={"access_count": count + 1,
+                             "last_accessed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                    points=[pid], wait=False)
+            except Exception as exc:
+                logger.debug("flywheel bump skip %s: %s", str(pid)[:8], exc)
 
     def _forget(self, memory_id: str) -> Dict[str, Any]:
         if not self._qdrant: raise RuntimeError("Provider not initialized")
@@ -859,7 +937,8 @@ class NexusMemoryProvider:
         if entity.attributes:
             attr_str = ", ".join(f"{k}={v}" for k, v in entity.attributes.items())
             text += f" ({attr_str})"
-        vector = self._embedder.embed(text)
+        # Review fix R1: deterministic entity text - cache the embed
+        vector = self._embed_cached(text)
         payload = {
             "id": eid,
             "content": text,
