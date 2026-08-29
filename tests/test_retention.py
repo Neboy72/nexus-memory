@@ -149,7 +149,7 @@ class TestDetectRetention:
         assert issues == []
 
     def test_naive_timestamp_treated_as_utc(self):
-        # Naive datetime (no tz) 10 days old — must use UTC, not local.
+        # Naive datetime (no tz) 10 days old - must use UTC, not local.
         naive = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
         points = [{"id": "t1", "payload": {"category": "temp", "created_at": naive}}]
         issues = _detect_retention(points, policies={"temp": 7})

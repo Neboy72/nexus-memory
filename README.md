@@ -12,7 +12,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.9.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.10.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-578%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -356,6 +356,18 @@ Query → ┌─ BM25 Index ──────→ Keyword Rankings
 | **Vector** 🧠 | Semantic matching, fuzzy queries | Vulnerable to poisoning |
 | **Hybrid (RRF)** 🏆 | Best of both |none |
 
+### Cross-Encoder Reranking 🎯
+
+Hybrid fusion gets you the right candidates; reranking gets the right order. After BM25 + Vector + RRF, a reranker scores each candidate against the query and re-sorts. Auto mode picks the best available backend: Voyage Rerank API when `VOYAGE_API_KEY` is set, a free local CrossEncoder otherwise. Off by default; enable with `nexus-memory.rerank: true` in `~/.hermes/config.yaml`.
+
+### Retention Policies 🧹
+
+Memories decay on their own schedule: per-category TTLs (e.g. `temp` = 1 day, `session` = 7 days by default) purge stale entries during SICA runs. Everything you did not mark as disposable stays forever. Missing timestamps are never deleted, and the legacy `SICA_STALE_TEMP_DAYS` variable keeps working.
+
+### Reflect Insights 💡 + Entity Dedup 🧬
+
+SICA's Reflect phase turns contradiction groups into one deterministic insight each: likely current truth (confidence-based winner) plus a concrete resolution suggestion, stored in `SICAResult.reflect_insights`. Duplicate entity records (same type, name variants) surface as merge-review suggestions; the oldest point wins, nothing is ever auto-deleted.
+
 ### Source-Tier Boosting 🏷️
 
 | Tier | Sources | Boost |
@@ -522,6 +534,10 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 🚀 **Graph-Boosted Auto-Recall** | **✅ All 3 plugins** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🔄 **SICA Self-Improvement** | **✅ Auto-cleanup** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | ⏰ **Time Decay** | **✅ Gauss-shaped** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🎯 **Cross-Encoder Reranking** | **✅ Auto: cloud or free local** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🧹 **Retention Policies** | **✅ Per-category TTL** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 💡 **Reflect Insights** | **✅ Conflict resolution hints** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🧬 **Entity Dedup** | **✅ Merge-review, no data loss** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 💾 **Auto-Backup** | **✅ Every 6h** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 📦 **Update Notifications** | **✅ Auto-check GitHub** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -559,6 +575,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.10.0** | 2026-08-30 | Cross-Encoder Reranking (auto: Voyage if key, free local else), per-category retention policies, SICA reflect insights (one deterministic insight per contradiction group), entity dedup detection, 549 tests |
 | **v0.9.1** | 2026-07-27 | Fix: discovery content-dict handling, SICA session storage dimension mismatch (768d vs 1024d), 578 tests |
 | **v0.9.0** | 2026-07-27 | Graph-Boosted Auto-Recall (all 3 plugins: 1-hop graph neighbors from top-3 vector hits, `[graph:<relation>]` tagging, access-level filtering), SICA Self-Improvement Cycle (Detect → Reflect → Act → Learn, stale temp auto-deletion, low-confidence + contradiction detection, `nexus_sica_run` tool), SkillGraph caching, `SkillGraph.get_point()` public API, 64 code review fixes across 7 rounds, 578 tests |
 | **v0.8.0** | 2026-07-25 | Cost-Aware Routing: tier-based embedding provider selection (premium/standard/economy), category→tier mapping (fact→premium, session→economy), cost estimation, routing stats + explain tools, auto-enables when 2+ providers available, 558 tests |

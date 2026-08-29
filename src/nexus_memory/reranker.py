@@ -108,7 +108,7 @@ def rerank_points(
     texts = [
         ((p.payload or {}).get("content") or "")[:MAX_DOC_CHARS] for p in pool
     ]
-    # Points without text cannot be cross-encoded — keep their relative order.
+    # Points without text cannot be cross-encoded - keep their relative order.
     results = [
         {"_idx": i, "text": text} for i, text in enumerate(texts) if text
     ]
@@ -132,7 +132,7 @@ def rerank_points(
     order = [r["_idx"] for i, r in enumerate(ranked)]
     ordered = [pool[i] for i in order]
     # Pool candidates that the reranker dropped (empty content etc.) are
-    # re-appended at the end in their original order — a rerank failure
+    # re-appended at the end in their original order - a rerank failure
     # must never silently lose results.
     seen = set(order)
     missing = [pool[i] for i in range(len(pool)) if i not in seen]
@@ -170,7 +170,7 @@ def _rerank_voyage(
     )
     if resp.status_code >= 400:
         logger.warning(
-            "Voyage rerank HTTP %s — falling back to original order",
+            "Voyage rerank HTTP %s - falling back to original order",
             resp.status_code,
         )
         raise RuntimeError(f"voyage rerank HTTP {resp.status_code}")
