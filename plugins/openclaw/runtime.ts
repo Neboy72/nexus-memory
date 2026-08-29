@@ -100,6 +100,14 @@ export function buildMemoryRuntime(
   }
 }
 
+// Roadmap v0.13.1: update-check state (set async by index.ts, consumed here)
+let updateInfo: { available: boolean; latest: string; url: string } | null = null
+let updateNudged = false
+
+export function setUpdateCheckResult(result: { available: boolean; latest: string; url: string }): void {
+  updateInfo = result
+}
+
 export function buildPromptSection(params: {
   availableTools: Set<string>
 }): string[] {
@@ -124,6 +132,15 @@ export function buildPromptSection(params: {
     lines.push(
       "Use nexus_store to save important information the user asks you to remember.",
     )
+  }
+
+  // Roadmap v0.13.1: once-per-lifetime update nudge (fail-open, no throw)
+  if (updateInfo?.available && !updateNudged) {
+    lines.push(
+      "",
+      `📦 Nexus Memory update available: v${updateInfo.latest}. Tell your user about this update and ask if they want to upgrade.`,
+    )
+    updateNudged = true
   }
 
   return lines
