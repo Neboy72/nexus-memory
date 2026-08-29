@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from collections import OrderedDict
+from threading import Lock
 from typing import List
 
 
@@ -20,7 +21,7 @@ class EmbedCache:
     def __init__(self, maxsize: int = 256):
         self._maxsize = maxsize
         self._data: OrderedDict[str, List[float]] = OrderedDict()
-        self._lock = __import__("threading").Lock()
+        self._lock = Lock()
         self.hits = 0
         self.misses = 0
 
@@ -29,19 +30,20 @@ class EmbedCache:
         return hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest()
 
     def get(self, text: str) -> List[float] | None:
+        key = self._key(text)
         with self._lock:
-            vec = self._data.get(self._key(text))
+            vec = self._data.get(key)
             if vec is not None:
-                self._data.move_to_end(self._key(text))
+                self._data.move_to_end(key)
                 self.hits += 1
             else:
                 self.misses += 1
             return list(vec) if vec is not None else None
 
     def put(self, text: str, vector: List[float]) -> None:
+        key = self._key(text)
         with self._lock:
-            self._data[self._key(text)] = list(vector)
-            self._data.move_to_end(self._key(text))
+            self._data[key] = list(vector)
             while len(self._data) > self._maxsize:
                 self._data.popitem(last=False)
 
@@ -51,8 +53,10 @@ class EmbedCache:
         return self.hits / total if total else 0.0
 
     def stats(self) -> dict:
+        with self._lock:
+            entries = len(self._data)
         return {
-            "entries": len(self._data),
+            "entries": entries,
             "hits": self.hits,
             "misses": self.misses,
             "hit_rate": round(self.hit_rate, 3),
