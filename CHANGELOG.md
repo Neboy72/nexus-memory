@@ -5,6 +5,29 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Cross-Encoder Reranking** (roadmap 1.2) - new `nexus_memory/reranker.py`;
+  optional rerank step in the Hermes plugin `_recall` pipeline. Config-driven
+  via `nexus-memory.rerank` in `~/.hermes/config.yaml` (reranker: voyage
+  API or cross-encoder local, rerank_pool pool size; env overrides
+  NEXUS_RERANK / NEXUS_RERANKER). Disabled by default; fail-open (rerank
+  errors return the original vector order). 12 new tests.
+- **Per-category retention policies** (roadmap 2.2) - SICA `_detect_retention`
+  replaces the temp-only scan: temp=1 day, session=7 days by default,
+  override via SICA_RETENTION_<CATEGORY> env vars; unlisted categories and
+  no SICA_DEFAULT_RETENTION_DAYS keep memories forever. Memory with
+  missing/unparseable timestamps is never deleted. Legacy
+  SICA_STALE_TEMP_DAYS keeps working (feeds the temp policy).
+  `_apply_auto_patch` now deletes `retention_expired` issues. 16 new tests.
+
+### Changed
+
+- SICA issue type for expired memories is now `retention_expired` (was
+  `stale_temp`); `_detect_stale_temp` stays as a backwards-compatible bridge.
+
 ## [v0.9.1] — 2026-07-27
 
 ### Fixed
