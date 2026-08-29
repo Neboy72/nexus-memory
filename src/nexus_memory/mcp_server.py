@@ -609,7 +609,10 @@ class MemoryStore:
                             collection_name=COLLECTION_NAME,
                             payload={"lifecycle_status": "deprecated",
                                      "superseded_by": entry_id,
-                                     "superseded_at": created_at},
+                                     "superseded_at": created_at,
+                                     "supersede_reason": (
+                                         f"replaced by fact {entry_id[:8]} "
+                                         f"(similarity {float(point.score):.2f} >= 0.90)")},
                             points=[old_id],
                         )
                         superseded_ids.append(old_id)
