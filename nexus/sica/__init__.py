@@ -272,6 +272,20 @@ def _detect_retention(
     return issues
 
 
+def _age_days(created_at) -> float:
+    """Days since created_at (0.0 when missing/unparseable)."""
+    if not created_at:
+        return 0.0
+    try:
+        ts = str(created_at).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds() / 86400)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def _detect_low_confidence(points: List[Dict], low_confidence_threshold: float = 0.5) -> List[Dict[str, Any]]:
     """Detect memories with confidence below threshold.
 
@@ -291,12 +305,23 @@ def _detect_low_confidence(points: List[Dict], low_confidence_threshold: float =
         except (TypeError, ValueError):
             continue
         if confidence < low_confidence_threshold:
+            # Roadmap 4.8 autonomous: confidence < 0.2 + never accessed +
+            # older than 30 days -> safe auto-delete. Everything else review.
+            # Legacy points ohne access_count-Feld gelten NICHT als never_used
+            # (review fix: fehlendes Feld = unbekannt = fail-safe review-only)
+            if "access_count" not in payload:
+                never_used = False
+            else:
+                never_used = int(payload.get("access_count", 0) or 0) == 0
+            age = _age_days(payload.get("created_at"))
+            purgeable = never_used and confidence < 0.2 and age > 30
             issues.append({
                 "id": p["id"],
                 "type": "low_confidence",
-                "detail": f"Confidence {confidence:.2f} < {low_confidence_threshold}",
-                "auto_fixable": False,
-                "action": "review",
+                "detail": f"Confidence {confidence:.2f} < {low_confidence_threshold}"
+                          + (" (never accessed)" if never_used else ""),
+                "auto_fixable": purgeable,
+                "action": "delete" if purgeable else "review",
                 "category": payload.get("category", "fact"),
                 "confidence": confidence,
             })
@@ -480,9 +505,12 @@ def _apply_auto_patch(client: Any, collection: str, issue: Dict[str, Any]) -> Op
     try:
         # 'stale_temp' is kept for external/legacy issue producers
         # (the built-in detector now always emits 'retention_expired').
+        # 'low_confidence' delete issues come from the 4.8 autonomous
+        # purge rule (confidence<0.2 + never accessed + age>30d).
         if issue.get("action") == "delete" and issue.get("type") in (
             "stale_temp",
             "retention_expired",
+            "low_confidence",
         ):
             client.delete(
                 collection_name=collection,
