@@ -22,7 +22,7 @@ google = ["google-generativeai>=0.7.0"]
 jina = []
 webui = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
 all = ["voyageai>=0.3.0", "openai>=1.0.0", "google-generativeai>=0.7.0", "fastapi>=0.100.0", "uvicorn>=0.20.0"]
-test = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]
+test = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "mcp>=1.0.0"]
 
 [project.scripts]
 nexus-memory = "nexus_memory.mcp_server:cli"
