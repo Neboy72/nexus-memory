@@ -5,6 +5,32 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.13.2] - 2026-08-30
+
+### Fixed
+
+- **Prefetch slot-replacement race** (hermes-agent `memory_manager.py`) - when a
+  turn began while the previous prefetch thread was still in flight, the old
+  code replaced the `_external_prefetch_threads` mapping regardless, silently
+  dropping that turn's memory recall. Fixed to only skip when the previous
+  prefetch is genuinely still running. 71/71 memory-provider tests green.
+
+### Changed
+
+- **Prefetch capacity doubled** - Auto-Prefetch now fetches 10 (was 5) vector
+  hits with a 2400-char (was 1200) budget. At 14k+ stored memories the old
+  limits surfaced only 2-3 hits and let session-noise dominate context.
+  Both still overridable via `NEXUS_PREFETCH_CHARS`.
+
+### Added
+
+- **Hardware auto-entity detection** - `sync_turn` now triggers entity extraction
+  immediately when a user message contains declarative hardware statements
+  ("Ich habe X", "Ich nutze Y") together with known hardware keywords
+  (Bose, Razer, Mikrofon, USB, Bluetooth, ...). Stores with confidence 0.9
+  instead of letting the fact sink as a confidence-0.5 session log entry.
+  Question sentences are excluded. Failure is non-blocking.
+
 ## [v0.13.1] - 2026-08-30
 
 ### Added
