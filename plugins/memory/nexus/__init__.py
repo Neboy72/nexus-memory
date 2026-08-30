@@ -6,6 +6,7 @@ and embedding logic as the MCP server so all agents share the same memory.
 
 from __future__ import annotations
 import json, logging, os, threading, time, uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
@@ -217,18 +218,50 @@ class NexusMemoryProvider:
         if hasattr(self, '_update_available') and self._update_available and not self._update_nudged:
             self._update_nudged = True
             base += f"\n\n📦 Nexus Memory update available: v{self._update_available['version']}. Tell your user about this update and ask if they want to upgrade."
-        # Backup info nudge (once per lifetime)
-        if not self._backup_nudged:
+        # Backup info nudge (once per lifetime): only fire when an external chain
+        # is NOT already configured. Nebo 30.08.2026: the blanket "Shall I help you
+        # set up external backup?" text was wrong for this deployment - Synology
+        # chain has existed for weeks and the nudge misled the agent into offering
+        # a setup that was already running.
+        if not self._backup_nudged and not os.environ.get("NEXUS_SKIP_BACKUP_NUDGE"):
             self._backup_nudged = True
-            base += (
-                "\n\n💾 Nexus Memory has automatic daily backups enabled. "
-                "Backups are saved to ~/.nexus-memory/backups/. "
-                "Tell your user: 'Nexus Memory backs up your memories automatically every day. "
-                "I recommend copying the backup to external storage (USB, NAS, cloud) for extra safety. "
-                "Latest backup: " + (self._last_backup_path or "pending (first backup runs 60s after startup)") + ". "
-                "Shall I help you set up external backup?'"
-            )
+            if not self._external_backup_configured():
+                base += (
+                    "\n\n💾 Nexus Memory has automatic daily backups enabled. "
+                    "Backups are saved to ~/.nexus-memory/backups/. "
+                    "Latest backup: " + (self._last_backup_path or "pending (first backup runs 60s after startup)") + ". "
+                    "No external/off-site backup chain detected - mention this once to the user and "
+                    "offer to set one up (USB, NAS, cloud)."
+                )
+            else:
+                logger.debug("External backup chain detected - skipping setup nudge.")
         return base
+
+    @staticmethod
+    def _external_backup_configured() -> bool:
+        """True wenn eine externe Backup-Pipeline für ~/.nexus-memory/backups besteht.
+
+        Prüfe die gängigsten lokalen Installations-Artefakte (Synology-rsync-Script,
+        LaunchAgent, bekannter Backup-Cron). Fail-open: bei Unklarheit Nudge zeigen.
+        """
+        markers = [
+            Path.home() / ".hermes/scripts/backup-macmini.sh",
+            Path.home() / ".hermes/scripts/backup.sh",
+            Path.home() / "Library/LaunchAgents/com.kiosha.backup-macmini.plist",
+            Path.home() / "Library/LaunchAgents/com.nexus.backup.plist",
+        ]
+        try:
+            for m in markers:
+                if m.exists():
+                    try:
+                        blob = m.read_text(errors="ignore")
+                    except Exception:
+                        continue
+                    if "nexus-memory/backups" in blob or "nexus/memory-backups" in blob:
+                        return True
+        except Exception:
+            pass
+        return False
 
     def shutdown(self) -> None:
         self._write_stop.set()
