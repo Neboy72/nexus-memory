@@ -330,8 +330,8 @@ class NexusMemoryProvider:
         if not self._embedder or not self._qdrant: return
         try:
             vector = self._embed_cached(query)
-            pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=5).points
-            budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "1200"))
+            pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=10).points
+            budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
             total = 0
             items: List[str] = []
             for p in pts:
@@ -371,6 +371,14 @@ class NexusMemoryProvider:
             self._write_queue.append({"text": f"User: {user_content}\nAssistant: {assistant_content}",
                                        "category": "session", "access_level": "public",
                                        "source": "hermes-plugin", "confidence": 0.5})
+
+        # Auto-Entity-Detection (Nebo 30.08.2026): Hardware-Fakten sofort als Entity speichern,
+        # nicht nur bei session_end. Pattern: "Ich habe X" / "Ich nutze X" / "Ich habe X per Y"
+        if any(sig in user_content.lower() for sig in ["ich habe ", "ich nutze ", "ich hab ", "ich nutz "]):
+            try:
+                self._maybe_extract_hardware_entities(user_content, session_id)
+            except Exception as exc:
+                logger.debug("Hardware-entity auto-extract failed (non-fatal): %s", exc)
 
     def _write_loop(self) -> None:
         while not self._write_stop.is_set():
@@ -787,6 +795,33 @@ class NexusMemoryProvider:
             # Thread spawn failed: release the lock or enrichment dies forever
             logger.warning("Entity extraction thread start failed: %s", exc)
             self._entity_extract_lock.release()
+
+    def _maybe_extract_hardware_entities(self, text: str, session_id: str) -> None:
+        """Hardware-Pattern (Nebo 30.08.2026): "ich habe X", "ich nutze Y" sofort extrahieren.
+
+        Triggert NUR auf deklarative Hardware-Sätze, niemals auf Fragen ("Hast du...?").
+        Speichert als nexus_remember mit confidence=0.9 (User-deklariert, kein LLM-Guess).
+        """
+        # Skip Fragensätze (beginnen mit Fragewort oder haben Fragezeichen-Pattern)
+        if text.strip().startswith(("Hast", "Kannst", "Bist", "Wie ", "Was ", "Wo ", "Warum ")):
+            return
+
+        # Hardware-Keywords die Entity-Extraktion auslösen
+        hw_keywords = ["Bose", "Razer", "Mikrofon", "Mikro", "USB", "Bluetooth", "BT", "Lautsprecher",
+                       "Headset", "Kopfhörer", "SoundLink", "Webcam", "Monitor", "Tastatur", "Maus"]
+
+        if not any(kw.lower() in text.lower() for kw in hw_keywords):
+            return
+
+        # Text auf 500 Zeichen begrenzen (Kosten + Signal-Rausch-Verhältnis)
+        snippet = text[:500]
+        try:
+            er = self._extract_entities_from_text(snippet, source="auto-hardware-detection")
+            if er.get("entities", 0) > 0:
+                logger.info("Auto-hardware extraction: %d entities aus User-Aussage gespeichert",
+                            er.get("entities"))
+        except Exception as exc:
+            logger.warning("Hardware-auto-extract failed: %s", exc)
 
     def _extract_entities_from_text(self, text: str, source: str = "nexus_remember",
                                      access_level: str = "public") -> Dict[str, Any]:
