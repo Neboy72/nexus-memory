@@ -80,16 +80,26 @@ class HealthAuditor:
 
     # ── public: run one audit now (used by the loop AND tests) ────────
     def run_audit(self) -> Optional[Dict[str, Any]]:
+        # Registry hygiene runs FIRST and independent of the Qdrant audit —
+        # ghost-agent cleanup must not depend on collection health.
+        agent_cleanup: Optional[Dict[str, Any]] = None
+        try:
+            from nexus_memory.agent_detect import cleanup_removed_agents
+            agent_cleanup = cleanup_removed_agents()
+        except Exception as reg_exc:
+            log.warning("Agent registry cleanup failed: %s", reg_exc)
         try:
             report = self._audit()
             with self._lock:
                 self._last_report = report
+            if agent_cleanup is not None:
+                report["agent_cleanup"] = agent_cleanup
             self._write_report(report)
             self._maybe_webhook(report)
             return report
         except Exception as exc:  # never break the server
             log.warning("Health audit failed: %s", exc)
-            return None
+            return agent_cleanup  # still return the registry report
 
     # ── internal ───────────────────────────────────────────────────────
     def _audit(self) -> Dict[str, Any]:
