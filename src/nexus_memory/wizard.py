@@ -81,8 +81,8 @@ PROVIDERS = [
     },
     {
         "id": "ollama",
-        "name": "Ollama",
-        "dims": 768,
+        "name": "Ollama (bge-m3, lokal)",
+        "dims": 1024,
         "quality": "good",
         "type": "local",
         "key_url": "https://ollama.com/download",
@@ -192,13 +192,16 @@ def _run_cmd(cmd: list[str], timeout: int = 60) -> tuple[int, str, str]:
 
 
 def _check_ollama() -> tuple[bool, str]:
-    """Check if Ollama is running and has an embed model. Returns (available, model_name)."""
+    """Check if Ollama is running and has an embed model. Returns (available, model_name).
+    Known embedding models are matched by name so bge-m3 (no 'embed' substring) counts too."""
     try:
         import requests
         r = requests.get("http://localhost:11434/api/tags", timeout=2)
         if r.status_code < 400:
             models = [m["name"] for m in r.json().get("models", [])]
-            emb_model = next((m for m in models if "embed" in m.lower()), None)
+            emb_model = next((m for m in models if "bge-m3" in m.lower()), None)
+            if not emb_model:
+                emb_model = next((m for m in models if "embed" in m.lower()), None)
             if emb_model:
                 return True, emb_model
     except Exception:
@@ -548,9 +551,21 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
         return True
 
     _print(f"\n  {YELLOW}⚠{RESET} Ollama is not running or no embedding model found.")
-    _print(f"  Install an embedding model: {CYAN}ollama pull nomic-embed-text{RESET}")
+    _print(f"  Install a local embedding model: {CYAN}ollama pull bge-m3{RESET}")
+    _print(f"  ({'1.2 GB, multilingual (100+ languages), best local quality.'}{RESET})")
+    _print(f"  Smaller alternative: {CYAN}ollama pull nomic-embed-text{RESET} (274 MB, English-focused)")
 
-    if _confirm(f"  Install nomic-embed-text now?"):
+    if _confirm("  Install bge-m3 now? (recommended, 1.2 GB)"):
+        _print(f"\n  {CYAN}Pulling bge-m3...{RESET}")
+        ret, out, err = _run_cmd(["ollama", "pull", "bge-m3"], timeout=600)
+        if ret == 0:
+            _print(f"  {GREEN}✓{RESET} bge-m3 installed successfully (1024d, multilingual).")
+            return True
+        else:
+            _print(f"  {RED}✗{RESET} Failed to pull model. Is Ollama installed?")
+            _print(f"  Download: {CYAN}{ps.provider['key_url']}{RESET}")
+            return False
+    elif _confirm("  Install nomic-embed-text instead? (small, fast, 274 MB)"):
         _print(f"\n  {CYAN}Pulling nomic-embed-text...{RESET}")
         ret, out, err = _run_cmd(["ollama", "pull", "nomic-embed-text"], timeout=300)
         if ret == 0:
@@ -558,11 +573,10 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
             return True
         else:
             _print(f"  {RED}✗{RESET} Failed to pull model. Is Ollama installed?")
-            _print(f"  Download: {CYAN}{ps.provider['key_url']}{RESET}")
             return False
     else:
         _print(f"  {YELLOW}Skipping Ollama setup. You can install later:{RESET}")
-        _print(f"    {CYAN}ollama pull nomic-embed-text{RESET}")
+        _print(f"    {CYAN}ollama pull bge-m3{RESET}")
         return True  # Not a hard failure
 
 
