@@ -40,6 +40,22 @@ for _candidate in (_REPO_ROOT / "src", _REPO_ROOT):
 # 2. Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def isolated_agents_registry(tmp_path, monkeypatch):
+    """Redirect agents.json to a temp file for EVERY test.
+
+    Tests must never touch the real ``~/.nexus-memory/agents.json``: a
+    registry write from a test with a broken path-patch corrupted real
+    agent state on 31.08.2026. The module binds its path helper lazily
+    via ``_get_agents_registry_path()``, so patching the module attr is
+    sufficient for every code path (load/save/register/cleanup).
+    """
+    import nexus_memory.agent_detect as _ad
+
+    path = tmp_path / "agents.json"
+    monkeypatch.setattr(_ad, "_get_agents_registry_path", lambda: path)
+    yield path
+
 
 @pytest.fixture
 def isolated_env(monkeypatch):
