@@ -165,10 +165,10 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
   | **OpenAI** ☁️ | Cloud | 1536d | `OPENAI_API_KEY` |
   | **Google/Vertex AI** 💚 | Cloud | 768d | `GOOGLE_API_KEY` |
   | **Jina** 💜 | Cloud | 1024d | `JINA_API_KEY` |
-  | **Ollama** 🦙 | Local | 768d | Auto-detected (`embed` model) |
+  | **Ollama** 🦙 | Local | 1024d (bge-m3) | Auto-detected — `ollama pull bge-m3` (recommended, 1.2 GB) or any `embed` model |
   | **sentence-transformers** 🏠 | Local | 384d | `pip install sentence-transformers` |
 
-  > **Zero-setup:** If you have Ollama running with an `embed` model (e.g. `nomic-embed-text`), it works out of the box — no API key needed.
+  > **Zero-setup:** If you have Ollama running with an embedding model, it works out of the box — no API key needed. Recommended local model: `ollama pull bge-m3` (1.2 GB, 1024d, multilingual, best local quality). Smaller alternative: `nomic-embed-text` (274 MB, English-focused).
 
 ### 1. Install
 
@@ -200,7 +200,7 @@ Set your preferred embedding provider's API key. Pick **one** of these options �
 echo 'VOYAGE_API_KEY="vo-your-key-here"' >> ~/nexus-memory/.env
 ```
 
-> 💡 **No API key?** If you have Ollama running locally with an embed model (e.g. `nomic-embed-text`), skip config entirely — the server detects it automatically.
+> 💡 **No API key?** If you have Ollama running locally with an embedding model (e.g. `bge-m3`), skip config entirely — the server detects it automatically.
 
 ### 3. Run MCP Server
 
@@ -527,7 +527,7 @@ MCP Client ← stdio → nexus-memory (MCP Server)
                                     (384d)
 ```
 
-> **Auto-detection:** The server tries Voyage → OpenAI → Google → Jina → Ollama → sentence-transformers. First available wins. No manual selection needed.
+> **Auto-detection:** The server tries Voyage → OpenAI → Google → Jina → Ollama (prefers bge-m3) → sentence-transformers. First available wins. No manual selection needed.
 
 ### Key Components
 
