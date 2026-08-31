@@ -29,6 +29,7 @@ Usage:
 import json
 import os
 import shutil
+import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,14 +114,20 @@ def _check_codex() -> dict:
 
 
 def _check_cursor() -> dict:
-    """Detect Cursor."""
+    """Detect Cursor.
+
+    Strict install signals only: the Cursor app bundle or the ``cursor``
+    CLI. A bare ``~/.cursor`` directory does NOT count — tools (e.g. our
+    own skill deployments) create it without Cursor ever being installed.
+    """
     info = {"id": "cursor", "name": "Cursor", "icon": "🖱️", "plugin_available": False, "mcp_available": True}
-    
-    config_dir = Path.home() / ".cursor"
-    info["config_dir"] = str(config_dir) if config_dir.exists() else None
-    
-    # Check for mcp.json with nexus
-    mcp_json = config_dir / "mcp.json"
+
+    cli = shutil.which("cursor")
+    info["cli_path"] = cli
+
+    app_dir = Path("/Applications/Cursor.app")
+    home_cursor = Path.home() / ".cursor"
+    mcp_json = home_cursor / "mcp.json"
     if mcp_json.exists():
         try:
             cfg = json.loads(mcp_json.read_text())
@@ -129,8 +136,9 @@ def _check_cursor() -> dict:
             info["nexus_installed"] = False
     else:
         info["nexus_installed"] = False
-    
-    info["detected"] = bool(config_dir.exists())
+
+    info["config_dir"] = str(home_cursor) if home_cursor.exists() else None
+    info["detected"] = bool(cli or app_dir.exists())
     return info
 
 
@@ -174,18 +182,19 @@ def _check_opencode() -> dict:
 
 
 def _check_kilo_code() -> dict:
-    """Detect Kilo Code (#2 OpenRouter). VS Code / JetBrains extension, CLI."""
-    info = {"id": "kilo-code", "name": "Kilo Code", "icon": "⚡", "plugin_available": False, "mcp_available": True}
+    """Detect Kilo Code (#2 OpenRouter). VS Code / JetBrains extension, CLI.
 
-    # VS Code extension config
-    vscode_dir = Path.home() / ".vscode" / "extensions"
-    info["config_dir"] = str(vscode_dir) if vscode_dir.exists() else None
+    Strict install signals only: a ``kilo`` binary or a ``~/.kilo`` config
+    dir counts. The mere presence of ``~/.vscode/extensions`` does NOT
+    (any VS Code install would otherwise register as Kilo Code).
+    """
+    info = {"id": "kilo-code", "name": "Kilo Code", "icon": "⚡", "plugin_available": False, "mcp_available": True}
 
     cli = shutil.which("kilo")
     info["cli_path"] = cli
 
-    # Check MCP config for nexus
-    mcp_json = Path.home() / ".kilo" / "mcp.json"
+    kilo_dir = Path.home() / ".kilo"
+    mcp_json = kilo_dir / "mcp.json"
     if mcp_json.exists():
         try:
             cfg = json.loads(mcp_json.read_text())
@@ -195,7 +204,11 @@ def _check_kilo_code() -> dict:
     else:
         info["nexus_installed"] = False
 
-    info["detected"] = bool(vscode_dir.exists() or cli)
+    # Extension-style install inside ~/.kilo (e.g. mcp.json or other config)
+    kilo_cfg = kilo_dir.exists() and any(kilo_dir.iterdir())
+
+    info["config_dir"] = str(kilo_dir) if kilo_dir.exists() else None
+    info["detected"] = bool(cli or kilo_cfg)
     return info
 
 
@@ -412,7 +425,11 @@ def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
         "reads": 0,
         "writes": 0,
     })
-    
+    # Registration via local detection = this machine (never clobbers an
+    # explicitly-registered remote host's fields, since those entries are
+    # not re-registered by detectors).
+    annotate_host(agent, host_type="local")
+
     save_agents_registry(registry)
     return agent
 
@@ -440,6 +457,35 @@ def update_agent_seen(agent_id: str) -> None:
 # days before the registry treats it as removed (protects against transient
 # detection hiccups and short uninstall/reinstall windows).
 AGENT_REMOVAL_GRACE_DAYS = 14
+
+
+def _local_host_label() -> str:
+    """Human-readable name of the machine this code runs on.
+
+    ``NEXUS_HOST_LABEL`` wins (explicit config), else the macOS hostname.
+    Used to auto-annotate locally-detected agents in the registry.
+    """
+    env = os.environ.get("NEXUS_HOST_LABEL", "").strip()
+    if env:
+        return env
+    try:
+        name = socket.gethostname().strip()
+        return name or "this machine"
+    except Exception:
+        return "this machine"
+
+
+def annotate_host(agent: dict, host_type: Optional[str] = None,
+                  host_label: Optional[str] = None) -> dict:
+    """Fill host fields on a registry entry without clobbering existing ones.
+
+    host_type: "local" (this machine) or "remote" (VPS/other machine).
+    host_label: human-readable seat, e.g. "Mac Mini" or "Hetzner CX22".
+    host_provider: optional vendor, e.g. "Hetzner".
+    """
+    agent.setdefault("host_type", host_type or "local")
+    agent.setdefault("host_label", host_label or _local_host_label())
+    return agent
 
 
 def cleanup_removed_agents(grace_days: int = AGENT_REMOVAL_GRACE_DAYS) -> dict:
@@ -476,6 +522,7 @@ def cleanup_removed_agents(grace_days: int = AGENT_REMOVAL_GRACE_DAYS) -> dict:
 
     registry = load_agents_registry()
     kept, removed = [], []
+    changed = False
     now = datetime.now(timezone.utc)
 
     for agent in registry.get("agents", []):
@@ -499,6 +546,15 @@ def cleanup_removed_agents(grace_days: int = AGENT_REMOVAL_GRACE_DAYS) -> dict:
 
     if removed:
         registry["agents"] = [a for a in registry.get("agents", []) if a.get("id") in set(kept)]
+        changed = True
+
+    # Backfill host annotations for legacy entries (pre-host-fields).
+    for agent in registry.get("agents", []):
+        if not agent.get("host_type"):
+            annotate_host(agent, host_type="local")
+            changed = True
+
+    if changed:
         save_agents_registry(registry)
 
     return {
@@ -524,6 +580,55 @@ def set_agent_trust_level(agent_id: str, trust_level: str) -> dict:
             return {"agent_id": agent_id, "trust_level": trust_level, "status": "updated"}
     
     return {"error": f"Agent not found: {agent_id}"}
+
+
+def register_remote_agent(agent_id: str, name: str, trust_level: str = "trusted",
+                          host_label: str = "", host_provider: str = "",
+                          icon: str = "🌐", install_type: str = "mcp",
+                          notes: str = "") -> dict:
+    """Pre-register a REMOTE agent (VPS / other machine) in the registry.
+
+    The remote harness is not on this machine, so detection will never
+    confirm it: the entry is created host_type="remote" and stats start
+    counting with its first real call (NEXUS_AGENT_ID set on the remote
+    side). Trust defaults to "trusted" because remote agents are expected
+    to talk to this Qdrant over the network by explicit user intent.
+    """
+    valid = ["public", "trusted", "private"]
+    if trust_level not in valid:
+        return {"error": f"Invalid trust level: {trust_level}"}
+    if agent_id in ("hermes", "openclaw", "claude-code", "gemini-cli"):
+        return {"error": f"Refusing to shadow a local agent id: {agent_id}"}
+
+    registry = load_agents_registry()
+    agents = registry.setdefault("agents", [])
+    for a in agents:
+        if a.get("id") == agent_id:
+            return {"error": f"Agent id already registered: {agent_id}"}
+
+    entry = {
+        "id": agent_id,
+        "name": name or agent_id,
+        "icon": icon if len(icon) <= 4 else "🌐",
+        "trust_level": trust_level,
+        "install_type": install_type,
+        "config_dir": None,
+        "connected_at": _now_iso(),
+        "last_seen": _now_iso(),
+        "reads": 0,
+        "writes": 0,
+        "host_type": "remote",
+        "host_label": host_label or "unknown host",
+        "host_provider": host_provider or "",
+    }
+    if notes:
+        entry["notes"] = notes
+    agents.append(entry)
+    save_agents_registry(registry)
+    return {"status": "registered", "agent": entry, "next_step": (
+        "On the remote machine: install nexus-memory, set "
+        f"NEXUS_AGENT_ID={agent_id} and NEXUS_QDRANT_HOST to this "
+        "machine's Tailscale IP. Dashboard shows stats on first call.")}
 
 
 def _now_iso() -> str:
