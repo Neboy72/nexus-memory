@@ -374,6 +374,15 @@ class MemoryStore:
         self._last_backup_time: float = 0
         self._check_for_updates_async()
         self._start_auto_backup()
+        # 2026-08-31: in-process health audit (harness-independent, read-only)
+        self._health_auditor = None
+        try:
+            from nexus_memory.health_audit import HealthAuditor
+            self._health_auditor = HealthAuditor(self, COLLECTION_NAME)
+            self._health_auditor.start()
+            logging.info("Health audit daemon active")
+        except Exception as e:
+            logging.warning(f"Health audit daemon unavailable: {e}")
 
     def _check_for_updates_async(self):
         """Check GitHub for new releases on startup (non-blocking, cached 24h)."""
@@ -1037,15 +1046,19 @@ class MemoryStore:
                 )
             else:
                 result["update_available"] = False
+            # 2026-08-31: health audit flags - harness-independent self-monitoring.
+            # The agent sees dedup/health warnings on its next health check and can tell the user.
+            try:
+                auditor = getattr(self, "_health_auditor", None)
+                if auditor is not None:
+                    flags = auditor.get_flags()
+                    if flags:
+                        result["health_flags"] = flags
+            except Exception:
+                pass
             return result
         except Exception as e:
             return {"status": "error", "error": str(e)}
-
-
-# ── MCP Server ─────────────────────────────────────────────────────
-
-_store: Optional[MemoryStore] = None
-
 
 def get_store() -> MemoryStore:
     global _store
