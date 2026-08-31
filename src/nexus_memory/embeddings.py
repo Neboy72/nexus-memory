@@ -201,22 +201,59 @@ class EmbeddingProvider:
             return False
 
     def _try_ollama(self) -> bool:
-        """Try Ollama. Returns True on success."""
+        """Try Ollama. Returns True on success.
+
+        Prefers bge-m3 (1024d, multilingual, best local quality) when installed,
+        then any other model with 'embed' in its name. The dimension is measured
+        with a probe embedding instead of being hardcoded, so new models with
+        unexpected dimensions keep working.
+        """
         try:
             import requests
             r = requests.get("http://localhost:11434/api/tags", timeout=2)
             if r.status_code < 400:
                 models = [m["name"] for m in r.json().get("models", [])]
-                emb_model = next((m for m in models if "embed" in m.lower()), None)
+                emb_model = next((m for m in models if "bge-m3" in m.lower()), None)
+                if not emb_model:
+                    emb_model = next((m for m in models if "embed" in m.lower()), None)
                 if emb_model:
                     self._client = {"base_url": "http://localhost:11434"}
                     self._name = emb_model
-                    self._dim = 768
-                    logging.info(f"Embedding: Ollama/{emb_model} (768d, local)")
+                    dim = self._probe_ollama_dim()
+                    if not dim:
+                        return False
+                    self._dim = dim
+                    logging.info(f"Embedding: Ollama/{emb_model} ({dim}d, local)")
                     return True
         except Exception:
             pass
         return False
+
+    def _probe_ollama_dim(self) -> int | None:
+        """Measure the embedding dimension of self._name with a tiny probe call."""
+        try:
+            import requests as _req
+            import warnings as _warnings
+            with _warnings.catch_warnings():
+                _warnings.simplefilter("ignore")
+                r = _req.post(
+                    f"{self._client['base_url']}/api/embed",
+                    json={"model": self._name, "input": "probe"},
+                    timeout=30,
+                )
+                vec = r.json().get("embeddings", [[None]])[0]
+                if vec and isinstance(vec[0], (int, float)):
+                    return len(vec)
+                # Legacy fallback: old /api/embeddings endpoint with prompt=
+                r2 = _req.post(
+                    f"{self._client['base_url']}/api/embeddings",
+                    json={"model": self._name, "prompt": "probe"},
+                    timeout=30,
+                )
+                vec2 = r2.json().get("embedding")
+                return len(vec2) if vec2 else None
+        except Exception:
+            return None
 
     def _try_sentence_transformers(self) -> bool:
         """Try sentence-transformers. Returns True on success."""
@@ -257,8 +294,20 @@ class EmbeddingProvider:
                 timeout=30,
             )
             return r.json()["data"][0]["embedding"]
-        elif isinstance(self._client, dict):  # Ollama
+        elif isinstance(self._client, dict) and self._client.get("base_url", "").startswith("http"):  # Ollama
             import requests as _req
+            # Modern endpoint first (/api/embed, batched input), legacy /api/embeddings as fallback
+            try:
+                r = _req.post(
+                    f"{self._client['base_url']}/api/embed",
+                    json={"model": self._name, "input": [text]},
+                    timeout=30,
+                )
+                vec = r.json().get("embeddings", [[None]])[0]
+                if vec and isinstance(vec[0], (int, float)):
+                    return vec
+            except Exception:
+                pass
             r = _req.post(
                 f"{self._client['base_url']}/api/embeddings",
                 json={"model": self._name, "prompt": text},
