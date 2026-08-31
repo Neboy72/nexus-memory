@@ -75,7 +75,7 @@ def ensure_collection() -> bool:
     for field, idx_type in indices:
         idx_payload = {
             "field_name": field,
-            "index_schema": {"type": idx_type},
+            "field_schema": {"type": idx_type},
             "wait": True,
         }
         resp = requests.put(
