@@ -79,13 +79,15 @@ nexus-memory
 
 ### 🛠️ Embedding Provider (auto-detected)
 
-Pick **one**: the server auto-detects at runtime:
+Pick **one** — or none: the server auto-detects at runtime. The detection priority is: cloud keys first (Voyage → OpenAI → Google → Jina), then **Ollama with bge-m3** (preferred local model), then other local options. Embedding-Provider-Freiheit bleibt: du entscheidest immer selbst.
 
+> **🦙 Recommended local setup (free, private, offline):** `ollama pull bge-m3` — 1024d, 100+ languages (German & English strong), best local quality. Works out of the box, no API key. Smaller alternative for limited hardware: `nomic-embed-text` (274 MB, 768d, English-focused).
+
+- **☁️ Voyage**: `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d) — highest recall quality, what we run in production
+- **☁️ OpenAI**: `OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
 - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
 - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
-- **🦙 Ollama**: `ollama pull nomic-embed-text`
-- **☁️ Voyage**: `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d)
-- **☁️ OpenAI**: `OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
+- **🦙 Ollama**: `ollama pull bge-m3` (preferred, 1.2 GB, 1024d, multilingual) — smaller: `ollama pull nomic-embed-text` (274 MB, 768d)
 - **🏠 Local (default)**: `pip install nexus-memory[local]` (sentence-transformers, no key)
 
 ### 🌐 Web UI (optional)
@@ -568,7 +570,7 @@ One server. Multiple backends. Same API.
 | **OpenAI** ☁️ | Cloud | `OPENAI_API_KEY` in MCP `env:` block | 1536 |
 | **Google / Vertex AI** 💚 | Cloud | `GOOGLE_API_KEY` in `.env` | 768 |
 | **Jina** 💜 | Cloud | `JINA_API_KEY` in `.env` | 1024 |
-| **Ollama** 🦙 | Local | `ollama pull nomic-embed-text` | 768 |
+| **Ollama** 🦙 | Local | `ollama pull bge-m3` | 1024 |
 | **sentence-transformers** 🏠 | Local | `pip install sentence-transformers` | 384 |
 
 ---
@@ -583,6 +585,7 @@ One server. Multiple backends. Same API.
 | **v0.11.0** | 2026-08-30 | Superseded-by recall skip (deprecated never surfaces), auto entity enrichment on nexus_remember (daemon, hash-dedup, opt-out), lifecycle filter before rerank, shared session-end entity path, 558 tests |
 | **v0.10.0** | 2026-08-30 | Cross-Encoder Reranking (auto: Voyage if key, free local else), per-category retention policies, SICA reflect insights (one deterministic insight per contradiction group), entity dedup detection, 549 tests |
 | **v0.9.1** | 2026-07-27 | Fix: discovery content-dict handling, SICA session storage dimension mismatch (768d vs 1024d), 578 tests |
+| **v0.13.3** | 2026-08-31 | bge-m3 as preferred local embedding provider: dynamic dimension probe for Ollama models (no more hardcoded 768d), modern `/api/embed` endpoint with legacy fallback, wizard detects & recommends `ollama pull bge-m3` (1024d, multilingual, free, offline), docs updated (AGENTS.md + README), 649 tests green, hermes verify green |
 | **v0.9.0** | 2026-07-27 | Graph-Boosted Auto-Recall (all 3 plugins: 1-hop graph neighbors from top-3 vector hits, `[graph:<relation>]` tagging, access-level filtering), SICA Self-Improvement Cycle (Detect → Reflect → Act → Learn, stale temp auto-deletion, low-confidence + contradiction detection, `nexus_sica_run` tool), SkillGraph caching, `SkillGraph.get_point()` public API, 64 code review fixes across 7 rounds, 578 tests |
 | **v0.8.0** | 2026-07-25 | Cost-Aware Routing: tier-based embedding provider selection (premium/standard/economy), category→tier mapping (fact→premium, session→economy), cost estimation, routing stats + explain tools, auto-enables when 2+ providers available, 558 tests |
 | **v0.7.0** | 2026-07-25 | Knowledge Graph Layer: entity extraction (device/service/person/location/protocol), 11 typed relationships (manages, runs_on, connected_to, etc.), multi-hop graph traversal via NetworkX, entities as Qdrant points, 524 tests |
@@ -630,7 +633,7 @@ pytest tests/ -v # 558 tests ✅
 - One embedding provider (auto-detected):
  - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
  - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
- - **🦙 Ollama**: `ollama pull nomic-embed-text`
+ - **🦙 Ollama**: `ollama pull bge-m3` (empfohlen, 1.2 GB, 1024d, mehrsprachig) — kleiner: `ollama pull nomic-embed-text` (274 MB)
  - **☁️ Voyage**: `VOYAGE_API_KEY` in `.env` (1024d)
  - **☁️ OpenAI**: `OPENAI_API_KEY` in `.env` (1536d)
  - **🏠 Local**: `pip install sentence-transformers`
