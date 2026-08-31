@@ -313,16 +313,16 @@ class NexusMemoryProvider:
             return self._skill_graph
 
     def _graph_boost(self, top_points: list, max_boost: int = 3,
-                     out_pids: Optional[set] = None) -> List[str]:
-        """Fetch 1-hop graph neighbors for the top vector search results.
+                     out_pids: Optional[set] = None, max_depth: int = 2) -> List[str]:
+        """Fetch graph neighbors for the top vector search results.
 
-        For each of the top ``max_boost`` points, queries the Knowledge Graph
-        for directly related facts (1-hop, bidirectional). Returns a list of
-        context strings prefixed with ``[graph]`` so the agent can distinguish
-        graph-boosted results from pure vector hits.
+        For each of the top ``max_boost`` points, walks the Knowledge Graph.
+        ``max_depth=1`` replicates the previous 1-hop behavior. ``max_depth=2``
+        (default) answers 'what is connected to X via one intermediary?' —
+        the multi-hop recall upgrade (HippoRAG-2-style associative recall).
 
-        Access-level filtering: the Hermes plugin has full access as the
-        primary agent, so no filtering is needed here.
+        Depth-2 results are prefixed with a deeper relation tag and truncated
+        harder, so the vector hits and their direct neighbors always rank first.
 
         Failures are logged and silently skipped - vector results alone are
         always returned without the graph boost.
@@ -334,15 +334,24 @@ class NexusMemoryProvider:
             sg = self._get_skill_graph()
             gt = GraphTraversal(sg)
             seen_ids: set = set()
+            budget_boost = 6  # hard cap: depth>1 adds fan-out, keep prefetch budget sane
             for p in top_points[:max_boost]:
                 pid = str(p.id)
                 if pid in seen_ids: continue
                 seen_ids.add(pid)
-                neighbors = gt.get_related(pid)
-                for n in neighbors:
-                    nid = n.get("fact_id", "")
+
+                paths = []
+                if max_depth <= 1:
+                    paths = [(n.get("fact_id", ""), n.get("relation", "related"), 1)
+                             for n in gt.get_related(pid)]
+                else:
+                    for step in gt.traverse(pid, max_depth=max_depth):
+                        paths.append((step["fact_id"], step.get("relation", "related"), step["depth"]))
+
+                for nid, rel, depth in paths:
                     if not nid or nid in seen_ids: continue
                     seen_ids.add(nid)
+                    if len(boosted) >= budget_boost: break
                     pt = sg.get_point(nid)
                     if not pt: continue
                     pt_payload = pt.get("payload") or {}
@@ -351,10 +360,13 @@ class NexusMemoryProvider:
                         continue
                     text = pt_payload.get("content", "")
                     if text:
-                        rel = n.get("relation", "related")
-                        boosted.append(f"[graph:{rel}] {text[:400]}")
+                        # depth-2 items: shorter excerpt, still tagged for provenance
+                        text = text[:400] if max_depth <= 1 else text[:240]
+                        boosted.append(f"[graph:{rel}{':'*max(1, min(3, depth))}{rel if depth > 1 else ''}] {text}" if depth > 1
+                                       else f"[graph:{rel}] {text}")
                         if out_pids is not None:
                             out_pids.add(nid)
+                if len(boosted) >= budget_boost: break
         except Exception as exc:
             logger.warning("Graph boost skipped: %s", exc)
         return boosted
@@ -384,7 +396,7 @@ class NexusMemoryProvider:
                     items.append(item)
                     total += len(item)
             # Graph-boost: add 1-hop neighbors from top 3 vector hits
-            graph_items = self._graph_boost(pts, max_boost=3)
+            graph_items = self._graph_boost(pts, max_boost=3, max_depth=2)
             for gi in graph_items:
                 if total >= budget:
                     break

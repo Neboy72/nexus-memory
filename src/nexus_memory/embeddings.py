@@ -256,7 +256,28 @@ class EmbeddingProvider:
             return None
 
     def _try_sentence_transformers(self) -> bool:
-        """Try sentence-transformers. Returns True on success."""
+        """Try local HF embeddings. Returns True on success.
+
+        Priority: bge-m3 (1024d, multilingual, via HuggingFace weights) when
+        the model is locally available (NEXUS_HF_BGE3=1 forces the attempt),
+        then all-MiniLM-L6-v2 (384d, smallest, always works with the package).
+
+        bge-m3 via HF downloads ~2.3 GB on first use (cached afterwards) so it
+        is opt-in per environment; the wizard offers it after Ollama fails."""
+        hf_candidate = os.environ.get("NEXUS_HF_BGE3") or ""
+        if hf_candidate:
+            # explicit opt-in (or explicit 0/1 with default model name)
+            model_name = hf_candidate if hf_candidate not in ("1", "true", "yes") else "BAAI/bge-m3"
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._model = SentenceTransformer(model_name)
+                probe = self._model.encode("nexus dimension probe")
+                self._name = model_name
+                self._dim = int(len(probe))
+                logging.info(f"Embedding: {self._name} ({self._dim}d, local HF)")
+                return True
+            except Exception as exc:
+                logging.warning(f"HF model {model_name} unavailable ({exc}); falling back to MiniLM.")
         try:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer("all-MiniLM-L6-v2")
