@@ -83,7 +83,7 @@ Pick **one**: the server auto-detects at runtime:
 
 - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
 - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
-- **🦙 Ollama**: `ollama pull nomic-embed-text`
+- **🦙 Ollama**: `ollama pull bge-m3` (empfohlen, 1.2 GB, 1024d, mehrsprachig) — kleiner: `ollama pull nomic-embed-text` (274 MB)
 - **☁️ Voyage**: `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d)
 - **☁️ OpenAI**: `OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
 - **🏠 Local (default)**: `pip install nexus-memory[local]` (sentence-transformers, no key)
@@ -568,7 +568,7 @@ One server. Multiple backends. Same API.
 | **OpenAI** ☁️ | Cloud | `OPENAI_API_KEY` in MCP `env:` block | 1536 |
 | **Google / Vertex AI** 💚 | Cloud | `GOOGLE_API_KEY` in `.env` | 768 |
 | **Jina** 💜 | Cloud | `JINA_API_KEY` in `.env` | 1024 |
-| **Ollama** 🦙 | Local | `ollama pull nomic-embed-text` | 768 |
+| **Ollama** 🦙 | Local | `ollama pull bge-m3` | 1024 |
 | **sentence-transformers** 🏠 | Local | `pip install sentence-transformers` | 384 |
 
 ---
@@ -630,7 +630,7 @@ pytest tests/ -v # 558 tests ✅
 - One embedding provider (auto-detected):
  - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
  - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
- - **🦙 Ollama**: `ollama pull nomic-embed-text`
+ - **🦙 Ollama**: `ollama pull bge-m3` (empfohlen, 1.2 GB, 1024d, mehrsprachig) — kleiner: `ollama pull nomic-embed-text` (274 MB)
  - **☁️ Voyage**: `VOYAGE_API_KEY` in `.env` (1024d)
  - **☁️ OpenAI**: `OPENAI_API_KEY` in `.env` (1536d)
  - **🏠 Local**: `pip install sentence-transformers`
