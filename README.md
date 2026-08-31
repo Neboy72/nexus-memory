@@ -83,6 +83,18 @@ Pick **one** — or none: the server auto-detects at runtime. The detection prio
 
 > **🦙 Recommended local setup (free, private, offline):** `ollama pull bge-m3` — 1024d, 100+ languages (German & English strong), best local quality. Works out of the box, no API key. Smaller alternative for limited hardware: `nomic-embed-text` (274 MB, 768d, English-focused).
 
+**Not sure what to pick? Here's the plain-language guide:**
+
+| Your situation | Do this |
+|---|---|
+| You have an API key (Voyage, OpenAI, …) | Put it in `.env` — done, best quality, nothing else to install |
+| You have Ollama installed | Run `ollama pull bge-m3` — free, private, offline, 1024d quality |
+| No Ollama, no key, want the best local option | Install [Ollama](https://ollama.com) (free, one download), then run `ollama pull bge-m3` |
+| No Ollama, no key, just want it to work NOW | Do nothing — the server falls back to a built-in small model automatically. Fine to start. Upgrade later when your memories grow |
+| Coming from Hugging Face only | Direct HF/FlagEmbedding loading is on the roadmap (see `roadmap` in docs) — today use the Ollama route or the built-in fallback |
+
+> 💡 **Think of it like this:** the tiny built-in model is fine for your first hundred memories. Once your agent remembers weeks of context in German/mixed languages, switch to bge-m3 — the upgrade is one command, and your memories re-embed automatically in a few minutes, free.
+
 - **☁️ Voyage**: `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d) — highest recall quality, what we run in production
 - **☁️ OpenAI**: `OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
 - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
@@ -633,7 +645,7 @@ pytest tests/ -v # 558 tests ✅
 - One embedding provider (auto-detected):
  - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
  - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
- - **🦙 Ollama**: `ollama pull bge-m3` (empfohlen, 1.2 GB, 1024d, mehrsprachig) — kleiner: `ollama pull nomic-embed-text` (274 MB)
+ - **🦙 Ollama**: `ollama pull bge-m3` (recommended, 1.2 GB, 1024d, multilingual) — smaller: `ollama pull nomic-embed-text` (274 MB)
  - **☁️ Voyage**: `VOYAGE_API_KEY` in `.env` (1024d)
  - **☁️ OpenAI**: `OPENAI_API_KEY` in `.env` (1536d)
  - **🏠 Local**: `pip install sentence-transformers`
