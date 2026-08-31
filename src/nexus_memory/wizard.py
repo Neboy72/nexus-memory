@@ -575,8 +575,24 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
             _print(f"  {RED}✗{RESET} Failed to pull model. Is Ollama installed?")
             return False
     else:
-        _print(f"  {YELLOW}Skipping Ollama setup. You can install later:{RESET}")
-        _print(f"    {CYAN}ollama pull bge-m3{RESET}")
+        # Service-Flow: no Ollama? Offer direct HuggingFace route instead of giving up.
+        if _confirm("  Install bge-m3 via HuggingFace instead? (no Ollama needed, ~2.3 GB first download, then offline)"):
+            _run_pip("sentence-transformers")
+            _print(f"\n  {CYAN}Downloading bge-m3 from HuggingFace (one-time, cached afterwards)...{RESET}")
+            import sys as _sys
+            ret, out, err = _run_cmd(
+                [_sys.executable, "-c",
+                 "from sentence_transformers import SentenceTransformer; "
+                 "SentenceTransformer('BAAI/bge-m3'); print('ok')"],
+                timeout=1800,
+            )
+            if ret == 0:
+                _save_api_key("NEXUS_HF_BGE3", "1")  # activate HF route in .env
+                _print(f"  {GREEN}✓{RESET} bge-m3 (HuggingFace) ready and activated (NEXUS_HF_BGE3=1 in .env).")
+                return True
+            _print(f"  {RED}✗{RESET} HuggingFace download failed: {err[:200] if err else out[:200]}")
+        _print(f"  {YELLOW}Skipping local model setup. Built-in MiniLM fallback will be used (384d, fine to start).{RESET}")
+        _print(f"  You can upgrade later: {CYAN}ollama pull bge-m3{RESET} — memories re-embed in minutes, free.")
         return True  # Not a hard failure
 
 

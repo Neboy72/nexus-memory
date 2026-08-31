@@ -89,7 +89,7 @@ Pick **one** — or none: the server auto-detects at runtime. The detection prio
 |---|---|
 | You have an API key (Voyage, OpenAI, …) | Put it in `.env` — done, best quality, nothing else to install |
 | You have Ollama installed | Run `ollama pull bge-m3` — free, private, offline, 1024d quality |
-| No Ollama, no key, want the best local option | Install [Ollama](https://ollama.com) (free, one download), then run `ollama pull bge-m3` |
+| No Ollama, no key, want the best local option | Install [Ollama](https://ollama.com) (free, one download), then run `ollama pull bge-m3` — or skip Ollama entirely and let the wizard load bge-m3 via HuggingFace |
 | No Ollama, no key, just want it to work NOW | Do nothing — the server falls back to a built-in small model automatically. Fine to start. Upgrade later when your memories grow |
 | Coming from Hugging Face only | Direct HF/FlagEmbedding loading is on the roadmap (see `roadmap` in docs) — today use the Ollama route or the built-in fallback |
 
@@ -597,6 +597,7 @@ One server. Multiple backends. Same API.
 | **v0.11.0** | 2026-08-30 | Superseded-by recall skip (deprecated never surfaces), auto entity enrichment on nexus_remember (daemon, hash-dedup, opt-out), lifecycle filter before rerank, shared session-end entity path, 558 tests |
 | **v0.10.0** | 2026-08-30 | Cross-Encoder Reranking (auto: Voyage if key, free local else), per-category retention policies, SICA reflect insights (one deterministic insight per contradiction group), entity dedup detection, 549 tests |
 | **v0.9.1** | 2026-07-27 | Fix: discovery content-dict handling, SICA session storage dimension mismatch (768d vs 1024d), 578 tests |
+| **v0.13.4** | 2026-08-31 | HuggingFace direct route for local embeddings: `NEXUS_HF_BGE3=1` activates bge-m3 via sentence-transformers (no Ollama required, dynamic dim probe), setup wizard offers Ollama → HuggingFace → built-in MiniLM fallback chain and persists NEXUS_HF_BGE3 to .env, 649 tests green |
 | **v0.13.3** | 2026-08-31 | bge-m3 as preferred local embedding provider: dynamic dimension probe for Ollama models (no more hardcoded 768d), modern `/api/embed` endpoint with legacy fallback, wizard detects & recommends `ollama pull bge-m3` (1024d, multilingual, free, offline), docs updated (AGENTS.md + README), 649 tests green, hermes verify green |
 | **v0.9.0** | 2026-07-27 | Graph-Boosted Auto-Recall (all 3 plugins: 1-hop graph neighbors from top-3 vector hits, `[graph:<relation>]` tagging, access-level filtering), SICA Self-Improvement Cycle (Detect → Reflect → Act → Learn, stale temp auto-deletion, low-confidence + contradiction detection, `nexus_sica_run` tool), SkillGraph caching, `SkillGraph.get_point()` public API, 64 code review fixes across 7 rounds, 578 tests |
 | **v0.8.0** | 2026-07-25 | Cost-Aware Routing: tier-based embedding provider selection (premium/standard/economy), category→tier mapping (fact→premium, session→economy), cost estimation, routing stats + explain tools, auto-enables when 2+ providers available, 558 tests |
