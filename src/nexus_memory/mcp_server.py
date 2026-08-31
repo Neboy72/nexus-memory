@@ -192,6 +192,11 @@ class WebhookStore:
 
 _webhook_store: Optional["WebhookStore"] = None
 
+# Module-level singleton for MemoryStore — was missing entirely, so the first
+# get_store() call raised NameError: name '_store' is not defined (every MCP
+# tool call failed). Pattern mirrors _webhook_store above.
+_store: Optional["MemoryStore"] = None
+
 
 def get_webhook_store() -> WebhookStore:
     """Module-level singleton accessor — keeps the same pattern as
@@ -1628,6 +1633,24 @@ async def handle_list_tools() -> list[types.Tool]:
 
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     store = get_store()
+
+    # Registry stats (dashboard last_seen/reads/writes): remember/update = write,
+    # recall = read. Fire-and-forget — registry stats must never break a
+    # memory operation. Requires NEXUS_AGENT_ID env; without it we skip
+    # rather than misattribute activity to the wrong agent.
+    if not getattr(handle_call_tool, "_skip_stats", False):
+        agent_id = os.environ.get("NEXUS_AGENT_ID", "").strip()
+        if agent_id:
+            try:
+                from nexus_memory.agent_detect import update_agent_stats
+
+                update_agent_stats(
+                    agent_id,
+                    read=(name == "recall"),
+                    write=name in ("remember", "update"),
+                )
+            except Exception:
+                pass
 
     if name == "remember":
         try:
