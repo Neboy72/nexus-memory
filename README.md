@@ -374,6 +374,16 @@ Query → ┌─ BM25 Index ──────→ Keyword Rankings
 
 Hybrid fusion gets you the right candidates; reranking gets the right order. After BM25 + Vector + RRF, a reranker scores each candidate against the query and re-sorts. Auto mode picks the best available backend: Voyage Rerank API when `VOYAGE_API_KEY` is set, a free local CrossEncoder otherwise. Off by default; enable with `nexus-memory.rerank: true` in `~/.hermes/config.yaml`.
 
+### Memory Dynamics 🧠 (v0.15)
+
+Ranking is brain-inspired, not static. Three forces shape every recall:
+
+- **Reinforcement** — every recall hit increments `use_count`; often-recalled memories rank higher (log-capped boost, max ×4).
+- **Decay** — unused memories lose 5% of ranking weight per month (30-day months, linear), down to a floor of 30%. Forgotten ≠ deleted: the data stays, only the rank sinks.
+- **Salience** — importance marker 0.0–1.0 stored per memory. At `≥ 0.8` a memory is immune to decay (rules/procedures default to 0.8, temp/session to 0.1).
+
+Counters (`use_count`, `access_count`) are tracked separately and incremented from their own base — both store paths (Hermes plugin + MCP) and the vector-only fallback behave identically. Backward compatible: old memories without the new fields keep working with sensible defaults. The dynamics act only as a tie-breaker *within* equal semantic relevance (base-score windows of ±0.02), so the reranker's semantic order is never overridden.
+
 ### Retention Policies 🧹
 
 Memories decay on their own schedule: per-category TTLs (e.g. `temp` = 1 day, `session` = 7 days by default) purge stale entries during SICA runs. Everything you did not mark as disposable stays forever. Missing timestamps are never deleted, and the legacy `SICA_STALE_TEMP_DAYS` variable keeps working.
