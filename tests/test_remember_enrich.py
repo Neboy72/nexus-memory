@@ -254,3 +254,109 @@ def test_flywheel_bumps_access_count():
     assert set(bumps) >= {"p1", "p2"}  # top hits versorgt
     assert all(v >= 6 for v in bumps.values())  # access_count: 5+1
     assert all(u >= 8 for u in use_bumps.values())  # use_count: 7+1 (eigene Basis)
+
+
+def test_flywheel_bump_uses_fresh_counters_not_snapshot():
+    """v0.15 Review-Fix (Race): Bump liest AKTUELLEN Stand vor dem Write.
+
+    Snapshot sagt use_count=7, aber die DB ist inzwischen bei 10 — der Bump
+    muss 12 schreiben (10+1+1: frisch 11 wäre zwischen Retrieve und Write,
+    hier deterministisch 11) und NICHT 8 (Snapshot+1, Lost-Update).
+    """
+    import time as _t
+    prov, _client = _provider()
+    prov._embed_cache = None
+    bumps = {}
+    class _P:
+        def __init__(self, pid):
+            self.id = pid
+            self.score = 0.9
+            self.payload = {"id": pid, "content": f"fact {pid}", "category": "fact",
+                            "access_count": 5, "use_count": 7}
+    store = {"p1": _P("p1")}
+    # "DB" ist inzwischen weiter als der Snapshot: use_count=10, access_count=9
+    fresh_db = {"p1": {"use_count": 10, "access_count": 9}}
+    class _C:
+        def retrieve(self, **kw):
+            return [SimpleNamespace(id=i, payload=fresh_db.get(str(i), {}))
+                    for i in kw["ids"]]
+        def set_payload(self, **kw):
+            bumps[kw["points"][0]] = kw["payload"]
+    prov._qdrant = _C()
+    prov._flywheel_bump([("p1", 7, 5, "canonical")])
+    _t.sleep(0.05)  # kein Thread hier — direkter Call, synchron
+    p = bumps["p1"]
+    assert p["use_count"] == 11  # frisch 10+1, NICHT snapshot 7+1=8
+    assert p["access_count"] == 10  # frisch 9+1, NICHT snapshot 5+1=6
+
+
+def test_nexus_remember_passthrough_salience_source_url():
+    """v0.15 (Verifier B2): handle_tool_call reicht salience/confidence/
+    source_url wirklich an _upsert durch — Schema verspricht sie."""
+    import plugins.memory.nexus as mod
+    prov = object.__new__(mod.NexusMemoryProvider)
+    captured = {}
+
+    def _fake_upsert(text="", category="fact", access_level="public",
+                     source="", confidence=0.7, salience=None, source_url=""):
+        captured.update(text=text, category=category, access_level=access_level,
+                        source=source, confidence=confidence, salience=salience,
+                        source_url=source_url)
+        return {"status": "ok", "id": "x"}
+
+    prov._upsert = _fake_upsert
+    prov._enqueue_entity_extraction = lambda *a, **k: None
+    prov.handle_tool_call("nexus_remember", {
+        "text": "Test-Fakt", "category": "rule", "salience": 0.95,
+        "confidence": 0.9, "source_url": "https://example.com", "source": "Unit-Test",
+    })
+    assert captured["salience"] == 0.95
+    assert captured["confidence"] == 0.9
+    assert captured["source_url"] == "https://example.com"
+    assert captured["source"] == "Unit-Test"
+
+
+def test_salience_fallback_parity_with_normalize_salience():
+    """_salience_fallback (MCP, import-fail-Pfad) verhält sich identisch zu
+    normalize_salience (memory_dynamics) — behauptete Parität, jetzt bewiesen."""
+    from nexus_memory.memory_dynamics import normalize_salience
+    from nexus_memory.mcp_server import _salience_fallback
+    for sal, cat in [(None, "rule"), (None, "temp"), (None, "session"),
+                     (None, "fact"), (None, "procedure"), (None, "kurios"),
+                     (1.7, "fact"), (-0.5, "fact"), (0.9, "fact"),
+                     ("kaputt", "fact"), (0.0, "rule"), (2.0, "temp")]:
+        assert _salience_fallback(sal, cat) == normalize_salience(sal, cat), \
+            f"Parität verletzt bei salience={sal}, category={cat}"
+
+
+def test_plugin_window_sort_windows_on_base_score():
+    """v0.15 (Verifier M2): Fenster auf BASIS-Score, nicht auf eff.
+
+    Zwei Punkte mit deutlich verschiedenem Basis-Score (0.9 vs 0.5) dürfen
+    NIE umsortiert werden — auch wenn der schwächere mehr use_count hat.
+    Bei fast gleichem Basis-Score (0.90 vs 0.89) entscheidet die Dynamik.
+    Testet die ECHTE Provider-Methode (keine Test-Kopie des Algorithmus).
+    """
+    import plugins.memory.nexus as mod
+    prov = object.__new__(mod.NexusMemoryProvider)
+    from nexus_memory.memory_dynamics import effective_score as eff
+
+    def _pt(pid, score, use_count):
+        return SimpleNamespace(id=pid, score=score,
+                               payload={"id": pid, "content": f"c {pid}",
+                                        "use_count": use_count})
+
+    # Fall 1: unterschiedliche Basis-Relevanz → Rerank-Ordnung bleibt
+    pts = [_pt("stark", 0.9, 0), _pt("schwach", 0.5, 10**6)]
+    out = prov._apply_dynamics_tiebreak(pts, eff)
+    assert [p.id for p in out] == ["stark", "schwach"]
+
+    # Fall 2: near-tie auf Basis (0.89 in 0.02-Fenster um 0.90) → Dynamik entscheidet
+    pts = [_pt("frisch", 0.90, 0), _pt("oft", 0.89, 50)]
+    out = prov._apply_dynamics_tiebreak(pts, eff)
+    assert [p.id for p in out] == ["oft", "frisch"]
+
+    # Fall 3: Grenze — außerhalb des Fensters bleibt Ordnung (0.9 vs 0.85 > EPS)
+    pts = [_pt("a", 0.90, 0), _pt("b", 0.85, 50)]
+    out = prov._apply_dynamics_tiebreak(pts, eff)
+    assert [p.id for p in out] == ["a", "b"]

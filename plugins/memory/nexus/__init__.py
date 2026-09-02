@@ -437,7 +437,7 @@ class NexusMemoryProvider:
 
     def _upsert(self, text: str, category: str = "fact", access_level: str = "public",
                 source: str = "", confidence: float = 0.7, salience: Optional[float] = None,
-                **_: Any) -> Dict[str, Any]:
+                source_url: str = "", **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         vector = self._embedder.embed(text)
@@ -447,7 +447,7 @@ class NexusMemoryProvider:
         from nexus_memory.memory_dynamics import normalize_salience
         eff_salience = normalize_salience(salience, category)
         payload = {"id": eid, "content": text, "access_level": access_level, "category": category,
-                    "source": source, "source_url": "", "created_at": ts,
+                    "source": source, "source_url": source_url, "created_at": ts,
                     "lifecycle_status": "canonical", "salience": eff_salience, "use_count": 0,
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
@@ -515,35 +515,8 @@ class NexusMemoryProvider:
         except ImportError:
             _eff = None
         if _eff is not None and pts:
-            EPS = 0.02  # Toleranz: darunter gilt Relevanz als "gleich"
-            # Stable in-place sort: Primär = Rerank-Reihenfolge (Index), Sekundär = eff-Score
-            decorated = []
-            for rank, p in enumerate(pts):
-                eff = _eff(float(p.score or 0.0), p.payload or {})
-                # Normalisieren auf Rang-Skala: gleiches eff = gleiche Relevanz-Stufe
-                # Wir sortieren nach (rank_quelle, eff) — aber nur innerhalb
-                # von Fenstern, deren eff-Differenz < EPS liegt, sonst bleibt
-                # die Rerank-Reihenfolge erhalten.
-                decorated.append((p, rank, eff))
-            # Fenster-Algorithmus: laufe über die Rangliste, tausche nur Punkte
-            # innerhalb eines Relevanz-Fensters (score-Delta <= EPS).
-            sorted_pts = []
-            remaining = list(decorated)
-            while remaining:
-                head = remaining.pop(0)
-                # Sammle alle Kandidaten im Fenster (gleiche Relevanz wie head)
-                window = [head]
-                j = 0
-                while j < len(remaining):
-                    if abs(remaining[j][2] - head[2]) <= EPS:
-                        window.append(remaining.pop(j))
-                    else:
-                        j += 1
-                # Innerhalb des Fensters: dynamischer Score entscheidet (sekundaer)
-                window.sort(key=lambda t: (-t[2], t[1]))
-                sorted_pts.extend(w[0] for w in window)
-            pts = sorted_pts
-        
+            pts = self._apply_dynamics_tiebreak(pts, _eff)
+
         results: List[Dict[str, Any]] = []
         seen_ids: set = set()
         for p in pts:
@@ -595,29 +568,92 @@ class NexusMemoryProvider:
                             "created_at": ""})
         return vector_results
 
+    def _apply_dynamics_tiebreak(self, pts, _eff) -> list:
+        """v0.15: Memory-Dynamics als Tie-Breaker NACH dem Reranker.
+
+        Verifier-Fix (M2): Fenster werden auf dem BASIS-Score gebildet (die
+        semantische Relevanz-Ordnung des Rerankers), nicht auf eff — eff
+        enthält reinforcement/decay und würde das Fenster sonst beliebig
+        verschieben (Dynamik könnte semantische Ordnung umsortieren).
+        Innerhalb eines Basis-Fensters (score-Delta <= EPS) entscheidet die
+        Dynamik (eff); darüber hinaus bleibt die Rerank-Reihenfolge.
+        Zustandslos, fail-open.
+        """
+        if not pts:
+            return pts
+        EPS = 0.02  # Toleranz auf dem BASIS-Score: darunter gilt Relevanz als "gleich"
+        decorated = []
+        for rank, p in enumerate(pts):
+            eff = _eff(float(p.score or 0.0), p.payload or {})
+            decorated.append((p, rank, eff))
+        # Fenster-Algorithmus: laufe über die Rangliste, tausche nur Punkte
+        # innerhalb eines Relevanz-Fensters (score-Delta <= EPS).
+        sorted_pts = []
+        remaining = list(decorated)
+        while remaining:
+            head = remaining.pop(0)
+            base_head = float(head[0].score or 0.0)
+            # Sammle alle Kandidaten im Fenster (gleiche Basis-Relevanz wie head)
+            window = [head]
+            j = 0
+            while j < len(remaining):
+                if abs(float(remaining[j][0].score or 0.0) - base_head) <= EPS:
+                    window.append(remaining.pop(j))
+                else:
+                    j += 1
+            # Innerhalb des Fensters: dynamischer Score entscheidet (sekundaer)
+            window.sort(key=lambda t: (-t[2], t[1]))
+            sorted_pts.extend(w[0] for w in window)
+        return sorted_pts
+
     def _flywheel_bump(self, entries: List[tuple]) -> None:
         """Roadmap 4.9 + v0.15 Memory Dynamics: increment access_count/use_count
         on recalled points.
 
-        Fire-and-forget ( payloads passed in - zero retrieve roundtrips
-        since _recall already had them). Skips points deprecated between
+        Fire-and-forget: läuft im eigenen Thread, blockiert den Recall-Pfad
+        nie. v0.15 (Review-Fix, Race): der Thread liest VOR dem Write den
+        AKTUELLEN Zählerstand (retrieve) statt den Recall-Snapshot zu
+        überschreiben — bei zwei gleichzeitigen Recalls zählt sonst der
+        zweite den ersten weg (Lost-Update). Snapshot-Werte bleiben Fallback,
+        falls der Retrieve fehlschlägt. Skips points deprecated between
         recall and this bump (review fix B2). SICA uses access_count
         later as trust signal for retrieval weighting.
-        v0.15: schreibt zusätzlich use_count (einheitliches Feld für
-        Decay/Reinforcement-Mathe in memory_dynamics.py).
         """
+        _client = self._qdrant
+        _fresh = {}
+        if _client is not None:
+            try:
+                _ids = [pid for pid, _u, _a, _s in entries]
+                _fresh = {
+                    str(p.id): (p.payload or {})
+                    for p in _client.retrieve(
+                        collection_name=self._collection,
+                        ids=_ids, with_payload=True, with_vectors=False)
+                }
+            except Exception:
+                _fresh = {}
         for pid, use_count, access_count, status in entries:
             try:
                 # Review fix: skip facts deprecated after the recall snapshot
                 if status in ("deprecated", "rolled_back"):
                     continue
+                # v0.15 (Review-Fix): aktuelle Zähler verwenden wenn lesbar,
+                # sonst Snapshot — und von der eigenen Basis incrementieren
+                # (use_count nicht mehr aus access_count abgeleitet, das
+                # überschrieb sonst MCP-Zähler → Reset auf 1).
+                fp = _fresh.get(str(pid)) or {}
+                try:
+                    u_now = max(0, int(fp.get("use_count", use_count) or 0))
+                except (TypeError, ValueError):
+                    u_now = max(0, int(use_count) or 0)
+                try:
+                    a_now = max(0, int(fp.get("access_count", access_count) or 0))
+                except (TypeError, ValueError):
+                    a_now = max(0, int(access_count) or 0)
                 self._qdrant.set_payload(
                     collection_name=self._collection,
-                    # v0.15 (Review-Fix): beide Zähler incrementieren von der
-                    # eigenen Basis — use_count nicht mehr aus access_count
-                    # abgeleitet (überschrieb sonst MCP-Zähler → Reset auf 1).
-                    payload={"access_count": access_count + 1,
-                             "use_count": use_count + 1,
+                    payload={"access_count": a_now + 1,
+                             "use_count": u_now + 1,
                              "last_accessed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
                     points=[pid], wait=False)
             except Exception as exc:
@@ -1117,6 +1153,12 @@ class NexusMemoryProvider:
             "source": source,
             "source_url": "",
             "created_at": ts,
+            # v0.15 (Review-Fix): Dynamics-Defaults explizit — Entities decayen
+            # normal (salience 0.5), Nutzung zählt ab 0. Ohne Felder würde die
+            # Berechnung zwar auch die Defaults nehmen, aber explizit ist
+            # besser als implizit (Doku im Datenbestand statt nur im Code).
+            "salience": 0.5,
+            "use_count": 0,
             "provenance": {
                 "source_type": "hermes-plugin",
                 "created_by": "nexus-memory-entity-extractor",

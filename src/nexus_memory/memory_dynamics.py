@@ -46,6 +46,9 @@ def parse_ts(value: Any) -> datetime | None:
 
 
 def months_since(value: Any, now: datetime | None = None) -> float:
+    """Monate seit `value`. Monat = 30 Tage (bewusste Näherung, konstant
+    statt kalendarisch — 365 Tage ergeben 12.17 Monate, der Decay ist
+    dadurch minimal schneller; für Ranking-Zwecke ausreichend präzise)."""
     dt = parse_ts(value)
     if dt is None:
         return 0.0
