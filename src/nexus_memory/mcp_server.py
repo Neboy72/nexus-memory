@@ -310,6 +310,22 @@ ACCESS_HIERARCHY = {
 }
 
 
+def _salience_fallback(salience, category: str = "fact") -> float:
+    """v0.15 Review-Fix: salience klemmen ohne memory_dynamics-Import.
+
+    Identische Semantik zu normalize_salience(): Werte werden auf [0,1]
+    begrenzt, None/ungültig → Kategorie-Default. Wird genutzt, falls der
+    Import des Dynamics-Moduls fehlschlägt (fail-open, aber clampend).
+    """
+    defaults = {"rule": 0.8, "procedure": 0.8, "temp": 0.1, "session": 0.1}
+    if salience is None:
+        return defaults.get(category, 0.5)
+    try:
+        return min(1.0, max(0.0, float(salience)))
+    except (TypeError, ValueError):
+        return defaults.get(category, 0.5)
+
+
 def _to_point_id(val):
     """Coerce a point ID to a Qdrant-friendly typed value.
 
@@ -597,6 +613,7 @@ class MemoryStore:
         source: str = "",
         source_url: str = "",
         confidence: Optional[float] = None,
+        salience: Optional[float] = None,
     ) -> dict:
         """Store a memory with full v2.8.0 metadata support + auto TTL + auto supersession.
 
@@ -703,7 +720,19 @@ class MemoryStore:
             "lifecycle_status": "canonical",  # New facts are canonical by default
             "expiry_policy": expiry_policy,
             "valid_until": valid_until,
+            # Memory Dynamics (v0.15): Salience via Helper — klemmt auf [0,1]
+            # und setzt Kategorie-Defaults (Review-Fix: unclampete Werte).
+            "salience": None,  # placeholder, replaced below
+            "use_count": 0,
         }
+        try:
+            from nexus_memory.memory_dynamics import normalize_salience as _nsal
+        except ImportError:
+            _nsal = None
+        payload["salience"] = (
+            _nsal(salience, category) if _nsal is not None
+            else _salience_fallback(salience, category)
+        )
         if superseded_ids:
             payload["supersedes"] = superseded_ids
 
@@ -848,6 +877,11 @@ class MemoryStore:
                                         r["evidences"] = pl.get("evidences", [])
                                     if not r.get("valid_until"):
                                         r["valid_until"] = pl.get("valid_until")
+                                    # Memory Dynamics (v0.15): payload + echte point-id
+                                    # für Access-Tracking und effective_score mitnehmen
+                                    if pt and pt.id:
+                                        r["_point_id"] = str(pt.id)
+                                    r["_payload"] = pl
                         except Exception as enrich_err:
                             logging.warning(f"Payload enrichment failed: {enrich_err}")
         except Exception as e:
@@ -876,6 +910,11 @@ class MemoryStore:
                     "created_at": payload.get("created_at"),
                     "lifecycle_status": payload.get("lifecycle_status"),
                     "score": point.score,
+                    # v0.15 (Review-Fix): Fallback liefert dieselben Dynamics-
+                    # Felder wie der Hybrid-Pfad — sonst greifen dort weder
+                    # Access-Tracking noch effective_score-Sortierung.
+                    "_point_id": str(point.id),
+                    "_payload": payload,
                 })
 
         # ── Lifecycle filtering: skip deprecated / rolled_back facts ────
@@ -915,6 +954,17 @@ class MemoryStore:
             logging.info(f"TTL: filtered {expired_count} expired memories from results")
         raw_results = filtered_results
 
+        # ── Memory Dynamics (v0.15): effective_score = base × reinforcement × decay ──
+        # Gehirn-inspiriert: Nutzung verstärkt (use_count), Nichtnutzung zerfällt,
+        # saliente Fakten sind immun. Fehlende Felder = Defaults (backward compat).
+        try:
+            from nexus_memory.memory_dynamics import effective_score as _eff
+        except ImportError:
+            _eff = None
+
+        # Collect internal point-ids for access-tracking (F1)
+        _point_ids_for_tracking = []
+
         # Normalize scores relative to max score in results
         # Handles both RRF scores (0.001-0.1) and Qdrant scores (0.0-1.0)
         raw_scores = []
@@ -923,6 +973,23 @@ class MemoryStore:
             raw_scores.append(s if isinstance(s, (int, float)) else 0)
         max_raw = max(raw_scores, default=1)
         max_raw = max(max_raw, 0.001)  # Avoid division by zero
+
+        # v0.15 (Review-Fix): effective scores ZWEISTUFIG normalisieren —
+        # dynamic_score wird auf max(eff) bezogen und bleibt damit in [0,1]
+        # (vorher: eff/max_raw konnte > 1.0 explodieren).
+        _eff_scores = []
+        if _eff is not None:
+            for r in raw_results:
+                dyn_payload = r.get("_payload") or {
+                    "use_count": r.get("use_count", 0),
+                    "salience": r.get("salience", 0.5),
+                    "last_accessed": r.get("last_accessed"),
+                    "created_at": r.get("created_at"),
+                }
+                _s = r.get("rrf_score") or r.get("score", 0)
+                _eff_scores.append(_eff(_s if isinstance(_s, (int, float)) else 0, dyn_payload))
+        max_eff = max(_eff_scores, default=1)
+        max_eff = max(max_eff, 0.001)
 
         # Justification-Check (Rung 2): Verify source URLs are still reachable
         source_urls = [r.get("source_url") for r in raw_results if r.get("source_url")]
@@ -941,8 +1008,23 @@ class MemoryStore:
             if not isinstance(score, (int, float)):
                 score = 0
             
-            # Normalize score relative to max in result set
+            # Memory Dynamics: effective score from base + payload
+            if _eff is not None:
+                dyn_payload = r.get("_payload") or {
+                    "use_count": r.get("use_count", 0),
+                    "salience": r.get("salience", 0.5),
+                    "last_accessed": r.get("last_accessed"),
+                    "created_at": r.get("created_at"),
+                }
+                eff = _eff(score, dyn_payload)
+            else:
+                eff = score
+            
+            # Normalize score relative to max in result set (on effective scores)
             normalized_score = round(score / max_raw, 3)
+            # v0.15 (Review-Fix): dynamic_score auf max(eff) normiert → bleibt
+            # garantiert in [0,1]; base-score als Tie-Breaker in der Sortierung.
+            dynamic_score = round(eff / max_eff, 3)
             
             # Determine match type
             if normalized_score > 0.7:
@@ -985,10 +1067,14 @@ class MemoryStore:
             else:
                 confidence_label = "very low"
             
+            if _eff is not None and r.get("_point_id"):
+                _point_ids_for_tracking.append(r["_point_id"])
+            
             entry = {
                 "id": r.get("id"),
                 "text": text[:2000],  # Cap for readability
                 "score": round(normalized_score, 3),
+                "dynamic_score": dynamic_score,  # v0.15: base × reinforcement × decay
                 "match": match_type,
                 "source": r.get("source"),
                 "source_url": r.get("source_url"),
@@ -1016,7 +1102,41 @@ class MemoryStore:
                     seen_docs.add(doc_id)
                 results.append(entry)
 
-        results.sort(key=lambda x: x["score"], reverse=True)
+        # v0.15 (Review-Fix): Nach effective_score sortieren (Dynamik wirkt),
+        # base-score als Tie-Breaker. MCP-Pfad hat keinen Reranker, daher ist
+        # die direkte Sortierung hier das Gegenstück zum Plugin-Tie-Breaker.
+        results.sort(key=lambda x: (x.get("dynamic_score", x["score"]), x["score"]), reverse=True)
+
+        # ── F1 Access-Tracking: Nutzung verstärken (set_payload, non-blocking) ──
+        # Jeder ausgelieferte Treffer zählt als "erinnert" — use_count++,
+        # last_accessed=now. Wie ein Muskel: Nutzung macht stärker.
+        try:
+            from nexus_memory.memory_dynamics import access_update_payload as _aup
+        except ImportError:
+            _aup = None
+        if _aup is not None and _point_ids_for_tracking:
+            try:
+                import qdrant_client.models as _qm
+                now_iso = datetime.now(timezone.utc).isoformat()
+                # v0.15 (Review-Fix): bestehendes Payload mitschicken, damit
+                # use_count von seinem aktuellen Stand incrementiert —
+                # _aup({}) hätte den Zähler bei jedem Recall auf 1 resettet.
+                _existing = {
+                    str(p.id): (p.payload or {})
+                    for p in self.client.retrieve(
+                        collection_name=COLLECTION_NAME,
+                        ids=_point_ids_for_tracking[:limit],
+                        with_payload=True, with_vectors=False,
+                    )
+                }
+                for pid in _point_ids_for_tracking[:limit]:
+                    self.client.set_payload(
+                        collection_name=COLLECTION_NAME,
+                        payload=_aup(_existing.get(pid, {}), now=now_iso),
+                        points=_qm.PointIdsList(points=[pid]),
+                    )
+            except Exception as track_err:
+                logging.debug(f"Access-tracking failed (non-blocking): {track_err}")
         
         # One-time update nudge: if update available and not yet nudged, append a note
         if (self._update_check_result and 

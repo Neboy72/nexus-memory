@@ -19,7 +19,7 @@ _COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
 # Tool schemas (OpenAI function-calling format)
 RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
                   "as_of": {"type": "string", "description": "Point-in-time: YYYY-MM-DD - only memories created on/before this date.", "default": ""}}, "required": ["query"]}}
-REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "public"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}}, "required": ["text"]}}
+REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "public"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}, "salience": {"type": "number", "description": "Wichtigkeit 0.0-1.0. >= 0.8 immun gegen Decay. Default: kategorie-abhaengig."}}, "required": ["text"]}}
 FORGET_SCHEMA = {"name": "nexus_forget", "description": "Delete a memory from Nexus Memory by ID.", "parameters": {"type": "object", "properties": {"memory_id": {"type": "string", "description": "The memory ID to delete."}}, "required": ["memory_id"]}}
 GUARDRAIL_CHECK_SCHEMA = {"name": "nexus_guardrail_check", "description": "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (rm, drop, kill, overwrite).", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command string to check (e.g. 'rm -rf ~/project/')"}, "tool_name": {"type": "string", "description": "The tool being called (e.g. 'terminal', 'write_file')", "default": ""}, "tool_input": {"type": "object", "description": "Full tool input dict for path-based checks", "default": {}}}, "required": ["command"]}}
 GUARDRAIL_OVERRIDE_SCHEMA = {"name": "nexus_guardrail_override", "description": "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command that was blocked"}, "reasoning": {"type": "string", "description": "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters."}, "matched_rules": {"type": "array", "items": {"type": "object"}, "description": "The matched_rules array from the guardrail_check response", "default": []}, "agent_id": {"type": "string", "description": "Agent identifier for audit trail", "default": "unknown"}}, "required": ["command", "reasoning"]}}
@@ -436,13 +436,19 @@ class NexusMemoryProvider:
             else: time.sleep(0.5)
 
     def _upsert(self, text: str, category: str = "fact", access_level: str = "public",
-                source: str = "", confidence: float = 0.7, **_: Any) -> Dict[str, Any]:
+                source: str = "", confidence: float = 0.7, salience: Optional[float] = None,
+                **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         vector = self._embedder.embed(text)
+        # v0.15 Memory Dynamics: Salience via Helper (klemmt auf [0,1] und
+        # setzt Kategorie-Defaults; Review-Fix: Werte außerhalb 0-1 wurden
+        # unclampet gespeichert und sind jetzt sicher normalisiert).
+        from nexus_memory.memory_dynamics import normalize_salience
+        eff_salience = normalize_salience(salience, category)
         payload = {"id": eid, "content": text, "access_level": access_level, "category": category,
                     "source": source, "source_url": "", "created_at": ts,
-                    "lifecycle_status": "canonical",
+                    "lifecycle_status": "canonical", "salience": eff_salience, "use_count": 0,
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
         self._qdrant.upsert(collection_name=self._collection,
@@ -470,6 +476,7 @@ class NexusMemoryProvider:
         try: self._bump_agent_stats(read=True)
         except Exception: pass
         flywheel: List[str] = []  # roadmap 4.9: top-3 recalled point ids
+        flywheel: List[tuple] = []  # roadmap 4.9 + v0.15: (pid, use_count, access_count, status)
         # Rerank config is read once and cached (double-checked lock,
         # mirrors the _skill_graph caching pattern in this class).
         if self._rerank_cfg is None:
@@ -497,6 +504,46 @@ class NexusMemoryProvider:
                 pool_k=int(cfg.get("pool_k", DEFAULT_POOL_K)),
                 voyage_api_key=cfg.get("voyage_api_key") or None,
             )
+        # v0.15 Memory Dynamics: effective_score = base x reinforcement x decay.
+        # ANWENDUNG ALS TIE-BREAKER (Review-Fix): Der Voyage/Cross-Encoder-Reranker
+        # oben liefert die semantische Relevanz-Ordnung — die duerfen wir NICHT
+        # mit Vektor-Score neu sortieren (bricht den Rerank-Integrationstest).
+        # Stattdessen: Nur bei (fast) gleichen Rerank-Positionen entscheidet die
+        # Dynamik (use_count/Salience) die Reihenfolge. Zustandslos, fail-open.
+        try:
+            from nexus_memory.memory_dynamics import effective_score as _eff
+        except ImportError:
+            _eff = None
+        if _eff is not None and pts:
+            EPS = 0.02  # Toleranz: darunter gilt Relevanz als "gleich"
+            # Stable in-place sort: Primär = Rerank-Reihenfolge (Index), Sekundär = eff-Score
+            decorated = []
+            for rank, p in enumerate(pts):
+                eff = _eff(float(p.score or 0.0), p.payload or {})
+                # Normalisieren auf Rang-Skala: gleiches eff = gleiche Relevanz-Stufe
+                # Wir sortieren nach (rank_quelle, eff) — aber nur innerhalb
+                # von Fenstern, deren eff-Differenz < EPS liegt, sonst bleibt
+                # die Rerank-Reihenfolge erhalten.
+                decorated.append((p, rank, eff))
+            # Fenster-Algorithmus: laufe über die Rangliste, tausche nur Punkte
+            # innerhalb eines Relevanz-Fensters (score-Delta <= EPS).
+            sorted_pts = []
+            remaining = list(decorated)
+            while remaining:
+                head = remaining.pop(0)
+                # Sammle alle Kandidaten im Fenster (gleiche Relevanz wie head)
+                window = [head]
+                j = 0
+                while j < len(remaining):
+                    if abs(remaining[j][2] - head[2]) <= EPS:
+                        window.append(remaining.pop(j))
+                    else:
+                        j += 1
+                # Innerhalb des Fensters: dynamischer Score entscheidet (sekundaer)
+                window.sort(key=lambda t: (-t[2], t[1]))
+                sorted_pts.extend(w[0] for w in window)
+            pts = sorted_pts
+        
         results: List[Dict[str, Any]] = []
         seen_ids: set = set()
         for p in pts:
@@ -512,7 +559,11 @@ class NexusMemoryProvider:
             pid = pl.get("id") or str(p.id)
             seen_ids.add(pid)
             if len(flywheel) < 3:
-                flywheel.append((pid, pl.get("access_count", 0) or 0,
+                # v0.15 (Review-Fix): use_count UND access_count separat
+                # transportieren — beide incrementieren sich in _flywheel_bump
+                # von ihrer eigenen Basis, keiner überschreibt den anderen.
+                flywheel.append((pid, pl.get("use_count", 0) or 0,
+                                 pl.get("access_count", 0) or 0,
                                  (pl.get("lifecycle_status") or "canonical")))
             results.append({"id": pid, "text": (pl.get("content") or "")[:2000],
                             "score": round(float(p.score or 0.0), 3), "source": pl.get("source"),
@@ -530,7 +581,7 @@ class NexusMemoryProvider:
         # "never accessed" ein und loescht sie (Datenverlust).
         for gpid in list(graph_pids)[:3]:
             if len(flywheel) < 6:
-                flywheel.append((gpid, 0, "canonical"))
+                flywheel.append((gpid, 0, 0, "canonical"))
         # Roadmap 4.9: fire-and-forget access bump for the top recall hits
         # (payloads carried inline - no extra retrieve roundtrips, review fix)
         if flywheel and self._qdrant:
@@ -545,21 +596,28 @@ class NexusMemoryProvider:
         return vector_results
 
     def _flywheel_bump(self, entries: List[tuple]) -> None:
-        """Roadmap 4.9: increment access_count on recalled points.
+        """Roadmap 4.9 + v0.15 Memory Dynamics: increment access_count/use_count
+        on recalled points.
 
         Fire-and-forget ( payloads passed in - zero retrieve roundtrips
         since _recall already had them). Skips points deprecated between
         recall and this bump (review fix B2). SICA uses access_count
         later as trust signal for retrieval weighting.
+        v0.15: schreibt zusätzlich use_count (einheitliches Feld für
+        Decay/Reinforcement-Mathe in memory_dynamics.py).
         """
-        for pid, count, status in entries:
+        for pid, use_count, access_count, status in entries:
             try:
                 # Review fix: skip facts deprecated after the recall snapshot
                 if status in ("deprecated", "rolled_back"):
                     continue
                 self._qdrant.set_payload(
                     collection_name=self._collection,
-                    payload={"access_count": count + 1,
+                    # v0.15 (Review-Fix): beide Zähler incrementieren von der
+                    # eigenen Basis — use_count nicht mehr aus access_count
+                    # abgeleitet (überschrieb sonst MCP-Zähler → Reset auf 1).
+                    payload={"access_count": access_count + 1,
+                             "use_count": use_count + 1,
                              "last_accessed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
                     points=[pid], wait=False)
             except Exception as exc:
@@ -737,9 +795,15 @@ class NexusMemoryProvider:
                 result = self._recall(args.get("query", ""), args.get("limit", 5),
                                       as_of=args.get("as_of", ""))
             elif tool_name == "nexus_remember":
+                # v0.15 (Review-Fix, CRITICAL): salience/confidence/source_url
+                # wirklich durchreichen — das Tool-Schema verspricht sie,
+                # vorher wurden sie stillschweigend ignoriert.
                 result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
                                       access_level=args.get("access_level", "public"),
-                                      source=args.get("source", ""))
+                                      source=args.get("source", ""),
+                                      confidence=args.get("confidence", 0.7),
+                                      salience=args.get("salience"),
+                                      source_url=args.get("source_url", ""))
                 # Roadmap 1.1/4.1: auto-enrich with entities + edges (async, fail-open)
                 try:
                     self._enqueue_entity_extraction(args.get("text", ""))

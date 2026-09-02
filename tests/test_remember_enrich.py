@@ -228,12 +228,13 @@ def test_flywheel_bumps_access_count():
     prov, _client = _provider()
     prov._embed_cache = None
     bumps = {}
+    use_bumps = {}
     class _P:
         def __init__(self, pid):
             self.id = pid
             self.score = 0.9
             self.payload = {"id": pid, "content": f"fact {pid}", "category": "fact",
-                            "access_count": 5}
+                            "access_count": 5, "use_count": 7}
     store = {"p1": _P("p1"), "p2": _P("p2"), "p3": _P("p3"), "p4": _P("p4")}
     class _C:
         def query_points(self, **kw):
@@ -243,6 +244,7 @@ def test_flywheel_bumps_access_count():
             return [store[pid]] if pid in store else []
         def set_payload(self, **kw):
             bumps[kw["points"][0]] = kw["payload"]["access_count"]
+            use_bumps[kw["points"][0]] = kw["payload"]["use_count"]
     prov._qdrant = _C()
 
     prov._recall("flywheel test query", limit=5)
@@ -250,4 +252,5 @@ def test_flywheel_bumps_access_count():
     while len(bumps) < 3 and _t.time() < deadline:
         _t.sleep(0.05)
     assert set(bumps) >= {"p1", "p2"}  # top hits versorgt
-    assert all(v >= 6 for v in bumps.values())  # 5+1
+    assert all(v >= 6 for v in bumps.values())  # access_count: 5+1
+    assert all(u >= 8 for u in use_bumps.values())  # use_count: 7+1 (eigene Basis)
