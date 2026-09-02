@@ -53,12 +53,14 @@ class HealthAuditor:
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._last_report: Optional[Dict[str, Any]] = None
+        self._forget_report: Optional[Dict[str, Any]] = None
         self._thread: Optional[threading.Thread] = None
 
     # ── public: flags for the health tool ──────────────────────────────
     def get_flags(self) -> Dict[str, Any]:
         with self._lock:
             r = self._last_report
+            f = self._forget_report
         if not r:
             return {}
         dup = r.get("duplicate_summary") or {}
@@ -75,6 +77,18 @@ class HealthAuditor:
                     f"Audit is READ-ONLY; cleanup is a separate manual step."
                 ),
                 "audit_ts": r.get("timestamp"),
+            }
+        # 2026-09-02: selective-forgetting flags (arXiv 2608.28978 scoring)
+        if f and (f.get("candidates_score_ge_060") or []):
+            flags["forgetting"] = {
+                "candidates": len(f["candidates_score_ge_060"]),
+                "message": (
+                    f"🧠 Nexus Memory selective-forgetting audit found "
+                    f"{len(f['candidates_score_ge_060'])} old, low-value memories "
+                    f"(read-only review: {f.get('report_file', '')}). "
+                    f"Candidates are RECOMMENDATIONS only — nothing was deleted."
+                ),
+                "audit_ts": f.get("timestamp"),
             }
         return flags
 
@@ -96,10 +110,126 @@ class HealthAuditor:
                 report["agent_cleanup"] = agent_cleanup
             self._write_report(report)
             self._maybe_webhook(report)
-            return report
         except Exception as exc:  # never break the server
             log.warning("Health audit failed: %s", exc)
             return agent_cleanup  # still return the registry report
+        # 2026-09-02: selective-forgetting scoring runs in the SAME loop, as an
+        # independent step (its failure must not affect the dup report).
+        try:
+            from nexus_memory.selective_forgetting import SelectiveForgettingAuditor
+            forget = SelectiveForgettingAuditor(self._store, self._store.collection_name,
+                                                data_dir=str(self._data_dir))
+            forget_report = forget.run()
+            with self._lock:
+                self._forget_report = forget_report
+        except Exception as exc:
+            log.warning("Selective-forgetting audit failed: %s", exc)
+        # 2026-09-02 (Nebo-GO): self-maintenance dedup sweep — in-process, no
+        # external scheduler. Merges ONLY exactly-normalized duplicate copies.
+        # Kill switch: NEXUS_DEDUP_SWEEP=0 disables (user opt-out).
+        if os.environ.get("NEXUS_DEDUP_SWEEP", "1") == "1":
+            try:
+                sweep = self._dedup_sweep()
+                report["dedup_sweep"] = sweep
+            except Exception as exc:
+                log.warning("Dedup sweep failed: %s", exc)
+        return report
+
+    # ── dedup sweep (in-process self-maintenance) ───────────────────────
+    def _collect_points(self):
+        points = []
+        offset = None
+        while True:
+            batch, offset = self._store.client.scroll(
+                self._store.collection_name, limit=500, offset=offset,
+                with_payload=True, with_vectors=False,
+            )
+            points.extend(batch)
+            if offset is None:
+                break
+        return points
+
+    def _dedup_sweep(self) -> Dict[str, Any]:
+        """Merge exact-normalized duplicates, oldest point wins as keeper.
+
+        Mirrors the proven 31.08. manual merge: attribute rescue (entity_attributes
+        keys missing on keeper are copied from dropped candidates) and provenance
+        source_urls are preserved before deletion. Deletion happens ONLY on
+        byte-identical normalized text — unique content is never touched.
+
+        A JSON backup of every deleted point is written BEFORE deletion so the
+        sweep is always reversible.
+        """
+        import uuid as _uuid
+        points = self._collect_points()
+        by_norm: Dict[str, list] = {}
+        for p in points:
+            payload = p.payload or {}
+            if (payload.get("lifecycle_status") or "canonical") not in VALID_LIFECYCLE:
+                continue
+            text = str(payload.get("text") or payload.get("content") or "").strip()
+            key = _normalize(text)
+            if len(key) < 12:
+                continue
+            by_norm.setdefault(key, []).append(p)
+
+        merged = 0
+        rescued_attrs = 0
+        backup_rows = []
+        backup_path = None
+        for key, group in by_norm.items():
+            if len(group) < 2:
+                continue
+            def _created(p):
+                return (p.payload or {}).get("created_at") or "9999"
+            group_sorted = sorted(group, key=_created)
+            keeper = group_sorted[0]
+            kp = keeper.payload or {}
+            keeper_attrs = dict(kp.get("entity_attributes") or {})
+            to_delete = []
+            for cand in group_sorted[1:]:
+                cp = cand.payload or {}
+                da = cp.get("entity_attributes") or {}
+                if isinstance(da, dict):
+                    rescued = {k: v for k, v in da.items() if k not in keeper_attrs}
+                    if rescued:
+                        keeper_attrs.update(rescued)
+                        rescued_attrs += len(rescued)
+                backup_rows.append({
+                    "id": str(cand.id),
+                    "payload": cp,
+                    "keeper_id": str(keeper.id),
+                })
+                to_delete.append(cand.id)
+            if to_delete:
+                # Backup BEFORE delete (reversibility guarantee)
+                if backup_rows and backup_path is None:
+                    backup_path = str(self._data_dir / f"dedup-sweep-backup-{time.strftime('%Y%m%d-%H%M%S')}.json")
+                    self._data_dir.mkdir(parents=True, exist_ok=True)
+                    with open(backup_path, "w") as bf:
+                        json.dump({"keeper_strategy": "oldest_created_at",
+                                   "deleted": backup_rows}, bf, indent=2, ensure_ascii=False, default=str)
+                if keeper_attrs and keeper_attrs != (kp.get("entity_attributes") or {}):
+                    self._store.client.set_payload(
+                        collection_name=self._store.collection_name,
+                        payload={"entity_attributes": keeper_attrs},
+                        points=[keeper.id],
+                    )
+                self._store.client.delete(
+                    collection_name=self._store.collection_name,
+                    points_selector=to_delete,
+                )
+                merged += len(to_delete)
+        result = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "merged": merged,
+            "rescued_attributes": rescued_attrs,
+            "backup_file": backup_path,
+            "policy": "exact-normalized duplicates only; keeper = oldest created_at",
+        }
+        log.info("Dedup sweep: %d merged, %d attrs rescued, backup=%s",
+                 merged, rescued_attrs, backup_path)
+        return result
 
     # ── internal ───────────────────────────────────────────────────────
     def _audit(self) -> Dict[str, Any]:
