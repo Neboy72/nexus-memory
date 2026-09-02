@@ -447,12 +447,28 @@ class NexusMemoryProvider:
                                    "timestamp": ts, "confidence": confidence}}
         self._qdrant.upsert(collection_name=self._collection,
                             points=[qmodels.PointStruct(id=eid, vector=vector, payload=payload)])
+        try: self._bump_agent_stats(write=True)
+        except Exception: pass
         return {"status": "ok", "id": eid, "category": category}
+
+    def _bump_agent_stats(self, read: bool = False, write: bool = False) -> None:
+        """Registry-Hygiene (Dashboard last_seen/reads/writes): der Plugin-Pfad
+        ist der tatsaechlich genutzte Gedachtnis-Weg von Hermes — ohne dieses
+        Wiring lief 'last seen' auf einem eingefrorenen Stand (31.08. gevonden).
+        Fire-and-forget: Registry-Statistiken durfen nie den Memory-Op brechen."""
+        try:
+            agent_id = os.environ.get("NEXUS_AGENT_ID", "").strip() or "hermes"
+            from nexus_memory.agent_detect import update_agent_stats
+            update_agent_stats(agent_id, read=read, write=write)
+        except Exception:
+            pass
 
     def _recall(self, query: str, limit: int = 5, as_of: str = "") -> List[Dict[str, Any]]:
         """Roadmap 4.5: as_of='YYYY-MM-DD' limits recall to memories
         created on/before that date (point-in-time view). Empty = no filter."""
         if not self._embedder or not self._qdrant: return []
+        try: self._bump_agent_stats(read=True)
+        except Exception: pass
         flywheel: List[str] = []  # roadmap 4.9: top-3 recalled point ids
         # Rerank config is read once and cached (double-checked lock,
         # mirrors the _skill_graph caching pattern in this class).
