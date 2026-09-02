@@ -37,6 +37,20 @@ const REASONING_MARKERS: RegExp[] = [
   /\b(Draft|Final answer version|Response draft)\s*:\s*$/im,
   // Selbstdiskussion über Antwortformat
   /^(draft|response|final)(\s+\d)?:\s/im,
+  // Runtime-context-/Replay-Selbstverortung (02.09.-Leak, "The runtime context is just a replay…")
+  /^the (runtime )?context (is just|re-delivery)/i,
+  /^runtime context (re-delivery|is just)/i,
+  // Recovery-/Bearing-Marker ("Let me get my bearings for the current turn.")
+  /^let me get my bearings\b/i,
+  /^i(?:'| a)m (still|now) (processing|waiting|in)\b/i,
+  // Plan-Aufzählungs-Blöcke ("Where I am:", "What do I know:", "Plan for this turn")
+  /^(where i am|what do i know|my plan|the plan|plan for this turn|current state|now \(|critical honesty)\s*:?\s*$/i,
+  /^what(?:'s| is) (missing|next|left)\b/i,
+  /^next (steps?|up)\s*:/i,
+  // Recovery-Ehrlichkeits-Deklarationen ("Critical honesty requirement: …")
+  /^(critical honesty|important honesty|honesty requirement|note to self)\b/i,
+  // System-Kontext-Wiedergabe ("The last system message: …" / "The last system message was a retry.")
+  /^the (last |previous )?(system|incoming|visible) (message|context)\b/i,
 ]
 
 /** true = Block besteht (sehr wahrscheinlich) NUR aus internem Reasoning. */
