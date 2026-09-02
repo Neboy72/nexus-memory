@@ -388,6 +388,27 @@ class MemoryStore:
             logging.info("Health audit daemon active")
         except Exception as e:
             logging.warning(f"Health audit daemon unavailable: {e}")
+        # 2026-09-02 (v0.14.1, Nebo-GO '100% selbstversorgend'): trust recompute +
+        # retrieval watch als in-process daemons — letzte externen Wartungs-Crons
+        # ersetzt. Kill-switches: NEXUS_TRUST_SWEEP=0 / NEXUS_RETRIEVAL_WATCH=0.
+        self._trust_service = None
+        if os.environ.get("NEXUS_TRUST_SWEEP", "1") == "1":
+            try:
+                from nexus_memory.trust_service import TrustService
+                self._trust_service = TrustService(self, COLLECTION_NAME)
+                self._trust_service.start()
+                logging.info("Trust service daemon active")
+            except Exception as e:
+                logging.warning(f"Trust service daemon unavailable: {e}")
+        self._retrieval_watch = None
+        if os.environ.get("NEXUS_RETRIEVAL_WATCH", "1") == "1":
+            try:
+                from nexus_memory.retrieval_watch import RetrievalWatch
+                self._retrieval_watch = RetrievalWatch(self, COLLECTION_NAME)
+                self._retrieval_watch.start()
+                logging.info("Retrieval-watch daemon active")
+            except Exception as e:
+                logging.warning(f"Retrieval-watch daemon unavailable: {e}")
 
     def _check_for_updates_async(self):
         """Check GitHub for new releases on startup (non-blocking, cached 24h)."""
