@@ -24,7 +24,8 @@ DEFAULT_SALIENCE = 0.5
 DECAY_PER_MONTH = 0.05      # 5% Gewichtsverlust pro Monat Nichtnutzung
 DECAY_FLOOR = 0.3           # nie tiefer als 30% (vergessen != gelöscht)
 SALIENCE_IMMUNE = 0.8       # ab hier immun gegen Decay
-REINFORCE_LOG_CAP = 3.0     # log-Verstärkung gedeckelt bei e^3 ≈ 20x Nutzung
+REINFORCE_LOG_CAP = 3.0     # ln-Verstärkung gedeckelt: Boost max. +3 → Faktor ≤ 4.0,
+                            # Kappe praktisch bei ~20 Nutzungen (ln(21) ≈ 3.04)
 
 # Kategorie-Gruppen für Salience-Defaults (Store-Pfade MCP + Hermes-Plugin)
 SALIENT_CATEGORIES = ("rule", "procedure")
