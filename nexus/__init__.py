@@ -80,7 +80,14 @@ from nexus.graph.schema import EdgeRelation, EdgeStatus
 
 from nexus.config import get_collection, is_success
 
-__version__ = "0.13.5"
+# Version: aus dem installierten nexus-memory-Paket (importlib.metadata), damit
+# dieser Legacy-Wert NIE wieder vom installierten Release abweichen kann
+# (Bug 03.09.: Dashboard las hier hart 0.13.5, obwohl 0.16.0 installiert war).
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("nexus-memory")
+except Exception:  # Paket nicht installiert (z.B. nur git clone) — Legacy-Fallback
+    __version__ = "0.16.0"
 
 _logger = logging.getLogger(__name__)
 
