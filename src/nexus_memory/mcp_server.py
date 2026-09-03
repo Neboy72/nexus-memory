@@ -375,6 +375,75 @@ def _check_content_guardrails(text: str) -> list[str]:
     return warnings
 
 
+# ── Temporal Fact Validity (Unreleased) ─────────────────────────────
+# Helpers for point-in-time queries: every memory carries 'valid_from'
+# (ISO-8601, default = created_at) and 'valid_to' (None = still valid).
+# Auto-supersession stamps valid_to on the old fact at supersession time.
+# Legacy points without these fields are treated as implicitly valid
+# (backward compatible, no migration required).
+
+
+def _parse_iso(ts, *, default=None):
+    """Parse an ISO-8601 timestamp into an aware UTC datetime.
+
+    Handles with/without timezone, 'Z' suffix and date-only strings.
+    Naive timestamps are assumed UTC. Unparseable input → ``default``.
+    """
+    if ts is None:
+        return default
+    if isinstance(ts, datetime):
+        dt = ts
+    else:
+        s = str(ts).strip()
+        if not s:
+            return default
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            # date-only fallback ("2026-09-03")
+            try:
+                dt = datetime.strptime(s[:10], "%Y-%m-%d")
+            except ValueError:
+                return default
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _valid_from_of(payload: dict):
+    """Effective start of validity for a payload (valid_from, else created_at)."""
+    vf = _parse_iso(payload.get("valid_from"))
+    if vf is not None:
+        return vf
+    return _parse_iso(payload.get("created_at"))
+
+
+def _valid_to_of(payload: dict):
+    """Effective end of validity for a payload (valid_to, else superseded_at, else None=∞)."""
+    vt = _parse_iso(payload.get("valid_to"))
+    if vt is not None:
+        return vt
+    return _parse_iso(payload.get("superseded_at"))
+
+
+def _valid_at(payload: dict, as_of: datetime) -> bool:
+    """Was/will this memory be valid at ``as_of`` (aware UTC datetime)?
+
+    Rule: (valid_from or created_at) <= as_of AND (valid_to or
+    superseded_at or None=∞) > as_of. Points without temporal fields are
+    implicitly valid (legacy, backward compatible).
+    """
+    vf = _valid_from_of(payload)
+    if vf is not None and vf > as_of:
+        return False
+    vt = _valid_to_of(payload)
+    if vt is not None and vt <= as_of:
+        return False
+    return True
+
+
 # ── Storage ─────────────────────────────────────────────────────────
 
 class MemoryStore:
@@ -614,6 +683,7 @@ class MemoryStore:
         source_url: str = "",
         confidence: Optional[float] = None,
         salience: Optional[float] = None,
+        effective_from: Optional[str] = None,
     ) -> dict:
         """Store a memory with full v2.8.0 metadata support + auto TTL + auto supersession.
 
@@ -621,6 +691,11 @@ class MemoryStore:
         and same category), the old fact is automatically deprecated and the new one
         marked as canonical with a 'supersedes' reference. This prevents contradictions
         without requiring the agent to manually call update().
+
+        Temporal validity (Unreleased): every new point gets 'valid_from' (defaults to
+        created_at; override via ``effective_from`` for retro-dated imports, e.g. mail)
+        and 'valid_to' (None = still valid). The superseded old fact gets 'valid_to'
+        stamped at the supersession time.
         """
         # Validate category against MemoryCategory
         valid_categories = [c.value for c in MemoryCategory]
@@ -662,6 +737,9 @@ class MemoryStore:
                             payload={"lifecycle_status": "deprecated",
                                      "superseded_by": entry_id,
                                      "superseded_at": created_at,
+                                     # Temporal validity: the old fact stopped
+                                     # being valid at the supersession time.
+                                     "valid_to": created_at,
                                      "supersede_reason": (
                                          f"replaced by fact {entry_id[:8]} "
                                          f"(similarity {float(point.score):.2f} >= 0.90)")},
@@ -708,6 +786,15 @@ class MemoryStore:
         if source:
             provenance["source"] = source
 
+        # Temporal validity (Unreleased): valid_from defaults to created_at,
+        # override via effective_from for retro-dated imports. valid_to=None
+        # means "still valid / open interval".
+        _effective_from = _parse_iso(effective_from)
+        if _effective_from is not None:
+            valid_from = _effective_from.isoformat()
+        else:
+            valid_from = created_at
+
         payload = {
             "id": entry_id,
             "content": text,
@@ -720,6 +807,9 @@ class MemoryStore:
             "lifecycle_status": "canonical",  # New facts are canonical by default
             "expiry_policy": expiry_policy,
             "valid_until": valid_until,
+            # Temporal Fact Validity (Unreleased)
+            "valid_from": valid_from,
+            "valid_to": None,
             # Memory Dynamics (v0.15): Salience via Helper — klemmt auf [0,1]
             # und setzt Kategorie-Defaults (Review-Fix: unclampete Werte).
             "salience": None,  # placeholder, replaced below
@@ -807,8 +897,23 @@ class MemoryStore:
         query: str,
         agent_level: str = ACCESS_PUBLIC,
         limit: int = 5,
+        as_of: Optional[str] = None,
     ) -> list[dict]:
-        """Search memories with hybrid search (BM25 + Vector + RRF) + access filtering."""
+        """Search memories with hybrid search (BM25 + Vector + RRF) + access filtering.
+
+        Temporal Fact Validity (Unreleased): pass ``as_of`` (ISO-8601) for a
+        point-in-time query. ``as_of=None`` keeps the default behavior exactly
+        as before (only currently-valid facts; deprecated filtered out).
+        With ``as_of``, deprecated facts are no longer auto-filtered — a fact
+        is included when it was valid at that date:
+        (valid_from or created_at) <= as_of AND (valid_to or superseded_at
+        or None=∞) > as_of. The valid_until TTL is also compared against the
+        cutoff instead of 'now'.
+        """
+        # Parse as_of once (aware UTC). Unparseable → treated as None
+        # (default behavior) so a bad client value can never crash recall.
+        as_of_dt = _parse_iso(as_of)
+        point_in_time = as_of_dt is not None
         allowed_levels = [ACCESS_PUBLIC]
         agent_lvl = ACCESS_HIERARCHY.get(agent_level, 0)
         if agent_lvl >= 1:
@@ -877,6 +982,16 @@ class MemoryStore:
                                         r["evidences"] = pl.get("evidences", [])
                                     if not r.get("valid_until"):
                                         r["valid_until"] = pl.get("valid_until")
+                                    # Temporal Fact Validity: Validitäts-Fenster
+                                    # nachliefern, sonst sieht _valid_at im
+                                    # Hybrid-Pfad keine Fenster (alles implizit
+                                    # gültig → as_of-Filter schläft).
+                                    if not r.get("valid_from"):
+                                        r["valid_from"] = pl.get("valid_from")
+                                    if not r.get("valid_to"):
+                                        r["valid_to"] = pl.get("valid_to")
+                                    if not r.get("superseded_at"):
+                                        r["superseded_at"] = pl.get("superseded_at")
                                     # Memory Dynamics (v0.15): payload + echte point-id
                                     # für Access-Tracking und effective_score mitnehmen
                                     if pt and pt.id:
@@ -909,6 +1024,15 @@ class MemoryStore:
                     "provenance": payload.get("provenance", {}),
                     "created_at": payload.get("created_at"),
                     "lifecycle_status": payload.get("lifecycle_status"),
+                    # Temporal Fact Validity: Fenster-Felder auch im
+                    # Fallback-Pfad mappen — ohne sie behandelt _valid_at
+                    # jeden Treffer als implizit gültig (as_of-Filter tot).
+                    "valid_from": payload.get("valid_from"),
+                    "valid_to": payload.get("valid_to"),
+                    "superseded_at": payload.get("superseded_at"),
+                    # valid_until ebenfalls mappen — sonst greift der
+                    # TTL-Filter im Fallback-Pfad nie (vu=None → Pass).
+                    "valid_until": payload.get("valid_until"),
                     "score": point.score,
                     # v0.15 (Review-Fix): Fallback liefert dieselben Dynamics-
                     # Felder wie der Hybrid-Pfad — sonst greifen dort weder
@@ -920,17 +1044,23 @@ class MemoryStore:
         # ── Lifecycle filtering: skip deprecated / rolled_back facts ────
         # Only "canonical" or missing lifecycle_status entries are included
         # (missing = backwards compat with old entries written before Phase 2).
+        # Point-in-time mode (as_of set): deprecated facts are NOT auto-
+        # filtered here — instead the temporal validity window below decides.
         _suppressed_statuses = {"deprecated", "rolled_back"}
-        raw_results = [
-            r for r in raw_results
-            if r.get("lifecycle_status") not in _suppressed_statuses
-        ]
+        if point_in_time:
+            raw_results = [r for r in raw_results if _valid_at(r, as_of_dt)]
+        else:
+            raw_results = [
+                r for r in raw_results
+                if r.get("lifecycle_status") not in _suppressed_statuses
+            ]
 
         # ── TTL/Expiry filtering: skip expired memories ────
         # Memories with valid_until in the past are filtered out.
         # Backwards compatible: entries without valid_until pass through.
+        # Point-in-time mode: compare against as_of instead of 'now'.
         from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
+        now = as_of_dt if point_in_time else datetime.now(timezone.utc)
         expired_count = 0
         filtered_results = []
         for r in raw_results:
@@ -1166,6 +1296,106 @@ class MemoryStore:
         )
         return result.status == "completed"
 
+    async def fact_history(self, memory_id: str, max_depth: int = 20) -> list[dict]:
+        """Trace the supersession chain of a memory (Temporal Fact Validity).
+
+        Starts at ``memory_id`` and walks the chain both ways:
+        - forward:  follow ``superseded_by`` links (this fact → its successors)
+        - backward: find points whose ``superseded_by`` references this fact
+
+        Returns a list of dicts ``{memory_id, text, valid_from, valid_to,
+        supersede_reason}`` ordered by valid_from (oldest first). Pure
+        payload-read logic — no new index dependency.
+        """
+        chain: dict[str, dict] = {}
+        seen: set[str] = set()
+        frontier = [str(memory_id)]
+        depth = 0
+
+        while frontier and depth < max_depth:
+            next_frontier: list[str] = []
+            point_ids = [_to_point_id(pid) for pid in frontier]
+
+            # 1. Fetch the points themselves (id + forward links).
+            try:
+                records = self.client.retrieve(
+                    collection_name=COLLECTION_NAME,
+                    ids=point_ids,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+            except Exception as e:
+                logging.warning(f"fact_history retrieve failed: {e}")
+                records = []
+
+            for rec in records:
+                pid = str(rec.id)
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                pl = rec.payload or {}
+                chain[pid] = self._fact_history_entry(pid, pl)
+                successor = pl.get("superseded_by")
+                if successor and str(successor) not in seen:
+                    next_frontier.append(str(successor))
+
+            # 2. Find predecessors: points superseded BY any point in the
+            #    frontier (scroll over superseded_by field values).
+            for pid in frontier:
+                try:
+                    scrolled = self.client.scroll(
+                        collection_name=COLLECTION_NAME,
+                        scroll_filter=qmodels.Filter(
+                            must=[qmodels.FieldCondition(
+                                key="superseded_by",
+                                match=qmodels.MatchValue(value=pid),
+                            )],
+                        ),
+                        with_payload=True,
+                        limit=100,
+                    )
+                except Exception as e:
+                    logging.debug(f"fact_history scroll failed for {pid[:8]}: {e}")
+                    scrolled = ([], None)
+
+                points = scrolled[0] if isinstance(scrolled, tuple) else scrolled
+                for rec in points:
+                    pred_id = str(getattr(rec, "id", ""))
+                    if not pred_id or pred_id in seen:
+                        continue
+                    seen.add(pred_id)
+                    pl = rec.payload or {}
+                    chain[pred_id] = self._fact_history_entry(pred_id, pl)
+                    successor = pl.get("superseded_by")
+                    if successor and str(successor) not in seen:
+                        next_frontier.append(str(successor))
+
+            frontier = next_frontier
+            depth += 1
+
+        # Deterministic order: by valid_from (oldest first); fallback
+        # created_at, then memory_id — chains always sort the same way.
+        chain_list = list(chain.values())
+        chain_list.sort(key=lambda e: (
+            e["valid_from"] or "9999-12-31T23:59:59+00:00",
+            e["memory_id"],
+        ))
+        return chain_list
+
+    @staticmethod
+    def _fact_history_entry(pid: str, pl: dict) -> dict:
+        """Build one entry for fact_history() from a point payload."""
+        text = str(pl.get("content", ""))
+        vf = pl.get("valid_from") or pl.get("created_at")
+        vt = pl.get("valid_to") or pl.get("superseded_at")
+        return {
+            "memory_id": pid,
+            "text": text[:120] + ("…" if len(text) > 120 else ""),
+            "valid_from": vf,
+            "valid_to": vt,
+            "supersede_reason": pl.get("supersede_reason"),
+        }
+
     async def health(self) -> dict:
         try:
             collections = self.client.get_collections().collections
@@ -1371,6 +1601,15 @@ async def handle_list_tools() -> list[types.Tool]:
                         "minimum": 0.0,
                         "maximum": 1.0,
                     },
+                    "effective_from": {
+                        "type": "string",
+                        "description": (
+                            "Optional ISO-8601 date/datetime: when this fact became valid "
+                            "(temporal validity). Defaults to now. Use for retro-dated "
+                            "imports (e.g. mail import with the original mail date)."
+                        ),
+                        "default": None,
+                    },
                 },
                 "required": ["text", "category"],
             },
@@ -1397,6 +1636,16 @@ async def handle_list_tools() -> list[types.Tool]:
                         "enum": ALL_ACCESS_LEVELS,
                         "description": "Filter by access level. Returns only memories at this level or below.",
                         "default": ACCESS_PUBLIC,
+                    },
+                    "as_of": {
+                        "type": "string",
+                        "description": (
+                            "ISO-8601 date/datetime for point-in-time queries. "
+                            "Omit (= None) for the default behavior: only currently "
+                            "valid facts. With as_of, deprecated facts are returned "
+                            "when they were valid at that date."
+                        ),
+                        "default": None,
                     },
                 },
                 "required": ["query"],
@@ -1435,6 +1684,33 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Who made this modification (e.g. 'Kiosha', 'Miosha', 'Nebo')",
                         "default": "",
+                    },
+                    "effective_from": {
+                        "type": "string",
+                        "description": (
+                            "Optional ISO-8601 date/datetime: when the updated fact "
+                            "became valid (temporal validity, written to valid_from). "
+                            "Defaults to keeping the existing valid_from."
+                        ),
+                        "default": None,
+                    },
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        types.Tool(
+            name="fact_history",
+            description=(
+                "Trace the supersession chain of a memory: the point itself plus all "
+                "successors (and predecessors via superseded_by), ordered by valid_from. "
+                "Shows how a fact evolved over time."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory whose history to trace",
                     },
                 },
                 "required": ["memory_id"],
@@ -1808,6 +2084,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             source = arguments.get("source", "")
             source_url = arguments.get("source_url", "")
             confidence = arguments.get("confidence")
+            effective_from = arguments.get("effective_from")
 
             if access_level not in ALL_ACCESS_LEVELS:
                 access_level = ACCESS_PUBLIC
@@ -1815,7 +2092,8 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             guardrails = _check_content_guardrails(text)
 
             result = await store.remember(
-                text, access_level, category, source, source_url, confidence
+                text, access_level, category, source, source_url, confidence,
+                effective_from=effective_from,
             )
 
             # Fire-and-forget: dispatch "memory.remember" to any subscribers.
@@ -1842,11 +2120,14 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             query = arguments["query"]
             limit = min(arguments.get("limit", 5), 20)
             filter_level = arguments.get("filter_level", ACCESS_PUBLIC)
+            as_of = arguments.get("as_of")  # None = default behavior
 
             if filter_level not in ALL_ACCESS_LEVELS:
                 filter_level = ACCESS_PUBLIC
 
-            results = await store.recall(query, agent_level=filter_level, limit=limit)
+            results = await store.recall(
+                query, agent_level=filter_level, limit=limit, as_of=as_of
+            )
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"results": results, "count": len(results)}),
@@ -1886,26 +2167,37 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             memory_id = arguments["memory_id"]
             new_text = arguments.get("text", "")
             modified_by = arguments.get("modified_by", "")
+            effective_from = arguments.get("effective_from")
 
             # ── Supersession: mark the old version as deprecated ──────
             # Before updating, set the existing point's lifecycle_status
             # to "deprecated" so recall() filters it out. The updated
             # content gets lifecycle_status: "canonical" via new_metadata.
             try:
+                _now_iso = datetime.now(timezone.utc).isoformat()
+                _deprecate_payload = {
+                    "lifecycle_status": "deprecated",
+                    "superseded_at": _now_iso,
+                    # Temporal validity: the old version stopped being valid now.
+                    "valid_to": _now_iso,
+                }
                 store.client.set_payload(
                     collection_name=COLLECTION_NAME,
-                    payload={"lifecycle_status": "deprecated"},
+                    payload=_deprecate_payload,
                     points=[memory_id],
                 )
                 logging.info(f"Supersession: marked {memory_id[:8]} as deprecated")
             except Exception as sup_err:
                 logging.warning(f"Supersession (deprecate old) failed: {sup_err}")
 
+            _update_metadata = {"lifecycle_status": "canonical"}
+            if effective_from:
+                _update_metadata["valid_from"] = _parse_iso(effective_from).isoformat()
             from nexus import nexus_update
             result = nexus_update(
                 point_id=memory_id,
                 new_content=new_text if new_text else None,
-                new_metadata={"lifecycle_status": "canonical"},
+                new_metadata=_update_metadata,
                 modified_by=modified_by if modified_by else None,
                 qdrant_host=QDRANT_HOST,
                 qdrant_port=QDRANT_PORT,
@@ -1928,6 +2220,21 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": "updated", "detail": result}),
+            )]
+        except Exception as e:
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "error": str(e)}),
+            )]
+
+    elif name == "fact_history":
+        try:
+            memory_id = arguments["memory_id"]
+            chain = await store.fact_history(memory_id)
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"memory_id": memory_id, "chain": chain,
+                                 "count": len(chain)}),
             )]
         except Exception as e:
             return [types.TextContent(
