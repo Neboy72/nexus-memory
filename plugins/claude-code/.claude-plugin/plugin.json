@@ -1,10 +1,21 @@
 {
   "name": "nexus-memory",
-  "version": "0.8.0",
-  "description": "Persistent memory for Claude Code via Qdrant. Auto-Recall injects relevant memories before each prompt. Auto-Capture stores facts after each turn. Self-hosted, private, universal.",
+  "version": "1.0.0",
+  "description": "Self-hosted memory for Claude Code via Qdrant. Auto-Recall injects relevant memories before each prompt. Auto-Capture stores facts after each turn. Hybrid retrieval, reranking, memory dynamics, guardrails. One store shared with OpenClaw and Hermes (MCP).",
   "author": {
     "name": "Neboy72",
     "url": "https://github.com/Neboy72/nexus-memory"
   },
-  "hooks": "./hooks/nexus-hooks.json"
+  "hooks": "./hooks/nexus-hooks.json",
+  "mcpServers": {
+    "nexus": {
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp_bootstrap.py"
+      ],
+      "env": {
+        "NEXUS_AGENT_ID": "claude-code"
+      }
+    }
+  }
 }
