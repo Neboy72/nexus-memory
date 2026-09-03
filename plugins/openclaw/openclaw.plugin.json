@@ -1,5 +1,6 @@
 {
   "id": "nexus-memory",
+  "name": "Nexus Memory",
   "kind": "memory",
   "contracts": {
     "tools": [
@@ -81,23 +82,61 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "qdrantUrl": { "type": "string" },
-      "collection": { "type": "string" },
+      "qdrantUrl": {
+        "type": "string"
+      },
+      "collection": {
+        "type": "string"
+      },
       "embedding": {
         "type": "object",
         "properties": {
-          "provider": { "type": "string", "enum": ["voyage", "openai", "ollama", "google", "jina"] },
-          "model": { "type": "string" },
-          "apiKey": { "type": "string" },
-          "baseUrl": { "type": "string" },
-          "dimensions": { "type": "number" }
+          "provider": {
+            "type": "string",
+            "enum": [
+              "voyage",
+              "openai",
+              "ollama",
+              "google",
+              "jina"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "number"
+          }
         }
       },
-      "autoRecall": { "type": "boolean" },
-      "autoCapture": { "type": "boolean" },
-      "maxRecallResults": { "type": "number", "minimum": 1, "maximum": 20 },
-      "accessLevel": { "type": "string", "enum": ["public", "trusted", "private"] },
-      "debug": { "type": "boolean" }
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "maxRecallResults": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 20
+      },
+      "accessLevel": {
+        "type": "string",
+        "enum": [
+          "public",
+          "trusted",
+          "private"
+        ]
+      },
+      "debug": {
+        "type": "boolean"
+      }
     },
     "required": []
   }
