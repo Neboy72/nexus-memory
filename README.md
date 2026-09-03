@@ -91,7 +91,7 @@ Pick **one** — or none: the server auto-detects at runtime. The detection prio
 | You have Ollama installed | Run `ollama pull bge-m3` — free, private, offline, 1024d quality |
 | No Ollama, no key, want the best local option | Install [Ollama](https://ollama.com) (free, one download), then run `ollama pull bge-m3` — or skip Ollama entirely and let the wizard load bge-m3 via HuggingFace |
 | No Ollama, no key, just want it to work NOW | Do nothing — the server falls back to a built-in small model automatically. Fine to start. Upgrade later when your memories grow |
-| Coming from Hugging Face only | Direct HF/FlagEmbedding loading is on the roadmap (see `roadmap` in docs) — today use the Ollama route or the built-in fallback |
+| Coming from Hugging Face only | Set `NEXUS_HF_BGE3=1` — loads bge-m3 directly via sentence-transformers, no Ollama needed (wizard configures this for you) |
 
 > 💡 **Think of it like this:** the tiny built-in model is fine for your first hundred memories. Once your agent remembers weeks of context in German/mixed languages, switch to bge-m3 — the upgrade is one command, and your memories re-embed automatically in a few minutes, free.
 
@@ -307,7 +307,7 @@ Standard MCP stdio config:
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `remember` 💾 | Store a memory | `text` (req), `category` (req, default `fact`), `access_level`, `source`, `source_url`, `confidence` |
+| `remember` 💾 | Store a memory | `text` (req), `category` (req, default `fact`), `access_level`, `source`, `source_url`, `confidence` (Hermes plugin also accepts `salience`) |
 | `recall` 🔍 | Hybrid search (BM25 + Vector + RRF) | `query` (req), `limit`, `filter_level` |
 | `forget` 🗑️ | Delete a memory | `memory_id` (req) |
 | `update` ✏️ | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
@@ -321,6 +321,12 @@ Standard MCP stdio config:
 | `restore` 📦 | Restore memories from backup JSON | `backup_path` (req), `reembed` (optional) |
 | `guardrail_check` 🛡️ | Check if an action is safe before executing (queries protection rules) | `command` (req), `tool_name`, `tool_input` |
 | `guardrail_override` 🔓 | Record a guardrail override with audit trail (requires reasoning) | `command` (req), `reasoning` (req, min 10 chars), `matched_rules`, `agent_id` |
+| `graph_traverse` 🔗 | Multi-hop traversal from a fact | `fact_id` (req), `max_depth`, `relation`, `target_type` |
+| `find_entities` 🔗 | Find all entity-typed memories | `entity_type`, `limit` |
+| `get_subgraph` 🔗 | Subgraph centered on a fact | `fact_id` (req), `max_depth` |
+| `get_related` 🔗 | Directly related facts (1-hop) | `fact_id` (req), `relation` |
+| `cost_routing_stats` 💰 | Embedding provider routing statistics | none |
+| `cost_routing_explain` 💰 | Explain routing decision for a category | `category` (req) |
 
 ### Memory Categories (State-Prefixing)
 
@@ -593,7 +599,10 @@ One server. Multiple backends. Same API.
 | **OpenAI** ☁️ | Cloud | `OPENAI_API_KEY` in MCP `env:` block | 1536 |
 | **Google / Vertex AI** 💚 | Cloud | `GOOGLE_API_KEY` in `.env` | 768 |
 | **Jina** 💜 | Cloud | `JINA_API_KEY` in `.env` | 1024 |
-| **Ollama** 🦙 | Local | `ollama pull bge-m3` | 1024 |
+| **Ollama bge-m3** 🦙 | Local | `ollama pull bge-m3` | 1024 |
+| **Ollama nomic-embed-text** 🦙 | Local | `ollama pull nomic-embed-text` | 768 |
+| **HuggingFace direct (bge-m3)** 🏠 | Local | `NEXUS_HF_BGE3=1` (no Ollama needed) | 1024 |
+| **sentence-transformers (MiniLM)** 🏠 | Local | `pip install sentence-transformers` | 384 |
 | **sentence-transformers** 🏠 | Local | `pip install sentence-transformers` | 384 |
 
 ---
@@ -649,7 +658,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 558 tests ✅
+pytest tests/ -v # 726 tests ✅
 ```
 
 ---
@@ -664,7 +673,8 @@ pytest tests/ -v # 558 tests ✅
  - **🦙 Ollama**: `ollama pull bge-m3` (recommended, 1.2 GB, 1024d, multilingual) — smaller: `ollama pull nomic-embed-text` (274 MB)
  - **☁️ Voyage**: `VOYAGE_API_KEY` in `.env` (1024d)
  - **☁️ OpenAI**: `OPENAI_API_KEY` in `.env` (1536d)
- - **🏠 Local**: `pip install sentence-transformers`
+ - **🏠 Local (bge-m3 via HuggingFace, no Ollama)**: `NEXUS_HF_BGE3=1` (wizard sets this automatically)
+- **🏠 Local (fallback)**: `pip install sentence-transformers` (built-in MiniLM, 384d)
 
 ---
 
@@ -678,4 +688,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026 · v0.4.3 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026, continuously developed · v0.15.0 · One memory for all your agents</sub>
