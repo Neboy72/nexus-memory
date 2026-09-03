@@ -5,6 +5,20 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.15.0] - 2026-09-03
+
+### Added
+
+- **Memory Dynamics**: Decay (5%/Monat linear, Floor 0.3), Salience-Boost (>= 0.8 immun), ln-Versetärkung via use/access-Counts — Scores bereinigt sich jetzt mit tatsächlicher Nutzung.
+- `effective_score` / `normalize_salience` / `access_update_payload` in neuem Modul `src/nexus_memory/memory_dynamics.py`.
+- Recall-Flugbahn: Top-Treffer verstärken sich (use_count), ungenutzte gedächtnisse verblassen langsam.
+
+### Fixed
+
+- Review Runde 1+2 (Verifier GREEN): B2 (source_url-Passthrough), M2 (Dynamik-Fenster auf Basis-Score statt effektivem Score — sonst sortiert Dynamik die semantische Rerank-Ordnung um), use/access_count getrennt incrementiert mit retrieve-before-write (Reset-Bug + Lost-Update gefixt).
+- ln-Cap-Docstring Klarstellung (Verifier-Kosmetik).
+- README: Memory-Dynamics-Sektion.
+
 ## [v0.13.2] - 2026-08-30
 
 ### Fixed
