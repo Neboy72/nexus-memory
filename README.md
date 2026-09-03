@@ -12,8 +12,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.15.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-726%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.16.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-766%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -307,8 +307,8 @@ Standard MCP stdio config:
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `remember` 💾 | Store a memory | `text` (req), `category` (req, default `fact`), `access_level`, `source`, `source_url`, `confidence` (Hermes plugin also accepts `salience`) |
-| `recall` 🔍 | Hybrid search (BM25 + Vector + RRF) | `query` (req), `limit`, `filter_level` |
+| `remember` 💾 | Store a memory | `text` (req), `category` (req, default `fact`), `access_level`, `source`, `source_url`, `confidence`, `effective_from` (Hermes plugin also accepts `salience`) |
+| `recall` 🔍 | Hybrid search (BM25 + Vector + RRF) | `query` (req), `limit`, `filter_level`, `as_of` (point-in-time query — deprecated facts returned when valid at that date) |
 | `forget` 🗑️ | Delete a memory | `memory_id` (req) |
 | `update` ✏️ | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `subscribe` 🔔 | Register a webhook for memory events | `event_type` (req), `webhook_url` (req) |
@@ -325,6 +325,7 @@ Standard MCP stdio config:
 | `find_entities` 🔗 | Find all entity-typed memories | `entity_type`, `limit` |
 | `get_subgraph` 🔗 | Subgraph centered on a fact | `fact_id` (req), `max_depth` |
 | `get_related` 🔗 | Directly related facts (1-hop) | `fact_id` (req), `relation` |
+| `fact_history` 🕰️ | Supersession chain of a memory (both directions, ordered by valid_from) | `memory_id` (req), `max_depth` |
 | `cost_routing_stats` 💰 | Embedding provider routing statistics | none |
 | `cost_routing_explain` 💰 | Explain routing decision for a category | `category` (req) |
 
@@ -611,6 +612,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.16.0** | 2026-09-03 | **Temporal Fact Validity**: point-in-time recall (`recall as_of` — "what was true at date X", TTL vs. cutoff), `fact_history` MCP tool (bidirectional supersession chain ordered by valid_from), `effective_from` on remember/update for retro-dated imports; `valid_from`/`valid_to` on every point, auto-supersession stamps `valid_to` (history retained, no migration, legacy behavior unchanged); 766 tests |
 | **v0.15.0** | 2026-09-03 | **Memory Dynamics**: reinforcement (log-capped use_count boost), decay (5%/month linear, floor 30%), salience (≥0.8 immune); effective_score ranking as tie-breaker within semantic windows (reranker order never overridden); separate use/access counters with retrieve-before-write (reset-bug + lost-update fixed), B2 source_url passthrough, M2 base-score windows; new module `memory_dynamics.py`; 726 tests |
 | **v0.14.1** | 2026-09-02 | Trust Service as in-process daemon (belief trust recompute, governance: retraction > user-override > user-confirm > agent-contest), zero external schedulers |
 | **v0.14.0** | 2026-09-02 | In-process self-maintenance: dedup sweep (keeper = oldest, JSON backup before every delete, `NEXUS_DEDUP_SWEEP=0` kill switch) + selective forgetting + retrieval watch, zero external schedulers |
@@ -658,7 +660,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 726 tests ✅
+pytest tests/ -v # 766 tests ✅
 ```
 
 ---
@@ -688,4 +690,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026, continuously developed · v0.15.0 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026, continuously developed · v0.16.0 · One memory for all your agents</sub>
