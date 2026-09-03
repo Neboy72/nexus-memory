@@ -12,8 +12,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.13.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-578%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.15.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-726%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -79,7 +79,7 @@ nexus-memory
 
 ### 🛠️ Embedding Provider (auto-detected)
 
-Pick **one** — or none: the server auto-detects at runtime. The detection priority is: cloud keys first (Voyage → OpenAI → Google → Jina), then **Ollama with bge-m3** (preferred local model), then other local options. Embedding-Provider-Freiheit bleibt: du entscheidest immer selbst.
+Pick **one** — or none: the server auto-detects at runtime. The detection priority is: cloud keys first (Voyage → OpenAI → Google → Jina), then **Ollama with bge-m3** (preferred local model), then other local options. You always stay in control of the embedding provider.
 
 > **🦙 Recommended local setup (free, private, offline):** `ollama pull bge-m3` — 1024d, 100+ languages (German & English strong), best local quality. Works out of the box, no API key. Smaller alternative for limited hardware: `nomic-embed-text` (274 MB, 768d, English-focused).
 
@@ -559,6 +559,7 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 🔄 **SICA Self-Improvement** | **✅ Auto-cleanup** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | ⏰ **Time Decay** | **✅ Gauss-shaped** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🎯 **Cross-Encoder Reranking** | **✅ Auto: cloud or free local** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🧠 **Memory Dynamics** | **✅ Reinforcement + decay + salience** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧹 **Retention Policies** | **✅ Per-category TTL** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 💡 **Reflect Insights** | **✅ Conflict resolution hints** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧬 **Entity Dedup** | **✅ Merge-review, no data loss** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -573,12 +574,12 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 🔌 **MCP Server** | **✅ Any MCP agent** | ❌ | ❌ | ❌ | ✅ | ❌ |
 | 🏠 **Self-hosted** | **✅ Your machine** | ❌ Blockchain | ❌ Cloud | ❌ Cloud | ❌ Cloud | ✅ Local |
 | 💰 **Cost** | **🆓 Free** | WAL token | Subscription | Subscription | API costs | Free |
-| 📦 **Code size** | ~9.6K Python | Managed service | Managed service | Managed service | ~50K TS | ~1.5K Python |
+| 📦 **Code size** | ~12.3K Python | Managed service | Managed service | Managed service | ~50K TS | ~1.5K Python |
 | ⏱️ **Setup time** | **1 command** | Signup + SDK | API key + signup | Postgres + pgvector | 30+ min + OAuth | 1 command |
 
 *\*Mem0 lists staleness as an "open problem" in their 2026 report but does not ship a solution.*
 
-**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, access control, and active guardrails: all in one package. It is also the only memory layer that actively prevents destructive actions by checking protection rules before execution — not just storing knowledge, but guarding it. Plus native plugins for Hermes, OpenClaw, and Claude Code, plus an MCP server for every other agent: one brain, three paths, all agents.**
+**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, access control, and active guardrails: all in one package. It is also the only one with brain-inspired Memory Dynamics (reinforcement, decay, salience). It is also the only memory layer that actively prevents destructive actions by checking protection rules before execution — not just storing knowledge, but guarding it. Plus native plugins for Hermes, OpenClaw, and Claude Code, plus an MCP server for every other agent: one brain, three paths, all agents.**
 
 ---
 
@@ -601,33 +602,36 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v0.13.1** | 2026-08-30 | OpenClaw plugin update-check (24h cache, semver, once-per-lifetime nudge) - update-notification parity across all 3 install paths |
+| **v0.15.0** | 2026-09-03 | **Memory Dynamics**: reinforcement (log-capped use_count boost), decay (5%/month linear, floor 30%), salience (≥0.8 immune); effective_score ranking as tie-breaker within semantic windows (reranker order never overridden); separate use/access counters with retrieve-before-write (reset-bug + lost-update fixed), B2 source_url passthrough, M2 base-score windows; new module `memory_dynamics.py`; 726 tests |
+| **v0.14.1** | 2026-09-02 | Trust Service as in-process daemon (belief trust recompute, governance: retraction > user-override > user-confirm > agent-contest), zero external schedulers |
+| **v0.14.0** | 2026-09-02 | In-process self-maintenance: dedup sweep (keeper = oldest, JSON backup before every delete, `NEXUS_DEDUP_SWEEP=0` kill switch) + selective forgetting + retrieval watch, zero external schedulers |
+| **v0.13.5** | 2026-08-31 | Self-monitoring health audit daemon: in-process thread, 30-day read-only dedup/health audit → `~/.nexus-memory/reports/`, `health_flags` in health tool, optional `NEXUS_WEBHOOK_URL` push, zero cron dependency, 649 tests |
+| **v0.13.4** | 2026-08-31 | HuggingFace direct route for local embeddings: `NEXUS_HF_BGE3=1` activates bge-m3 via sentence-transformers, wizard fallback chain Ollama → HuggingFace → MiniLM, 649 tests |
+| **v0.13.3** | 2026-08-31 | bge-m3 as preferred local embedding provider: dynamic dimension probe, modern `/api/embed` endpoint, wizard detects & recommends `ollama pull bge-m3` (1024d, multilingual, free, offline), 649 tests |
+| **v0.13.2** | 2026-08-30 | Prefetch slot-replacement race fix + prefetch capacity doubled (10 hits / 2400 chars, `NEXUS_PREFETCH_CHARS`), hardware auto-entity detection on sync_turn, 71/71 provider tests |
+| **v0.13.1** | 2026-08-30 | OpenClaw plugin update-check (24h cache, semver, once-per-lifetime nudge), update-notification parity across all 3 install paths |
 | **v0.13.0** | 2026-08-31 | Point-in-Time-Queries (as_of), supersede_reason in deprecated payload, skill-health monitor (review-only), 571 tests |
-| **v0.12.0** | 2026-08-30 | Latency benchmark (p50=485ms/p95=610ms honest baseline), EmbedCache L0 (repeated queries skip Voyage ~256ms), prefetch token budget (~65% context saved), data flywheel (access_count), autonomous SICA purge (3-of-3 rule), 568 tests |
-| **v0.11.0** | 2026-08-30 | Superseded-by recall skip (deprecated never surfaces), auto entity enrichment on nexus_remember (daemon, hash-dedup, opt-out), lifecycle filter before rerank, shared session-end entity path, 558 tests |
-| **v0.10.0** | 2026-08-30 | Cross-Encoder Reranking (auto: Voyage if key, free local else), per-category retention policies, SICA reflect insights (one deterministic insight per contradiction group), entity dedup detection, 549 tests |
+| **v0.12.0** | 2026-08-30 | Latency benchmark (p50=485ms/p95=610ms honest baseline), EmbedCache L0, prefetch token budget (~65% context saved), data flywheel (access_count), autonomous SICA purge (3-of-3 rule), 568 tests |
+| **v0.11.0** | 2026-08-30 | Superseded-by recall skip, auto entity enrichment on nexus_remember, lifecycle filter before rerank, shared session-end entity path, 558 tests |
+| **v0.10.0** | 2026-08-30 | Cross-Encoder Reranking (auto: Voyage if key, free local else), per-category retention policies, SICA reflect insights, entity dedup detection, 549 tests |
 | **v0.9.1** | 2026-07-27 | Fix: discovery content-dict handling, SICA session storage dimension mismatch (768d vs 1024d), 578 tests |
-| **v0.13.5** | 2026-08-31 | Self-monitoring health audit daemon: in-process thread (no external scheduler, works on every harness), 30-day read-only dedup/health audit writing JSON reports to `~/.nexus-memory/reports/`, `health_flags` surfaced via the health tool (agent sees warnings and can tell the user), optional `NEXUS_WEBHOOK_URL` push (Discord/Telegram/n8n). Zero cron dependency. 649 tests green |
-| **v0.13.4** | 2026-08-31 | HuggingFace direct route for local embeddings: `NEXUS_HF_BGE3=1` activates bge-m3 via sentence-transformers (no Ollama required, dynamic dim probe), setup wizard offers Ollama → HuggingFace → built-in MiniLM fallback chain and persists NEXUS_HF_BGE3 to .env, 649 tests green |
-| **v0.13.3** | 2026-08-31 | bge-m3 as preferred local embedding provider: dynamic dimension probe for Ollama models (no more hardcoded 768d), modern `/api/embed` endpoint with legacy fallback, wizard detects & recommends `ollama pull bge-m3` (1024d, multilingual, free, offline), docs updated (AGENTS.md + README), 649 tests green, hermes verify green |
-| **v0.9.0** | 2026-07-27 | Graph-Boosted Auto-Recall (all 3 plugins: 1-hop graph neighbors from top-3 vector hits, `[graph:<relation>]` tagging, access-level filtering), SICA Self-Improvement Cycle (Detect → Reflect → Act → Learn, stale temp auto-deletion, low-confidence + contradiction detection, `nexus_sica_run` tool), SkillGraph caching, `SkillGraph.get_point()` public API, 64 code review fixes across 7 rounds, 578 tests |
-| **v0.8.0** | 2026-07-25 | Cost-Aware Routing: tier-based embedding provider selection (premium/standard/economy), category→tier mapping (fact→premium, session→economy), cost estimation, routing stats + explain tools, auto-enables when 2+ providers available, 558 tests |
-| **v0.7.0** | 2026-07-25 | Knowledge Graph Layer: entity extraction (device/service/person/location/protocol), 11 typed relationships (manages, runs_on, connected_to, etc.), multi-hop graph traversal via NetworkX, entities as Qdrant points, 524 tests |
-| **v0.6.0** | 2026-07-25 | Session→Memory Pipeline: native fact extraction in on_session_end (LLM + heuristic fallback), categorization (fact/rule/preference/belief), confidence scoring, non-blocking background thread, 476 tests |
-| **v0.5.1** | 2026-07-19 | Auto-Supersession: automatic deprecation of similar facts at similarity >0.90, superseded_by + supersedes tracking, non-blocking, 452 tests |
-| **v0.5.0** | 2026-07-19 | Active Guardrails: memory-driven prevention of destructive actions (guardrail_check + guardrail_override MCP tools), pattern matching for rm/drop/kill/recreate/find-delete/git-clean, override with audit trail, 445 tests |
+| **v0.9.0** | 2026-07-27 | Graph-Boosted Auto-Recall (all 3 plugins), SICA Self-Improvement Cycle, SkillGraph caching, 64 code-review fixes across 7 rounds, 578 tests |
+| **v0.8.0** | 2026-07-25 | Cost-Aware Routing: tier-based embedding provider selection, category→tier mapping, cost estimation, auto-enables with 2+ providers, 558 tests |
+| **v0.7.0** | 2026-07-25 | Knowledge Graph Layer: entity extraction, 11 typed relationships, multi-hop traversal via NetworkX, 524 tests |
+| **v0.6.0** | 2026-07-25 | Session→Memory Pipeline: native fact extraction in on_session_end, categorization, confidence scoring, non-blocking, 476 tests |
+| **v0.5.1** | 2026-07-25 | Auto-Supersession: automatic deprecation of similar facts at similarity >0.90, superseded_by + supersedes tracking, 452 tests |
+| **v0.5.0** | 2026-07-25 | Active Guardrails: memory-driven prevention of destructive actions (guardrail_check + guardrail_override MCP tools), override with audit trail, 445 tests |
 | **v0.4.3** | 2026-06-19 | Confidence scores + brain pages in recall (trust, evidence_count, confidence_label, lifecycle_status) |
-| **v0.4.2** | 2026-06-19 | Auto TTL/expiry per memory category (FACT=365d, BELIEF=180d, SESSION=7d, TEMP=24h), expired memories filtered in recall |
+| **v0.4.2** | 2026-06-19 | Auto TTL/expiry per memory category, expired memories filtered in recall |
 | **v0.4.1** | 2026-06-19 | Auto-backup (every 6h), update notifications, pre-update backup safety, backup + restore MCP tools |
-| **v0.4.0** | 2026-06-19 | OpenClaw native plugin, 3-way architecture, MCP server → core engine integration (SkillGraph, Auto-Discovery, lifecycle, events), time decay, PROCEDURE category, staging with real embeddings |
+| **v0.4.0** | 2026-06-19 | OpenClaw native plugin, 3-way architecture, MCP server → core engine integration, time decay, PROCEDURE category, staging with real embeddings |
 | **v0.3.0** | 2026-06-18 | Hermes native MemoryProvider plugin + embedding wizard (`nexus-memory-init`), auto-prefetch & auto-sync |
-| **v0.2.5** | 2026-06-13 | Bugfix: `is_success()` replaces raw `status_code == 200` (29 sites), CI audit workflow, code simplification |
+| **v0.2.5** | 2026-06-13 | Bugfix: `is_success()` replaces raw `status_code == 200` (29 sites), CI audit workflow |
 | **v0.2.4** | 2026-06-12 | Web UI with live D3.js graph, drift ampel, stats cards, Ko-fi integration |
-| **v0.2.3** | 2026-06-08 | Auto-update tools (`check_update`, `do_update`), agent-managed self-restart, macOS setup fixes |
-| **v0.2.2** | 2026-06-08 | Justification Check (Rung 2): source URL verification on recall, hybrid search score fixes |
-| **v0.2.0** | 2026-06-07 | Full v2.8.0 feature parity: MemoryCategory, provenance, guardrails, access control, hybrid search, drift detection, graph analytics, skill export: 224 tests |
+| **v0.2.3** | 2026-06-08 | Auto-update tools, agent-managed self-restart, macOS setup fixes |
+| **v0.2.2** | 2026-06-08 | Justification Check: source URL verification on recall, hybrid search score fixes |
+| **v0.2.0** | 2026-06-07 | Full v2.8.0 feature parity: MemoryCategory, provenance, guardrails, access control, hybrid search, drift detection, graph analytics, skill export, 224 tests |
 | **v0.1.0** | 2026-06-07 | Initial release: MCP server with 4 tools, Qdrant vector storage, access control, local-only security |
-
 ---
 
 ## 🔧 Troubleshooting
