@@ -12,19 +12,6 @@
         ]
       }
     ],
-    "PreToolExecution": [
-      {
-        "matcher": "Bash|Terminal|Write|Edit|Delete",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/guardrail_check.py\"",
-            "timeout": 5,
-            "statusMessage": "Nexus: checking guardrails..."
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
@@ -46,6 +33,19 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py\"",
             "timeout": 10,
             "statusMessage": "Nexus: loading session context..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Terminal|Write|Edit|Delete",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/guardrail_check.py\"",
+            "timeout": 5,
+            "statusMessage": "Nexus: checking guardrails..."
           }
         ]
       }
