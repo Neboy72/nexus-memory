@@ -1,0 +1,29 @@
+{
+  "name": "neboy72-nexus-memory",
+  "owner": {
+    "name": "Neboy72",
+    "url": "https://github.com/Neboy72/nexus-memory"
+  },
+  "plugins": [
+    {
+      "name": "nexus-memory",
+      "source": "./plugins/claude-code",
+      "description": "Self-hosted memory for Claude Code via Qdrant - auto-recall before every prompt, auto-capture after every turn, guardrails, knowledge graph. One store shared with OpenClaw and Hermes.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Neboy72"
+      },
+      "homepage": "https://github.com/Neboy72/nexus-memory",
+      "license": "Apache-2.0",
+      "keywords": [
+        "memory",
+        "qdrant",
+        "rag",
+        "knowledge-graph",
+        "self-hosted"
+      ],
+      "category": "memory"
+    }
+  ],
+  "description": "Nexus Memory - self-hosted memory for Claude Code, OpenClaw and MCP agents. One Qdrant store, hybrid retrieval, memory dynamics."
+}
