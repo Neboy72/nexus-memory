@@ -5,6 +5,23 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.16.0] - 2026-09-03
+
+### Added
+
+- **Temporal Fact Validity**: every memory now carries `valid_from` (defaults to
+  `created_at`, overridable via the new `effective_from` parameter for
+  retro-dated imports such as mail) and `valid_to` (`None` = still valid).
+  Auto-supersession stamps `valid_to` on the superseded fact at supersession
+  time — the full validity history is retained instead of being overwritten.
+- **Point-in-time recall**: new optional `as_of` parameter on `recall`.
+  With `as_of`, deprecated facts are returned when they were valid at that
+  date, and the `valid_until` TTL is compared against the cutoff instead of
+  "now". Omitting `as_of` keeps the previous behavior exactly unchanged.
+- **`fact_history` MCP tool**: traces the supersession chain of a memory in
+  both directions (successors and predecessors), ordered by `valid_from`,
+  showing how a fact evolved over time.
+
 ## [v0.15.0] - 2026-09-03
 
 ### Added
