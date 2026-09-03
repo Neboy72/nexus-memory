@@ -530,9 +530,9 @@ Zero-token relation discovery between canonical facts via Qdrant (O(n·k)) + heu
 
 Detects stale entries, old patterns, age thresholds. Weighted 0-10 scoring.
 
-### Time Decay in Retrieval ⏰
+### Memory Dynamics in Retrieval 📊
 
-Gauss-shaped score decay: recent memories rank higher, old ones fade gracefully. Configurable offset (30 days, no penalty) and scale (365 days, half-life). Only applies when timestamps are present - backwards compatible.
+Linear time decay: unused memories lose 5% of ranking weight per month (30-day months), down to a floor of 30% — forgotten ≠ deleted, the data stays, only the rank sinks. Memories with salience ≥ 0.8 are immune to decay (rules/procedures default to 0.8). Every access/use boosts the score (log-capped reinforcement). Decay and reinforcement compose the effective score, used as tie-breaker within semantic rerank windows — the reranker's semantic order is never overridden. Backwards compatible, applies automatically.
 
 ### Auto-Backup 💾
 
@@ -566,7 +566,6 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 📊 **Graph Analytics** | **✅ Hub scores, gaps** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🚀 **Graph-Boosted Auto-Recall** | **✅ All 3 plugins** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🔄 **SICA Self-Improvement** | **✅ Auto-cleanup** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| ⏰ **Time Decay** | **✅ Gauss-shaped** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🎯 **Cross-Encoder Reranking** | **✅ Auto: cloud or free local** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧠 **Memory Dynamics** | **✅ Reinforcement + decay + salience** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧹 **Retention Policies** | **✅ Per-category TTL** | ❌ | ❌ | ❌ | ❌ | ❌ |
