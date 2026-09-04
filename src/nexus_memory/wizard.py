@@ -81,7 +81,7 @@ PROVIDERS = [
     },
     {
         "id": "ollama",
-        "name": "Ollama (bge-m3, lokal)",
+        "name": "Ollama (qwen3-embedding, lokal)",
         "dims": 1024,
         "quality": "good",
         "type": "local",
@@ -193,13 +193,16 @@ def _run_cmd(cmd: list[str], timeout: int = 60) -> tuple[int, str, str]:
 
 def _check_ollama() -> tuple[bool, str]:
     """Check if Ollama is running and has an embed model. Returns (available, model_name).
-    Known embedding models are matched by name so bge-m3 (no 'embed' substring) counts too."""
+    Priority: qwen3-embedding (no 'embed' substring in the base name is handled by
+    explicit matching), then bge-m3, then any 'embed' model."""
     try:
         import requests
         r = requests.get("http://localhost:11434/api/tags", timeout=2)
         if r.status_code < 400:
             models = [m["name"] for m in r.json().get("models", [])]
-            emb_model = next((m for m in models if "bge-m3" in m.lower()), None)
+            emb_model = next((m for m in models if m.lower().startswith("qwen3-embedding")), None)
+            if not emb_model:
+                emb_model = next((m for m in models if "bge-m3" in m.lower()), None)
             if not emb_model:
                 emb_model = next((m for m in models if "embed" in m.lower()), None)
             if emb_model:
@@ -315,8 +318,8 @@ def _get_env_file() -> Path:
     return _get_config_dir() / ".env"
 
 
-def _save_config(provider_id: str) -> None:
-    """Save the provider choice to config.json."""
+def _save_config(provider_id: str, embedding_model: str = "") -> None:
+    """Save the provider choice (and the concrete local model) to config.json."""
     config_dir = _get_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.json"
@@ -329,6 +332,8 @@ def _save_config(provider_id: str) -> None:
             pass
 
     config["embedding_provider"] = provider_id
+    if embedding_model:
+        config["embedding_model"] = embedding_model
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     _print(f"  {GREEN}✓{RESET} Config saved: {config_path}")
 
@@ -551,11 +556,22 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
         return True
 
     _print(f"\n  {YELLOW}⚠{RESET} Ollama is not running or no embedding model found.")
-    _print(f"  Install a local embedding model: {CYAN}ollama pull bge-m3{RESET}")
-    _print(f"  ({'1.2 GB, multilingual (100+ languages), best local quality.'}{RESET})")
+    _print(f"  Install a local embedding model: {CYAN}ollama pull qwen3-embedding:0.6b{RESET}")
+    _print(f"  ({'639 MB, 1024d, multilingual, best local quality (benchmark 04.09.).'}{RESET})")
+    _print(f"  Alternative: {CYAN}ollama pull bge-m3{RESET} (1.2 GB, 1024d, multilingual)")
     _print(f"  Smaller alternative: {CYAN}ollama pull nomic-embed-text{RESET} (274 MB, English-focused)")
 
-    if _confirm("  Install bge-m3 now? (recommended, 1.2 GB)"):
+    if _confirm("  Install qwen3-embedding:0.6b now? (recommended, 639 MB)"):
+        _print(f"\n  {CYAN}Pulling qwen3-embedding:0.6b...{RESET}")
+        ret, out, err = _run_cmd(["ollama", "pull", "qwen3-embedding:0.6b"], timeout=600)
+        if ret == 0:
+            _print(f"  {GREEN}✓{RESET} qwen3-embedding:0.6b installed successfully (1024d, multilingual).")
+            return True
+        else:
+            _print(f"  {RED}✗{RESET} Failed to pull model. Is Ollama installed?")
+            _print(f"  Download: {CYAN}{ps.provider['key_url']}{RESET}")
+            return False
+    elif _confirm("  Install bge-m3 instead? (1.2 GB, also good, multilingual)"):
         _print(f"\n  {CYAN}Pulling bge-m3...{RESET}")
         ret, out, err = _run_cmd(["ollama", "pull", "bge-m3"], timeout=600)
         if ret == 0:
@@ -592,7 +608,7 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
                 return True
             _print(f"  {RED}✗{RESET} HuggingFace download failed: {err[:200] if err else out[:200]}")
         _print(f"  {YELLOW}Skipping local model setup. Built-in MiniLM fallback will be used (384d, fine to start).{RESET}")
-        _print(f"  You can upgrade later: {CYAN}ollama pull bge-m3{RESET} — memories re-embed in minutes, free.")
+        _print(f"  You can upgrade later: {CYAN}ollama pull qwen3-embedding:0.6b{RESET} — memories re-embed in minutes, free.")
         return True  # Not a hard failure
 
 
@@ -692,8 +708,13 @@ def _run_wizard() -> None:
         _print(f"  {RED}Failed to install required package. Exiting.{RESET}")
         sys.exit(1)
 
-    # 7. Save config
-    _save_config(provider_id)
+    # 7. Save config (record the concrete local model for the drift guard)
+    _embedding_model = ""
+    if provider_id == "ollama":
+        ok, _embedding_model = _check_ollama()
+        if not ok:
+            _embedding_model = ""
+    _save_config(provider_id, _embedding_model)
 
     # 8. Verify
     verified = _verify_embedding(provider_id, provider_name, dims, quality)

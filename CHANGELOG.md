@@ -5,6 +5,25 @@ All notable changes to **Nexus Memory** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.17.0] - 2026-09-04
+
+### Changed
+
+- **qwen3-embedding is now the preferred local embedding provider** (Ollama).
+  Benchmark (LongMemEval-S, 100 identical questions, identical hybrid RRF
+  protocol): qwen3-embedding:0.6b 66/72/75% (R@5/10/20) vs bge-m3 62/71/73%.
+  Priority order is now: qwen3-embedding → bge-m3 → any 'embed' model.
+  Existing users keep their current model automatically (collection drift
+  guard reads `embedding_model` from config) — no silent mixed-model
+  collections. bge-m3 remains fully supported as the second choice.
+- **Instruct prefix for qwen3 queries**: qwen3-embedding is instruction-aware,
+  so queries are embedded with the official Instruct prefix while documents
+  stay plain — matches the model card guidance and the benchmark protocol.
+- **Wizard**: recommends `ollama pull qwen3-embedding:0.6b` (639 MB, 1024d,
+  MRL, instruction-aware, 32k context) instead of bge-m3 (1.2 GB); bge-m3
+  stays available as the second option. Config now records the concrete
+  local model (`embedding_model`).
+
 ## [v0.16.0] - 2026-09-03
 
 ### Added

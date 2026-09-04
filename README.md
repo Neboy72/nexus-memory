@@ -81,27 +81,27 @@ nexus-memory
 
 ### 🛠️ Embedding Provider (auto-detected)
 
-Pick **one** — or none: the server auto-detects at runtime. The detection priority is: cloud keys first (Voyage → OpenAI → Google → Jina), then **Ollama with bge-m3** (preferred local model), then other local options. You always stay in control of the embedding provider.
+Pick **one** — or none: the server auto-detects at runtime. The detection priority is: cloud keys first (Voyage → OpenAI → Google → Jina), then **Ollama with qwen3-embedding** (preferred local model; benchmark: +4 R@5 vs bge-m3), then bge-m3, then other local options. You always stay in control of the embedding provider — and if your collection already uses a local model, the auto-detect keeps it (no silent mixed-model collections).
 
-> **🦙 Recommended local setup (free, private, offline):** `ollama pull bge-m3` — 1024d, 100+ languages (German & English strong), best local quality. Works out of the box, no API key. Smaller alternative for limited hardware: `nomic-embed-text` (274 MB, 768d, English-focused).
+> **🦙 Recommended local setup (free, private, offline):** `ollama pull qwen3-embedding:0.6b` — 639 MB, 1024d, 100+ languages, instruction-aware, 32k context, best local quality (benchmark 04.09.). Works out of the box, no API key. Alternatives: `bge-m3` (1.2 GB, 1024d) or the smaller `nomic-embed-text` (274 MB, 768d, English-focused).
 
 **Not sure what to pick? Here's the plain-language guide:**
 
 | Your situation | Do this |
 |---|---|
 | You have an API key (Voyage, OpenAI, …) | Put it in `.env` — done, best quality, nothing else to install |
-| You have Ollama installed | Run `ollama pull bge-m3` — free, private, offline, 1024d quality |
-| No Ollama, no key, want the best local option | Install [Ollama](https://ollama.com) (free, one download), then run `ollama pull bge-m3` — or skip Ollama entirely and let the wizard load bge-m3 via HuggingFace |
+| You have Ollama installed | Run `ollama pull qwen3-embedding:0.6b` — free, private, offline, 1024d quality |
+| No Ollama, no key, want the best local option | Install [Ollama](https://ollama.com) (free, one download), then run `ollama pull qwen3-embedding:0.6b` — or skip Ollama entirely and let the wizard load bge-m3 via HuggingFace |
 | No Ollama, no key, just want it to work NOW | Do nothing — the server falls back to a built-in small model automatically. Fine to start. Upgrade later when your memories grow |
 | Coming from Hugging Face only | Set `NEXUS_HF_BGE3=1` — loads bge-m3 directly via sentence-transformers, no Ollama needed (wizard configures this for you) |
 
-> 💡 **Think of it like this:** the tiny built-in model is fine for your first hundred memories. Once your agent remembers weeks of context in German/mixed languages, switch to bge-m3 — the upgrade is one command, and your memories re-embed automatically in a few minutes, free.
+> 💡 **Think of it like this:** the tiny built-in model is fine for your first hundred memories. Once your agent remembers weeks of context in German/mixed languages, switch to qwen3-embedding:0.6b — the upgrade is one command, and your memories re-embed automatically in a few minutes, free.
 
 - **☁️ Voyage**: `VOYAGE_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1024d) — highest recall quality, what we run in production
 - **☁️ OpenAI**: `OPENAI_API_KEY` in `NEXUS_ENV_FILE` or MCP `env:`-block (1536d)
 - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
 - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
-- **🦙 Ollama**: `ollama pull bge-m3` (preferred, 1.2 GB, 1024d, multilingual) — smaller: `ollama pull nomic-embed-text` (274 MB, 768d)
+- **🦙 Ollama**: `ollama pull qwen3-embedding:0.6b` (preferred, 639 MB, 1024d, multilingual, instruction-aware) — alternatives: `ollama pull bge-m3` (1.2 GB, 1024d), smaller: `ollama pull nomic-embed-text` (274 MB, 768d)
 - **🏠 Local (default)**: `pip install nexus-memory[local]` (sentence-transformers, no key)
 
 ### 🌐 Web UI (optional)
@@ -601,6 +601,7 @@ One server. Multiple backends. Same API.
 | **OpenAI** ☁️ | Cloud | `OPENAI_API_KEY` in MCP `env:` block | 1536 |
 | **Google / Vertex AI** 💚 | Cloud | `GOOGLE_API_KEY` in `.env` | 768 |
 | **Jina** 💜 | Cloud | `JINA_API_KEY` in `.env` | 1024 |
+| **Ollama qwen3-embedding** 🦙 | Local | `ollama pull qwen3-embedding:0.6b` | 1024 |
 | **Ollama bge-m3** 🦙 | Local | `ollama pull bge-m3` | 1024 |
 | **Ollama nomic-embed-text** 🦙 | Local | `ollama pull nomic-embed-text` | 768 |
 | **HuggingFace direct (bge-m3)** 🏠 | Local | `NEXUS_HF_BGE3=1` (no Ollama needed) | 1024 |
@@ -613,6 +614,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.17.0** | 2026-09-04 | qwen3-embedding:0.6b as preferred local provider (LongMemEval-S benchmark: 66/72/75% vs bge-m3 62/71/73%, +4 R@5), instruction-aware query prefix (documents plain), collection drift guard (existing users keep their model, config records `embedding_model`), wizard recommends qwen3 (639 MB) with bge-m3 second, 772 tests |
 | **v0.16.0** | 2026-09-03 | **Temporal Fact Validity**: point-in-time recall (`recall as_of` — "what was true at date X", TTL vs. cutoff), `fact_history` MCP tool (bidirectional supersession chain ordered by valid_from), `effective_from` on remember/update for retro-dated imports; `valid_from`/`valid_to` on every point, auto-supersession stamps `valid_to` (history retained, no migration, legacy behavior unchanged); 766 tests |
 | **v0.15.0** | 2026-09-03 | **Memory Dynamics**: reinforcement (log-capped use_count boost), decay (5%/month linear, floor 30%), salience (≥0.8 immune); effective_score ranking as tie-breaker within semantic windows (reranker order never overridden); separate use/access counters with retrieve-before-write (reset-bug + lost-update fixed), B2 source_url passthrough, M2 base-score windows; new module `memory_dynamics.py`; 726 tests |
 | **v0.14.1** | 2026-09-02 | Trust Service as in-process daemon (belief trust recompute, governance: retraction > user-override > user-confirm > agent-contest), zero external schedulers |
@@ -673,7 +675,7 @@ pytest tests/ -v # 766 tests ✅
 - One embedding provider (auto-detected):
  - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
  - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
- - **🦙 Ollama**: `ollama pull bge-m3` (recommended, 1.2 GB, 1024d, multilingual) — smaller: `ollama pull nomic-embed-text` (274 MB)
+ - **🦙 Ollama**: `ollama pull qwen3-embedding:0.6b` (recommended, 639 MB, 1024d, multilingual, instruction-aware) — alternatives: `bge-m3` (1.2 GB) — smaller: `nomic-embed-text` (274 MB)
  - **☁️ Voyage**: `VOYAGE_API_KEY` in `.env` (1024d)
  - **☁️ OpenAI**: `OPENAI_API_KEY` in `.env` (1536d)
  - **🏠 Local (bge-m3 via HuggingFace, no Ollama)**: `NEXUS_HF_BGE3=1` (wizard sets this automatically)
