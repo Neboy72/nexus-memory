@@ -71,6 +71,39 @@ def _read_preferred_provider() -> str:
     return ""
 
 
+def _read_existing_collection_model() -> str:
+    """Read which local embedding model the existing collection uses.
+
+    Reads $HERMES_HOME/nexus/config.json or ~/.nexus-memory/config.json
+    (whichever the wizard writes). Returns '' when nothing recorded.
+    """
+    import json as _json
+    candidates = []
+    hermes_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+    candidates.append(os.path.join(hermes_home, "nexus", "config.json"))
+    candidates.append(os.path.expanduser("~/.nexus-memory/config.json"))
+    for path in candidates:
+        try:
+            if os.path.exists(path):
+                with open(path) as f:
+                    cfg = _json.load(f)
+                model = cfg.get("embedding_model", "")
+                if model:
+                    return str(model).strip().lower()
+        except Exception:
+            continue
+    return ""
+
+
+def _same_local_model(a: str, b: str) -> bool:
+    """True when two Ollama model names refer to the same model (tag-tolerant)."""
+    if not a or not b:
+        return False
+    a_base = a.split(":")[0].lower()
+    b_base = b.split(":")[0].lower()
+    return a_base == b_base or a_base in b_base or b_base in a_base
+
+
 class EmbeddingProvider:
     """Auto-detect best embedding provider.
 
@@ -203,20 +236,33 @@ class EmbeddingProvider:
     def _try_ollama(self) -> bool:
         """Try Ollama. Returns True on success.
 
-        Prefers bge-m3 (1024d, multilingual, best local quality) when installed,
-        then any other model with 'embed' in its name. The dimension is measured
+        Prefers qwen3-embedding (1024d, MRL, instruction-aware; benchmark
+        04.09.: +4 R@5 vs bge-m3), then bge-m3 (1024d, multilingual), then
+        any other model with 'embed' in its name. The dimension is measured
         with a probe embedding instead of being hardcoded, so new models with
         unexpected dimensions keep working.
+
+        Guard: if the store already contains vectors from a different local
+        model, keep the existing model to avoid mixed-model collections.
         """
         try:
             import requests
             r = requests.get("http://localhost:11434/api/tags", timeout=2)
             if r.status_code < 400:
                 models = [m["name"] for m in r.json().get("models", [])]
-                emb_model = next((m for m in models if "bge-m3" in m.lower()), None)
-                if not emb_model:
-                    emb_model = next((m for m in models if "embed" in m.lower()), None)
+                qwen = next((m for m in models if m.lower().startswith("qwen3-embedding")), None)
+                bge = next((m for m in models if "bge-m3" in m.lower()), None)
+                emb_model = qwen or bge or next((m for m in models if "embed" in m.lower()), None)
                 if emb_model:
+                    # Collection-drift guard: existing collections keep their model.
+                    existing_model = _read_existing_collection_model()
+                    if existing_model and not _same_local_model(existing_model, emb_model):
+                        if existing_model in models or _same_local_model(existing_model, existing_model):
+                            logging.info(
+                                f"Embedding: keeping existing local model '{existing_model}' "
+                                f"(collection already uses it; '{emb_model}' also available)"
+                            )
+                            emb_model = existing_model
                     self._client = {"base_url": "http://localhost:11434"}
                     self._name = emb_model
                     dim = self._probe_ollama_dim()
@@ -317,11 +363,17 @@ class EmbeddingProvider:
             return r.json()["data"][0]["embedding"]
         elif isinstance(self._client, dict) and self._client.get("base_url", "").startswith("http"):  # Ollama
             import requests as _req
+            # qwen3-embedding is instruction-aware: queries get the Instruct prefix,
+            # documents are embedded plain (matches the official usage guidance and
+            # the benchmark protocol that measured +4 R@5 vs bge-m3).
+            payload_text = text
+            if "qwen3-embedding" in (self._name or "").lower():
+                payload_text = f"Instruct: retrieve the relevant memory for the user query. Query: {text}"
             # Modern endpoint first (/api/embed, batched input), legacy /api/embeddings as fallback
             try:
                 r = _req.post(
                     f"{self._client['base_url']}/api/embed",
-                    json={"model": self._name, "input": [text]},
+                    json={"model": self._name, "input": [payload_text]},
                     timeout=30,
                 )
                 vec = r.json().get("embeddings", [[None]])[0]
@@ -331,7 +383,7 @@ class EmbeddingProvider:
                 pass
             r = _req.post(
                 f"{self._client['base_url']}/api/embeddings",
-                json={"model": self._name, "prompt": text},
+                json={"model": self._name, "prompt": payload_text},
                 timeout=30,
             )
             return r.json()["embedding"]
@@ -455,21 +507,31 @@ def detect_available() -> list[dict]:
     # Ollama
     ollama_available = False
     ollama_model = ""
+    ollama_dims = 768
     try:
         import requests
         r = requests.get("http://localhost:11434/api/tags", timeout=2)
         if r.status_code < 400:
             models = [m["name"] for m in r.json().get("models", [])]
-            emb_model = next((m for m in models if "embed" in m.lower()), None)
+            # Same priority as _try_ollama: qwen3 → bge-m3 → any embed model
+            emb_model = next((m for m in models if m.lower().startswith("qwen3-embedding")), None)
+            if not emb_model:
+                emb_model = next((m for m in models if "bge-m3" in m.lower()), None)
+            if not emb_model:
+                emb_model = next((m for m in models if "embed" in m.lower()), None)
             if emb_model:
                 ollama_available = True
                 ollama_model = emb_model
+                if "qwen3-embedding" in emb_model.lower():
+                    ollama_dims = 1024
+                elif "bge-m3" in emb_model.lower():
+                    ollama_dims = 1024
     except Exception:
         pass
     results.append({
         "id": "ollama",
         "name": "Ollama",
-        "dims": 768,
+        "dims": ollama_dims,
         "quality": QUALITY_GOOD,
         "type": "local",
         "available": ollama_available,
