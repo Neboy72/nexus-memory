@@ -41,6 +41,10 @@ _CONFLICT_SIM_THRESHOLD = float(os.environ.get("NEXUS_CONSOLIDATION_SIM", "0.75"
 _CONSOLIDATED_BY = "consolidation-v1"
 _MAX_CONV_CHARS = 8000
 
+
+class _SkipPointError(Exception):
+    """Raised when a point must be excluded from consolidation entirely."""
+
 DISTILL_PROMPT = """Extract atomic, self-contained facts from this AI agent conversation turn. Return JSON only.
 
 Rules:
@@ -191,13 +195,37 @@ class Consolidator:
     # ── one pass (used by loop AND tests) ────────────────────────────
     def run(self, batch_size: int = 0, dry_run: bool = False) -> Dict[str, Any]:
         batch_size = batch_size or CONSOLIDATION_BATCH
-        scanned = facts_created = superseded = duplicates = failed = 0
+        scanned = facts_created = superseded = duplicates = failed = skipped = 0
         raw_points = self._next_raw_batch(batch_size)
         date = time.strftime("%Y-%m-%d")
         for p in raw_points:
             scanned += 1
+            payload = p.payload or {}
+            # Guardrail override audit entries are NEVER consolidated:
+            # their content holds commands + reasoning from protected-
+            # resource bypasses. Marked so they don't reappear each batch.
+            if payload.get("guardrail_override"):
+                skipped += 1
+                log.info("consolidation: guardrail override audit point %s excluded", p.id)
+                if not dry_run:
+                    try:
+                        self._store.client.set_payload(
+                            self._collection,
+                            payload={"consolidated_by": _CONSOLIDATED_BY,
+                                     "consolidated_at": time.strftime(
+                                         "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                     "consolidated_facts": 0,
+                                     "consolidation_skipped": "guardrail_override_audit"},
+                            points=[p.id],
+                        )
+                    except Exception as mark_exc:
+                        # Non-blocking: unmarked points are simply re-skipped
+                        # (and re-marked) on the next batch — no LLM cost.
+                        log.warning("consolidation: marking skipped point %s failed: %s",
+                                    p.id, mark_exc)
+                continue
             try:
-                text = (p.payload or {}).get("content", "")
+                text = payload.get("content", "")
                 conv = text[:_MAX_CONV_CHARS]
                 facts = _parse_facts(self._llm(DISTILL_PROMPT.format(date=date, conv=conv)))
                 created_here = 0
@@ -207,7 +235,7 @@ class Consolidator:
                         duplicates += 1
                         continue
                     if not dry_run:
-                        new_id = self._store_fact(fact, p.id)
+                        new_id = self._store_fact(fact, p.id, source_payload=payload)
                         for old_id in supersede_ids:
                             self._supersede_old(old_id, new_id)
                         superseded += len(supersede_ids)
@@ -221,7 +249,7 @@ class Consolidator:
         report = {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                   "scanned": scanned, "facts_created": facts_created,
                   "superseded": superseded, "duplicates": duplicates,
-                  "failed": failed}
+                  "failed": failed, "skipped": skipped}
         with self._lock:
             self._last_report = report
         return report
@@ -306,9 +334,28 @@ class Consolidator:
         )
 
     # ── write the distilled fact ─────────────────────────────────────
-    def _store_fact(self, fact: str, source_point_id: str) -> str:
+    def _store_fact(self, fact: str, source_point_id: str,
+                    source_payload: Optional[dict] = None) -> str:
         import uuid
         from qdrant_client.models import PointStruct
+
+        src = source_payload if isinstance(source_payload, dict) else {}
+        src_access = str(src.get("access_level") or "").strip().lower()
+        # Conservative inheritance: valid explicit level wins; anything
+        # missing/unknown degrades to 'private', NEVER to 'public'
+        # (private session content must never surface as a public
+        # consolidated fact).
+        if src_access in ("public", "trusted", "private"):
+            access_level = src_access
+        else:
+            access_level = "private"
+        # Guardrail override audit entries must never be consolidated
+        # into distilled facts (their content contains commands and
+        # reasoning from protected-resource bypasses).
+        if src.get("guardrail_override"):
+            raise _SkipPointError(
+                "consolidation: guardrail override audit point skipped (never consolidated)")
+
         vec = self._embed(fact)
         new_id = str(uuid.uuid4())
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -316,7 +363,8 @@ class Consolidator:
             self._collection,
             points=[PointStruct(
                 id=new_id, vector=vec,
-                payload={"content": fact, "category": "fact", "access_level": "public",
+                payload={"content": fact, "category": "fact",
+                         "access_level": access_level,
                          "source": "nexus-consolidation", "created_at": now,
                          "lifecycle_status": "canonical", "confidence": 0.8,
                          "consolidated_from": source_point_id,
