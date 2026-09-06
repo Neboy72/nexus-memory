@@ -349,6 +349,46 @@ def _to_point_id(val):
         return ""  # callers filter None out before calling
     return str(val)
 
+
+def _token_jaccard(a: str, b: str) -> float:
+    """Token-level Jaccard overlap between two texts (case/punctuation-agnostic).
+
+    Used by auto-supersession as a second guard next to vector similarity:
+    a high embedding score alone can fire on unrelated facts that merely
+    share terminology, so replacement additionally requires substantial
+    literal token overlap (>= 0.5 at the call site).
+    """
+    stop = {
+        "the", "a", "an", "and", "or", "of", "to", "in", "on", "for",
+        "is", "are", "was", "were", "be", "with", "as", "at", "by",
+        "it", "its", "that", "this", "uses", "use", "via",
+    }
+    ta = {t for t in re.findall(r"[a-z0-9]+", (a or "").lower()) if t not in stop}
+    tb = {t for t in re.findall(r"[a-z0-9]+", (b or "").lower()) if t not in stop}
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def _is_valid_access_level(level) -> bool:
+    """True only for a known, non-empty access level string."""
+    return isinstance(level, str) and level in ACCESS_HIERARCHY
+
+
+def _access_levels_compatible(new_level: str, old_level) -> bool:
+    """May a new fact at ``new_level`` supersede an old one at ``old_level``?
+
+    Auto-supersession must never cross access boundaries (review fix):
+    public only replaces public; trusted replaces trusted+public; private
+    replaces everything. Unknown/missing old levels are treated as
+    private (fail-closed) and can never be replaced.
+    """
+    new_num = ACCESS_HIERARCHY.get(new_level, ACCESS_HIERARCHY[ACCESS_PRIVATE])
+    old_num = ACCESS_HIERARCHY[ACCESS_PRIVATE]
+    if _is_valid_access_level(old_level):
+        old_num = ACCESS_HIERARCHY[old_level]
+    return new_num >= old_num
+
 # ── Guardrails (from v2.8.0) ───────────────────────────────────────
 MAX_CONTENT_LENGTH = 5000
 PII_PATTERNS = {
@@ -718,6 +758,18 @@ class MemoryStore:
         vector = await self._embed(text)
 
         # ── Auto-Supersession: check for existing similar canonical facts ──
+        # Review hardening:
+        #   1. Access boundaries: a new fact may only supersede candidates
+        #      at a compatible (equal or lower) access level; unknown or
+        #      missing levels are fail-closed (treated as private).
+        #   2. Vector similarity alone is not proof of duplication — very
+        #      similar embeddings also occur on independent facts that
+        #      merely share terminology. Replacement additionally requires
+        #      token-level text overlap (Jaccard >= 0.5).
+        #   3. The old fact is only deprecated AFTER the new point has been
+        #      persisted successfully (marking happens below, right after
+        #      the upsert), so a persistence failure can never leave
+        #      orphaned deprecations behind.
         superseded_ids: list[str] = []
         if category in ("fact", "rule", "preference", "procedure"):
             try:
@@ -740,27 +792,28 @@ class MemoryStore:
                     score_threshold=0.90,
                 )
                 for point in existing.points:
-                    if float(point.score or 0.0) >= 0.90:
-                        old_id = str(point.id)
-                        # Deprecate the old fact
-                        self.client.set_payload(
-                            collection_name=COLLECTION_NAME,
-                            payload={"lifecycle_status": "deprecated",
-                                     "superseded_by": entry_id,
-                                     "superseded_at": created_at,
-                                     # Temporal validity: the old fact stopped
-                                     # being valid at the supersession time.
-                                     "valid_to": created_at,
-                                     "supersede_reason": (
-                                         f"replaced by fact {entry_id[:8]} "
-                                         f"(similarity {float(point.score):.2f} >= 0.90)")},
-                            points=[old_id],
-                        )
-                        superseded_ids.append(old_id)
+                    score = float(point.score or 0.0)
+                    if score < 0.90:
+                        continue
+                    cand_payload = point.payload or {}
+                    if not _access_levels_compatible(
+                        access_level, cand_payload.get("access_level")
+                    ):
                         logging.info(
-                            f"Auto-supersession: deprecated {old_id[:8]} "
-                            f"(score={float(point.score):.3f}) for new {entry_id[:8]}"
+                            f"Auto-supersession skipped {str(point.id)[:8]}: "
+                            f"access level {cand_payload.get('access_level')!r} "
+                            f"is not compatible with new fact level {access_level!r}"
                         )
+                        continue
+                    cand_text = str(cand_payload.get("content") or "")
+                    if _token_jaccard(text, cand_text) < 0.5:
+                        logging.info(
+                            f"Auto-supersession skipped {str(point.id)[:8]}: "
+                            f"score {score:.3f} >= 0.90 but token overlap "
+                            f"< 0.5 (independent fact)"
+                        )
+                        continue
+                    superseded_ids.append(str(point.id))
             except Exception as sup_err:
                 logging.warning(f"Auto-supersession check failed (non-blocking): {sup_err}")
 
@@ -846,6 +899,38 @@ class MemoryStore:
             )],
         )
         logging.info(f"Stored memory {entry_id[:8]} [{access_level}] cat={category}")
+
+        # ── Supersession marking (post-persist, review fix): the new point
+        # was stored successfully, so it is now safe to deprecate the old
+        # facts. If the upsert above raises, no deprecation marks are left
+        # behind and the old facts remain canonical.
+        if superseded_ids:
+            try:
+                for old_id in superseded_ids:
+                    self.client.set_payload(
+                        collection_name=COLLECTION_NAME,
+                        payload={"lifecycle_status": "deprecated",
+                                 "superseded_by": entry_id,
+                                 "superseded_at": created_at,
+                                 # Temporal validity: the old fact stopped
+                                 # being valid at the supersession time.
+                                 "valid_to": created_at,
+                                 "supersede_reason": (
+                                     f"replaced by fact {entry_id[:8]} "
+                                     f"(similarity >= 0.90, token overlap >= 0.5)")},
+                        points=[old_id],
+                    )
+                    logging.info(
+                        f"Auto-supersession: deprecated {old_id[:8]} "
+                        f"for new {entry_id[:8]}"
+                    )
+            except Exception as mark_err:
+                # Non-blocking: the new fact is stored; if marking the old
+                # ones fails both versions remain visible (recoverable
+                # state, never a lost fact).
+                logging.warning(
+                    f"Supersession marking failed (non-blocking): {mark_err}"
+                )
 
         # ── BM25 index: incremental update so new memories are immediately
         # keyword-searchable (prevents stale-index / score=0 symptoms).
@@ -1139,8 +1224,15 @@ class MemoryStore:
         results = []
         seen_docs = set()
         for r in raw_results:
-            mem_level = r.get("access_level", ACCESS_PUBLIC)
-            if ACCESS_HIERARCHY.get(mem_level, 0) > ACCESS_HIERARCHY.get(agent_level, 0):
+            # Access gate (review fix): missing, empty or unknown
+            # access_level values are treated as "private" (fail-closed),
+            # NOT as "public". Previously they fell through to public via
+            # the .get() default, so legacy/corrupt entries bypassed the
+            # hierarchy filter for lower-privileged agents.
+            mem_level = r.get("access_level")
+            if mem_level not in ACCESS_HIERARCHY:
+                mem_level = ACCESS_PRIVATE
+            if ACCESS_HIERARCHY.get(mem_level, 2) > ACCESS_HIERARCHY.get(agent_level, 0):
                 continue
             
             doc_id = r.get("doc_id") or r.get("id")
@@ -2180,30 +2272,61 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             modified_by = arguments.get("modified_by", "")
             effective_from = arguments.get("effective_from")
 
-            # ── Supersession: mark the old version as deprecated ──────
-            # Before updating, set the existing point's lifecycle_status
-            # to "deprecated" so recall() filters it out. The updated
-            # content gets lifecycle_status: "canonical" via new_metadata.
+            # ── Input validation BEFORE any write (review fix) ─────────
+            # A client can still send an invalid effective_from through
+            # the tool schema. Validating it here guarantees that a
+            # rejected request leaves the store completely untouched —
+            # in particular the point is NOT deactivated via the
+            # set_payload call below. The parsed value is reused for the
+            # metadata below, so no second, unchecked parse can happen.
+            _effective_from_dt = None
+            if effective_from is not None and str(effective_from).strip():
+                _effective_from_dt = _parse_iso(effective_from)
+                if _effective_from_dt is None:
+                    return [types.TextContent(
+                        type="text",
+                        text=json.dumps({
+                            "status": "error",
+                            "error": (
+                                f"invalid effective_from {effective_from!r}: "
+                                f"expected ISO-8601 (e.g. '2026-09-06' or "
+                                f"'2026-09-06T12:00:00+00:00'); "
+                                f"store was not modified"
+                            ),
+                        }),
+                    )]
+
+            # ── Auto-Supersession: mark the old version as deprecated ──
+            # The update rewrites the SAME point (same ID): it stays the
+            # canonical fact, so no deprecation marking may run at all.
+            # (A previous version marked the point deprecated before the
+            # update, which corrupted version history — valid_to /
+            # superseded_at were left set although the point remained
+            # canonical and valid.)
             try:
-                _now_iso = datetime.now(timezone.utc).isoformat()
-                _deprecate_payload = {
-                    "lifecycle_status": "deprecated",
-                    "superseded_at": _now_iso,
-                    # Temporal validity: the old version stopped being valid now.
-                    "valid_to": _now_iso,
+                _revert_payload = {
+                    "lifecycle_status": "canonical",
+                    "superseded_at": None,
+                    "superseded_by": None,
+                    "valid_to": None,
                 }
                 store.client.set_payload(
                     collection_name=COLLECTION_NAME,
-                    payload=_deprecate_payload,
+                    payload=_revert_payload,
                     points=[memory_id],
                 )
-                logging.info(f"Supersession: marked {memory_id[:8]} as deprecated")
+                logging.info(
+                    f"Update: cleared supersession marks on {memory_id[:8]} "
+                    f"(point stays canonical)"
+                )
             except Exception as sup_err:
-                logging.warning(f"Supersession (deprecate old) failed: {sup_err}")
+                logging.warning(
+                    f"Supersession-mark cleanup failed (non-blocking): {sup_err}"
+                )
 
             _update_metadata = {"lifecycle_status": "canonical"}
-            if effective_from:
-                _update_metadata["valid_from"] = _parse_iso(effective_from).isoformat()
+            if _effective_from_dt is not None:
+                _update_metadata["valid_from"] = _effective_from_dt.isoformat()
             from nexus import nexus_update
             result = nexus_update(
                 point_id=memory_id,
