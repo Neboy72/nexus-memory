@@ -310,3 +310,138 @@ class TestBatchSelection:
         conds = f.must
         keys = [c_.key if hasattr(c_, "key") else getattr(getattr(c_, "is_empty", None), "key", None) for c_ in conds]
         assert "category" in keys and "lifecycle_status" in keys and "consolidated_by" in keys
+
+
+# ── 7. security: access_level inheritance + audit exclusion ──────────
+# (consolidation.py previously hardcoded access_level='public' — private
+# session content must never surface as a public consolidated fact, and
+# guardrail override audits must never be consolidated at all.)
+
+class TestAccessInheritance:
+    def _stored_fact(self, q):
+        return q.upserts[-1][1][0].payload
+
+    def test_public_source_yields_public_fact(self):
+        p = FakePoint("raw-1", {"content": "User: x", "category": "session",
+                                "access_level": "public"})
+        q = FakeQdrant([p], similar_points=[])
+        c, prompts = _make(q, ['{"facts": ["Nebo uses Mac Mini M4"]}'])
+        c.run(batch_size=1)
+        assert self._stored_fact(q)["access_level"] == "public"
+
+    def test_trusted_source_yields_trusted_fact(self):
+        p = FakePoint("raw-1", {"content": "User: x", "category": "session",
+                                "access_level": "trusted"})
+        q = FakeQdrant([p], similar_points=[])
+        c, prompts = _make(q, ['{"facts": ["trusted fact"]}'])
+        c.run(batch_size=1)
+        assert self._stored_fact(q)["access_level"] == "trusted"
+
+    def test_private_source_yields_private_fact(self):
+        p = FakePoint("raw-1", {"content": "User: x", "category": "session",
+                                "access_level": "private"})
+        q = FakeQdrant([p], similar_points=[])
+        c, prompts = _make(q, ['{"facts": ["private fact"]}'])
+        c.run(batch_size=1)
+        assert self._stored_fact(q)["access_level"] == "private"
+
+    def test_missing_access_level_degrades_to_private(self):
+        q = FakeQdrant([_raw_point()], similar_points=[])  # payload without access_level
+        c, prompts = _make(q, ['{"facts": ["some fact"]}'])
+        c.run(batch_size=1)
+        assert self._stored_fact(q)["access_level"] == "private"
+
+    def test_unknown_access_level_degrades_to_private(self):
+        p = FakePoint("raw-1", {"content": "User: x", "category": "session",
+                                "access_level": "confidential"})  # not a valid level
+        q = FakeQdrant([p], similar_points=[])
+        c, prompts = _make(q, ['{"facts": ["some fact"]}'])
+        c.run(batch_size=1)
+        assert self._stored_fact(q)["access_level"] == "private"
+
+    def test_access_level_is_normalized(self):
+        # "PUBLIC  " (case/whitespace noise) is recognized, not degraded
+        p = FakePoint("raw-1", {"content": "User: x", "category": "session",
+                                "access_level": "PUBLIC  "})
+        q = FakeQdrant([p], similar_points=[])
+        c, prompts = _make(q, ['{"facts": ["some fact"]}'])
+        c.run(batch_size=1)
+        assert self._stored_fact(q)["access_level"] == "public"
+
+    def test_store_fact_none_payload_defaults_private(self):
+        q = FakeQdrant([], similar_points=[])
+        c, prompts = _make(q, [])
+        c._store_fact("direct fact", "raw-1", source_payload=None)
+        assert q.upserts[0][1][0].payload["access_level"] == "private"
+
+    def test_mixed_batch_each_fact_keeps_own_level(self):
+        pub = FakePoint("raw-p", {"content": "User: a", "category": "session",
+                                  "access_level": "public"})
+        priv = FakePoint("raw-q", {"content": "User: b", "category": "session",
+                                   "access_level": "private"})
+        q = FakeQdrant([pub, priv], similar_points=[])
+        c, prompts = _make(q, ['{"facts": ["fact from pub"]}', '{"facts": ["fact from priv"]}'])
+        rep = c.run(batch_size=2)
+        assert rep["facts_created"] == 2
+        levels = sorted(u[1][0].payload["access_level"] for u in q.upserts)
+        assert levels == ["private", "public"]
+
+
+class TestGuardrailAuditExclusion:
+    def _audit_point(self, pid="audit-1"):
+        return FakePoint(pid, {
+            "content": "GUARDRAIL OVERRIDE by agent-x\nCommand: rm -rf /tmp/x",
+            "category": "session", "access_level": "private",
+            "guardrail_override": True,
+        })
+
+    def test_audit_point_skipped_no_llm_no_upsert(self):
+        q = FakeQdrant([self._audit_point()], similar_points=[])
+        c, prompts = _make(q, ['{"facts": ["leaked fact"]}'])
+        rep = c.run(batch_size=1)
+        assert rep["skipped"] == 1
+        assert rep["facts_created"] == 0
+        assert prompts == []          # excluded BEFORE any LLM call
+        assert q.upserts == []        # nothing distilled from the audit
+
+    def test_audit_point_marked_as_skipped(self):
+        q = FakeQdrant([self._audit_point()], similar_points=[])
+        c, prompts = _make(q, [])
+        c.run(batch_size=1)
+        marked = [ps for ps in q.payload_sets
+                  if ps[1].get("consolidation_skipped") == "guardrail_override_audit"]
+        assert marked and marked[0][2] == ["audit-1"]
+
+    def test_audit_point_dry_run_not_marked(self):
+        q = FakeQdrant([self._audit_point()], similar_points=[])
+        c, prompts = _make(q, [])
+        rep = c.run(batch_size=1, dry_run=True)
+        assert rep["skipped"] == 1
+        assert q.payload_sets == []
+
+    def test_marking_failure_never_crashes_run(self):
+        class FlakyQdrant(FakeQdrant):
+            def set_payload(self, collection, payload, points, **kw):
+                raise RuntimeError("qdrant hiccup")
+
+        q = FlakyQdrant([self._audit_point()], similar_points=[])
+        c, prompts = _make(q, [])
+        rep = c.run(batch_size=1)   # must not raise
+        assert rep["skipped"] == 1
+        assert rep["failed"] == 0
+
+    def test_mixed_batch_audit_excluded_normal_processed(self):
+        q = FakeQdrant([self._audit_point(), _raw_point("raw-9")], similar_points=[])
+        c, prompts = _make(q, ['{"facts": ["normal fact"]}'])
+        rep = c.run(batch_size=2)
+        assert rep["skipped"] == 1
+        assert rep["facts_created"] == 1
+        # the distilled fact comes from the normal raw point only
+        assert q.upserts[0][1][0].payload["consolidated_from"] == "raw-9"
+
+    def test_store_fact_raises_on_override_source(self):
+        q = FakeQdrant([], similar_points=[])
+        c, prompts = _make(q, [])
+        with pytest.raises(C._SkipPointError):
+            c._store_fact("fact", "audit-1",
+                          source_payload={"guardrail_override": True})
