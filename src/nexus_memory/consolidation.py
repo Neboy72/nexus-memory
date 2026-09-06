@@ -45,6 +45,16 @@ _MAX_CONV_CHARS = 8000
 class _SkipPointError(Exception):
     """Raised when a point must be excluded from consolidation entirely."""
 
+# Valid access levels + which candidate levels a fact may conflict with.
+# Conflict resolution must not cross visibility domains: a public fact
+# must never suppress/supersede a private memory (and vice versa).
+_ACCESS_LEVELS = ("public", "trusted", "private")
+_ACCESS_CONFLICT_SCOPE = {
+    "public": frozenset({"public"}),
+    "trusted": frozenset({"trusted", "public"}),
+    "private": frozenset({"private"}),
+}
+
 DISTILL_PROMPT = """Extract atomic, self-contained facts from this AI agent conversation turn. Return JSON only.
 
 Rules:
@@ -100,9 +110,38 @@ def _extract_payload(txt: str) -> str:
     return txt
 
 
-def _parse_facts(raw: str) -> List[str]:
-    """Tolerant JSON parsing of {"facts": [...]}; regex fallback for broken JSON."""
+def _normalize_access_level(payload: Any) -> str:
+    """Valid explicit access_level wins; anything missing/unknown degrades
+    to 'private', NEVER to 'public' (private session content must never
+    surface as a public consolidated fact)."""
+    if not isinstance(payload, dict):
+        return "private"
+    v = str(payload.get("access_level") or "").strip().lower()
+    return v if v in _ACCESS_LEVELS else "private"
+
+
+def _conflict_allowed(new_level: str, old_level: str) -> bool:
+    """Access-level compatibility for conflict resolution.
+
+    public conflicts only with public; trusted with trusted+public;
+    private only with private (no mixing upwards). Cross-domain
+    conflicts would let one visibility domain suppress or supersede
+    another domain's facts.
+    """
+    return old_level in _ACCESS_CONFLICT_SCOPE.get(new_level, frozenset({"private"}))
+
+
+def _parse_facts(raw: str) -> Optional[List[str]]:
+    """Parse a distiller response into a fact list.
+
+    Returns None when the response is UNPARSEABLE (invalid JSON, no
+    'facts' structure) so the caller can leave the source point unmarked
+    and retry it on the next tick. A valid response without facts
+    returns [].
+    """
     txt = _extract_payload((raw or "").strip())
+    if not txt:
+        return None
     try:
         d = json.loads(txt)
         if isinstance(d, dict) and isinstance(d.get("facts"), list):
@@ -116,28 +155,34 @@ def _parse_facts(raw: str) -> List[str]:
         items = re.findall(r'"((?:[^"\\]|\\.)+)"', m.group(1))
         return [it.replace('\\"', '"').strip()[:300] for it in items
                 if len(it.strip()) >= 4]
-    return []
+    return None
+
+
+_VERDICTS = ("duplicate", "supersede", "unrelated")
 
 
 def _parse_verdict(raw: str) -> str:
-    """Parse the classifier verdict; keyword fallback for GLM prose leaks."""
+    """Parse the classifier verdict.
+
+    STRICT: only a JSON object whose "verdict" field is one of
+    duplicate/supersede/unrelated counts. Everything else — prose,
+    embedded instruction text, JSON with a foreign verdict value — is
+    treated as 'unrelated' (no action). Keyword heuristics were removed
+    on purpose: prose like "do not supersede" must never deactivate a
+    memory, and instructions embedded in memory content must not be able
+    to drive supersede decisions. A missed conflict is the safe failure
+    mode; a false supersede is not.
+    """
     txt = _extract_payload((raw or "").strip())
     try:
         d = json.loads(txt)
-        v = str(d.get("verdict", "")).lower()
-        if v in ("duplicate", "supersede", "unrelated"):
-            return v
     except Exception:
-        pass
-    import re
-    m = re.search(r'"verdict"\s*:\s*"(\w+)"', txt)
-    if m and m.group(1).lower() in ("duplicate", "supersede", "unrelated"):
-        return m.group(1).lower()
-    low = txt.lower()
-    if "supersede" in low:
-        return "supersede"
-    if "duplicate" in low:
-        return "duplicate"
+        return "unrelated"
+    if not isinstance(d, dict):
+        return "unrelated"
+    v = str(d.get("verdict", "")).strip().lower()
+    if v in _VERDICTS:
+        return v
     return "unrelated"
 
 
@@ -228,9 +273,21 @@ class Consolidator:
                 text = payload.get("content", "")
                 conv = text[:_MAX_CONV_CHARS]
                 facts = _parse_facts(self._llm(DISTILL_PROMPT.format(date=date, conv=conv)))
+                if facts is None:
+                    # Unparseable LLM response — NOT a valid "no facts"
+                    # result. Do not mark the source consolidated: its
+                    # content would be lost forever. Leave it unmarked so
+                    # the next tick retries (fail-safe loop).
+                    failed += 1
+                    log.warning(
+                        "consolidation: point %s got unparseable LLM response "
+                        "(left unmarked for retry)", p.id)
+                    continue
+                src_access = _normalize_access_level(payload)
                 created_here = 0
                 for fact in facts:
-                    decision, supersede_ids = self._resolve_conflicts(fact)
+                    decision, supersede_ids = self._resolve_conflicts(
+                        fact, access_level=src_access)
                     if decision == "duplicate":
                         duplicates += 1
                         continue
@@ -278,12 +335,18 @@ class Consolidator:
         return points[:limit]
 
     # ── conflict resolution BEFORE the fact lands ────────────────────
-    def _resolve_conflicts(self, fact: str):
+    def _resolve_conflicts(self, fact: str, access_level: str = "private"):
         """Returns (decision, to_supersede_ids).
 
         decision: 'ok' (store it) or 'duplicate' (drop it).
         Contradictions: old canonical fact ids are returned; caller supersedes
         them AFTER the new fact got its id (superseded_by reference). Never deletes.
+
+        Candidates are filtered by category (fact only), lifecycle (only
+        canonical/unknown are considered) AND access level: a fact may only
+        conflict with candidates whose access_level is compatible (see
+        _conflict_allowed) — public facts must never suppress or supersede
+        private memories.
         """
         from qdrant_client.models import Filter, FieldCondition, MatchValue
         vec = self._embed(fact)
@@ -308,6 +371,10 @@ class Consolidator:
             if str(old_payload.get("category", "fact")) != "fact":
                 continue
             if old_payload.get("lifecycle_status") not in ("canonical", None, ""):
+                continue
+            # Access boundary: candidates in a different visibility domain
+            # are skipped entirely — never classified, never superseded.
+            if not _conflict_allowed(access_level, _normalize_access_level(old_payload)):
                 continue
             try:
                 verdict = _parse_verdict(self._llm(CLASSIFY_PROMPT.format(
@@ -340,15 +407,8 @@ class Consolidator:
         from qdrant_client.models import PointStruct
 
         src = source_payload if isinstance(source_payload, dict) else {}
-        src_access = str(src.get("access_level") or "").strip().lower()
-        # Conservative inheritance: valid explicit level wins; anything
-        # missing/unknown degrades to 'private', NEVER to 'public'
-        # (private session content must never surface as a public
-        # consolidated fact).
-        if src_access in ("public", "trusted", "private"):
-            access_level = src_access
-        else:
-            access_level = "private"
+        src_access = _normalize_access_level(src)
+        access_level = src_access
         # Guardrail override audit entries must never be consolidated
         # into distilled facts (their content contains commands and
         # reasoning from protected-resource bypasses).

@@ -100,6 +100,20 @@ class TestClassifyAction:
     def test_del_f_is_delete(self):
         assert classify_action("del /f /s /q somefile") == GuardrailAction.DELETE
 
+    def test_rm_bare_is_delete(self):
+        """rm without -r/-f is still destructive."""
+        assert classify_action("rm /protected/file") == GuardrailAction.DELETE
+
+    def test_rm_with_other_flags_is_delete(self):
+        assert classify_action("rm -i somefile") == GuardrailAction.DELETE
+
+    def test_kill_without_9_is_kill(self):
+        """kill with any signal, not only -9, is destructive."""
+        assert classify_action("kill 12345") == GuardrailAction.KILL
+
+    def test_kill_term_is_kill(self):
+        assert classify_action("kill -TERM 12345") == GuardrailAction.KILL
+
 
 # ---------------------------------------------------------------------------
 # extract_targets tests
@@ -118,12 +132,26 @@ class TestExtractTargets:
 
     def test_extract_no_path(self):
         targets = extract_targets("kill -9 12345")
-        # kill -9 12345 has no path, only a PID
-        assert len(targets) == 0 or all("12345" not in t for t in targets)
+        # The PID is captured as an (unresolvable) operand so destructive
+        # actions on unknown targets can be blocked instead of passing
+        assert any("12345" in t for t in targets)
 
     def test_extract_collection_name(self):
         targets = extract_targets("DELETE collection=nexus")
         assert "nexus" in targets
+
+    def test_extract_relative_path_operand(self):
+        """Bare relative operands of destructive commands are captured."""
+        targets = extract_targets("rm -rf protected")
+        assert any("protected" in t for t in targets)
+
+    def test_extract_variable_reference(self):
+        targets = extract_targets("rm -rf $BACKUP_DIR")
+        assert any("BACKUP_DIR" in t for t in targets)
+
+    def test_extract_variable_reference_braces(self):
+        targets = extract_targets("rm -rf ${BACKUP_DIR}")
+        assert any("BACKUP_DIR" in t for t in targets)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +184,63 @@ class TestPathMatching:
 
     def test_normalized_trailing_slash(self):
         assert GuardrailEngine._path_matches("/foo/bar/", "/foo/bar")
+
+    def test_recursive_delete_blocks_protected_child_inside_target(self):
+        """Deleting a parent subtree containing the protected path matches."""
+        assert GuardrailEngine._path_matches("/data", "/data/protected", recursive=True)
+
+    def test_parent_dir_bypass_blocked_end_to_end(self):
+        """rm -rf /data blocks when /data/protected is protected."""
+        points = [MockPoint(
+            id="rule1",
+            payload={"content": "NIEMALS /data/protected loeschen - kritisch", "category": "rule"},
+        )]
+        client = MagicMock()
+        client.scroll.return_value = (points, None)
+        engine = GuardrailEngine(client)
+        result = engine.check_action("rm -rf /data")
+        assert result.verdict == GuardrailVerdict.BLOCK
+
+    def test_nonrecursive_parent_still_allows(self):
+        """Without recursion a parent target does not match (unchanged)."""
+        assert not GuardrailEngine._path_matches("/data", "/data/protected")
+
+
+# ---------------------------------------------------------------------------
+# Symlink resolution tests
+# ---------------------------------------------------------------------------
+
+class TestSymlinkResolution:
+    """Symlink aliases must compare equal to the real protected path."""
+
+    def test_symlink_normalization_matches_real_path(self, tmp_path):
+        import os
+        real = tmp_path / "real_secret.txt"
+        real.write_text("secret")
+        link = tmp_path / "alias.txt"
+        os.symlink(str(real), str(link))
+        engine = GuardrailEngine.__new__(GuardrailEngine)
+        assert engine._normalize_path(str(link)) == engine._normalize_path(str(real))
+
+    def test_symlink_alias_write_blocks(self, tmp_path):
+        """Writing through a symlink to a protected file is blocked."""
+        import os
+        real = tmp_path / "config.yaml"
+        real.write_text("cfg")
+        link = tmp_path / "alias.yaml"
+        os.symlink(str(real), str(link))
+        client = MagicMock()
+        client.scroll.return_value = ([MockPoint(
+            id="rule1",
+            payload={"content": f"NIEMALS {real} ueberschreiben", "category": "rule"},
+        )], None)
+        engine = GuardrailEngine(client)
+        result = engine.check_action(
+            "write_file",
+            tool_name="write_file",
+            tool_input={"path": str(link), "content": "overwrite"},
+        )
+        assert result.verdict == GuardrailVerdict.BLOCK
 
 
 # ---------------------------------------------------------------------------
@@ -196,11 +281,14 @@ class TestGuardrailEngine:
         assert result.allowed
 
     def test_destructive_no_target_allowed(self):
+        """A PID-only kill passes when the rule store was fully loaded."""
         client = self._make_mock_client([])
         engine = GuardrailEngine(client)
         result = engine.check_action("kill -9 12345")
+        # The PID operand is now extracted; with a complete rule load and no
+        # match this resolves to a normal ALLOW on an unprotected target.
         assert result.verdict == GuardrailVerdict.ALLOW
-        assert "no protected target" in result.reason.lower()
+        assert "unprotected target" in result.reason.lower()
 
     def test_destructive_unprotected_target_allowed(self):
         client = self._make_mock_client([
@@ -240,7 +328,57 @@ class TestGuardrailEngine:
         result = engine.check_action("rm -rf ~/some-path/")
         assert result.verdict == GuardrailVerdict.ALLOW
 
-    def test_cache_cleared_on_force_refresh(self):
+    def test_rules_paginated_until_end(self):
+        """Scroll offset is followed until the end of the rule set."""
+        def make_points(start, n):
+            return [MockPoint(
+                id=f"rule{start + i}",
+                payload={
+                    "content": f"NIEMALS /data/dir{start + i} loeschen",
+                    "category": "rule",
+                },
+            ) for i in range(n)]
+        client = MagicMock()
+        client.scroll.side_effect = [
+            (make_points(1, 200), "offset-page-2"),
+            (make_points(201, 150), None),
+        ]
+        engine = GuardrailEngine(client)
+        rules = engine._load_protected_rules(force_refresh=True)
+        assert len(rules) == 350
+        assert client.scroll.call_count == 2
+        second_call = client.scroll.call_args_list[1]
+        assert second_call.kwargs.get("offset") == "offset-page-2"
+
+    def test_cache_preserved_on_load_failure(self):
+        """A failed reload must not wipe a complete cache."""
+        points = [MockPoint(
+            id="rule1",
+            payload={"content": "NIEMALS /data/protected loeschen", "category": "rule"},
+        )]
+        client = MagicMock()
+        client.scroll.return_value = (points, None)
+        engine = GuardrailEngine(client)
+        rules = engine._load_protected_rules(force_refresh=True)
+        assert len(rules) == 1
+        assert engine._last_load_state == "fresh"
+        client.scroll.side_effect = Exception("Qdrant down")
+        rules2 = engine._load_protected_rules(force_refresh=True)
+        # Stale cache served as additional layer, not replaced while broken
+        assert len(rules2) == 1
+        assert engine._last_load_state == "degraded"
+
+    def test_collection_rule_loaded_without_path(self):
+        """Path-less collection protection rules are loaded too."""
+        points = [MockPoint(
+            id="rule-coll",
+            payload={"content": "NIEMALS delete collection=prod-memories", "category": "rule"},
+        )]
+        client = MagicMock()
+        client.scroll.return_value = (points, None)
+        engine = GuardrailEngine(client)
+        rules = engine._load_protected_rules(force_refresh=True)
+        assert any(r.get("collection") == "prod-memories" for r in rules)
         client = self._make_mock_client([])
         engine = GuardrailEngine(client)
         engine._load_protected_rules()
@@ -261,14 +399,44 @@ class TestGuardrailEngine:
         )
         assert result.verdict == GuardrailVerdict.BLOCK
 
-    def test_qdrant_failure_returns_allow(self):
-        """If Qdrant is unreachable, guardrail should not block everything."""
+    def test_qdrant_failure_blocks_destructive(self):
+        """Fail-closed: unreachable Qdrant blocks destructive actions."""
         client = MagicMock()
         client.scroll.side_effect = Exception("Qdrant unreachable")
         engine = GuardrailEngine(client)
         result = engine.check_action("rm -rf ~/nexus-memory-test/")
-        # Should allow (fail-open) rather than block everything
+        assert result.verdict == GuardrailVerdict.BLOCK
+        assert "not fully loaded" in result.reason
+
+    def test_qdrant_failure_allows_nondestructive(self):
+        """Fail-closed only applies to destructive actions, never to reads."""
+        client = MagicMock()
+        client.scroll.side_effect = Exception("Qdrant unreachable")
+        engine = GuardrailEngine(client)
+        result = engine.check_action("ls -la /home")
         assert result.verdict == GuardrailVerdict.ALLOW
+
+    def test_cache_serves_as_additional_layer_on_failure(self):
+        """On load failure, a complete cached rule set still blocks matches."""
+        points = [MockPoint(
+            id="rule1",
+            payload={"content": "NIEMALS ~/nexus-memory-test/ loeschen", "category": "rule"},
+        )]
+        client = MagicMock()
+        client.scroll.return_value = (points, None)
+        engine = GuardrailEngine(client)
+        engine._load_protected_rules()
+        assert engine._last_load_state == "fresh"
+        # Fresh engine sharing the populated cache, Qdrant now unreachable:
+        # the cache still blocks the protected target as an additional layer.
+        import time as _time
+        client.scroll.side_effect = Exception("Qdrant down")
+        engine2 = GuardrailEngine(client)
+        engine2._cache = list(engine._cache)
+        engine2._cache_time = _time.time() - 999.0  # TTL expired -> real reload
+        result = engine2.check_action("rm -rf ~/nexus-memory-test/")
+        assert result.verdict == GuardrailVerdict.BLOCK
+        assert engine2._last_load_state == "degraded"
 
 
 # ---------------------------------------------------------------------------
@@ -310,12 +478,67 @@ class TestOverrideRecording:
         engine = GuardrailEngine(client)
         override_id = engine.record_override(
             command="rm -rf test",
-            matched_rules=[],
+        matched_rules=[],
             reasoning="test reasoning here",
         )
         # Should be a valid UUID string
         import uuid
         uuid.UUID(override_id)  # Raises if invalid
+
+    def test_override_rejects_empty_reasoning(self):
+        """Empty reasoning must raise, not return an override id."""
+        client = MagicMock()
+        engine = GuardrailEngine(client)
+        with pytest.raises(ValueError):
+            engine.record_override(
+                command="rm -rf test",
+                matched_rules=[],
+                reasoning="",
+            )
+
+    def test_override_rejects_whitespace_reasoning(self):
+        client = MagicMock()
+        engine = GuardrailEngine(client)
+        with pytest.raises(ValueError):
+            engine.record_override(
+                command="rm -rf test",
+                matched_rules=[],
+                reasoning="   ",
+            )
+
+    def test_override_rejects_short_reasoning(self):
+        client = MagicMock()
+        engine = GuardrailEngine(client)
+        with pytest.raises(ValueError):
+            engine.record_override(
+                command="rm -rf test",
+                matched_rules=[],
+                reasoning="short",
+            )
+
+    def test_override_raises_when_upsert_fails(self):
+        """Failed persistence must raise instead of returning an id."""
+        client = MagicMock()
+        client.upsert.side_effect = Exception("upsert failed")
+        engine = GuardrailEngine(client)
+        with pytest.raises(RuntimeError):
+            engine.record_override(
+                command="rm -rf test",
+                matched_rules=[],
+                reasoning="valid reasoning here",
+            )
+
+    def test_override_reasoning_validated_before_upsert(self):
+        """Reasoning validation happens before any store access."""
+        client = MagicMock()
+        engine = GuardrailEngine(client)
+        with pytest.raises(ValueError):
+            engine.record_override(
+                command="rm -rf test",
+                matched_rules=[],
+                reasoning="ab",
+            )
+        assert not client.upsert.called
 
 
 # ---------------------------------------------------------------------------

@@ -76,6 +76,7 @@ class TestAutoSupersession:
         existing = [MockScoredPoint(id=old_id, score=0.95, payload={
             "content": "Project uses Stripe for payments",
             "category": "fact",
+            "access_level": "public",
             "lifecycle_status": "canonical",
         })]
 
@@ -170,12 +171,13 @@ class TestAutoSupersession:
         from nexus_memory.mcp_server import MemoryStore
 
         old1 = MockScoredPoint(id="old-1", score=0.93, payload={
-            "content": "Project uses Stripe", "category": "fact",
-            "lifecycle_status": "canonical",
+            "content": "Project uses Stripe for payments", "category": "fact",
+            "access_level": "public", "lifecycle_status": "canonical",
         })
         old2 = MockScoredPoint(id="old-2", score=0.91, payload={
-            "content": "Payment via Stripe", "category": "fact",
-            "lifecycle_status": "canonical",
+            "content": "Project uses Stripe payments",
+            "category": "fact",
+            "access_level": "public", "lifecycle_status": "canonical",
         })
 
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:
@@ -234,8 +236,8 @@ class TestAutoSupersession:
 
         old_id = "old-fact-456"
         existing = [MockScoredPoint(id=old_id, score=0.95, payload={
-            "content": "Project uses Stripe", "category": "fact",
-            "lifecycle_status": "canonical",
+            "content": "Project uses Stripe for payments", "category": "fact",
+            "access_level": "public", "lifecycle_status": "canonical",
         })]
 
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:

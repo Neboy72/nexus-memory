@@ -79,8 +79,9 @@ def test_drift_guard_keeps_existing_model(monkeypatch, tmp_path):
 
 
 def test_same_local_model_tolerates_tags():
+    # Ollama semantics: tag-less name == ':latest' variant (same model).
     assert _same_local_model("bge-m3", "bge-m3:latest") is True
-    assert _same_local_model("qwen3-embedding:0.6b", "qwen3-embedding") is True
+    assert _same_local_model("qwen3-embedding:0.6b", "qwen3-embedding") is False
     assert _same_local_model("bge-m3", "qwen3-embedding:0.6b") is False
     assert _same_local_model("", "bge-m3") is False
 

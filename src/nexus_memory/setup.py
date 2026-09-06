@@ -37,6 +37,8 @@ import json
 import os
 import sys
 import subprocess
+import tempfile
+import tomllib  # stdlib since Python 3.11
 from pathlib import Path
 from typing import Optional
 
@@ -51,143 +53,50 @@ from nexus_memory.agent_detect import (
 
 
 # ── Plugin/MCP Installation ──────────────────────────────────────────────────
+#
+# Which MCP config file each agent actually loads (do NOT "normalize" these):
+#   codex         ~/.codex/config.toml                  TOML, [mcp_servers.<name>] tables
+#   claude-code   ~/.claude.json                        user-scope JSON, top-level "mcpServers"
+#   windsurf      ~/.codeium/windsurf/mcp_config.json   JSON, "mcpServers"
+#   all others    <agent_dir>/mcp.json                  generic JSON, "mcpServers"
+# Codex never reads ~/.codex/mcp.json and Claude Code never reads
+# ~/.claude/mcp.json — the generic mcp.json layout is only written for agents
+# that really load it.
 
 INSTALL_SCRIPTS = {
     "hermes": "scripts/install_hermes_plugin.sh",
     "openclaw": "scripts/install_openclaw_plugin.sh",
 }
 
-MCP_CONFIG_SNIPPETS = {
-    "claude-code": {
-        "file": "~/.claude/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "cursor": {
-        "file": "~/.cursor/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "kilo-code": {
-        "file": "~/.kilo/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "codex": {
-        "file": "~/.codex/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "antigravity-cli": {
-        "file": "~/.agy/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "cline": {
-        "file": "~/.cline/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "roo-code": {
-        "file": "~/.roo/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "openhands": {
-        "file": "~/.openhands/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "qwen-code": {
-        "file": "~/.qwen/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "opencode": {
-        "file": "~/.opencode/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "windsurf": {
-        "file": "~/.codeium/windsurf/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "crush": {
-        "file": "~/.crush/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
-    "pi": {
-        "file": "~/.pi/mcp.json",
-        "config": {
-            "nexus": {
-                "command": "nexus-memory",
-                "args": [],
-                "env": {}
-            }
-        }
-    },
+_NEXUS_MCP_SERVER = {"command": "nexus-memory", "args": [], "env": {}}
+
+# Generic JSON agents: "<agent_dir>/mcp.json" with an "mcpServers" map.
+MCP_CONFIG_SNIPPETS: dict[str, dict] = {}
+for _agent, _file in (
+    ("claude-code", "~/.claude.json"),
+    ("cursor", "~/.cursor/mcp.json"),
+    ("kilo-code", "~/.kilo/mcp.json"),
+    ("antigravity-cli", "~/.agy/mcp.json"),
+    ("cline", "~/.cline/mcp.json"),
+    ("roo-code", "~/.roo/mcp.json"),
+    ("openhands", "~/.openhands/mcp.json"),
+    ("qwen-code", "~/.qwen/mcp.json"),
+    ("opencode", "~/.opencode/mcp.json"),
+    ("windsurf", "~/.codeium/windsurf/mcp_config.json"),
+    ("crush", "~/.crush/mcp.json"),
+    ("pi", "~/.pi/mcp.json"),
+):
+    MCP_CONFIG_SNIPPETS[_agent] = {
+        "file": _file,
+        "format": "json",
+        "config": {"nexus": dict(_NEXUS_MCP_SERVER)},
+    }
+
+# Codex wants TOML: ~/.codex/config.toml with [mcp_servers.nexus] tables.
+MCP_CONFIG_SNIPPETS["codex"] = {
+    "file": "~/.codex/config.toml",
+    "format": "toml",
+    "config": {"nexus": dict(_NEXUS_MCP_SERVER)},
 }
 
 
@@ -219,39 +128,130 @@ def _install_plugin(agent_id: str) -> dict:
         return {"agent_id": agent_id, "install_type": "plugin", "status": "error", "message": str(e)}
 
 
+class MCPConfigError(Exception):
+    """An existing agent MCP config could not be read, parsed or validated."""
+
+
+def _toml_inline(value) -> str:
+    """Serialize a small TOML value (str/int/float/bool/list/dict) inline."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        # JSON basic-string escaping is TOML-compatible.
+        return json.dumps(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_inline(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{k} = {_toml_inline(v)}" for k, v in value.items()) + " }"
+    raise MCPConfigError(f"Unsupported TOML value type: {type(value).__name__}")
+
+
+def _toml_server_block(name: str, entry: dict) -> str:
+    """Render one [mcp_servers.<name>] table block."""
+    lines = [f"[mcp_servers.{name}]"]
+    for key, value in entry.items():
+        lines.append(f"{key} = {_toml_inline(value)}")
+    return "\n".join(lines)
+
+
+def _load_mcp_config(mcp_file: Path, fmt: str) -> tuple[dict, str]:
+    """Load an agent's existing MCP config.
+
+    Returns (config, raw_text); config is {} ONLY when the file does not
+    exist yet. Read/parse errors raise MCPConfigError so callers never
+    treat a broken or foreign-format config as empty and overwrite it.
+    """
+    if not mcp_file.exists():
+        return {}, ""
+    try:
+        raw = mcp_file.read_text()
+    except OSError as exc:
+        raise MCPConfigError(f"Cannot read existing MCP config {mcp_file}: {exc}") from exc
+    try:
+        if fmt == "toml":
+            data = tomllib.loads(raw)
+        else:
+            data = json.loads(raw)
+    except Exception as exc:
+        raise MCPConfigError(f"Cannot parse existing MCP config {mcp_file} ({fmt}): {exc}") from exc
+    if not isinstance(data, dict):
+        raise MCPConfigError(f"Existing MCP config {mcp_file} is not an object")
+    return data, raw
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text to path atomically (temp file in the same dir + os.replace)."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def _install_mcp(agent_id: str) -> dict:
     """Install Nexus Memory as an MCP server for an agent."""
     snippet = MCP_CONFIG_SNIPPETS.get(agent_id)
     if not snippet:
         return {"agent_id": agent_id, "install_type": "mcp", "status": "no_config", "message": f"No MCP config template for {agent_id}"}
 
+    fmt = snippet.get("format", "json")
+    servers_key = "mcp_servers" if fmt == "toml" else "mcpServers"
     mcp_file = Path(snippet["file"]).expanduser()
     mcp_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Load existing config or create new
-    existing = {}
-    if mcp_file.exists():
-        try:
-            existing = json.loads(mcp_file.read_text())
-        except Exception:
-            existing = {}
+    # Read existing config; a broken/unreadable file aborts here and is
+    # never overwritten with a fresh one.
+    try:
+        existing, raw = _load_mcp_config(mcp_file, fmt)
+    except MCPConfigError as exc:
+        return {"agent_id": agent_id, "install_type": "mcp", "status": "config_error", "message": str(exc)}
 
-    # Merge nexus into mcpServers
-    servers_key = "mcpServers" if "mcpServers" not in existing else "mcpServers"
-    if servers_key not in existing:
-        existing[servers_key] = {}
+    servers = existing.get(servers_key)
+    if servers is None:
+        servers = {}
+    elif not isinstance(servers, dict):
+        return {"agent_id": agent_id, "install_type": "mcp", "status": "config_error", "message": f"{servers_key} in {mcp_file} is not a table/object; refusing to modify"}
 
-    if "nexus" in existing[servers_key]:
+    if "nexus" in servers:
         return {"agent_id": agent_id, "install_type": "mcp", "status": "already_installed", "message": f"Nexus MCP already configured for {agent_id}"}
 
-    existing[servers_key]["nexus"] = snippet["config"]["nexus"]
-    mcp_file.write_text(json.dumps(existing, indent=2) + "\n")
+    servers["nexus"] = dict(snippet["config"]["nexus"])
+
+    if fmt == "toml":
+        # Preserve the user's config verbatim except for the appended
+        # [mcp_servers.nexus] table; validate the merged text before writing.
+        base = raw.rstrip("\n")
+        block = _toml_server_block("nexus", servers["nexus"])
+        new_text = (base + "\n\n" + block + "\n") if base.strip() else (block + "\n")
+        try:
+            merged = tomllib.loads(new_text)
+            if merged.get("mcp_servers", {}).get("nexus") != servers["nexus"]:
+                raise ValueError("merged nexus entry mismatch")
+        except Exception as exc:
+            return {"agent_id": agent_id, "install_type": "mcp", "status": "config_error", "message": f"Would not produce valid TOML for {mcp_file}: {exc}"}
+    else:
+        existing[servers_key] = servers
+        new_text = json.dumps(existing, indent=2) + "\n"
+
+    _atomic_write_text(mcp_file, new_text)
 
     return {"agent_id": agent_id, "install_type": "mcp", "status": "installed", "message": f"MCP server configured for {agent_id} at {mcp_file}"}
 
 
 def install_agent(agent_id: str, trust_level: str = "public") -> dict:
-    """Install Nexus Memory for an agent (plugin if available, else MCP) and register it."""
+    """Install Nexus Memory for an agent and register it.
+
+    Plugin first when a plugin installer exists; whenever the plugin part is
+    unavailable or fails, fall back to the agent's MCP config template. The
+    agent is registered only after at least one part installed successfully,
+    and install_type contains only the parts that actually succeeded.
+    """
     # Get agent info from detection
     detection = detect_all_agents()
     agent_info = None
@@ -263,23 +263,36 @@ def install_agent(agent_id: str, trust_level: str = "public") -> dict:
     if not agent_info:
         return {"error": f"Unknown agent: {agent_id}"}
 
-    # Try plugin first, then MCP
-    if agent_info.get("plugin_available"):
-        result = _install_plugin(agent_id)
-        install_type = "plugin+mcp" if agent_info.get("mcp_available") else "plugin"
-    elif agent_info.get("mcp_available"):
-        result = _install_mcp(agent_id)
-        install_type = "mcp"
-    else:
-        return {"error": f"Agent {agent_id} supports neither plugin nor MCP"}
+    steps: list[dict] = []
+    installed: list[str] = []
 
-    # If plugin succeeded and MCP is also available, add MCP too
-    if result["status"] == "installed" and agent_info.get("plugin_available") and agent_info.get("mcp_available"):
+    def _try_mcp() -> dict:
         mcp_result = _install_mcp(agent_id)
+        steps.append(mcp_result)
         if mcp_result["status"] in ("installed", "already_installed"):
-            install_type = "plugin+mcp"
+            installed.append("mcp")
+        return mcp_result
 
-    # Register agent in registry
+    if agent_info.get("plugin_available"):
+        plugin_result = _install_plugin(agent_id)
+        steps.append(plugin_result)
+        if plugin_result["status"] == "installed":
+            installed.append("plugin")
+    if agent_info.get("mcp_available"):
+        _try_mcp()
+
+    if not installed:
+        return {
+            "agent_id": agent_id,
+            "error": f"No installation succeeded for {agent_id}",
+            "status": steps[-1]["status"] if steps else "no_target",
+            "message": steps[-1]["message"] if steps else f"Agent {agent_id} supports neither plugin nor MCP",
+            "steps": steps,
+        }
+
+    install_type = "+".join(installed)
+
+    # Register agent in registry (only after a successful install)
     register_agent(
         agent_id=agent_id,
         name=agent_info["name"],
@@ -294,8 +307,9 @@ def install_agent(agent_id: str, trust_level: str = "public") -> dict:
         "name": agent_info["name"],
         "trust_level": trust_level,
         "install_type": install_type,
-        "status": result["status"],
-        "message": result["message"],
+        "status": "installed",
+        "message": steps[-1]["message"],
+        "steps": steps,
     }
 
 
@@ -317,7 +331,7 @@ def step_welcome() -> dict:
         "title": "Welcome to Nexus Memory Setup",
         "message": "Nexus Memory is a universal memory layer for AI agents. This setup will configure embedding, detect your agents, and connect them.",
         "qdrant_running": qdrant_running,
-        "qdrant_instructions": "Make sure Qdrant is running on localhost:6333. Start it with: docker run -p 6333:6333 qdrant/qdrant" if not qdrant_running else None,
+        "qdrant_instructions": "Make sure Qdrant is running on localhost:6333. Start it with: docker run -p 127.0.0.1:6333:6333 qdrant/qdrant" if not qdrant_running else None,
         "next_step": "scan_embedding",
     }
 

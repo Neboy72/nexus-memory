@@ -38,6 +38,11 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+try:
+    from nexus_memory.env_secret_store import validate_api_key
+except ImportError:  # standalone script execution: package not importable
+    from env_secret_store import validate_api_key  # type: ignore[no-redef]
+
 # Reuse provider definitions from wizard.py
 try:
     from nexus_memory.wizard import PROVIDERS, _check_ollama, _check_sentence_transformers, _check_pip_package
@@ -141,19 +146,12 @@ def _save_config(config: dict) -> None:
 
 
 def _save_api_key(key_env: str, api_key: str) -> None:
-    config_dir = _get_config_dir()
-    config_dir.mkdir(parents=True, exist_ok=True)
+    """Save an API key to the .env file (validated, escaped, 0600, atomic)."""
+    from nexus_memory.env_secret_store import write_env_key
+
     env_path = _get_env_path()
-    existing = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                existing[k.strip()] = v.strip().strip('"').strip("'")
-    existing[key_env] = api_key
-    lines = [f'{k}="{v}"' for k, v in existing.items()]
-    env_path.write_text("\n".join(lines) + "\n")
+    write_env_key(env_path, key_env, api_key)
+    os.chmod(_get_config_dir(), 0o700)
 
 
 def _install_pip(package: str) -> bool:
@@ -260,8 +258,11 @@ def apply_choice(provider_id: str, api_key: str = None) -> dict:
         if not success:
             return {"error": f"Failed to install {provider['pip_package']}"}
 
-    # Save API key if provided
+    # Save API key if provided (validate first — never persist invalid keys)
     if api_key and provider["key_env"]:
+        ok, reason = validate_api_key(provider["key_env"], api_key)
+        if not ok:
+            return {"error": reason}
         _save_api_key(provider["key_env"], api_key)
         os.environ[provider["key_env"]] = api_key
 

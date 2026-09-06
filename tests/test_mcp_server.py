@@ -958,3 +958,364 @@ class TestWebhookEventDispatch:
         assert len(subs) == 1
         assert subs[0]["id"] == sub["id"]
 
+
+# ===========================================================================
+# 9. Review-fix invariants
+#    (update history integrity, update validation, supersession gates,
+#    persist-first ordering, fail-closed recall access gate)
+# ===========================================================================
+
+
+class TestUpdateClearsSupersessionMarks:
+    """An in-place update rewrites the SAME point — it must stay canonical.
+
+    Previously the update handler deprecated the point before rewriting it,
+    which left valid_to/superseded_at set although the point came back as
+    the canonical fact (corrupted version history).
+    """
+
+    async def test_update_reactivates_superseded_point(
+        self, mcp_store, mock_qdrant_client, monkeypatch
+    ):
+        import nexus as nexus_pkg
+
+        update_spy = MagicMock(return_value={"status": "ok"})
+        monkeypatch.setattr(nexus_pkg, "nexus_update", update_spy)
+
+        # Simulate a point that was superseded earlier (deprecated marks).
+        # The update handler cannot read these — the invariant is that it
+        # always clears the end marks on the same point ID.
+        out = await mcp.handle_call_tool(
+            "update",
+            {"memory_id": "mem-123", "text": "corrected content"},
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "updated"
+        update_spy.assert_called_once()
+
+        set_payload = mock_qdrant_client.set_payload.call_args
+        assert set_payload.kwargs["points"] == ["mem-123"]
+        marks = set_payload.kwargs["payload"]
+        assert marks["lifecycle_status"] == "canonical"
+        assert marks["superseded_at"] is None
+        assert marks["superseded_by"] is None
+        assert marks["valid_to"] is None
+        # Never a deprecation mark on an in-place update.
+        assert "deprecated" not in json.dumps(marks)
+
+    async def test_valid_update_still_rewrites_content(
+        self, mcp_store, mock_qdrant_client, monkeypatch
+    ):
+        """Normal-case invariant: a valid update still reaches nexus_update."""
+        import nexus as nexus_pkg
+
+        update_spy = MagicMock(return_value={"status": "ok"})
+        monkeypatch.setattr(nexus_pkg, "nexus_update", update_spy)
+
+        out = await mcp.handle_call_tool(
+            "update",
+            {
+                "memory_id": "mem-456",
+                "text": "new text",
+                "effective_from": "2026-09-01",
+            },
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "updated"
+        kwargs = update_spy.call_args.kwargs
+        assert kwargs["point_id"] == "mem-456"
+        assert kwargs["new_content"] == "new text"
+        assert kwargs["new_metadata"]["valid_from"].startswith("2026-09-01")
+
+
+class TestUpdateValidatesEffectiveFromBeforeWrite:
+    """Invalid effective_from must abort BEFORE any write happens."""
+
+    async def test_invalid_effective_from_aborts_without_state_change(
+        self, mcp_store, mock_qdrant_client, monkeypatch
+    ):
+        import nexus as nexus_pkg
+
+        update_spy = MagicMock(return_value={"status": "ok"})
+        monkeypatch.setattr(nexus_pkg, "nexus_update", update_spy)
+
+        out = await mcp.handle_call_tool(
+            "update",
+            {
+                "memory_id": "mem-789",
+                "text": "rewrite",
+                "effective_from": "not-a-date",
+            },
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "error"
+        assert "effective_from" in body["error"]
+
+        # The invariant: the store was not modified at all. Previously the
+        # point was deactivated (deprecated + valid_to) before the parse
+        # error surfaced, silently hiding the memory.
+        mock_qdrant_client.set_payload.assert_not_called()
+        update_spy.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   ", "2026-13-45", "next tuesday"])
+    async def test_unparseable_effective_from_variants_rejected(
+        self, mcp_store, mock_qdrant_client, monkeypatch, bad
+    ):
+        import nexus as nexus_pkg
+
+        update_spy = MagicMock(return_value={"status": "ok"})
+        monkeypatch.setattr(nexus_pkg, "nexus_update", update_spy)
+
+        out = await mcp.handle_call_tool(
+            "update",
+            {"memory_id": "mem-x", "text": "t", "effective_from": bad},
+        )
+        body = _decode(out[0].text)
+        if bad.strip() == "":
+            # Empty / whitespace-only is treated as "not provided" → a
+            # normal update runs (which may legitimately touch the point).
+            assert body["status"] == "updated"
+            update_spy.assert_called_once()
+            # ...but no valid_from was written from the empty value.
+            assert "valid_from" not in update_spy.call_args.kwargs["new_metadata"]
+        else:
+            # Real parse garbage: hard abort, zero writes.
+            assert body["status"] == "error"
+            assert "effective_from" in body["error"]
+            update_spy.assert_not_called()
+            mock_qdrant_client.set_payload.assert_not_called()
+
+
+class TestSupersessionAccessBoundary:
+    """Auto-supersession must never replace facts above the new fact's level."""
+
+    @staticmethod
+    def _candidate(mock_qdrant_client, pid, access_level, content):
+        cand = MagicMock()
+        cand.id = pid
+        cand.score = 0.97
+        cand.payload = {
+            "content": content,
+            "category": "fact",
+            "access_level": access_level,
+            "lifecycle_status": "canonical",
+        }
+        mock_qdrant_client.query_points.return_value = MagicMock(points=[cand])
+
+    async def test_public_fact_never_supersedes_trusted(
+        self, store, mock_qdrant_client
+    ):
+        self._candidate(
+            mock_qdrant_client, "trusted-1", "trusted",
+            "Deploy runs on AWS eu-central-1",
+        )
+        result = await store.remember(
+            "Deploy runs on AWS eu-central-1",
+            access_level="public",
+            category="fact",
+        )
+        assert result["status"] == "ok"
+        assert result["superseded"] is None
+        mock_qdrant_client.set_payload.assert_not_called()
+
+    async def test_public_fact_never_supersedes_missing_level_fail_closed(
+        self, store, mock_qdrant_client
+    ):
+        cand = MagicMock()
+        cand.id = "legacy-1"
+        cand.score = 0.97
+        cand.payload = {
+            "content": "Deploy runs on AWS eu-central-1",
+            "category": "fact",
+            "lifecycle_status": "canonical",
+            # access_level deliberately missing → fail-closed = private
+        }
+        mock_qdrant_client.query_points.return_value = MagicMock(points=[cand])
+        result = await store.remember(
+            "Deploy runs on AWS eu-central-1",
+            access_level="public",
+            category="fact",
+        )
+        assert result["superseded"] is None
+        mock_qdrant_client.set_payload.assert_not_called()
+
+    async def test_private_fact_supersedes_trusted_fact(
+        self, store, mock_qdrant_client
+    ):
+        # Higher-privileged new facts keep the established behavior.
+        self._candidate(
+            mock_qdrant_client, "trusted-2", "trusted",
+            "Deploy runs on AWS eu-central-1",
+        )
+        result = await store.remember(
+            "Deploy runs on AWS eu-central-1",
+            access_level="private",
+            category="fact",
+        )
+        assert result["superseded"] == ["trusted-2"]
+        mock_qdrant_client.set_payload.assert_called_once()
+
+
+class TestSupersessionRequiresTextOverlap:
+    """Vector similarity alone must not deactivate independent facts."""
+
+    @staticmethod
+    def _candidate(mock_qdrant_client, pid, content):
+        cand = MagicMock()
+        cand.id = pid
+        cand.score = 0.97
+        cand.payload = {
+            "content": content,
+            "category": "fact",
+            "access_level": "public",
+            "lifecycle_status": "canonical",
+        }
+        mock_qdrant_client.query_points.return_value = MagicMock(points=[cand])
+
+    async def test_high_vector_score_without_overlap_keeps_candidate(
+        self, store, mock_qdrant_client
+    ):
+        # Same domain vocabulary, but an independent fact: token overlap
+        # far below 0.5. Vector score alone (0.97 > 0.90) must NOT retire it.
+        self._candidate(
+            mock_qdrant_client, "independent-1",
+            "Postgres is used by the analytics cluster",
+        )
+        result = await store.remember(
+            "Postgres is used by the reporting pipeline",
+            access_level="public",
+            category="fact",
+        )
+        assert result["status"] == "ok"
+        assert result["superseded"] is None
+        mock_qdrant_client.set_payload.assert_not_called()
+
+    async def test_near_duplicate_with_overlap_still_supersedes(
+        self, store, mock_qdrant_client
+    ):
+        # Positive control: high similarity AND real text overlap → the
+        # established supersession behavior is preserved.
+        self._candidate(
+            mock_qdrant_client, "dup-1", "Deploy runs on AWS eu-central-1"
+        )
+        result = await store.remember(
+            "Deploy runs on AWS eu-central-1",
+            access_level="public",
+            category="fact",
+        )
+        assert result["superseded"] == ["dup-1"]
+        mock_qdrant_client.set_payload.assert_called_once()
+
+
+class TestSupersessionPersistsFirst:
+    """Old facts are deprecated only AFTER the new point persisted."""
+
+    @staticmethod
+    def _candidate(mock_qdrant_client, pid):
+        cand = MagicMock()
+        cand.id = pid
+        cand.score = 0.97
+        cand.payload = {
+            "content": "Deploy runs on AWS eu-central-1",
+            "category": "fact",
+            "access_level": "public",
+            "lifecycle_status": "canonical",
+        }
+        mock_qdrant_client.query_points.return_value = MagicMock(points=[cand])
+
+    async def test_upsert_failure_leaves_old_fact_canonical(
+        self, store, mock_qdrant_client
+    ):
+        self._candidate(mock_qdrant_client, "old-1")
+        mock_qdrant_client.upsert.side_effect = Exception("qdrant down")
+
+        with pytest.raises(Exception):
+            await store.remember(
+                "Deploy runs on AWS eu-central-1",
+                access_level="public",
+                category="fact",
+            )
+        # No deprecation marks may exist when the new point never persisted.
+        mock_qdrant_client.set_payload.assert_not_called()
+
+    async def test_marking_happens_after_successful_upsert(
+        self, store, mock_qdrant_client
+    ):
+        self._candidate(mock_qdrant_client, "old-2")
+
+        order = []
+        mock_qdrant_client.upsert.side_effect = lambda **kw: order.append("upsert")
+        mock_qdrant_client.set_payload.side_effect = lambda **kw: (
+            order.append("set_payload")
+        )
+
+        result = await store.remember(
+            "Deploy runs on AWS eu-central-1",
+            access_level="public",
+            category="fact",
+        )
+        assert result["superseded"] == ["old-2"]
+        assert order == ["upsert", "set_payload"]
+
+
+class TestRecallAccessGateFailClosed:
+    """Missing/empty/unknown access_level values are private (fail-closed)."""
+
+    @staticmethod
+    def _point(mock_qdrant_client, payload):
+        point = MagicMock()
+        point.id = payload.get("id", "p1")
+        point.payload = payload
+        point.score = 0.9
+        mock_qdrant_client.query_points.return_value = MagicMock(points=[point])
+
+    async def test_missing_access_level_hidden_from_public_agent(
+        self, store, mock_qdrant_client
+    ):
+        payload = _payload(pid="ghost-1")
+        del payload["access_level"]
+        self._point(mock_qdrant_client, payload)
+
+        results = await store.recall("hello", agent_level="public")
+        assert results == []
+
+    async def test_empty_access_level_hidden_from_public_agent(
+        self, store, mock_qdrant_client
+    ):
+        payload = _payload(pid="empty-1", access_level="")
+        self._point(mock_qdrant_client, payload)
+
+        results = await store.recall("hello", agent_level="public")
+        assert results == []
+
+    async def test_unknown_access_level_hidden_from_public_agent(
+        self, store, mock_qdrant_client
+    ):
+        payload = _payload(pid="weird-1", access_level="GOD_MODE")
+        self._point(mock_qdrant_client, payload)
+
+        results = await store.recall("hello", agent_level="public")
+        assert results == []
+
+    async def test_fail_closed_entry_visible_to_private_agent(
+        self, store, mock_qdrant_client
+    ):
+        # Fail-closed must not LOSE data: a fully privileged agent still
+        # sees the entry, labeled with the conservative level.
+        payload = _payload(pid="ghost-2")
+        del payload["access_level"]
+        self._point(mock_qdrant_client, payload)
+
+        results = await store.recall("hello", agent_level="private")
+        assert len(results) == 1
+        assert results[0]["access_level"] == "private"
+
+    async def test_normal_public_fact_still_visible_regression(
+        self, store, mock_qdrant_client
+    ):
+        # Normal-case invariant: well-formed public facts behave as before.
+        self._point(mock_qdrant_client, _payload(pid="pub-1"))
+        results = await store.recall("hello", agent_level="public")
+        assert len(results) == 1
+        assert results[0]["access_level"] == "public"
+

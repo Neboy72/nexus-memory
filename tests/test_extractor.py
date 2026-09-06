@@ -97,6 +97,54 @@ class TestHeuristicExtraction:
             assert len(f["text"]) <= 300
 
 
+class TestRoleGatedExtraction:
+    """Invariant: durable preferences/rules come from USER messages only.
+
+    An assistant statement like 'Ich möchte immer auf Englisch antworten'
+    is the agent's own stance (or an echoed/quoted line) — storing it as a
+    durable USER preference or rule would poison the memory. Assistant
+    messages may only contribute factual statements.
+    """
+
+    def test_assistant_preference_statement_not_extracted(self):
+        msgs = [{"role": "assistant", "content": "Ich möchte immer auf Englisch antworten."}]
+        assert _heuristic_extract(msgs) == []
+
+    def test_assistant_rule_statement_not_extracted(self):
+        msgs = [{"role": "assistant", "content": "Ich werde die config.yaml nie ohne dein GO aendern."}]
+        assert _heuristic_extract(msgs) == []
+
+    def test_user_preference_statement_still_extracted(self):
+        msgs = [{"role": "user", "content": "Ich möchte immer auf Englisch antworten."}]
+        facts = _heuristic_extract(msgs)
+        assert any(f["category"] == "preference" for f in facts)
+
+    def test_user_rule_statement_still_extracted(self):
+        msgs = [{"role": "user", "content": "Die config.yaml darf nie ohne dein GO geaendert werden."}]
+        facts = _heuristic_extract(msgs)
+        assert any(f["category"] == "rule" for f in facts)
+
+    def test_extract_facts_pipeline_ignores_assistant_rules(self):
+        msgs = [
+            {"role": "assistant", "content": "Ich möchte immer auf Englisch antworten."},
+            {"role": "user", "content": "Okay verstanden."},
+        ]
+        facts = extract_facts(msgs, hermes_home="")
+        assert facts == []
+
+    def test_pipeline_assistant_fact_allowed_user_rule_extracted(self):
+        msgs = [
+            {"role": "user", "content": "Wie ist der Serverstand?"},
+            {"role": "assistant", "content": "Der Server laeuft auf 192.168.31.59."},
+            {"role": "user", "content": "Nie den Server neustarten ohne Rücksprache."},
+        ]
+        facts = extract_facts(msgs, hermes_home="")
+        for f in facts:
+            if f["category"] in ("preference", "rule"):
+                assert "laeuft auf 192.168" not in f["text"]
+        assert any(f["category"] == "rule" for f in facts)
+
+
 class TestExtractFactsPublicAPI:
     """Tests for the public extract_facts() function."""
 

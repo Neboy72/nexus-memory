@@ -26,11 +26,14 @@ Usage:
     → JSON list of detected agents
 """
 
+import fcntl
 import json
 import os
 import shutil
 import socket
 import sys
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -375,77 +378,182 @@ def detect_all_agents() -> dict:
 
 # ── Agent Registry (agents.json) ──────────────────────────────────────────
 
+# Locally detectable agent ids (must stay in sync with the ``_check_*``
+# detectors below). register_remote_agent() refuses these so a remote
+# pre-registration can never shadow a real local agent.
+LOCAL_AGENT_IDS = frozenset({
+    "hermes", "kilo-code", "openclaw", "claude-code", "pi", "cline",
+    "codex", "openhands", "roo-code", "qwen-code", "cursor",
+    "antigravity-cli", "opencode", "windsurf", "crush", "gemini-cli",
+})
+
+
 def _get_agents_registry_path() -> Path:
     """Get the path to the agents registry file."""
     return Path.home() / ".nexus-memory" / "agents.json"
 
 
-def load_agents_registry() -> dict:
-    """Load the agents registry."""
+def _registry_lock_path() -> Path:
+    """Advisory-lock file for the agents registry.
+
+    Lives in the SAME directory as the registry, so redirected registry
+    paths (tests, custom installs) automatically get their own lock.
+    """
     path = _get_agents_registry_path()
-    if path.exists():
+    return path.with_name(path.name + ".lock")
+
+
+@contextmanager
+def _registry_lock(exclusive: bool = True):
+    """Cross-process lock around a WHOLE registry read-modify-write cycle.
+
+    The lock must span read AND write: locking only the write would leave
+    the read-modify-write window open and parallel writers would silently
+    lose each other's registrations/trust changes. flock() conflicts across
+    file descriptors, so it serializes other processes AND other threads
+    (every caller opens its own fd on the lock file).
+    """
+    lock_path = _registry_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+") as lock_file:
+        fcntl.flock(
+            lock_file.fileno(),
+            fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
+        )
         try:
-            return json.loads(path.read_text())
-        except Exception:
-            pass
-    return {"agents": []}
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _load_registry_unlocked() -> dict:
+    """Read the registry file without taking the lock.
+
+    Callers either hold the registry lock already or accept a snapshot
+    read. A parse error is NOT treated as an empty registry: swallowing it
+    made the next save overwrite every existing entry with an empty list.
+    Fail closed instead — raise so the caller aborts without writing.
+    """
+    path = _get_agents_registry_path()
+    if not path.exists():
+        return {"agents": []}
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError("agents registry must be a JSON object")
+    return data
+
+
+def load_agents_registry() -> dict:
+    """Load the agents registry (shared lock, parse errors fail closed)."""
+    with _registry_lock(exclusive=False):
+        return _load_registry_unlocked()
+
+
+def _save_registry_unlocked(registry: dict) -> None:
+    """Atomically replace the registry file. Caller MUST hold the lock.
+
+    Writes a unique temp file next to the registry (flushed + fsynced) and
+    os.replace()s it into place, so readers see either the old or the new
+    complete document — never a half-written registry.
+    """
+    path = _get_agents_registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(registry, indent=2) + "\n"
+    tmp_path = path.with_name(
+        f"{path.name}.tmp-{os.getpid()}-{threading.get_ident()}"
+    )
+    try:
+        with open(tmp_path, "w") as tmp_file:
+            tmp_file.write(payload)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def save_agents_registry(registry: dict) -> None:
-    """Save the agents registry."""
-    path = _get_agents_registry_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(registry, indent=2) + "\n")
+    """Save the agents registry (exclusive lock + atomic replace).
+
+    Kept for external callers; the in-module read-modify-write cycles use
+    the lock plus the unlocked load/save helpers directly so the ENTIRE
+    cycle stays inside one critical section.
+    """
+    with _registry_lock():
+        _save_registry_unlocked(registry)
 
 
 def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
                    install_type: str, config_dir: str = None) -> dict:
-    """Register or update an agent in the registry."""
-    registry = load_agents_registry()
-    
-    # Find existing or create new
-    agent = None
-    for a in registry.get("agents", []):
-        if a["id"] == agent_id:
-            agent = a
-            break
-    
-    if agent is None:
-        agent = {"id": agent_id}
-        registry.setdefault("agents", []).append(agent)
-    
-    agent.update({
-        "name": name,
-        "icon": icon,
-        "trust_level": trust_level,
-        "install_type": install_type,  # "plugin+mcp", "mcp_only"
-        "config_dir": config_dir,
-        "connected_at": _now_iso(),
-        "last_seen": _now_iso(),
-        "reads": 0,
-        "writes": 0,
-    })
-    # Registration via local detection = this machine (never clobbers an
-    # explicitly-registered remote host's fields, since those entries are
-    # not re-registered by detectors).
-    annotate_host(agent, host_type="local")
+    """Register or update an agent in the registry.
 
-    save_agents_registry(registry)
+    Re-registration refreshes install metadata but PRESERVES the original
+    connected_at and usage stats (reads/writes) — otherwise every re-run
+    of the setup wizard would reset the dashboard counters.
+    """
+    now = _now_iso()
+    with _registry_lock():
+        registry = _load_registry_unlocked()
+        agents = registry.setdefault("agents", [])
+
+        # Find existing or create new
+        agent = None
+        for a in agents:
+            if a.get("id") == agent_id:
+                agent = a
+                break
+
+        if agent is None:
+            agent = {
+                "id": agent_id,
+                "name": name,
+                "icon": icon,
+                "trust_level": trust_level,
+                "install_type": install_type,  # "plugin+mcp", "mcp_only"
+                "config_dir": config_dir,
+                "connected_at": now,
+                "last_seen": now,
+                "reads": 0,
+                "writes": 0,
+            }
+            agents.append(agent)
+        else:
+            agent.update({
+                "name": name,
+                "icon": icon,
+                "trust_level": trust_level,
+                "install_type": install_type,
+                "config_dir": config_dir,
+                "last_seen": now,
+            })
+            agent.setdefault("connected_at", now)
+            agent.setdefault("reads", 0)
+            agent.setdefault("writes", 0)
+
+        # Registration via local detection = this machine (never clobbers an
+        # explicitly-registered remote host's fields, since those entries are
+        # not re-registered by detectors).
+        annotate_host(agent, host_type="local")
+
+        _save_registry_unlocked(registry)
     return agent
 
 
 def update_agent_stats(agent_id: str, read: bool = False, write: bool = False) -> None:
     """Update last_seen, reads, writes for an agent."""
-    registry = load_agents_registry()
-    for a in registry.get("agents", []):
-        if a["id"] == agent_id:
-            a["last_seen"] = _now_iso()
-            if read:
-                a["reads"] = a.get("reads", 0) + 1
-            if write:
-                a["writes"] = a.get("writes", 0) + 1
-            break
-    save_agents_registry(registry)
+    with _registry_lock():
+        registry = _load_registry_unlocked()
+        for a in registry.get("agents", []):
+            if a.get("id") == agent_id:
+                a["last_seen"] = _now_iso()
+                if read:
+                    a["reads"] = a.get("reads", 0) + 1
+                if write:
+                    a["writes"] = a.get("writes", 0) + 1
+                _save_registry_unlocked(registry)
+                return
+        # Unknown agent id: nothing to update, don't rewrite the file.
 
 
 def update_agent_seen(agent_id: str) -> None:
@@ -520,42 +628,51 @@ def cleanup_removed_agents(grace_days: int = AGENT_REMOVAL_GRACE_DAYS) -> dict:
         if isinstance(d, dict) and d.get("id")
     }
 
-    registry = load_agents_registry()
-    kept, removed = [], []
-    changed = False
-    now = datetime.now(timezone.utc)
+    # Detection scans the filesystem — keep it OUTSIDE the lock. The whole
+    # registry read-modify-write below runs under the exclusive lock with
+    # an atomic replace.
+    with _registry_lock():
+        registry = _load_registry_unlocked()
+        kept, removed = [], []
+        changed = False
+        now = datetime.now(timezone.utc)
 
-    for agent in registry.get("agents", []):
-        aid = agent.get("id", "")
-        undetected = not detection_map.get(aid, False)
-        config_dir = agent.get("config_dir")
-        dir_gone = (not config_dir) or (not Path(config_dir).exists())
+        for agent in registry.get("agents", []):
+            aid = agent.get("id", "")
+            undetected = not detection_map.get(aid, False)
+            config_dir = agent.get("config_dir")
+            dir_gone = (not config_dir) or (not Path(config_dir).exists())
 
-        # last_seen may be missing on hand-crafted entries -> treat as stale.
-        last_seen_raw = agent.get("lastSeen") or agent.get("last_seen") or ""
-        try:
-            last_seen = datetime.fromisoformat(last_seen_raw) if last_seen_raw else None
-        except Exception:
-            last_seen = None
-        stale_days = (now - last_seen).days if last_seen else grace_days + 1
+            # last_seen may be missing on hand-crafted entries -> treat as stale.
+            last_seen_raw = agent.get("lastSeen") or agent.get("last_seen") or ""
+            try:
+                last_seen = datetime.fromisoformat(last_seen_raw) if last_seen_raw else None
+            except Exception:
+                last_seen = None
+            if last_seen is not None and last_seen.tzinfo is None:
+                # This module always writes tz-aware ISO timestamps; treat
+                # hand-crafted timezone-less values as UTC so the naive/
+                # aware subtraction below cannot crash the whole cleanup.
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+            stale_days = (now - last_seen).days if last_seen else grace_days + 1
 
-        if undetected and dir_gone and stale_days > grace_days:
-            removed.append({"id": aid, "last_seen": last_seen_raw})
-        else:
-            kept.append(aid)
+            if undetected and dir_gone and stale_days > grace_days:
+                removed.append({"id": aid, "last_seen": last_seen_raw})
+            else:
+                kept.append(aid)
 
-    if removed:
-        registry["agents"] = [a for a in registry.get("agents", []) if a.get("id") in set(kept)]
-        changed = True
-
-    # Backfill host annotations for legacy entries (pre-host-fields).
-    for agent in registry.get("agents", []):
-        if not agent.get("host_type"):
-            annotate_host(agent, host_type="local")
+        if removed:
+            registry["agents"] = [a for a in registry.get("agents", []) if a.get("id") in set(kept)]
             changed = True
 
-    if changed:
-        save_agents_registry(registry)
+        # Backfill host annotations for legacy entries (pre-host-fields).
+        for agent in registry.get("agents", []):
+            if not agent.get("host_type"):
+                annotate_host(agent, host_type="local")
+                changed = True
+
+        if changed:
+            _save_registry_unlocked(registry)
 
     return {
         "status": "ok",
@@ -572,13 +689,14 @@ def set_agent_trust_level(agent_id: str, trust_level: str) -> dict:
     if trust_level not in valid:
         return {"error": f"Invalid trust level: {trust_level}"}
     
-    registry = load_agents_registry()
-    for a in registry.get("agents", []):
-        if a["id"] == agent_id:
-            a["trust_level"] = trust_level
-            save_agents_registry(registry)
-            return {"agent_id": agent_id, "trust_level": trust_level, "status": "updated"}
-    
+    with _registry_lock():
+        registry = _load_registry_unlocked()
+        for a in registry.get("agents", []):
+            if a.get("id") == agent_id:
+                a["trust_level"] = trust_level
+                _save_registry_unlocked(registry)
+                return {"agent_id": agent_id, "trust_level": trust_level, "status": "updated"}
+
     return {"error": f"Agent not found: {agent_id}"}
 
 
@@ -597,14 +715,8 @@ def register_remote_agent(agent_id: str, name: str, trust_level: str = "trusted"
     valid = ["public", "trusted", "private"]
     if trust_level not in valid:
         return {"error": f"Invalid trust level: {trust_level}"}
-    if agent_id in ("hermes", "openclaw", "claude-code", "gemini-cli"):
+    if agent_id in LOCAL_AGENT_IDS:
         return {"error": f"Refusing to shadow a local agent id: {agent_id}"}
-
-    registry = load_agents_registry()
-    agents = registry.setdefault("agents", [])
-    for a in agents:
-        if a.get("id") == agent_id:
-            return {"error": f"Agent id already registered: {agent_id}"}
 
     entry = {
         "id": agent_id,
@@ -623,8 +735,15 @@ def register_remote_agent(agent_id: str, name: str, trust_level: str = "trusted"
     }
     if notes:
         entry["notes"] = notes
-    agents.append(entry)
-    save_agents_registry(registry)
+
+    # Duplicate check + append + save inside ONE critical section: two
+    # concurrent registrations of the same id must not both pass the check.
+    with _registry_lock():
+        registry = _load_registry_unlocked()
+        if any(a.get("id") == agent_id for a in registry.get("agents", [])):
+            return {"error": f"Agent id already registered: {agent_id}"}
+        registry.setdefault("agents", []).append(entry)
+        _save_registry_unlocked(registry)
     return {"status": "registered", "agent": entry, "next_step": (
         "On the remote machine: install nexus-memory, set "
         f"NEXUS_AGENT_ID={agent_id} and NEXUS_QDRANT_HOST to this "

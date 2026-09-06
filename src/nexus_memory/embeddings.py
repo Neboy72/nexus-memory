@@ -95,13 +95,61 @@ def _read_existing_collection_model() -> str:
     return ""
 
 
+class CollectionModelUnavailable(RuntimeError):
+    """The model recorded for the existing collection is not available.
+
+    Security review fix companion: raised instead of silently selecting a
+    different local model (which would mix incompatible vector spaces) or
+    falling through to another provider.
+    """
+
+
 def _same_local_model(a: str, b: str) -> bool:
-    """True when two Ollama model names refer to the same model (tag-tolerant)."""
+    """True when two local model names are the exact same model.
+
+    Security review fix: this used to strip the tag and additionally accept
+    substring matches, so e.g. qwen3-embedding:0.6b and qwen3-embedding:8b
+    were treated as interchangeable although they can produce different
+    embedding dimensions. Model identity must include the tag.
+
+    Ollama semantics kept intact: a name WITHOUT a tag resolves to the
+    implicit default tag ':latest', so 'bge-m3' and 'bge-m3:latest' are the
+    same model. Any EXPLICIT tag (':0.6b', ':8b', ':latest-x') is a distinct,
+    well-defined model name and never equal to another tag.
+    """
     if not a or not b:
         return False
-    a_base = a.split(":")[0].lower()
-    b_base = b.split(":")[0].lower()
-    return a_base == b_base or a_base in b_base or b_base in a_base
+    na = a.strip().lower()
+    nb = b.strip().lower()
+    if na and ":" not in na:
+        na = f"{na}:latest"
+    if nb and ":" not in nb:
+        nb = f"{nb}:latest"
+    return na == nb
+
+
+# Cloud fallback is opt-in: switching to a cloud provider happens only when
+# the user explicitly asked for it via the preferred-provider setting.
+# Security review fix: a failed *explicitly chosen local* provider used to
+# trigger cloud-first auto-detection, silently shipping private text to a
+# cloud API. Now an explicit choice fails closed with a clear error unless
+# the user configured "auto" or listed allowed cloud fallbacks.
+CLOUD_PROVIDER_IDS = frozenset({"voyage", "openai", "google", "jina"})
+
+
+def _allowed_cloud_fallback() -> bool:
+    """True when the user explicitly allowed cloud fallback providers.
+
+    Allowed configurations (checked for the *explicitly preferred* provider
+    only, never during pure auto-detection):
+    - preferred provider is "auto" (cloud-first auto-detect by design)
+    - NEXUS_ALLOWED_CLOUD_FALLBACK contains one or more provider ids
+      (comma-separated; "1"/"true"/"yes" allows any cloud provider)
+    """
+    env = os.environ.get("NEXUS_ALLOWED_CLOUD_FALLBACK", "").strip().lower()
+    if env in ("1", "true", "yes"):
+        return True
+    return bool(env)
 
 
 class EmbeddingProvider:
@@ -115,10 +163,22 @@ class EmbeddingProvider:
     def __init__(self, preferred: str = ""):
         self._name = "none"
         self._dim = 384
+        self._backend: str = "none"
         self._client: Any = None
         self._model: Any = None
         self._preferred = preferred or _read_preferred_provider()
         self._detect()
+
+    @property
+    def backend(self) -> str:
+        """Backend type of the selected provider (dispatch key for embed()).
+
+        One of: voyage, openai, google, jina, ollama, sentence-transformers,
+        none. Kept separate from the model name so name-based heuristics can
+        never dispatch to the wrong API (Google's model name used to match
+        the OpenAI branch).
+        """
+        return self._backend
 
     def _detect(self):
         """Detect best available embedding backend.
@@ -129,9 +189,27 @@ class EmbeddingProvider:
         preferred = self._preferred
 
         if preferred:
+            explicit_cloud = preferred in CLOUD_PROVIDER_IDS
+            # Security review fix (fail closed): a non-auto explicit choice
+            # must never silently degrade to a different provider — in
+            # particular not from a local backend to a cloud one. Only
+            # "auto" (cloud-first by design) or an explicitly allowed cloud
+            # fallback may continue into auto-detection.
+            allowed_fallback = preferred == "auto" or (
+                explicit_cloud and _allowed_cloud_fallback()
+            )
             logging.info(f"Embedding: trying preferred provider '{preferred}'")
             if self._try_provider(preferred):
                 return
+            if not allowed_fallback:
+                raise RuntimeError(
+                    f"Preferred embedding provider '{preferred}' is not "
+                    f"available. Refusing to fall back to another provider "
+                    f"(fail-closed: texts must not be sent to a different "
+                    f"backend than the explicitly configured one). Set "
+                    f"NEXUS_ALLOWED_CLOUD_FALLBACK=1 or change "
+                    f"NEXUS_EMBEDDING_PROVIDER to 'auto' to allow fallbacks."
+                )
             logging.warning(
                 f"Preferred embedding provider '{preferred}' is not available. "
                 f"Falling back to auto-detect."
@@ -185,6 +263,7 @@ class EmbeddingProvider:
             self._client = voyageai.Client(api_key=VOYAGE_API_KEY)
             self._name = "voyage-4"
             self._dim = 1024
+            self._backend = "voyage"
             logging.info(f"Embedding: {self._name} (1024d, cloud)")
             return True
         except Exception:
@@ -199,6 +278,7 @@ class EmbeddingProvider:
             self._client = OpenAI(api_key=OPENAI_API_KEY)
             self._name = "text-embedding-3-small"
             self._dim = 1536
+            self._backend = "openai"
             logging.info(f"Embedding: {self._name} (1536d, cloud)")
             return True
         except Exception:
@@ -214,6 +294,7 @@ class EmbeddingProvider:
             self._client = genai
             self._name = "text-embedding-004"
             self._dim = 768
+            self._backend = "google"
             logging.info(f"Embedding: Google/{self._name} (768d, cloud)")
             return True
         except Exception:
@@ -228,6 +309,7 @@ class EmbeddingProvider:
             self._client = {"api_key": jina_key, "base_url": "https://api.jina.ai/v1"}
             self._name = "jina-embeddings-v3"
             self._dim = 1024
+            self._backend = "jina"
             logging.info(f"Embedding: Jina/{self._name} (1024d, cloud)")
             return True
         except Exception:
@@ -254,23 +336,46 @@ class EmbeddingProvider:
                 bge = next((m for m in models if "bge-m3" in m.lower()), None)
                 emb_model = qwen or bge or next((m for m in models if "embed" in m.lower()), None)
                 if emb_model:
-                    # Collection-drift guard: existing collections keep their model.
+                    # Collection-drift guard: existing collections keep their
+                    # model, but only if that model is actually installed.
+                    # Security review fix: the old existence check compared a
+                    # name with itself (always true), so a stored model that
+                    # is no longer on this machine (or a bogus cloud name) was
+                    # selected anyway; the first embed then failed or the
+                    # guard silently switched models. Resolve against the
+                    # real Ollama inventory and fail explicitly instead.
                     existing_model = _read_existing_collection_model()
                     if existing_model and not _same_local_model(existing_model, emb_model):
-                        if existing_model in models or _same_local_model(existing_model, existing_model):
+                        if existing_model in models:
                             logging.info(
                                 f"Embedding: keeping existing local model '{existing_model}' "
                                 f"(collection already uses it; '{emb_model}' also available)"
                             )
                             emb_model = existing_model
+                        else:
+                            raise CollectionModelUnavailable(
+                                f"Collection uses local model '{existing_model}', "
+                                f"but it is not available in Ollama. Embedding into "
+                                f"this collection with a different model would mix "
+                                f"incompatible vector spaces. Install it first "
+                                f"(e.g. `ollama pull {existing_model}`) or start "
+                                f"with an empty collection."
+                            )
                     self._client = {"base_url": "http://localhost:11434"}
                     self._name = emb_model
+                    self._backend = "ollama"
                     dim = self._probe_ollama_dim()
                     if not dim:
                         return False
                     self._dim = dim
                     logging.info(f"Embedding: Ollama/{emb_model} ({dim}d, local)")
                     return True
+        except CollectionModelUnavailable:
+            # Security review fix: the stored collection model is not usable —
+            # this must surface as an explicit error, not as a silent fall
+            # through to the next provider (which would switch models or
+            # backends behind the user's back).
+            raise
         except Exception:
             pass
         return False
@@ -340,19 +445,28 @@ class EmbeddingProvider:
             return False
 
     async def embed(self, text: str) -> list[float]:
-        if "voyage" in (self._name or ""):
+        # Dispatch on the stored backend type, never on the model name.
+        # Security review fix: the model-name heuristics sent Google's
+        # 'text-embedding-004' into the OpenAI branch (the google.generativeai
+        # module has no embeddings.create), so every Google call failed.
+        # getattr fallback: legacy/constructed-by-hand provider instances
+        # (tests, tools) may not carry _backend — they keep working.
+        backend = getattr(self, "_backend", None)
+        if backend == "voyage":
             result = await asyncio.to_thread(self._client.embed, [text], model=self._name)
             return result.embeddings[0]
-        elif "text-embedding" in (self._name or ""):
+        elif backend == "openai":
             result = await asyncio.to_thread(
                 self._client.embeddings.create,
                 model=self._name, input=[text]
             )
             return result.data[0].embedding
-        elif self._model:
-            vector = await asyncio.to_thread(self._model.encode, text)
-            return vector.tolist()
-        elif "jina" in (self._name or ""):
+        elif backend == "google":
+            result = await asyncio.to_thread(
+                self._client.embed_content, model=self._name, content=text
+            )
+            return result["embedding"]
+        elif backend == "jina":
             import requests as _req
             r = _req.post(
                 f"{self._client['base_url']}/embeddings",
@@ -361,7 +475,9 @@ class EmbeddingProvider:
                 timeout=30,
             )
             return r.json()["data"][0]["embedding"]
-        elif isinstance(self._client, dict) and self._client.get("base_url", "").startswith("http"):  # Ollama
+        elif backend == "ollama" or (
+                backend is None and "localhost:11434" in str((getattr(self, "_client", None) or {}).get("base_url", ""))
+        ):
             import requests as _req
             # qwen3-embedding is instruction-aware: queries get the Instruct prefix,
             # documents are embedded plain (matches the official usage guidance and
@@ -387,9 +503,9 @@ class EmbeddingProvider:
                 timeout=30,
             )
             return r.json()["embedding"]
-        elif "google" in str(type(self._client)).lower() or "generativeai" in str(type(self._client)).lower():
-            result = await asyncio.to_thread(self._client.embed_content, model=self._name, content=text)
-            return result["embedding"]
+        elif self._model:  # sentence-transformers
+            vector = await asyncio.to_thread(self._model.encode, text)
+            return vector.tolist()
         raise RuntimeError(
             f"No embedding provider available ({self._name}).\n"
             "Install: pip install sentence-transformers\n"
@@ -409,6 +525,13 @@ class EmbeddingProvider:
     @property
     def model_name(self) -> str:
         return self._name
+
+    @property
+    def provider_type(self) -> str:
+        """Cloud or local for the selected backend ('none' when unavailable)."""
+        return "cloud" if self._backend in CLOUD_PROVIDER_IDS else (
+            "local" if self._backend != "none" else "none"
+        )
 
 
 def detect_available() -> list[dict]:

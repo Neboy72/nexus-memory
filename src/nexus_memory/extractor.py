@@ -267,44 +267,31 @@ def _heuristic_extract(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             prev_was_assistant = (role == "assistant")
             continue
 
-        # Check for corrections (user corrects assistant → rule)
-        if role == "user" and prev_was_assistant:
-            for pattern in _CORRECTION_PATTERNS:
-                if re.search(pattern, content, re.IGNORECASE):
-                    # Extract the corrected statement
-                    fact_text = content[:300].strip()
-                    key = fact_text.lower()[:80]
-                    if key not in seen_texts:
-                        facts.append({
-                            "text": f"User correction: {fact_text}",
-                            "category": "rule",
-                            "confidence": 0.8,
-                        })
-                        seen_texts.add(key)
-                    break
-
-        # Check preference patterns FIRST (more specific than rules)
-        matched_pref = False
-        for pattern in _PREFERENCE_PATTERNS:
-            if re.search(pattern, content, re.IGNORECASE):
-                sentences = re.split(r"[.!?]\s+", content)
-                for sent in sentences:
-                    if re.search(pattern, sent, re.IGNORECASE) and len(sent) > 10:
-                        key = sent.lower()[:80]
+        # Role gate: durable preferences/rules/commands belong to the USER
+        # only. An assistant statement like "Ich möchte immer auf Englisch
+        # antworten" is the agent's own stance (or a quoted/echoed line) —
+        # never evidence of a durable USER preference. Assistant messages
+        # only contribute factual statements (server addresses, versions).
+        if role == "user":
+            # Check for corrections (user corrects assistant → rule)
+            if prev_was_assistant:
+                for pattern in _CORRECTION_PATTERNS:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        # Extract the corrected statement
+                        fact_text = content[:300].strip()
+                        key = fact_text.lower()[:80]
                         if key not in seen_texts:
                             facts.append({
-                                "text": sent[:300].strip(),
-                                "category": "preference",
-                                "confidence": 0.7,
+                                "text": f"User correction: {fact_text}",
+                                "category": "rule",
+                                "confidence": 0.8,
                             })
                             seen_texts.add(key)
                         break
-                matched_pref = True
-                break
 
-        # Only check rules if preference didn't match (avoids "keine" matching KEINE? rule)
-        if not matched_pref:
-            for pattern in _RULE_PATTERNS:
+            # Check preference patterns FIRST (more specific than rules)
+            matched_pref = False
+            for pattern in _PREFERENCE_PATTERNS:
                 if re.search(pattern, content, re.IGNORECASE):
                     sentences = re.split(r"[.!?]\s+", content)
                     for sent in sentences:
@@ -313,15 +300,34 @@ def _heuristic_extract(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                             if key not in seen_texts:
                                 facts.append({
                                     "text": sent[:300].strip(),
-                                    "category": "rule",
-                                    "confidence": 0.75,
+                                    "category": "preference",
+                                    "confidence": 0.7,
                                 })
                                 seen_texts.add(key)
                             break
+                    matched_pref = True
                     break
 
+            # Only check rules if preference didn't match (avoids "keine" matching KEINE? rule)
+            if not matched_pref:
+                for pattern in _RULE_PATTERNS:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        sentences = re.split(r"[.!?\s]\s+", content)
+                        for sent in sentences:
+                            if re.search(pattern, sent, re.IGNORECASE) and len(sent) > 10:
+                                key = sent.lower()[:80]
+                                if key not in seen_texts:
+                                    facts.append({
+                                        "text": sent[:300].strip(),
+                                        "category": "rule",
+                                        "confidence": 0.75,
+                                    })
+                                    seen_texts.add(key)
+                                break
+                        break
+
         # Check for fact patterns (only from assistant, not user)
-        if role == "assistant":
+        elif role == "assistant":
             for pattern in _FACT_PATTERNS:
                 if re.search(pattern, content, re.IGNORECASE):
                     sentences = re.split(r"[.!?]\s+", content)
