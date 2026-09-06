@@ -12,8 +12,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.18.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-766%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.18.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-813%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -489,6 +489,8 @@ Nexus doesn't just store raw conversation dumps — a background daemon (part of
 
 Other knobs: `NEXUS_CONSOLIDATION=0` (kill-switch), `NEXUS_CONSOLIDATION_INTERVAL` (default 3600s), `NEXUS_CONSOLIDATION_MODEL`.
 
+**Security (v0.18.1)**: consolidated facts **inherit the source memory's `access_level`** (unknown/missing levels degrade to `private`, never to public), and **guardrail override audit entries are never consolidated** — their content (commands + reasoning from protected-resource bypasses) stays out of distilled facts.
+
 ## SICA Self-Improvement Cycle 🔄
 
 **SICA** (v0.9.0): Automatic memory hygiene. Scans all memories for issues and patches them.
@@ -595,6 +597,7 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 📦 **Update Notifications** | **✅ Auto-check GitHub** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Access Control** | **✅ public/trusted/private** | ✅ Permissions | ❌ | ❌ | ❌ | ❌ |
+| 🔒 **Consolidation Security** | **✅ Access-level inheritance + audit exclusion** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Active Guardrails** | **✅ Memory-driven** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧠 **Native Plugins** | **✅ Hermes + OpenClaw + Claude Code** | ❌ | ✅ OpenClaw | ✅ OpenClaw | ✅ Hermes | ❌ |
 | 🔌 **MCP Server** | **✅ Any MCP agent** | ❌ | ❌ | ❌ | ✅ | ❌ |
@@ -632,6 +635,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.18.1** | 2026-09-06 | **Consolidation Security Fix**: consolidated facts inherit the source memory's `access_level` (unknown/missing → `private`, never public), guardrail override audit entries are excluded from consolidation entirely, 813 tests |
 | **v0.18.0** | 2026-09-06 | **Ingestion-Time Consolidation + Multi-Station Fuel Chain**: consolidation daemon distills raw session dumps into atomic facts + write-time conflict resolution (supersede, never delete), auto-discovery fuel chain (Ollama → OpenRouter → OpenAI-compatible → custom, cheapest-first), monthly budget cap `NEXUS_FUEL_BUDGET_USD` (default $1), kill-switch `NEXUS_CONSOLIDATION=0`, harness-independent (lives in MCP server), 799 tests |
 | **v0.17.0** | 2026-09-04 | qwen3-embedding:0.6b as preferred local provider (LongMemEval-S benchmark: 66/72/75% vs bge-m3 62/71/73%, +4 R@5), instruction-aware query prefix (documents plain), collection drift guard (existing users keep their model, config records `embedding_model`), wizard recommends qwen3 (639 MB) with bge-m3 second, 772 tests |
 | **v0.16.0** | 2026-09-03 | **Temporal Fact Validity**: point-in-time recall (`recall as_of` — "what was true at date X", TTL vs. cutoff), `fact_history` MCP tool (bidirectional supersession chain ordered by valid_from), `effective_from` on remember/update for retro-dated imports; `valid_from`/`valid_to` on every point, auto-supersession stamps `valid_to` (history retained, no migration, legacy behavior unchanged); 766 tests |
@@ -682,7 +686,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 799 tests ✅
+pytest tests/ -v # 813 tests ✅
 ```
 
 ---
@@ -712,4 +716,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.0 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.1 · One memory for all your agents</sub>
