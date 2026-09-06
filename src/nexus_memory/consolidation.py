@@ -175,7 +175,13 @@ class Consolidator:
         }}
 
     def _llm(self, prompt: str) -> str:
-        return self._llm_fn(prompt) if self._llm_fn else _ollama_generate(prompt)
+        if self._llm_fn:
+            return self._llm_fn(prompt)
+        from nexus_memory.fuel_chain import get_fuel
+        fn = get_fuel(OLLAMA_BASE, OLLAMA_MODEL, _ollama_generate)
+        if fn is None:
+            raise RuntimeError("no fuel station available (daemon sleeps)")
+        return fn(prompt)
 
     def _embed(self, text: str) -> list:
         if self._embed_fn:
