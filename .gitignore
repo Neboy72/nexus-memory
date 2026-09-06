@@ -32,3 +32,5 @@ __pycache__/
 
 # Accidental '~' directory from backup script bug
 ~/
+plugins/openclaw/*.tgz
+plugins/openclaw/reports/
