@@ -32,11 +32,14 @@ Run standalone:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import subprocess
 from pathlib import Path
 from typing import Optional
+
+log = logging.getLogger("nexus.chat_wizard")
 
 try:
     from nexus_memory.env_secret_store import validate_api_key
@@ -135,11 +138,23 @@ def _load_config() -> dict:
         try:
             return json.loads(path.read_text())
         except Exception:
-            pass
+            # Corrupt config: fail closed. A silent {} here would let the
+            # next _save_config() overwrite the broken file — losing
+            # recoverable data (trust level, provider choice). Callers get
+            # a distinguishable marker; _save_config refuses to overwrite
+            # a corrupt file unless _repair_config_file() resolved it.
+            log.warning("chat_wizard: config.json unreadable — refusing to "
+                        "overwrite it (repair manually or delete it)")
+            return {"_config_corrupt": True}
     return {}
 
 
 def _save_config(config: dict) -> None:
+    if config.get("_config_corrupt"):
+        raise ValueError(
+            "config.json is corrupt and was NOT overwritten. Fix or delete "
+            "~/.nexus-memory/config.json, then retry.")
+    config.pop("_config_corrupt", None)
     config_dir = _get_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     _get_config_path().write_text(json.dumps(config, indent=2) + "\n")
@@ -265,6 +280,19 @@ def apply_choice(provider_id: str, api_key: str = None) -> dict:
             return {"error": reason}
         _save_api_key(provider["key_env"], api_key)
         os.environ[provider["key_env"]] = api_key
+
+    # Review fix (MEDIUM :21): scan_providers() must see the key the wizard
+    # just wrote to .env, even in a NEW process that hasn't loaded .env.
+    # Consolidate the two key-state sources: if the env var is unset, load
+    # the value from the .env file the wizard writes (same source of truth).
+    elif not os.environ.get(provider.get("key_env") or ""):
+        try:
+            from nexus_memory.env_secret_store import read_env_key
+            stored = read_env_key(_get_env_path(), provider.get("key_env") or "")
+            if stored:
+                os.environ[provider["key_env"]] = stored
+        except Exception:
+            pass
 
     # Save config
     config = _load_config()

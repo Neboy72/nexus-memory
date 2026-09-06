@@ -79,6 +79,20 @@ def get_ts(payload: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+_TIMESTAMP_FIELDS = ("created_at", "updated_at", "modified", "timestamp", "created")
+
+
+def has_timestamp_field(payload: Dict[str, Any]) -> bool:
+    """True when the payload carries at least one timestamp field with a
+    NON-empty value — used to distinguish 'no timestamp at all' from
+    'timestamp present but unparseable' (data-quality issue)."""
+    for k in _TIMESTAMP_FIELDS:
+        v = payload.get(k)
+        if v is not None and str(v).strip() and str(v).strip().lower() != "none":
+            return True
+    return False
+
+
 class SelectiveForgettingAuditor:
     """Score-based aging audit. In-process, read-only, recommendations only."""
 
@@ -110,6 +124,7 @@ class SelectiveForgettingAuditor:
     def run(self) -> Dict[str, Any]:
         points = []
         offset = None
+        invalid_timestamps = 0
         while True:
             batch, offset = self._store.client.scroll(
                 self._collection, limit=500, offset=offset,
@@ -136,17 +151,25 @@ class SelectiveForgettingAuditor:
                     protected["protected_source"] = protected.get("protected_source", 0) + 1
                 elif str(payload.get("category") or "?") in PROTECTED_CATEGORY:
                     protected["protected_category"] = protected.get("protected_category", 0) + 1
+                elif has_timestamp_field(payload):
+                    # Timestamp fields exist but none parses — a data-quality
+                    # issue, counted separately (a single bad timestamp must
+                    # not abort the audit, it is skipped + reported).
+                    invalid_timestamps += 1
                 else:
                     protected["no_timestamp"] = protected.get("no_timestamp", 0) + 1
                 continue
             cat = str(payload.get("category") or "?")
             ts = get_ts(payload)
-            if ts is None:  # defensiv: score_point garantiert ts != None, aber sicher
-                protected["no_timestamp"] = protected.get("no_timestamp", 0) + 1
+            if ts is None:  # defensive: score_point guarantees ts != None
+                invalid_timestamps += 1
                 continue
             age_days = (now - ts) / 86400.0
             scored.append({
                 "score": round(score, 3),
+                # Filtering uses the EXACT score (kept separately from the
+                # rounded display value) so a rounded score can never cross
+                # the threshold that the exact score does not.
                 "age_days": round(age_days),
                 "category": cat,
                 "id": str(p.id),
@@ -154,6 +177,7 @@ class SelectiveForgettingAuditor:
             })
 
         scored.sort(key=lambda x: -x["score"])
+        # Threshold on the EXACT score, not a display-rounded one.
         candidates = [s for s in scored if s["score"] >= CANDIDATE_THRESHOLD]
 
         report: Dict[str, Any] = {
@@ -162,6 +186,7 @@ class SelectiveForgettingAuditor:
             "total_points": len(points),
             "scored": len(scored),
             "protected": protected,
+            "invalid_timestamps": invalid_timestamps,
             "candidates_score_ge_060": candidates,
             "threshold": CANDIDATE_THRESHOLD,
             "paper_reference": "arXiv 2608.28978: 9.8% Pruning ohne F1-Verlust",
@@ -177,8 +202,12 @@ class SelectiveForgettingAuditor:
             )
             with open(report["report_file"], "w") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+            # Cleanup uses the SAME naming scheme as the writer above
+            # (forget-YYYY-MM-DD.json). The old pattern ('forget-audit*')
+            # matched nothing, so old reports were never pruned.
             files = sorted(
-                f for f in os.listdir(self._data_dir) if f.startswith("forget-audit")
+                f for f in os.listdir(self._data_dir)
+                if f.startswith("forget-") and f.endswith(".json")
             )
             for old in sorted(files)[:-12]:
                 try:

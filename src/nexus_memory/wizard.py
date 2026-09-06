@@ -164,10 +164,20 @@ def _run_pip(package: str) -> bool:
         else:
             # Fallback: try without --quiet to see errors
             _print(f"  {YELLOW}Standard install failed, retrying...{RESET}")
-            subprocess.run(
+            # Review fix (MEDIUM :167): the retry's exit code must be
+            # checked — a failed second attempt used to be reported as
+            # success, hiding broken installs until runtime.
+            retry = subprocess.run(
                 [sys.executable, "-m", "pip", "install", package],
+                capture_output=True,
+                text=True,
                 timeout=120,
             )
+            if retry.returncode != 0:
+                _print(f"  {RED}✗{RESET} pip install failed for '{package}'.")
+                if retry.stderr:
+                    _print(f"  {DIM}{retry.stderr.strip()[:300]}{RESET}")
+                return False
             return True
     except subprocess.TimeoutExpired:
         _print(f"  {RED}Install timed out for {package}{RESET}")
@@ -319,7 +329,13 @@ def _get_env_file() -> Path:
 
 
 def _save_config(provider_id: str, embedding_model: str = "") -> None:
-    """Save the provider choice (and the concrete local model) to config.json."""
+    """Save the provider choice (and the concrete local model) to config.json.
+
+    Review fix (MEDIUM :337): switching providers RESETS the recorded model —
+    a non-empty embedding_model only reflects the NEW provider's local model.
+    An empty value REMOVES the stale key so the old provider's model (e.g.
+    an Ollama tag) never survives a switch to a cloud provider.
+    """
     config_dir = _get_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.json"
@@ -334,6 +350,10 @@ def _save_config(provider_id: str, embedding_model: str = "") -> None:
     config["embedding_provider"] = provider_id
     if embedding_model:
         config["embedding_model"] = embedding_model
+    else:
+        # Provider switched (or no local model): drop any stale recorded
+        # model from the PREVIOUS provider.
+        config.pop("embedding_model", None)
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     _print(f"  {GREEN}✓{RESET} Config saved: {config_path}")
 
@@ -515,7 +535,14 @@ def _setup_cloud_provider(ps: ProviderStatus) -> str | None:
     if not ps.key_detected:
         _print(f"\n  {BOLD}Get your API key at: {CYAN}{key_url}{RESET}")
         prompt = f"  Enter your {provider_name} API key (or press Enter to skip and use auto-detect): "
-        api_key = _input(prompt).strip()
+        # Review fix (MEDIUM :547): API keys must not be echoed to the
+        # terminal — hidden input via getpass (falls back to _input where
+        # no TTY is available, e.g. piped input in tests).
+        import getpass
+        try:
+            api_key = getpass.getpass(prompt).strip()
+        except Exception:
+            api_key = _input(prompt).strip()
 
         if api_key:
             _save_api_key(key_env, api_key)

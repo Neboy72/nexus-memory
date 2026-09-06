@@ -23,6 +23,7 @@ Design rules (agreed with Nebo 2026-09-05):
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -38,8 +39,44 @@ CONSOLIDATION_ENABLED = os.environ.get("NEXUS_CONSOLIDATION", "1") == "1"
 OLLAMA_BASE = os.environ.get("NEXUS_OLLAMA_BASE", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud")
 _CONFLICT_SIM_THRESHOLD = float(os.environ.get("NEXUS_CONSOLIDATION_SIM", "0.75"))
+# Consolidation resolves RELATIVE time expressions ("yesterday", "next
+# week") against the date the SOURCE SESSION was created — not the date
+# of the consolidation run. A session dumped 2026-08-10 saying "I
+# switched to the Mac Mini yesterday" means 2026-08-09; resolving
+# against the run date (2026-09-06) would bake a wrong date into a
+# permanent fact. Derived from the source point's created_at
+# (fallback: today when missing/unparseable).
 _CONSOLIDATED_BY = "consolidation-v1"
 _MAX_CONV_CHARS = 8000
+
+
+def _source_date(payload: Any) -> str:
+    """Date of the source point (YYYY-MM-DD) for relative-time resolution.
+
+    Reads created_at from the source payload (ISO-ish or unix seconds/
+    milliseconds); falls back to the current date when missing, empty
+    or unparseable — never raises, never returns an empty string.
+    """
+    if not isinstance(payload, dict):
+        return time.strftime("%Y-%m-%d")
+    raw = payload.get("created_at")
+    if isinstance(raw, (int, float)) and raw > 0:
+        try:
+            return time.strftime("%Y-%m-%d", time.gmtime(float(raw)))
+        except Exception:
+            pass
+    txt = str(raw or "").strip()
+    if txt:
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", txt)
+        if m:
+            try:
+                return time.strftime(
+                    "%Y-%m-%d", time.struct_time(
+                        (int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                         0, 0, 0, 0, 1, 0)))
+            except Exception:
+                pass
+    return time.strftime("%Y-%m-%d")
 
 
 class _SkipPointError(Exception):
@@ -241,8 +278,8 @@ class Consolidator:
     def run(self, batch_size: int = 0, dry_run: bool = False) -> Dict[str, Any]:
         batch_size = batch_size or CONSOLIDATION_BATCH
         scanned = facts_created = superseded = duplicates = failed = skipped = 0
+        pending_supersedes = self._load_pending_supersedes()
         raw_points = self._next_raw_batch(batch_size)
-        date = time.strftime("%Y-%m-%d")
         for p in raw_points:
             scanned += 1
             payload = p.payload or {}
@@ -272,7 +309,10 @@ class Consolidator:
             try:
                 text = payload.get("content", "")
                 conv = text[:_MAX_CONV_CHARS]
-                facts = _parse_facts(self._llm(DISTILL_PROMPT.format(date=date, conv=conv)))
+                # Resolve relative times ("yesterday") against the date the
+                # SOURCE SESSION was created, not the consolidation run date.
+                facts = _parse_facts(self._llm(DISTILL_PROMPT.format(
+                    date=_source_date(payload), conv=conv)))
                 if facts is None:
                     # Unparseable LLM response — NOT a valid "no facts"
                     # result. Do not mark the source consolidated: its
@@ -294,8 +334,20 @@ class Consolidator:
                     if not dry_run:
                         new_id = self._store_fact(fact, p.id, source_payload=payload)
                         for old_id in supersede_ids:
-                            self._supersede_old(old_id, new_id)
-                        superseded += len(supersede_ids)
+                            try:
+                                self._supersede_old(old_id, new_id)
+                                superseded += 1
+                            except Exception as sup_exc:
+                                # A failed supersede must NOT abort the rest
+                                # of the batch (the new fact is already
+                                # stored). Collect it as pending and retry
+                                # on the next tick (see _load_pending_supersedes).
+                                failed += 1
+                                pending_supersedes.append(
+                                    {"old_id": str(old_id), "new_id": str(new_id)})
+                                log.warning(
+                                    "consolidation: supersede of %s -> %s failed "
+                                    "(pending retry): %s", old_id, new_id, sup_exc)
                     created_here += 1
                     facts_created += 1
                 if not dry_run:
@@ -303,10 +355,14 @@ class Consolidator:
             except Exception as exc:
                 failed += 1
                 log.warning("consolidation: point %s failed (skipped): %s", p.id, exc)
+        retried, done_ids = self._retry_pending_supersedes(pending_supersedes)
+        superseded += retried
+        failed += max(0, len(pending_supersedes) - len(done_ids))
         report = {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                   "scanned": scanned, "facts_created": facts_created,
                   "superseded": superseded, "duplicates": duplicates,
-                  "failed": failed, "skipped": skipped}
+                  "failed": failed, "skipped": skipped,
+                  "pending_supersedes": max(0, len(pending_supersedes) - len(done_ids))}
         with self._lock:
             self._last_report = report
         return report
@@ -443,6 +499,62 @@ class Consolidator:
                      "consolidated_facts": facts_created},
             points=[point_id],
         )
+
+    # ── pending supersede retry store (review-fix: partial failures must
+    #    complete on a later tick instead of being lost) ────────────────
+    # The list lives at ~/.nexus-memory/consolidation_pending_supersedes.json
+    # as [{"old_id": ..., "new_id": ...}, ...]. Small, fail-safe: a broken
+    # file is treated as empty (the underlying facts are still canonical;
+    # supersede retries resume on the next successful load).
+
+    @staticmethod
+    def _pending_supersedes_path():
+        import pathlib
+        base = os.environ.get("NEXUS_HOME", str(pathlib.Path.home() / ".nexus-memory"))
+        return pathlib.Path(base) / "consolidation_pending_supersedes.json"
+
+    def _load_pending_supersedes(self) -> list:
+        try:
+            with open(self._pending_supersedes_path(), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, list):
+                return [item for item in data
+                        if isinstance(item, dict) and item.get("old_id") and item.get("new_id")]
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            log.warning("consolidation: pending-supersede file unreadable (%s) — "
+                        "starting with empty retry list", exc)
+        return []
+
+    def _save_pending_supersedes(self, items: list) -> None:
+        path = self._pending_supersedes_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(items, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        except Exception as exc:
+            # Non-fatal: a failed persist means lost retry bookkeeping, the
+            # canonical facts themselves are unaffected (never delete).
+            log.warning("consolidation: persisting pending supersedes failed: %s", exc)
+
+    def _retry_pending_supersedes(self, pending: list):
+        """Retry collected supersede pairs; returns (succeeded_count, done_ids)."""
+        retried, done_ids = 0, []
+        for item in pending:
+            try:
+                self._supersede_old(item["old_id"], item["new_id"])
+                retried += 1
+                done_ids.append(item)
+            except Exception as exc:
+                log.warning("consolidation: pending supersede retry %s -> %s still "
+                            "failing: %s", item["old_id"], item["new_id"], exc)
+        self._save_pending_supersedes([i for i in pending if i not in done_ids])
+        return retried, done_ids
 
     # ── daemon wiring (TrustService pattern) ─────────────────────────
     def start(self) -> None:
