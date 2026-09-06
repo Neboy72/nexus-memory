@@ -494,6 +494,17 @@ class MemoryStore:
                 logging.info("Retrieval-watch daemon active")
             except Exception as e:
                 logging.warning(f"Retrieval-watch daemon unavailable: {e}")
+        # 2026-09-05 (Nebo-GO, benchmark-driven): ingestion consolidation — raw
+        # session dumps get distilled into atomic facts + contradictions
+        # superseded at write time. In-process daemon (no cron dependency).
+        # Kill-switch: NEXUS_CONSOLIDATION=0.
+        self._consolidator = None
+        if os.environ.get("NEXUS_CONSOLIDATION", "1") == "1":
+            try:
+                from nexus_memory.consolidation import start_daemon
+                self._consolidator = start_daemon(self, COLLECTION_NAME)
+            except Exception as e:
+                logging.warning(f"Consolidation daemon unavailable: {e}")
 
     def _check_for_updates_async(self):
         """Check GitHub for new releases on startup (non-blocking, cached 24h)."""
