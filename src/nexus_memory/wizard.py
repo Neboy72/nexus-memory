@@ -339,28 +339,12 @@ def _save_config(provider_id: str, embedding_model: str = "") -> None:
 
 
 def _save_api_key(key_env: str, api_key: str) -> None:
-    """Save an API key to the .env file."""
-    config_dir = _get_config_dir()
-    config_dir.mkdir(parents=True, exist_ok=True)
+    """Save an API key to the .env file (validated, escaped, 0600, atomic)."""
+    from nexus_memory.env_secret_store import write_env_key
+
     env_path = _get_env_file()
-
-    # Read existing .env content
-    existing = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                existing[k.strip()] = v.strip().strip('"').strip("'")
-
-    # Update/add the key
-    existing[key_env] = api_key
-
-    # Write back
-    lines = []
-    for k, v in existing.items():
-        lines.append(f'{k}="{v}"')
-    env_path.write_text("\n".join(lines) + "\n")
+    write_env_key(env_path, key_env, api_key)
+    os.chmod(_get_config_dir(), 0o700)
     _print(f"  {GREEN}✓{RESET} API key saved: {env_path}")
 
 

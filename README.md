@@ -12,8 +12,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.18.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-813%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.18.2-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-994%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -491,6 +491,8 @@ Other knobs: `NEXUS_CONSOLIDATION=0` (kill-switch), `NEXUS_CONSOLIDATION_INTERVA
 
 **Security (v0.18.1)**: consolidated facts **inherit the source memory's `access_level`** (unknown/missing levels degrade to `private`, never to public), and **guardrail override audit entries are never consolidated** — their content (commands + reasoning from protected-resource bypasses) stays out of distilled facts.
 
+**Security (v0.18.2)**: hardening wave across the whole codebase — guardrails now **fail closed** for destructive actions when protection rules can't be loaded (and load every rule page, resolve symlinks, and block parent-directory + option-bypassing deletions); the health-audit dedup sweep is **opt-in** (`NEXUS_DEDUP_SWEEP=1`) with lossless full-content identity and atomic pre-deletion backups; embedding providers **fail closed** when an explicitly configured backend is down (no silent cloud fallback — `NEXUS_ALLOWED_CLOUD_FALLBACK` opts in); the fuel-chain budget is re-checked and reserved under a cross-process file lock before every paid call; auto-supersession never crosses access boundaries and requires token-level overlap (not just vector similarity); the agent registry is guarded by `fcntl.flock` with atomic writes; and API keys are stored with `0600` permissions in `0700` directories, injection-safe.
+
 ## SICA Self-Improvement Cycle 🔄
 
 **SICA** (v0.9.0): Automatic memory hygiene. Scans all memories for issues and patches them.
@@ -598,6 +600,7 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Access Control** | **✅ public/trusted/private** | ✅ Permissions | ❌ | ❌ | ❌ | ❌ |
 | 🔒 **Consolidation Security** | **✅ Access-level inheritance + audit exclusion** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🛡️ **Fail-Closed Security Wave** | **✅ Guardrails, dedup, embeddings, fuel budget** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Active Guardrails** | **✅ Memory-driven** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧠 **Native Plugins** | **✅ Hermes + OpenClaw + Claude Code** | ❌ | ✅ OpenClaw | ✅ OpenClaw | ✅ Hermes | ❌ |
 | 🔌 **MCP Server** | **✅ Any MCP agent** | ❌ | ❌ | ❌ | ✅ | ❌ |
@@ -635,6 +638,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.18.2** | 2026-09-06 | **Security Hardening Wave**: 40 high-severity review findings fixed across guardrails (fail-closed rule loading, full pagination, option-independent destructive command detection, parent-dir + symlink bypasses, override audit validation), health audit (lossless full-content dedup, atomic backups before deletion, opt-in destructive sweep), embeddings (backend-aware dispatch, fail-closed explicit providers, exact model identity), fuel chain (generation-time station dispatch, per-call budget reservations under file lock, fail-closed corrupt state), auto-supersession (access-level boundaries + token-overlap guard, persist-then-deprecate), agent registry (cross-process flock + atomic writes), per-agent MCP config adapters (Codex TOML / Claude Code / Windsurf), .env secret hardening (0600/0700, injection-safe serialization), docker Qdrant exposure fix; 994 tests |
 | **v0.18.1** | 2026-09-06 | **Consolidation Security Fix**: consolidated facts inherit the source memory's `access_level` (unknown/missing → `private`, never public), guardrail override audit entries are excluded from consolidation entirely, 813 tests |
 | **v0.18.0** | 2026-09-06 | **Ingestion-Time Consolidation + Multi-Station Fuel Chain**: consolidation daemon distills raw session dumps into atomic facts + write-time conflict resolution (supersede, never delete), auto-discovery fuel chain (Ollama → OpenRouter → OpenAI-compatible → custom, cheapest-first), monthly budget cap `NEXUS_FUEL_BUDGET_USD` (default $1), kill-switch `NEXUS_CONSOLIDATION=0`, harness-independent (lives in MCP server), 799 tests |
 | **v0.17.0** | 2026-09-04 | qwen3-embedding:0.6b as preferred local provider (LongMemEval-S benchmark: 66/72/75% vs bge-m3 62/71/73%, +4 R@5), instruction-aware query prefix (documents plain), collection drift guard (existing users keep their model, config records `embedding_model`), wizard recommends qwen3 (639 MB) with bge-m3 second, 772 tests |
@@ -686,7 +690,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 813 tests ✅
+pytest tests/ -v # 994 tests ✅
 ```
 
 ---
@@ -716,4 +720,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.1 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.2 · One memory for all your agents</sub>
