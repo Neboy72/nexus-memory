@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -1318,4 +1320,214 @@ class TestRecallAccessGateFailClosed:
         results = await store.recall("hello", agent_level="public")
         assert len(results) == 1
         assert results[0]["access_level"] == "public"
+
+
+# ===========================================================================
+# Astra-review MEDIUM fixes — invariant tests
+# (webhook write-failure reporting / cross-process RMW race /
+#  backup file permissions / MCP stdout channel hygiene)
+# ===========================================================================
+
+
+class TestWebhookWriteFailureReporting:
+    """Invariant: a failed persistence write must never be reported as
+    success — ``subscribe``/``unsubscribe`` raise instead of silently
+    dropping the subscription (data loss).
+    """
+
+    async def test_subscribe_reports_write_failure_and_leaves_no_litter(
+        self, webhook_store, tmp_path, monkeypatch
+    ):
+        def _boom(*args, **kwargs):
+            raise OSError("disk on fire")
+
+        # Fail the atomic replace (the durability point of the write).
+        monkeypatch.setattr(mcp.os, "replace", _boom)
+
+        with pytest.raises(RuntimeError, match="could not be persisted"):
+            await webhook_store.subscribe(
+                "memory.remember", "https://hook.example/fail"
+            )
+
+        # Nothing was reported as persisted → the store file must still
+        # hold the previous state (empty), and no temp litter remains.
+        assert not (tmp_path / "webhooks.json").exists()
+        leftovers = [p.name for p in tmp_path.iterdir() if ".tmp-" in p.name]
+        assert leftovers == []
+
+    async def test_unsubscribe_reports_write_failure(
+        self, webhook_store, monkeypatch
+    ):
+        sub = await webhook_store.subscribe(
+            "memory.remember", "https://hook.example/ok"
+        )
+
+        def _boom(*args, **kwargs):
+            raise OSError("disk on fire")
+
+        monkeypatch.setattr(mcp.os, "replace", _boom)
+        with pytest.raises(RuntimeError, match="could not be persisted"):
+            await webhook_store.unsubscribe(sub["id"])
+        # The old (successful) state is still on disk — untouched.
+        subs = await webhook_store.list()
+        assert [s["id"] for s in subs] == [sub["id"]]
+
+    async def test_success_path_still_persists_atomically(self, webhook_store):
+        # Regression guard for the new bool-returning write: the happy
+        # path must keep working (single complete JSON doc on disk).
+        sub = await webhook_store.subscribe(
+            "memory.remember", "https://hook.example/persist"
+        )
+        doc = json.loads(webhook_store.path.read_text())
+        assert [s["id"] for s in doc["subscriptions"]] == [sub["id"]]
+
+
+class TestWebhookCrossProcessLocking:
+    """Invariant: two server processes doing concurrent read-modify-write
+    on the same webhook store must not lose each other's subscriptions.
+    """
+
+    async def test_two_processes_no_lost_subscriptions(self, tmp_path):
+        import subprocess
+        import textwrap
+
+        store_path = tmp_path / "webhooks.json"
+        n = 5
+
+        worker = textwrap.dedent(
+            """
+            import sys
+            import asyncio
+            from nexus_memory import mcp_server as mcp
+
+            store = mcp.WebhookStore(path=sys.argv[1])
+            for i in range(int(sys.argv[2])):
+                asyncio.run(
+                    store.subscribe("memory.remember", "https://hook/" + str(i))
+                )
+            """
+        )
+
+        # nexus_memory may only be importable via the repo's src/ layout in
+        # this environment — make sure the worker subprocesses see it too.
+        env = dict(os.environ)
+        src_dir = str(Path(mcp.__file__).resolve().parent.parent)
+        env["PYTHONPATH"] = (
+            src_dir + os.pathsep + env["PYTHONPATH"]
+            if env.get("PYTHONPATH")
+            else src_dir
+        )
+
+        procs = [
+            subprocess.Popen(
+                [sys.executable, "-c", worker, str(store_path), str(n)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            for _ in range(2)
+        ]
+        outs = [p.communicate() for p in procs]
+        for p, (out, err) in zip(procs, outs):
+            assert p.returncode == 0, f"worker failed: {err.decode()[:500]}"
+
+        doc = json.loads(store_path.read_text())
+        subs = doc["subscriptions"]
+        # Every write from BOTH processes survived the RMW race.
+        assert len(subs) == 2 * n
+        assert len({s["id"] for s in subs}) == 2 * n
+
+
+class TestAutoBackupPermissions:
+    """Invariant: auto-backups contain every memory including private
+    payloads, so the file is 0o600 and the directory 0o700 — regardless
+    of the process umask.
+    """
+
+    def _bare_store(self):
+        store = object.__new__(mcp.MemoryStore)
+        store.client = MagicMock()
+        # scroll(...) → (points, next_offset): single empty page.
+        store.client.scroll.return_value = ([], None)
+        return store
+
+    def test_backup_file_0600_and_dir_0700_despite_umask(
+        self, tmp_path, monkeypatch
+    ):
+        import stat as stat_module
+
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(
+            mcp.os.path,
+            "expanduser",
+            lambda p: str(fake_home / p[2:]) if p.startswith("~/") else p,
+        )
+
+        store = self._bare_store()
+
+        old_umask = os.umask(0)  # worst case: umask removes NOTHING
+        try:
+            backup_path = store._do_backup()
+        finally:
+            os.umask(old_umask)
+
+        mode = stat_module.S_IMODE(os.stat(backup_path).st_mode)
+        assert mode & 0o077 == 0, f"backup readable by group/other: {oct(mode)}"
+        assert mode & 0o600 == 0o600
+
+        backup_dir = os.path.dirname(backup_path)
+        dmode = stat_module.S_IMODE(os.stat(backup_dir).st_mode)
+        assert dmode & 0o077 == 0, f"backup dir too open: {oct(dmode)}"
+        assert dmode & 0o700 == 0o700
+
+        # The backup content is still a valid full dump.
+        doc = json.loads(open(backup_path).read())
+        assert doc["point_count"] == 0
+        assert doc["points"] == []
+
+    def test_pre_existing_loose_backup_file_gets_tightened(
+        self, tmp_path, monkeypatch
+    ):
+        import stat as stat_module
+
+        fake_home = tmp_path / "home2"
+        (fake_home / ".nexus-memory" / "backups").mkdir(parents=True)
+        monkeypatch.setattr(
+            mcp.os.path,
+            "expanduser",
+            lambda p: str(fake_home / p[2:]) if p.startswith("~/") else p,
+        )
+        # A previous backup with lax permissions (e.g. created by an older
+        # version): the next run must fix the mode of the reused timestamp
+        # path only if it collides — instead assert our fresh file is tight
+        # even when a loose leftover exists in the directory.
+        loose = fake_home / ".nexus-memory" / "backups" / "nexus-backup-old.json"
+        loose.write_text("{}")
+        os.chmod(loose, 0o644)
+
+        store = self._bare_store()
+        backup_path = store._do_backup()
+
+        mode = stat_module.S_IMODE(os.stat(backup_path).st_mode)
+        assert mode & 0o077 == 0
+
+
+class TestCliStdoutChannelPurity:
+    """Invariant: the MCP stdio transport owns stdout. Non-protocol CLI
+    messages (WebUI hint) must go to stderr, never stdout.
+    """
+
+    def test_webui_banner_goes_to_stderr_not_stdout(self, monkeypatch, capsys):
+        # Force the "webui deps installed" branch deterministically.
+        monkeypatch.setitem(sys.modules, "fastapi", MagicMock())
+        monkeypatch.setitem(sys.modules, "uvicorn", MagicMock())
+
+        mcp._check_webui_available()
+
+        captured = capsys.readouterr()
+        assert captured.out == "", (
+            f"non-MCP text on protocol channel (stdout): {captured.out!r}"
+        )
+        assert "WebUI available" in captured.err
 

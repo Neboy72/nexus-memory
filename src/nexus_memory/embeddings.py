@@ -218,8 +218,39 @@ class EmbeddingProvider:
         # Auto-detect: priority order
         self._detect_auto()
 
+    def _reset_provider_state(self) -> None:
+        """Clear all provider state after a failed init attempt.
+
+        Review fix (MEDIUM :278): a _try_* method that crashed AFTER setting
+        e.g. self._name/_backend but BEFORE completing its probe used to
+        leave a 'phantom available' provider behind — available reported
+        True while every embed() call would fail. Resetting centrally after
+        every failed attempt guarantees consistent state.
+        """
+        self._name = "none"
+        self._dim = 384
+        self._backend = "none"
+        self._client = None
+        self._model = None
+
     def _try_provider(self, provider_id: str) -> bool:
-        """Try to initialize a specific provider by id. Returns True on success."""
+        """Try to initialize a specific provider by id. Returns True on success.
+
+        CollectionModelUnavailable propagates (fail-closed: the collection's
+        stored model is gone — silently falling through would mix vector
+        spaces). Any other failure resets the phantom-provider state.
+        """
+        try:
+            ok = self._try_provider_inner(provider_id)
+        except CollectionModelUnavailable:
+            raise
+        except Exception:
+            ok = False
+        if not ok:
+            self._reset_provider_state()
+        return ok
+
+    def _try_provider_inner(self, provider_id: str) -> bool:
         if provider_id == "voyage":
             return self._try_voyage()
         elif provider_id == "openai":
@@ -235,22 +266,38 @@ class EmbeddingProvider:
         return False
 
     def _detect_auto(self):
-        """Auto-detect providers in priority order."""
+        """Auto-detect providers in priority order.
+
+        Collection-drift guard: an existing collection keeps its recorded
+        local model — see _try_ollama()/CollectionModelUnavailable.
+        CollectionModelUnavailable must propagate (fail-closed, never silently
+        switch models/backends behind the user's back) — see the ollama step.
+        """
         # 1. Voyage (cloud, best quality)
         if self._try_voyage():
             return
+        self._reset_provider_state()
         # 2. OpenAI (cloud)
         if self._try_openai():
             return
+        self._reset_provider_state()
         # 3. Google / Vertex AI (cloud)
         if self._try_google():
             return
+        self._reset_provider_state()
         # 4. Jina (cloud, best value)
         if self._try_jina():
             return
-        # 5. Ollama (local service)
-        if self._try_ollama():
-            return
+        self._reset_provider_state()
+        # 5. Ollama (local service) — may raise CollectionModelUnavailable
+        try:
+            if self._try_ollama():
+                return
+        except CollectionModelUnavailable:
+            raise
+        except Exception:
+            pass
+        self._reset_provider_state()
         # 6. sentence-transformers (local, zero-setup fallback)
         self._try_sentence_transformers()
 
@@ -467,42 +514,56 @@ class EmbeddingProvider:
             )
             return result["embedding"]
         elif backend == "jina":
+            # Review fix (MEDIUM :369): blocking HTTP must not run on the
+            # event loop thread — moved to a worker thread via to_thread.
             import requests as _req
-            r = _req.post(
-                f"{self._client['base_url']}/embeddings",
-                json={"model": self._name, "input": [text]},
-                headers={"Authorization": f"Bearer {self._client['api_key']}"},
-                timeout=30,
-            )
-            return r.json()["data"][0]["embedding"]
+
+            def _jina_post() -> list:
+                r = _req.post(
+                    f"{self._client['base_url']}/embeddings",
+                    json={"model": self._name, "input": [text]},
+                    headers={"Authorization": f"Bearer {self._client['api_key']}"},
+                    timeout=30,
+                )
+                return r.json()["data"][0]["embedding"]
+
+            return await asyncio.to_thread(_jina_post)
         elif backend == "ollama" or (
                 backend is None and "localhost:11434" in str((getattr(self, "_client", None) or {}).get("base_url", ""))
         ):
-            import requests as _req
-            # qwen3-embedding is instruction-aware: queries get the Instruct prefix,
-            # documents are embedded plain (matches the official usage guidance and
-            # the benchmark protocol that measured +4 R@5 vs bge-m3).
+            # Review fix (MEDIUM :369): blocking HTTP must not run on the
+            # event loop thread — the whole ollama request chain (modern
+            # endpoint + legacy fallback) moved to a worker thread.
+            # qwen3-embedding is instruction-aware: queries get the Instruct
+            # prefix, documents are embedded plain (official usage guidance,
+            # benchmark protocol that measured +4 R@5 vs bge-m3).
             payload_text = text
             if "qwen3-embedding" in (self._name or "").lower():
                 payload_text = f"Instruct: retrieve the relevant memory for the user query. Query: {text}"
-            # Modern endpoint first (/api/embed, batched input), legacy /api/embeddings as fallback
-            try:
+
+            def _ollama_post() -> list:
+                import requests as _req
+                # Modern endpoint first (/api/embed, batched input),
+                # legacy /api/embeddings as fallback
+                try:
+                    r = _req.post(
+                        f"{self._client['base_url']}/api/embed",
+                        json={"model": self._name, "input": [payload_text]},
+                        timeout=30,
+                    )
+                    vec = r.json().get("embeddings", [[None]])[0]
+                    if vec and isinstance(vec[0], (int, float)):
+                        return vec
+                except Exception:
+                    pass
                 r = _req.post(
-                    f"{self._client['base_url']}/api/embed",
-                    json={"model": self._name, "input": [payload_text]},
+                    f"{self._client['base_url']}/api/embeddings",
+                    json={"model": self._name, "prompt": payload_text},
                     timeout=30,
                 )
-                vec = r.json().get("embeddings", [[None]])[0]
-                if vec and isinstance(vec[0], (int, float)):
-                    return vec
-            except Exception:
-                pass
-            r = _req.post(
-                f"{self._client['base_url']}/api/embeddings",
-                json={"model": self._name, "prompt": payload_text},
-                timeout=30,
-            )
-            return r.json()["embedding"]
+                return r.json()["embedding"]
+
+            return await asyncio.to_thread(_ollama_post)
         elif self._model:  # sentence-transformers
             vector = await asyncio.to_thread(self._model.encode, text)
             return vector.tolist()

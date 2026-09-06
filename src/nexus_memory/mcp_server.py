@@ -12,11 +12,15 @@ Integrates all nexus v2.8.0 features:
 """
 
 import asyncio
+import contextlib
+import fcntl
 import json
 import logging
 import os
 import re
+import stat as stat_module
 import sys
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,8 +112,42 @@ class WebhookStore:
 
     # ---- low-level IO --------------------------------------------------
 
+    @contextlib.contextmanager
+    def _file_lock(self):
+        """Cross-process flock over the WHOLE read-modify-write cycle.
+
+        The asyncio.Lock above only serializes coroutines inside THIS
+        process. Several MCP server processes can share
+        ``~/.nexus-webhooks.json`` (multiple agents, parallel test runs),
+        and read-modify-write without a file lock silently loses the other
+        process' subscription. flock() conflicts across file descriptors,
+        so it serializes other processes AND other threads (every caller
+        opens its own fd on the sidecar lock file). Same pattern as the
+        agent_detect registry (``_registry_lock``).
+        """
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = open(lock_path, "a+")
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+    @contextlib.asynccontextmanager
+    async def _locked(self):
+        """Hold the asyncio lock and the cross-process flock together."""
+        async with self._lock:
+            with self._file_lock():
+                yield
+
+    # ---- low-level IO --------------------------------------------------
+
     def _read_sync(self) -> list[dict]:
-        """Synchronous read of the JSON file. Caller must hold ``_lock``.
+        """Synchronous read of the JSON file. Caller must hold both locks.
 
         Returns an empty list when the file is missing or unreadable so a
         fresh install / permission hiccup never breaks the MCP server.
@@ -127,15 +165,35 @@ class WebhookStore:
         subs = data.get("subscriptions", [])
         return subs if isinstance(subs, list) else []
 
-    def _write_sync(self, subs: list[dict]) -> None:
-        """Synchronous write of the JSON file. Caller must hold ``_lock``."""
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+    def _write_sync(self, subs: list[dict]) -> bool:
+        """Atomically replace the JSON file. Caller must hold both locks.
+
+        Writes a unique temp file next to the store (flushed + fsynced)
+        and os.replace()s it into place, so readers — in this or another
+        process — always see either the old or the new complete document.
+
+        Returns True on success, False when the write FAILED. Callers
+        must propagate that failure: silently reporting success after a
+        failed write loses the subscription on the next restart
+        (data loss). Temp files are always cleaned up.
+        """
+        tmp_path = self.path.with_name(
+            f"{self.path.name}.tmp-{os.getpid()}-{threading.get_ident()}"
+        )
         try:
-            with tmp.open("w", encoding="utf-8") as fh:
+            with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump({"subscriptions": subs}, fh, indent=2)
-            tmp.replace(self.path)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_path, self.path)
         except OSError as exc:
             logging.error(f"Webhook store write failed: {exc}")
+            return False
+        finally:
+            # Never leak the temp file, even on a failed replace.
+            with contextlib.suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+        return True
 
     # ---- public API ----------------------------------------------------
 
@@ -164,23 +222,35 @@ class WebhookStore:
             "webhook_url": webhook_url,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        async with self._lock:
+        async with self._locked():
             subs = self._read_sync()
             subs.append(sub)
-            self._write_sync(subs)
+            if not self._write_sync(subs):
+                raise RuntimeError(
+                    f"Webhook subscription could not be persisted to "
+                    f"{self.path}: write failed"
+                )
         logging.info(f"Webhook subscribed: {sub['id'][:8]} {event_type} -> {webhook_url}")
         return sub
 
     async def unsubscribe(self, subscription_id: str) -> bool:
         """Remove the subscription with ``subscription_id``. Returns True
         when something was actually removed, False when the id was unknown.
+
+        Raises ``RuntimeError`` when the removal cannot be persisted —
+        reporting success without a durable write would leave the
+        subscription alive and let events fire after "unsubscribed".
         """
-        async with self._lock:
+        async with self._locked():
             subs = self._read_sync()
             kept = [s for s in subs if s.get("id") != subscription_id]
             if len(kept) == len(subs):
                 return False
-            self._write_sync(kept)
+            if not self._write_sync(kept):
+                raise RuntimeError(
+                    f"Webhook unsubscription could not be persisted to "
+                    f"{self.path}: write failed"
+                )
         logging.info(f"Webhook unsubscribed: {subscription_id[:8]}")
         return True
 
@@ -599,7 +669,14 @@ class MemoryStore:
         from datetime import datetime
 
         backup_dir = os.path.expanduser("~/.nexus-memory/backups")
-        os.makedirs(backup_dir, exist_ok=True)
+        # 0o700: backups contain EVERY memory including access_level="private"
+        # payloads — the directory must never be readable by other users,
+        # even if the process umask is lax (e.g. 0o022).
+        os.makedirs(backup_dir, mode=0o700, exist_ok=True)
+        with contextlib.suppress(OSError):
+            # exist_ok=True skips the chmod for pre-existing dirs — tighten
+            # an already-loose directory explicitly.
+            os.chmod(backup_dir, 0o700)
 
         all_points = []
         offset = None
@@ -624,8 +701,25 @@ class MemoryStore:
             "point_count": len(all_points),
             "points": all_points,
         }
-        with open(backup_path, "w") as f:
-            json.dump(backup_data, f, default=str)
+        # 0o600 file: the backup contains every memory, including
+        # access_level="private" payloads. Plain open() inherits the
+        # process umask (typically 0o022 → world-readable). Create with
+        # restrictive mode up front and verify afterwards, so a lax umask
+        # or a pre-existing file can never leave private memories readable.
+        fd = os.open(
+            backup_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(backup_data, f, default=str)
+            if (stat_module.S_IMODE(os.stat(backup_path).st_mode) & 0o077) != 0:
+                os.chmod(backup_path, 0o600)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(backup_path)
+            raise
 
         self._last_backup_time = time.time()
         self._last_backup_path = backup_path
@@ -1046,11 +1140,28 @@ class MemoryStore:
                                 with_vectors=False,
                             )
                             payload_map = {}
+                            id_map = {}   # payload-id-string → echte Point-ID
                             for pt in points:
                                 pl = pt.payload or {}
                                 payload_map[str(pt.id)] = pl
+                                # The result's "id" field may carry the payload
+                                # id (not the point id) — map BOTH so the lookup
+                                # below finds the correct point for each result.
+                                pid_payload = str((pl.get("id") or "")).strip()
+                                if pid_payload:
+                                    id_map[pid_payload] = pt.id
+                                id_map[str(pt.id)] = pt.id
                             for r in raw_results:
                                 rid = r.get("id")
+                                # Review fix (MEDIUM :1040): bind the CORRECT
+                                # point-id per result. The old code kept using
+                                # the LAST `pt` of the previous loop (loop
+                                # variable leaked), stamping every result with
+                                # the same point-id → access-tracking reinforced
+                                # the wrong memory.
+                                r_point_id = None
+                                if rid is not None:
+                                    r_point_id = id_map.get(str(rid))
                                 if rid and rid in payload_map:
                                     pl = payload_map[rid]
                                     if not r.get("source_url"):
@@ -1090,8 +1201,8 @@ class MemoryStore:
                                         r["superseded_at"] = pl.get("superseded_at")
                                     # Memory Dynamics (v0.15): payload + echte point-id
                                     # für Access-Tracking und effective_score mitnehmen
-                                    if pt and pt.id:
-                                        r["_point_id"] = str(pt.id)
+                                    if r_point_id is not None:
+                                        r["_point_id"] = str(r_point_id)
                                     r["_payload"] = pl
                         except Exception as enrich_err:
                             logging.warning(f"Payload enrichment failed: {enrich_err}")
@@ -2351,9 +2462,25 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             except Exception:
                 pass  # Events are nice-to-have, not critical
 
+            # Review fix (MEDIUM :2296): derive the status from the actual
+            # nexus_update result instead of blind "updated" — an error
+            # payload ({"error": ...}) or a failed Qdrant write must be
+            # reported as such, not masked as success.
+            result_str = json.dumps(result, default=str)
+            if isinstance(result, dict) and result.get("error"):
+                status = "error"
+            elif result_str.startswith("{\"result\":") and "status" not in result:
+                # Qdrant success envelope: result ok
+                status = "updated"
+            elif isinstance(result, dict) and result.get("status") in (
+                    "ok", "updated"):
+                status = "updated"
+            else:
+                # Qdrant write result without a clear success marker
+                status = "unknown"
             return [types.TextContent(
                 type="text",
-                text=json.dumps({"status": "updated", "detail": result}),
+                text=json.dumps({"status": status, "detail": result}),
             )]
         except Exception as e:
             return [types.TextContent(
@@ -2727,7 +2854,11 @@ def _check_webui_available():
     try:
         import fastapi  # noqa: F401
         import uvicorn  # noqa: F401
-        print("WebUI available: nexus-memory webui")
+        # stderr, NOT stdout: in server mode this runs BEFORE the MCP
+        # stdio protocol loop starts, and stdout is the MCP transport
+        # channel. A plain print() here injects a non-protocol line into
+        # the stream and corrupts the client's JSON-RPC framing.
+        print("WebUI available: nexus-memory webui", file=sys.stderr)
     except ImportError:
         pass
 

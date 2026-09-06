@@ -379,9 +379,10 @@ class TestExactLocalModelIdentity:
         assert _same_local_model("bge-m3", "bge-m3:latest-x") is False
         assert _same_local_model("nomic-embed", "nomic-embed-text") is False
 
-    def test_missing_tag_is_its_own_identity(self):
-        """'qwen3-embedding' (implicit latest) != 'qwen3-embedding:0.6b'."""
-        assert _same_local_model("qwen3-embedding", "qwen3-embedding:0.6b") is False
+    def test_missing_tag_resolves_to_latest(self):
+        """Ollama semantics: a tag-less name IS the ':latest' variant."""
+        assert _same_local_model("bge-m3", "bge-m3:latest") is True
+        assert _same_local_model("qwen3-embedding", "qwen3-embedding:latest") is True
 
     def test_empty_names_never_match(self):
         assert _same_local_model("", "bge-m3") is False
