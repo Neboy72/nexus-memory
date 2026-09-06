@@ -474,7 +474,22 @@ Before v0.6.0, `on_session_end` stored raw conversation text as a single "sessio
 
 Example: Search for "Wallbox" → vector hits about ABL Wallbox + graph neighbors: Reev Backend (`[graph:connected_to]`), RFID cards (`[graph:uses]`), IP address (`[graph:located_at]`).
 
-### SICA Self-Improvement Cycle 🔄
+### Ingestion-Time Consolidation (v0.18.0)
+
+Nexus doesn't just store raw conversation dumps — a background daemon (part of the MCP server, no cron needed) distills them into **atomic, self-contained facts** with resolved pronouns and anchored dates, and resolves contradictions at write time (supersede, never delete).
+
+**Multi-station fuel chain** — the daemon is a *hitchhiker* on your existing LLM config. No new accounts, no setup:
+
+1. **Local Ollama** (free) — first choice
+2. **OpenRouter** — if `OPENROUTER_API_KEY` is present (cheapest tier model)
+3. **OpenAI-compatible** — `OPENAI_API_KEY`, `NOUS_API_KEY`, or explicit `NEXUS_FUEL_BASE` + `NEXUS_FUEL_KEY`
+4. All closed → the daemon sleeps and retries next tick (fail-safe, never crashes, never blocks)
+
+**Monthly budget cap** for paid stations: `NEXUS_FUEL_BUDGET_USD` (default $1.00). Free Ollama is never affected. Spend tracker: `~/.nexus-memory/fuel_spend.json`.
+
+Other knobs: `NEXUS_CONSOLIDATION=0` (kill-switch), `NEXUS_CONSOLIDATION_INTERVAL` (default 3600s), `NEXUS_CONSOLIDATION_MODEL`.
+
+## SICA Self-Improvement Cycle 🔄
 
 **SICA** (v0.9.0): Automatic memory hygiene. Scans all memories for issues and patches them.
 
