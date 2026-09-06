@@ -134,3 +134,28 @@ def write_env_key(env_path: Path, key_env: str, api_key: str) -> None:
         os.chmod(env_path, FILE_MODE)
     except OSError:
         pass
+
+
+def read_env_key(env_path: Path, key_env: str) -> str:
+    """Read one KEY from the dotenv file (wizard ↔ provider state sync).
+
+    Returns '' when the file or the key is missing. Values are unquoted
+    (single-quote serialization is inverted; escaped chars round-trip).
+    """
+    try:
+        text = env_path.read_text()
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        if k.strip() != key_env:
+            continue
+        v = v.strip()
+        # Invert serialize_env_value(): single-quoted, backslash-escaped.
+        if len(v) >= 2 and v.startswith("'") and v.endswith("'"):
+            v = v[1:-1].replace("\\'", "'").replace("\\\\", "\\")
+        return v
+    return ""

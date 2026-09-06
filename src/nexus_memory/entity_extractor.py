@@ -451,9 +451,16 @@ def _heuristic_extract_entities(text: str) -> ExtractionResult:
                 relation="connected_to", confidence=0.5,
             ))
 
-    # Cap results
+    # Cap results — PAIRWISE CONSISTENT (review fix MEDIUM :490): drop
+    # relationships whose endpoints did not survive the entity cap, and
+    # drop whole relationships (never half-refs) when the relationship cap
+    # trims. Every returned relationship always points at returned entities.
     entities = entities[:10]
-    relationships = relationships[:8]
+    kept_names = {e.name for e in entities}
+    relationships = [
+        r for r in relationships
+        if r.source in kept_names and r.target in kept_names
+    ][:8]
 
     if entities:
         logger.info(
@@ -469,16 +476,36 @@ def _find_nearest_entity(
     entity_names: Dict[str, Entity],
     reverse: bool = False,
 ) -> Optional[str]:
-    """Find the nearest entity name in the given text."""
-    words = text.split()
-    if reverse:
-        words = list(reversed(words))
-    for word in words:
-        clean = word.strip(".,;:!?()[]{}\"'").lower()
-        for name, entity in entity_names.items():
-            if clean and (clean == name or name in clean or clean in name):
-                return entity.name
-    return None
+    """Find the nearest entity name in the given text.
+
+    Whole-word matching only (word boundaries, case-insensitive) — no
+    substring matches. A bare word like "Main" must not match the entity
+    "Main Street": substring matching created relationships to entities
+    that were never actually mentioned.
+    """
+    if not text or not entity_names:
+        return None
+    best_name: Optional[str] = None
+    best_pos: Optional[int] = None
+    for name, entity in entity_names.items():
+        if not name:
+            continue
+        # (?<!\w) / (?!\w) enforce whole-word boundaries; re.IGNORECASE
+        # makes the match case-insensitive.
+        pattern = r"(?<!\w)" + re.escape(name) + r"(?!\w)"
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            if best_pos is None:
+                closer = True
+            elif reverse:
+                # "before"-window: nearest entity is closest to the window end
+                closer = m.start() > best_pos
+            else:
+                # "after"-window: nearest entity is closest to the start
+                closer = m.start() < best_pos
+            if closer:
+                best_pos = m.start()
+                best_name = entity.name
+    return best_name
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────

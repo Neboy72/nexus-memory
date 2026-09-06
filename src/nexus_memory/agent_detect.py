@@ -387,6 +387,13 @@ LOCAL_AGENT_IDS = frozenset({
     "antigravity-cli", "opencode", "windsurf", "crush", "gemini-cli",
 })
 
+# Review fix (MEDIUM :587): ghost horizon for explicitly registered REMOTE
+# agents. Their regular cleanup conditions are always true (never detected,
+# no config_dir), so without this horizon the sweep would delete every
+# remote seat after grace_days. 30 days gives a seat whose agent never
+# called back a fair window before it is reaped.
+REMOTE_GHOST_DAYS = 30
+
 
 def _get_agents_registry_path() -> Path:
     """Get the path to the agents registry file."""
@@ -491,7 +498,17 @@ def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
     Re-registration refreshes install metadata but PRESERVES the original
     connected_at and usage stats (reads/writes) — otherwise every re-run
     of the setup wizard would reset the dashboard counters.
+
+    Review fixes:
+    - MEDIUM :430: trust_level is validated (public/trusted/private) —
+      a direct registration can no longer inject an unknown level.
+    - MEDIUM :660: local detector registration refuses ids that belong to
+      an explicitly registered REMOTE host (host_type="remote") so a
+      coincidental local match cannot clobber a remote seat.
     """
+    valid_trust = ("public", "trusted", "private")
+    if trust_level not in valid_trust:
+        return {"error": f"Invalid trust level: {trust_level}. Must be one of: {list(valid_trust)}"}
     now = _now_iso()
     with _registry_lock():
         registry = _load_registry_unlocked()
@@ -503,6 +520,15 @@ def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
             if a.get("id") == agent_id:
                 agent = a
                 break
+
+        # Review fix (MEDIUM :660): an id explicitly registered as REMOTE
+        # must not be overwritten by local detection — different host,
+        # different seat. Local registration of such an id is refused.
+        if agent is not None and agent.get("host_type") == "remote":
+            return {"error": (
+                f"Agent id '{agent_id}' is registered as a REMOTE host "
+                f"(host_type=remote). Local detection must not overwrite it; "
+                f"use a different agent id or update the remote entry explicitly.")}
 
         if agent is None:
             agent = {
@@ -639,6 +665,28 @@ def cleanup_removed_agents(grace_days: int = AGENT_REMOVAL_GRACE_DAYS) -> dict:
 
         for agent in registry.get("agents", []):
             aid = agent.get("id", "")
+            # Review fix (MEDIUM :587): explicitly registered REMOTE agents
+            # are never locally detectable and have no config_dir by design
+            # (config_dir=None) — both regular cleanup conditions are ALWAYS
+            # true for them, so the sweep would delete every registered
+            # remote agent after grace_days. Remote seats therefore use a
+            # much longer ghost horizon (30 days stale last_seen instead of
+            # grace_days): user intent is protected, but a seat whose agent
+            # NEVER called back still gets reaped eventually.
+            if agent.get("host_type") == "remote":
+                last_seen_raw_r = agent.get("lastSeen") or agent.get("last_seen") or ""
+                try:
+                    ls_r = datetime.fromisoformat(last_seen_raw_r) if last_seen_raw_r else None
+                except Exception:
+                    ls_r = None
+                if ls_r is not None and ls_r.tzinfo is None:
+                    ls_r = ls_r.replace(tzinfo=timezone.utc)
+                remote_stale_days = (now - ls_r).days if ls_r else REMOTE_GHOST_DAYS + 1
+                if remote_stale_days > REMOTE_GHOST_DAYS:
+                    removed.append({"id": aid, "last_seen": last_seen_raw_r})
+                else:
+                    kept.append(aid)
+                continue
             undetected = not detection_map.get(aid, False)
             config_dir = agent.get("config_dir")
             dir_gone = (not config_dir) or (not Path(config_dir).exists())

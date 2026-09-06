@@ -105,6 +105,11 @@ class TestApiKeyValidation:
 
     def test_chat_wizard_apply_choice_accepts_valid_key(self, tmp_path, monkeypatch):
         monkeypatch.setattr(cw, "_get_config_dir", lambda: tmp_path)
+        # The wizard only writes the key after its pip dependency check
+        # passes; the test pins the check itself so this test verifies the
+        # secret-writing path on every interpreter (with or without the
+        # optional 'openai' package installed).
+        monkeypatch.setattr(cw, "_check_pip_package", lambda package: True)
         result = cw.apply_choice("openai", "sk-validkey123")
         assert result.get("provider") == "openai"
         assert (tmp_path / ".env").exists()

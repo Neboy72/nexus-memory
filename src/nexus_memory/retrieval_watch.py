@@ -26,7 +26,9 @@ log = logging.getLogger("nexus.retrieval_watch")
 
 RETRIEVAL_START_DELAY_SECONDS = int(os.environ.get("NEXUS_RETRIEVAL_START_DELAY", 120))
 RETRIEVAL_INTERVAL_SECONDS = int(os.environ.get("NEXUS_RETRIEVAL_INTERVAL_SEC", 24 * 3600))
-MIN_SCORE = 0.5
+# Configurable minimum score: results below it count as retrieval failures
+# (a hit is worthless when the similarity is too low to be meaningful).
+MIN_SCORE = float(os.environ.get("NEXUS_WATCH_MIN_SCORE", "0.5"))
 
 DEFAULT_QUERIES: List[Tuple[str, str]] = [
     ("Bose SoundLink Audio-Ausgabe Bluetooth", "Bose"),
@@ -86,9 +88,12 @@ class RetrievalWatch:
     def run(self) -> Dict[str, Any]:
         failures = []
         checked = 0
+        failed_embeddings = 0
         for query, expected in self._queries:
             try:
-                results = self._search(query, limit=5)
+                results, embed_ok = self._search(query, limit=5)
+                if not embed_ok:
+                    failed_embeddings += 1
                 checked += 1
                 text = " ".join(
                     str((r.payload or {}).get("text") or (r.payload or {}).get("content") or "")
@@ -97,12 +102,18 @@ class RetrievalWatch:
                 top_score = max(
                     (getattr(r, "score", 0.0) or 0.0 for r in results), default=0.0
                 )
-                if not results or expected.lower() not in text:
+                # Minimum-score check: even when the keyword is present, a
+                # result with a similarity below MIN_SCORE is a quality
+                # failure (the hit is too weak to count as retrieval).
+                if not results or expected.lower() not in text or (
+                        results and top_score < MIN_SCORE):
                     failures.append({
                         "query": query,
                         "expected": expected,
                         "results": len(results),
                         "top_score": round(top_score, 3),
+                        "reason": "score_below_min" if results and
+                                  expected.lower() in text else "not_found",
                     })
             except Exception as exc:
                 log.warning("Retrieval-watch query failed: %s", exc)
@@ -111,6 +122,7 @@ class RetrievalWatch:
         report = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "queries_checked": checked,
+            "failed_embeddings": failed_embeddings,
             "failures": failures,
         }
         with self._lock:
@@ -120,7 +132,12 @@ class RetrievalWatch:
         return report
 
     def _search(self, query: str, limit: int = 5):
-        """Vector search über den Store (nutzt Store-Embedder, kein Hermes-Import)."""
+        """Vector search über den Store (nutzt Store-Embedder, kein Hermes-Import).
+
+        Returns ``(results, embed_ok)``: embed_ok=False marks embedding
+        failures so the report can distinguish "broken embeddings" from
+        "no hits" — a silent fallback to scrolling would hide them.
+        """
         embedder = self._embedder or getattr(self._store, "_embedder", None)
         vector = None
         if embedder is not None:
@@ -130,11 +147,12 @@ class RetrievalWatch:
                 log.warning("Embedding failed for watch query: %s", exc)
         if vector is None:
             # Fallback: kein Embedder am Store (z. B. Unit-Tests) → statisch
-            # scrollen. Der Watchdog bewertet dann Text-Containment.
+            # scrollen. Der Watchdog bewertet dann Text-Containment. Der
+            # Embedding-Ausfall bleibt sichtbar (embed_ok=False).
             results, _ = self._store.client.scroll(
                 self._collection, limit=limit, with_payload=True, with_vectors=False
             )
-            return results
+            return results, False
         client = self._store.client
         query_fn = getattr(client, "query_points", None)
         if query_fn is None:
@@ -144,13 +162,13 @@ class RetrievalWatch:
                 query_vector=vector,
                 limit=limit,
                 with_payload=True,
-            )
+            ), True
         return query_fn(
             collection_name=self._collection,
             query=vector,
             limit=limit,
             with_payload=True,
-        ).points
+        ).points, True
 
     # ── daemon loop ───────────────────────────────────────────────────
     def start(self) -> None:
@@ -161,8 +179,13 @@ class RetrievalWatch:
                     self.run()
                 except Exception as exc:
                     log.warning("Retrieval-watch pass failed: %s", exc)
-                for _ in range(max(60, RETRIEVAL_INTERVAL_SECONDS // 60)):
-                    time.sleep(60)
+                # Respect the configured interval (seconds resolution).
+                # No lower clamp: a short configured interval is honored as
+                # requested (the 60s sleep was an undocumented floor that
+                # silently ignored NEXUS_RETRIEVAL_INTERVAL_SEC < 3600).
+                # Upper bound stays 24h to avoid runaway memory loss.
+                interval = max(1, min(RETRIEVAL_INTERVAL_SECONDS, 24 * 3600))
+                time.sleep(interval)
 
         t = threading.Thread(target=_loop, name="nexus-retrieval-watch", daemon=True)
         t.start()

@@ -39,6 +39,12 @@ def test_concurrent_writers_all_registrations_survive(tmp_path, monkeypatch):
     workers = 8
     per_worker = 3
     script = tmp_path / "registry_worker.py"
+    # Importable package root: agent_detect lives at <root>/nexus_memory/...
+    # where <root> is src/ (editable layout) or site-packages (installed).
+    # parent.parent (NOT parent.parent.parent, which points above src and
+    # made the child import fail on interpreters without the editable
+    # install, e.g. bare Homebrew Python).
+    pkg_root = str(Path(agent_detect.__file__).parent.parent)
     script.write_text(
         "import json, sys\n"
         "from pathlib import Path\n"
@@ -51,7 +57,7 @@ def test_concurrent_writers_all_registrations_survive(tmp_path, monkeypatch):
         "    ad.register_agent(\n"
         "        f'agent-{wid}-{n}', 'A', '*', 'trusted', 'mcp_only')\n"
         "print(json.dumps({'ok': True}))\n"
-        % (str(Path(agent_detect.__file__).parent.parent.parent),
+        % (pkg_root,
            str(path), per_worker)
     )
 
@@ -80,6 +86,7 @@ def test_trust_change_survives_parallel_stats_update(tmp_path, monkeypatch):
     agent_detect.register_agent("hermes", "H", "f", "public", "mcp_only")
 
     child = tmp_path / "stats_worker.py"
+    pkg_root = str(Path(agent_detect.__file__).parent.parent)
     child.write_text(
         "import sys\n"
         "from pathlib import Path\n"
@@ -89,7 +96,7 @@ def test_trust_change_survives_parallel_stats_update(tmp_path, monkeypatch):
         "ad._get_agents_registry_path = lambda: path\n"
         "for _ in range(20):\n"
         "    ad.update_agent_stats('hermes', read=True)\n"
-        % (str(Path(agent_detect.__file__).parent.parent.parent),
+        % (pkg_root,
            str(path))
     )
     proc = subprocess.Popen(

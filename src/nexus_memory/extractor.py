@@ -119,8 +119,13 @@ def _quick_health_check(base_url: str, timeout: float = 1.0) -> bool:
 def _llm_extract(
     messages: List[Dict[str, Any]],
     hermes_home: str,
-) -> List[Dict[str, Any]]:
-    """Use LLM to extract facts. Returns [] on failure or no facts found."""
+) -> Optional[List[Dict[str, Any]]]:
+    """Use LLM to extract facts.
+
+    Returns a list (possibly EMPTY — a valid 'no facts' verdict) on a
+    successful LLM round-trip, or None on failure (unreachable endpoint,
+    unparseable response) so the caller can fall back to the heuristic.
+    """
     config = _load_llm_config(hermes_home)
     if not config["model"]:
         logger.debug("SessionExtractor: no model configured, skipping LLM")
@@ -189,7 +194,22 @@ def _llm_extract(
             if match:
                 text = match.group(1).strip()
 
-        data = json.loads(text)
+        # Review fix (MEDIUM :400): distinguish PARSE FAILURE from a VALID
+        # empty result. The LLM saying "no facts here" (valid JSON with an
+        # empty list) is a definitive answer — replacing it with heuristic
+        # pattern guesses would manufacture facts the LLM explicitly found
+        # none. Parse failures return None → caller falls back to heuristic.
+        try:
+            data = json.loads(text)
+        except Exception as parse_exc:
+            logger.warning(
+                "SessionExtractor: LLM response unparseable (%s) — heuristic fallback",
+                parse_exc)
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("facts"), list):
+            logger.warning(
+                "SessionExtractor: LLM response lacks a facts list — heuristic fallback")
+            return None
         facts = data.get("facts", [])
 
         # Validate and normalize
@@ -378,8 +398,13 @@ def extract_facts(
     if hermes_home:
         try:
             llm_facts = _llm_extract(relevant, hermes_home)
-            if llm_facts:
-                return llm_facts
+            if llm_facts is None:
+                # LLM path failed (unparseable etc.) → heuristic fallback
+                return _heuristic_extract(relevant)
+            # Review fix (MEDIUM :400): an EMPTY list from the LLM is a
+            # valid 'no facts' verdict — do NOT replace it with heuristic
+            # pattern guesses. Return it as-is.
+            return llm_facts
         except Exception as exc:
             logger.warning("SessionExtractor: LLM path failed: %s", exc)
 
