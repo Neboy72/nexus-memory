@@ -12,7 +12,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.16.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.18.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-766%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -588,6 +588,9 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 | 🧬 **Entity Dedup** | **✅ Merge-review, no data loss** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | ⚡ **Embed Cache (L0)** | **✅ Repeated queries free** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🎯 **Prefetch Token Budget** | **✅ Env-tunable** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| ⏳ **Temporal Fact Validity** | **✅ as_of recall + fact_history** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🧹 **Ingestion-Time Consolidation** | **✅ Auto fact distillation** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| ⛽ **Multi-Station Fuel Chain** | **✅ Auto-discovery + budget cap** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 💾 **Auto-Backup** | **✅ Every 6h** | **✅ Every 6h** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 📦 **Update Notifications** | **✅ Auto-check GitHub** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -602,7 +605,7 @@ Before any `do_update()`, a full backup is created automatically. If the update 
 
 *\*Mem0 lists staleness as an "open problem" in their 2026 report but does not ship a solution.*
 
-**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, staging/rollback, auto-discovery, graph analytics, skill export, memory categories, access control, and active guardrails: all in one package. It is also the only one with brain-inspired Memory Dynamics (reinforcement, decay, salience). It is also the only memory layer that actively prevents destructive actions by checking protection rules before execution — not just storing knowledge, but guarding it. Plus native plugins for Hermes, OpenClaw, and Claude Code, plus an MCP server for every other agent: one brain, three paths, all agents.**
+**Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, temporal validity, staging/rollback, ingestion-time consolidation, auto-discovery, graph analytics, skill export, memory categories, access control, and active guardrails: all in one package. It is also the only one with brain-inspired Memory Dynamics (reinforcement, decay, salience). It is also the only memory layer that actively prevents destructive actions by checking protection rules before execution — not just storing knowledge, but guarding it. Plus native plugins for Hermes, OpenClaw, and Claude Code, plus an MCP server for every other agent: one brain, three paths, all agents.**
 
 ---
 
@@ -629,6 +632,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.18.0** | 2026-09-06 | **Ingestion-Time Consolidation + Multi-Station Fuel Chain**: consolidation daemon distills raw session dumps into atomic facts + write-time conflict resolution (supersede, never delete), auto-discovery fuel chain (Ollama → OpenRouter → OpenAI-compatible → custom, cheapest-first), monthly budget cap `NEXUS_FUEL_BUDGET_USD` (default $1), kill-switch `NEXUS_CONSOLIDATION=0`, harness-independent (lives in MCP server), 799 tests |
 | **v0.17.0** | 2026-09-04 | qwen3-embedding:0.6b as preferred local provider (LongMemEval-S benchmark: 66/72/75% vs bge-m3 62/71/73%, +4 R@5), instruction-aware query prefix (documents plain), collection drift guard (existing users keep their model, config records `embedding_model`), wizard recommends qwen3 (639 MB) with bge-m3 second, 772 tests |
 | **v0.16.0** | 2026-09-03 | **Temporal Fact Validity**: point-in-time recall (`recall as_of` — "what was true at date X", TTL vs. cutoff), `fact_history` MCP tool (bidirectional supersession chain ordered by valid_from), `effective_from` on remember/update for retro-dated imports; `valid_from`/`valid_to` on every point, auto-supersession stamps `valid_to` (history retained, no migration, legacy behavior unchanged); 766 tests |
 | **v0.15.0** | 2026-09-03 | **Memory Dynamics**: reinforcement (log-capped use_count boost), decay (5%/month linear, floor 30%), salience (≥0.8 immune); effective_score ranking as tie-breaker within semantic windows (reranker order never overridden); separate use/access counters with retrieve-before-write (reset-bug + lost-update fixed), B2 source_url passthrough, M2 base-score windows; new module `memory_dynamics.py`; 726 tests |
@@ -678,7 +682,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 766 tests ✅
+pytest tests/ -v # 799 tests ✅
 ```
 
 ---
@@ -708,4 +712,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · June 2026, continuously developed · v0.16.0 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.0 · One memory for all your agents</sub>
