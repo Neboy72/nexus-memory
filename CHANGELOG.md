@@ -1,3 +1,15 @@
+# v0.18.0 — Consolidation Daemon + Multi-Station Fuel Chain
+
+**Ingestion-time consolidation is live.** Raw session dumps are distilled into atomic, self-contained facts (pronouns resolved, relative dates anchored) and contradictions are superseded at write time — the retrieval hebel from the LongMemEval findings, now in production path.
+
+## New
+- **Consolidation daemon** (`consolidation.py`): in-process background thread in the MCP server (no cron, harness-independent). Distills un-consolidated `session` points into `fact` points, resolves conflicts at write time via embed-similarity (≥0.75) + LLM classify (duplicate/supersede/unrelated). Never deletes — superseded facts keep lifecycle status. Kill-switch `NEXUS_CONSOLIDATION=0`. Interval `NEXUS_CONSOLIDATION_INTERVAL` (default 3600s).
+- **Fuel chain** (`fuel_chain.py`): the daemon is a hitchhiker on the user's existing LLM config — no setup, no new account. Station order (cheapest first): local Ollama → OpenRouter → OpenAI-compatible keys (OPENAI_API_KEY / NOUS_API_KEY / explicit NEXUS_FUEL_BASE+NEXUS_FUEL_KEY). Cheapest tier model per station, never the user's flagship. All stations closed → daemon sleeps and retries next tick (fail-safe, never crashes, never blocks).
+- **Monthly budget cap**: `NEXUS_FUEL_BUDGET_USD` (default 1.00). Paid stations pause when the cap is hit; free local Ollama keeps working. Spend tracker in `~/.nexus-memory/fuel_spend.json` (auto-reset each month).
+
+## Tests
+- 799 passed (8 new fuel-chain tests + 19 consolidation tests from the 05.09 GO)
+
 # Changelog
 
 All notable changes to **Nexus Memory** are documented in this file.
