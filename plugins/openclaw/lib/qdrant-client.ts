@@ -8,6 +8,8 @@ export type SearchResult = {
   category: string
   source: string
   created_at: string
+  /** Project/agent area label (unreleased). Missing → 'default'. */
+  scope?: string
 }
 
 /** Access-level hierarchy: public=0, trusted=1, private=2. */
@@ -164,6 +166,7 @@ export class QdrantClient {
       category: (r.payload?.category as string) ?? "fact",
       source: (r.payload?.source as string) ?? "conversation",
       created_at: (r.payload?.created_at as string) ?? "",
+      scope: (r.payload?.scope as string) ?? undefined,
     }))
 
     log.debugResponse("search", { count: results.length })

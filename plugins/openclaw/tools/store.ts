@@ -29,13 +29,27 @@ export function registerStoreTool(
         access_level: Type.Optional(
           Type.Unsafe<string>({ type: "string", enum: [...ACCESS_LEVELS] }),
         ),
+        scope: Type.Optional(
+          Type.String({
+            description:
+              "Optional project/agent area label ([a-z0-9-], max 40 chars). " +
+              "Scoped memories are excluded from OTHER agents' auto-recall; " +
+              "explicit search always finds them. Omit for 'default'.",
+          }),
+        ),
       }),
       async execute(
         _toolCallId: string,
-        params: { text: string; category?: string; access_level?: string },
+        params: { text: string; category?: string; access_level?: string; scope?: string },
       ) {
         const category = params.category ?? "fact"
         const accessLevel = (params.access_level ?? cfg.accessLevel) as string
+        // Scope normalization ([a-z0-9-], max 40) — fail-open to cfg/agent scope
+        // or 'default' on invalid input (same regex as lib/config.ts + server).
+        let scope = (params.scope ?? cfg.scope ?? "").trim().toLowerCase()
+        if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(scope)) {
+          scope = cfg.scope || "default"
+        }
 
         log.debug(
           `store tool: category="${category}" accessLevel="${accessLevel}" textLen=${params.text.length}`,
@@ -53,6 +67,7 @@ export function registerStoreTool(
             source_url: "",
             confidence: 0.9,
             created_at: new Date().toISOString(),
+            scope,
           }
 
           await qdrantClient.upsert(id, vector, payload)

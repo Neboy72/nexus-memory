@@ -1,3 +1,16 @@
+# v0.18.4 — Scopes: Project/Agent Areas (unreleased feature, first implementation)
+
+**Scopes answer "which project does this belong to?"** — access levels already answer "who may see this?". Every memory can now carry a scope label so multiple agents sharing one memory store get clean, focused auto-recall instead of cross-project noise.
+
+## New
+- **Scope labels** (`scope`): optional area label on every memory (`nexus_remember(..., scope="voice")`). Valid: `[a-z0-9-]`, max 40 chars, normalized lowercase. Anything invalid degrades to `default` (fail-open) — behaves exactly like pre-scope memories.
+- **Core principle — scopes steer automatic prefetch, never explicit search**: auto-prefetch (Hermes plugin `NEXUS_SCOPE` env / OpenClaw plugin `scope` config) surfaces only `default` memories plus the agent's own scope. Explicit `recall()` / `nexus_search` is NEVER scope-filtered — a scoped memory is never hidden from a direct question.
+- **OpenClaw plugin parity**: `scope` config key + `NEXUS_SCOPE` env fallback in `lib/config.ts`, gating in the auto-recall hook, scope inheritance in capture + `nexus_store` tool (optional `scope` parameter with same normalization).
+- **Backward compatible**: no `NEXUS_SCOPE` set → the agent sees everything (old behavior); memories without a scope field behave as `default`.
+
+## Tests
+- 1048 passed on the production suite (1034 previous + 14 new scope tests; 21 additional scope/rewrite tests live on the development testbed workspace)
+
 # v0.18.0 — Consolidation Daemon + Multi-Station Fuel Chain
 
 **Ingestion-time consolidation is live.** Raw session dumps are distilled into atomic, self-contained facts (pronouns resolved, relative dates anchored) and contradictions are superseded at write time — the retrieval hebel from the LongMemEval findings, now in production path.
