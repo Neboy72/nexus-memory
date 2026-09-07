@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#050810">
+<title>Nexus Memory - Graph</title>
+<link rel="stylesheet" href="/static/webui-style.css?v=20260620">
+<link rel="icon" type="image/png" href="/assets/brand/nexus-icon.png">
+</head>
+<body>
+
+  <!-- Graph (Vollbild) -->
+  <main class="graph-main">
+    <div class="graph-controls">
+      <div class="graph-controls__row">
+        <div class="graph-controls__group">
+          <label class="graph-controls__label" for="filterCategory">Category</label>
+          <select id="filterCategory" class="graph-controls__select">
+            <option value="all">All</option>
+            <option value="fact">Fact</option>
+            <option value="belief">Belief</option>
+            <option value="session">Session</option>
+            <option value="rule">Rule</option>
+            <option value="preference">Preference</option>
+            <option value="temp">Temp</option>
+          </select>
+        </div>
+        <div class="graph-controls__group">
+          <label class="graph-controls__label" for="filterAccess">Access</label>
+          <select id="filterAccess" class="graph-controls__select">
+            <option value="all">All</option>
+            <option value="public">Public</option>
+            <option value="trusted">Trusted</option>
+            <option value="private">Private</option>
+          </select>
+        </div>
+        <div class="graph-controls__group">
+          <label class="graph-controls__label" for="filterDrift">Drift</label>
+          <select id="filterDrift" class="graph-controls__select">
+            <option value="all">All</option>
+            <option value="fresh">Fresh</option>
+            <option value="drifting">Drifting</option>
+            <option value="drifted">Drifted</option>
+          </select>
+        </div>
+        <div class="graph-controls__group graph-controls__group--search">
+          <label class="graph-controls__label" for="searchInput">Search</label>
+          <input type="text" id="searchInput" class="graph-controls__input" placeholder="Search memories…" autocomplete="off">
+        </div>
+        <div class="graph-controls__group graph-controls__group--actions">
+          <button class="btn btn--secondary btn--sm" id="resetGraphBtn" title="Reset View">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+            Reset
+          </button>
+        </div>
+      </div>
+      <div class="graph-controls__legend" id="graphLegend">
+        <span class="legend-item"><span class="legend-dot legend-dot--fact"></span>Fact</span>
+        <span class="legend-item"><span class="legend-dot legend-dot--belief"></span>Belief</span>
+        <span class="legend-item"><span class="legend-dot legend-dot--session"></span>Session</span>
+        <span class="legend-item"><span class="legend-dot legend-dot--rule"></span>Rule</span>
+        <span class="legend-item"><span class="legend-dot legend-dot--preference"></span>Preference</span>
+        <span class="legend-item"><span class="legend-dot legend-dot--temp"></span>Temp</span>
+      </div>
+    </div>
+
+    <div class="graph-container" id="graphContainer">
+      <div class="graph-container__loading" id="graphLoading">
+        <div class="spinner"></div>
+        <p>Loading memory graph…</p>
+      </div>
+      <div id="graphSvg" class="graph-svg" style="width:100%;height:100%"></div>
+      <div class="graph-tooltip" id="graphTooltip"></div>
+    </div>
+
+    <!-- Stats -->
+    <div class="graph-stats" id="graphStats">
+      <div class="graph-stats__grid">
+        <div class="graph-stat">
+          <div class="graph-stat__value" id="statTotalMemories">-</div>
+          <div class="graph-stat__label">Memories</div>
+        </div>
+        <div class="graph-stat">
+          <div class="graph-stat__value" id="statGrownWeek">-</div>
+          <div class="graph-stat__label">New this week</div>
+        </div>
+        <div class="graph-stat">
+          <div class="graph-stat__value" id="statLastMemory">-</div>
+          <div class="graph-stat__label">Last Entry</div>
+        </div>
+        <div class="graph-stat">
+          <div class="graph-stat__value" id="statSources">-</div>
+          <div class="graph-stat__label">Sources</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Detail Panel -->
+  <aside class="detail-panel" id="detailPanel" role="dialog" aria-label="Memory Detail" aria-hidden="true">
+    <div class="detail-panel__backdrop" id="detailBackdrop"></div>
+    <div class="detail-panel__content">
+      <button class="detail-panel__close" id="detailClose" aria-label="Close">&times;</button>
+      <div id="detailBody">
+        <div class="detail-panel__empty">Click a node to view details</div>
+      </div>
+    </div>
+  </aside>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="/static/webui-js/api.js?v=20260620"></script>
+  <script src="/static/webui-js/graph.js?v=20260620"></script>
+  <script src="/static/webui-js/app.js?v=20260620"></script>
+</body>
+</html>

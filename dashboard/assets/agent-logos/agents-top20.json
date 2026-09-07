@@ -1,0 +1,182 @@
+[
+  {
+    "rank": 1,
+    "name": "Hermes Agent",
+    "id": "hermes",
+    "homepage": "https://nousresearch.com",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": true
+  },
+  {
+    "rank": 2,
+    "name": "Kilo Code",
+    "id": "kilo-code",
+    "homepage": "https://kilocode.ai",
+    "type": "IDE",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 3,
+    "name": "OpenClaw",
+    "id": "openclaw",
+    "homepage": "https://openclaw.ai",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": true
+  },
+  {
+    "rank": 4,
+    "name": "Claude Code",
+    "id": "claude-code",
+    "homepage": "https://anthropic.com",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": true
+  },
+  {
+    "rank": 5,
+    "name": "pi",
+    "id": "pi",
+    "homepage": "https://github.com/olixis/pi-openrouter-plus",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 6,
+    "name": "Cline",
+    "id": "cline",
+    "homepage": "https://cline.bot",
+    "type": "IDE",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 7,
+    "name": "Codex",
+    "id": "codex",
+    "homepage": "https://openai.com/codex",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 8,
+    "name": "OpenHands",
+    "id": "openhands",
+    "homepage": "https://openhands.ai",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 9,
+    "name": "Roo Code",
+    "id": "roo-code",
+    "homepage": "https://roocode.com",
+    "type": "IDE",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 10,
+    "name": "Qwen Code",
+    "id": "qwen-code",
+    "homepage": "https://github.com/QwenLM/qwen-code",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 11,
+    "name": "Cursor",
+    "id": "cursor",
+    "homepage": "https://cursor.com",
+    "type": "IDE",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 12,
+    "name": "Gemini CLI",
+    "id": "gemini-cli",
+    "homepage": "https://github.com/google-gemini/gemini-cli",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 13,
+    "name": "OpenCode",
+    "id": "opencode",
+    "homepage": "https://opencode.ai",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 14,
+    "name": "Zed Editor",
+    "id": "zed",
+    "homepage": "https://zed.dev",
+    "type": "IDE",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 15,
+    "name": "Windsurf",
+    "id": "windsurf",
+    "homepage": "https://windsurf.com",
+    "type": "IDE",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 16,
+    "name": "Crush",
+    "id": "crush",
+    "homepage": "https://charm.land",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 17,
+    "name": "GitHub Copilot",
+    "id": "copilot",
+    "homepage": "https://github.com/features/copilot",
+    "type": "IDE",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 18,
+    "name": "Aider",
+    "id": "aider",
+    "homepage": "https://aider.chat",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 19,
+    "name": "Continue",
+    "id": "continue",
+    "homepage": "https://continue.dev",
+    "type": "IDE",
+    "mcp": true,
+    "plugin": false
+  },
+  {
+    "rank": 20,
+    "name": "Warp",
+    "id": "warp",
+    "homepage": "https://warp.dev",
+    "type": "CLI",
+    "mcp": true,
+    "plugin": false
+  }
+]
