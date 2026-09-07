@@ -101,8 +101,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   MemoryGraph.onNodeSelect = (d) => showDetail(d);
   MemoryGraph.onNodeDeselect = () => hideDetail();
 
-  // Reset graph view button
+  // Reset graph view button — clears ALL filters back to All + resets zoom
   document.getElementById('resetGraphBtn').addEventListener('click', () => {
+    state.filters = { category: 'all', access_level: 'all', drift: 'all', search: '' };
+    document.getElementById('filterCategory').value = 'all';
+    document.getElementById('filterAccess').value = 'all';
+    document.getElementById('filterDrift').value = 'all';
+    document.getElementById('searchInput').value = '';
+    MemoryGraph.updateFilters(state.filters);
     MemoryGraph.resetZoom();
   });
 
@@ -112,7 +118,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       graphLoading.style.display = 'flex';
 
       const [memData, statsData] = await Promise.all([
-        API.getMemories(),
+        API.getMemories(state.filters),
         API.getStats(),
       ]);
 
@@ -197,7 +203,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ─── Filters ───
-  function applyFilters() {
+  // Access/Drift/Category filtern SERVERSEITIG (Graph lädt nur echte Treffer —
+  // clientseitiges Ausgrauen wäre mit nur 500 geladenen Punkten irreführend).
+  // Search läuft clientseitig auf dem Volltext der geladenen Punkte.
+  async function applyFilters() {
+    await loadData();
     MemoryGraph.updateFilters(state.filters);
   }
 
