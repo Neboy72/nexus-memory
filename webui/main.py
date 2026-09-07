@@ -2,6 +2,7 @@
 """Nexus Memory Web UI — FastAPI Backend with Live Qdrant Connection"""
 
 import json
+import logging
 import os
 import uuid
 from collections import Counter, defaultdict
@@ -331,7 +332,47 @@ async def spa(path: str):
 # ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
+# Success moment (Nebo law 07.09: a finished install must SHOW the dashboard):
+# after the server boots, open the browser ONCE per installation (marker file
+# prevents re-opening on every start) and ALWAYS print the URL + bookmark
+# hint — headless systems get the hint instead of the browser.
+WEBUI_URL = "http://127.0.0.1:9120"
+_OPEN_MARKER = Path.home() / ".nexus-webui-opened"
+
+
+def _print_url_banner(url: str) -> None:
+    """Always shown: the full URL + bookmark recommendation (belt & braces)."""
+    line = "─" * 62
+    print()
+    print(line)
+    print("  🧠 Nexus Memory Dashboard is running")
+    print()
+    print(f"      {url}")
+    print()
+    print("  Tip: bookmark this address in your browser so you can")
+    print("  open your memory dashboard anytime — one click, no setup.")
+    print(line)
+    print()
+
+
+def _maybe_open_browser(url: str) -> None:
+    """Open the browser once per installation. Never crash, never nag."""
+    try:
+        if _OPEN_MARKER.exists():
+            return  # already shown before — no spam
+        _OPEN_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        _OPEN_MARKER.write_text(url, encoding="utf-8")
+        import webbrowser
+
+        webbrowser.open(url)
+        print(f"Opened dashboard in your browser: {url}")
+    except Exception as exc:  # headless/SSH/no default browser — hint suffices
+        logging.info("webui: browser auto-open skipped (%s)", exc)
+
+
 if __name__ == "__main__":
+    _print_url_banner(WEBUI_URL)
+    _maybe_open_browser(WEBUI_URL)
     uvicorn.run(
         "main:app",
         host="127.0.0.1",
