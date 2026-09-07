@@ -375,13 +375,26 @@ class NexusMemoryProvider:
         if not self._embedder or not self._qdrant: return
         try:
             vector = self._embed_cached(query)
-            pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=10).points
             budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
             # Scope filter (project/agent areas): auto-prefetch surfaces only
             # 'default' memories plus the agent's OWN scope. Explicit recall()
             # is never scope-filtered (core principle, Nebo 07.09.).
             # Fail-open: no NEXUS_SCOPE set → agent sees everything (old behavior).
             my_scope = os.environ.get("NEXUS_SCOPE", "").strip().lower()
+            # Auto-scoping (self-organizing memory, Nebo law 07.09): the query
+            # itself can clearly belong to one area → surface only 'default'
+            # + that area's memories. Ambiguous/no match → None = no filtering
+            # (exactly the old behavior). Zero cost, fail-open per query.
+            allowed_scopes = None
+            try:
+                from nexus_memory.scope_auto import ScopeCentroids, prefetch_filter_scopes
+                if self._scope_centroids is None:
+                    self._scope_centroids = ScopeCentroids(self._qdrant, self._collection)
+                allowed_scopes = prefetch_filter_scopes(vector, self._scope_centroids.get(), my_scope)
+            except Exception as exc:
+                logger.debug("scope_auto: prefetch inference skipped (%s)", exc)
+                allowed_scopes = None
+            pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=10).points
             total = 0
             items: List[str] = []
             for p in pts:
@@ -391,9 +404,13 @@ class NexusMemoryProvider:
                 # Roadmap 4.6: superseded facts never surface in prefetch.
                 if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
                     continue
-                # Scope gating: skip memories scoped to a different area.
+                # Scope gating: manual env override + auto-inferred allowed set.
+                # allowed_scopes=None → no gating (fail-open, old behavior).
                 p_scope = (pl.get("scope") or "default").strip().lower() or "default"
-                if my_scope and p_scope != "default" and p_scope != my_scope:
+                if allowed_scopes is not None:
+                    if p_scope not in allowed_scopes:
+                        continue
+                elif my_scope and p_scope != "default" and p_scope != my_scope:
                     continue
                 if text:
                     item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}"
