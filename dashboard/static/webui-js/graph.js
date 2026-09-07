@@ -33,13 +33,18 @@ const MemoryGraph = {
       if (!seen.has(k)) { seen.add(k); links.push({source: e.source, target: e.target}); }
     });
 
-    const nodes = memories.map(m => ({
-      id: m.id, text: (m.text||'').slice(0,80),
-      title: m.title || '', category: m.category||'fact',
-      access_level: m.access_level||'unknown',
-      confidence: m.confidence||0.7, drift: m.drift||'not_tracked',
-      source: m.source||'', created_at: m.created_at||null,
-    }));
+    const nodes = memories.map(m => {
+      const fullText = (m.text || '');
+      return {
+        id: m.id, text: (m.text || '').slice(0, 80),
+        fullText: fullText,
+        title: m.title || '',
+        category: m.category || 'fact',
+        access_level: m.access_level || 'unknown',
+        confidence: m.confidence || 0.7, drift: m.drift || 'not_tracked',
+        source: m.source || '', created_at: m.created_at || null,
+      };
+    });
 
     this.g.selectAll('*').remove();
     this.link = this.g.append('g').selectAll('line').data(links).join('line')
@@ -82,9 +87,18 @@ const MemoryGraph = {
   },
 
   updateFilters(f) {
+    const q = (f.search || '').toLowerCase();
+    const visible = {};
     this.node.attr('opacity', d => {
-      if (f.category&&f.category!=='all'&&d.category!==f.category) return 0.05;
-      return 1;
+      let ok = true;
+      if (q && !(d.fullText || d.text || '').toLowerCase().includes(q) && !(d.title || '').toLowerCase().includes(q)) ok = false;
+      visible[d.id] = ok;
+      return ok ? 1 : 0.05;
+    });
+    this.link.attr('opacity', l => {
+      const sId = typeof l.source === 'object' ? l.source.id : l.source;
+      const tId = typeof l.target === 'object' ? l.target.id : l.target;
+      return (visible[sId] && visible[tId]) ? 0.5 : 0.05;
     });
   },
 

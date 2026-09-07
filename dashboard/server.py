@@ -368,8 +368,15 @@ def _extract_memory_fields(payload: dict) -> dict:
 
 @app.get("/api/memories")
 async def get_memories(category: str = "all", access_level: str = "all", drift: str = "all", source: str = "", limit: int = 500):
-    """Get memories list with optional filters. Used by the D3 graph page."""
-    all_points = _scroll_all_memories(max_points=min(limit * 2, 5000))
+    """Get memories list with optional filters. Used by the D3 graph page.
+
+    Active filters scroll the FULL collection (cap 50k) so the limit counts
+    MATCHING points — otherwise rare access levels (e.g. trusted: 202 of
+    21.8k) come back nearly empty and the graph looks broken.
+    """
+    has_filter = any(v not in ("all", "") for v in (category, access_level, drift, source))
+    scan_cap = 50_000 if has_filter else min(limit * 2, 5000)
+    all_points = _scroll_all_memories(max_points=scan_cap)
 
     memories = []
     by_cat = {}
@@ -424,6 +431,10 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
                         seen_pairs.add(pair)
 
     category_counts = {cat: len(mems) for cat, mems in by_cat.items()}
+    # Respect the limit AFTER filtering — the client asked for a max set size.
+    if len(memories) > limit:
+        memories = memories[:limit]
+
     return {"memories": memories, "edges": edges, "category_counts": category_counts}
 
 
