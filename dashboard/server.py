@@ -652,10 +652,19 @@ async def graph_page():
     return HTMLResponse(content="<h1>Graph not found</h1>")
 
 
-# Static files
+# Static files — no-cache so the dashboard UI updates land immediately
+# (cached stale CSS was serving the inspector unstyled = "hingerotzt" look).
 static_dir = DASHBOARD_DIR / "static"
 if static_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    from starlette.middleware import Middleware
+
+    class NoCacheStatic(StaticFiles):
+        def file_response(self, *args, **kwargs):
+            resp = super().file_response(*args, **kwargs)
+            resp.headers["Cache-Control"] = "no-cache"
+            return resp
+
+    app.mount("/static", NoCacheStatic(directory=str(static_dir)), name="static")
 
 # Assets directory (logos, brand)
 assets_dir = DASHBOARD_DIR / "assets"
