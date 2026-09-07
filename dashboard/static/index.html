@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#050810">
+<title>Nexus Memory Dashboard</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+<link rel="icon" type="image/png" href="/assets/brand/nexus-icon.png">
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <img src="/assets/brand/nexus-icon.png" alt="Nexus Memory" class="logo-img">
+      <div class="logo-text-group">
+        <span class="logo-text">NEXUS</span>
+        <span class="logo-subtext">MEMORY</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <button class="inspector-header-btn" id="inspectorHeaderBtn" onclick="openInspector()" title="Memory Inspector — see, understand, correct your memories">🔎 Inspector</button>
+      <span id="version" class="badge">v…</span>
+      <span id="health-indicator" class="health-dot health-unknown"></span>
+      <span id="health-text">Checking...</span>
+    </div>
+  </header>
+
+  <!-- Stats Bar -->
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="stat-value" id="stat-memories">-</div>
+      <div class="stat-label">Memories</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-agents">-</div>
+      <div class="stat-label">Connected Agents</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-provider">-</div>
+      <div class="stat-label">Embedding Provider</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value stat-value--multi" id="stat-access">-</div>
+      <div class="stat-label">Access Levels</div>
+    </div>
+  </div>
+
+  <!-- Main Content: Agents full width, 2-Spalten -->
+  <div class="main-content">
+    <section class="agents-section">
+      <h2>Connected Agents</h2>
+      <div id="agents-list" class="agents-grid">
+        <div class="loading">Loading agents...</div>
+      </div>
+
+      <!-- Available but not connected -->
+      <div id="available-section" style="display:none;">
+        <h2 style="margin-top:24px;">Available Agents</h2>
+        <div id="available-list" class="agents-grid"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Graph: /graph page embedded 1:1 via iframe -->
+  <iframe src="/graph" style="width:100%;height:100vh;border:none;margin-top:24px;" loading="lazy"></iframe>
+
+  <!-- Action Bar -->
+  <div class="action-bar">
+    <button class="action-btn action-btn--inspector" onclick="openInspector()">🔎 Inspector</button>
+    <button class="action-btn" onclick="triggerBackup()">📥 Backup</button>
+    <button class="action-btn" onclick="checkHealth()">❤️ Health</button>
+    <button class="action-btn" onclick="detectAgents()">🔍 Detect Agents</button>
+    <button class="action-btn" onclick="refreshAll()">🔄 Refresh</button>
+  </div>
+
+  <!-- Memory Inspector Overlay -->
+  <div class="insp-overlay" id="inspectorOverlay" role="dialog" aria-label="Memory Inspector" aria-hidden="true">
+    <div class="insp-overlay__panel">
+      <div class="insp-overlay__header">
+        <span class="insp-overlay__title">🔎 Memory Inspector</span>
+        <span class="insp-overlay__hint">See what's stored · understand why · correct · roll back (nothing is erased)</span>
+        <button class="insp-close" id="inspectorCloseBtn" onclick="Inspector.close()">&times;</button>
+      </div>
+      <div class="insp-overlay__body" id="inspectorBody"></div>
+    </div>
+  </div>
+
+  <!-- Toast notifications -->
+  <div id="toast" class="toast"></div>
+</div>
+
+<script src="/static/webui-js/inspector.js?v=20260907"></script>
+<script src="/static/dashboard.js?v=20260621"></script>
+</body>
+</html>

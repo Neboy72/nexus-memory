@@ -11,9 +11,8 @@ plugins/openclaw/package-lock.json
 # macOS
 .DS_Store
 
-# Backups + dashboard (local runtime data)
+# Backups (local runtime data)
 backups/
-dashboard/
 
 
 # Old session files
