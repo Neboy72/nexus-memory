@@ -622,11 +622,21 @@ async def health_check():
 
 @app.post("/api/backup")
 async def trigger_backup():
-    """Trigger a manual backup."""
-    from nexus_memory.mcp_server import _create_backup
+    """Trigger a manual backup (full JSON export via the production backup engine)."""
     try:
-        result = _create_backup()
-        return {"status": "ok", "result": result}
+        from nexus_memory.mcp_server import MemoryStore, QDRANT_HOST, QDRANT_PORT
+        from qdrant_client import QdrantClient
+
+        store = MemoryStore.__new__(MemoryStore)
+        # Only the pieces the backup engine touches — no embedding init, no
+        # collection side effects. Fail loud if the engine grows a new dependency.
+        store.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        store._embedder = None
+        store._hybrid_retriever = None
+        store._skill_graph = None
+        store._scope_centroids = None
+        result = store._do_backup()
+        return {"status": "ok", "backup_path": result}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
