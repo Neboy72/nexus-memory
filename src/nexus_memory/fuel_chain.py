@@ -10,7 +10,7 @@ cheapness order, skipping dead ones, waiting (fail-safe) if all are closed:
   3. OpenAI-compatible keys  (OPENAI_API_KEY / NOUS_API_KEY / NEXUS_FUEL_BASE+KEY)
   4. all closed              -> None; caller sleeps and retries next tick
 
-Cost guard: NEXUS_FUEL_BUDGET_USD (default 1.00/month). The tracker counts the
+Cost guard: NEXUS_FUEL_BUDGET_USD (default 5.00/month). The tracker counts the
 provider-reported API usage per month in ~/.nexus-memory/fuel_spend.json
 (OpenRouter's actual cost wins when present; otherwise model-specific
 reference prices on token counts; unknown models use a deliberately
@@ -48,7 +48,7 @@ FUEL_BASE = os.environ.get("NEXUS_FUEL_BASE", "")           # optional explicit 
 FUEL_KEY = os.environ.get("NEXUS_FUEL_KEY", "")             # optional explicit key
 FUEL_MODEL = os.environ.get("NEXUS_FUEL_MODEL", "")         # optional explicit model
 
-DEFAULT_FUEL_BUDGET_USD = 1.00
+DEFAULT_FUEL_BUDGET_USD = 5.00
 DEFAULT_MAX_PER_CALL_USD = 0.01  # conservative ceiling per paid call
 
 
@@ -237,6 +237,64 @@ def budget_exhausted() -> bool:
         log.warning("fuel: budget check failed (%s) — assuming exhausted", exc)
         return True
     return float(state.get("spent_usd", 0.0)) >= budget
+
+
+def fuel_exhausted_info() -> dict:
+    """Status for the user-facing notice (Nebo GO 07.09.: the user's agent
+    tells them IN CHAT when the budget is reached — in the user's language,
+    because the agent speaks it).
+
+    Returns: {"exhausted": bool, "budget_usd": float, "spent_usd": float,
+              "month": "YYYY-MM", "reset": "1st of next month"}
+    Never raises — any error reports exhausted+zeros (fail-closed display).
+    """
+    budget = _validate_amount(FUEL_BUDGET_USD) if not isinstance(FUEL_BUDGET_USD, bool) else None
+    if budget is None:
+        budget = 0.0
+    spent = 0.0
+    try:
+        with _budget_lock():
+            state = _load_state_unlocked()
+        spent = float(state.get("spent_usd", 0.0))
+    except Exception as exc:
+        log.warning("fuel: exhausted-info read failed (%s) — reporting exhausted", exc)
+    month = _current_month()
+    return {
+        "exhausted": budget_exhausted(),
+        "budget_usd": round(budget, 2),
+        "spent_usd": round(spent, 2),
+        "month": month,
+        "reset": "1st of next month",
+    }
+
+
+def _mark_budget_notified() -> None:
+    """Latch the one-shot 'budget reached' notification per month (a marker
+    field in the fuel state; cleared automatically by month turnover)."""
+    try:
+        with _budget_lock():
+            state = _load_state_unlocked()
+            if state.get("notified_month") != _current_month():
+                state["notified_month"] = _current_month()
+                _persist_state_unlocked(state)
+    except Exception as exc:
+        log.warning("fuel: budget-notify marker failed: %s", exc)
+
+
+def budget_notification_pending() -> bool:
+    """True exactly once per month when the budget is freshly exhausted
+    (drives the chat notice; free stations keep running regardless)."""
+    if not budget_exhausted():
+        return False
+    try:
+        with _budget_lock():
+            state = _load_state_unlocked()
+        already = state.get("notified_month") == _current_month()
+    except Exception:
+        already = True  # unreadable state → never spam
+    if not already:
+        _mark_budget_notified()
+    return not already
 
 
 def reserve_budget(max_spend: Optional[float] = None) -> Optional[float]:

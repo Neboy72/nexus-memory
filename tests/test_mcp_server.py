@@ -822,9 +822,10 @@ class TestWebhookTools:
         tools = await mcp.handle_list_tools()
         sub = next(t for t in tools if t.name == "subscribe")
         assert set(sub.input_schema["required"]) == {"event_type", "webhook_url"}
-        # event_type must be a closed enum of the three valid event types.
+        # event_type must be a closed enum of the valid event types
+        # (incl. "fuel.exhausted" — Nebo GO 07.09., chat notice event).
         assert set(sub.input_schema["properties"]["event_type"]["enum"]) == {
-            "memory.remember", "memory.update", "memory.forget"
+            "memory.remember", "memory.update", "memory.forget", "fuel.exhausted"
         }
 
     async def test_unsubscribe_schema_marks_id_required(self):
