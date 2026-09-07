@@ -58,24 +58,33 @@ Your agent will check prerequisites, install everything, configure the provider,
 ### Path 1: Hermes Native Plugin
 
 ```bash
+# Requires Python 3.11+ (check: python3 --version — macOS ships 3.9!)
 git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
-cd ~/nexus-memory && pip install -e .
+cd ~/nexus-memory
+python3 -m venv venv && source venv/bin/activate
+pip install -e .
 ./scripts/install_hermes_plugin.sh
 ```
 
 ### Path 2: OpenClaw Native Plugin
 
 ```bash
+# Requires Python 3.11+ (check: python3 --version — macOS ships 3.9!)
 git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
-cd ~/nexus-memory && pip install -e .
+cd ~/nexus-memory
+python3 -m venv venv && source venv/bin/activate
+pip install -e .
 ./scripts/install_openclaw_plugin.sh
 ```
 
 ### Path 3: MCP Server (any MCP-compatible agent)
 
 ```bash
+# Requires Python 3.11+ (check: python3 --version — macOS ships 3.9!)
 git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
-cd ~/nexus-memory && pip install -e .
+cd ~/nexus-memory
+python3 -m venv venv && source venv/bin/activate
+pip install -e .
 nexus-memory
 ```
 
