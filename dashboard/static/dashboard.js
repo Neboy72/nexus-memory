@@ -159,7 +159,7 @@ async function loadAgents() {
             ${logo}
             <span class="agent-name">${agent.name}</span>
             <span class="agent-install-badge mcp">${pluginLabel}</span>
-            <button class="connect-btn" onclick="toast('${agent.id}: setup runs in your terminal — nexus-memory setup', 'info')">Connect</button>
+            <button class="connect-btn" onclick="connectAgent('${agent.id}', event)">Connect</button>
           </div>
         `;
       }).join('');
@@ -174,6 +174,20 @@ async function setTrust(agentId, level) {
   if (result && !result.error) {
     showToast(`${agentId}: trust level → ${level}`, 'success');
     loadAgents();
+  }
+}
+
+async function connectAgent(agentId, ev) {
+  if (ev) ev.stopPropagation();
+  const result = await fetchAPI(`/api/agents/${agentId}/connect`, { method: 'POST' });
+  if (result && !result.error) {
+    const msg = result.action === 'already-connected'
+      ? `${agentId}: already connected`
+      : `${agentId}: connected — Nexus registered in its config`;
+    showToast(msg, 'success');
+    loadAgents(); // agent moves to Connected once nexus_installed flips true
+  } else {
+    showToast(`${agentId}: connect failed — ${result?.error || 'unknown error'}`, 'error');
   }
 }
 
