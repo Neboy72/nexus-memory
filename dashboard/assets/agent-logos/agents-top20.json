@@ -39,7 +39,7 @@
     "rank": 5,
     "name": "pi",
     "id": "pi",
-    "homepage": "https://github.com/olixis/pi-openrouter-plus",
+    "homepage": "https://pi.dev",
     "type": "CLI",
     "mcp": true,
     "plugin": false
