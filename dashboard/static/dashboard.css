@@ -831,17 +831,6 @@ h2 {
 /* Fehlermeldung: Signal-Farbe (rot), NICHT neutrales Grau */
 .insp-error { color: #e74c3c; font-size: 13px; padding: 10px 0; }
 
-/* Header-Button: exakt action-btn-Sprache, kompakter */
-.inspector-header-btn {
-  padding: 7px 16px; font-size: 13px;
-  background: #12121f; border: 1px solid #1a1a2e; border-radius: 8px;
-  color: #02C1FF; cursor: pointer; transition: all 0.2s;
-  margin-right: 12px;
-}
-.inspector-header-btn:hover {
-  background: #1a1a2e; border-color: #954EFF; color: #954EFF;
-}
-
 /* Action-Bar-Variante (bleibt in Reihe mit den anderen) */
 .action-btn--inspector { border-color: #1a1a2e; }
 .action-btn--inspector:hover { border-color: #954EFF; color: #954EFF; }
