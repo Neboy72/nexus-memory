@@ -173,8 +173,10 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
 ### 1. Install
 
 ```bash
+# Requires Python 3.11+ (check: python3 --version — macOS ships 3.9!)
 git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
 cd ~/nexus-memory
+python3 -m venv venv && source venv/bin/activate
 pip install -e .
 ```
 
