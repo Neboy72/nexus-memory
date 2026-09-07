@@ -6,6 +6,7 @@
 - **Scope labels** (`scope`): optional area label on every memory (`nexus_remember(..., scope="voice")`). Valid: `[a-z0-9-]`, max 40 chars, normalized lowercase. Anything invalid degrades to `default` (fail-open) — behaves exactly like pre-scope memories.
 - **Core principle — scopes steer automatic prefetch, never explicit search**: auto-prefetch (Hermes plugin `NEXUS_SCOPE` env / OpenClaw plugin `scope` config) surfaces only `default` memories plus the agent's own scope. Explicit `recall()` / `nexus_search` is NEVER scope-filtered — a scoped memory is never hidden from a direct question.
 - **OpenClaw plugin parity**: `scope` config key + `NEXUS_SCOPE` env fallback in `lib/config.ts`, gating in the auto-recall hook, scope inheritance in capture + `nexus_store` tool (optional `scope` parameter with same normalization).
+- **Claude Code plugin parity**: auto-recall hook gates on `NEXUS_SCOPE` (same client-side filter contract), auto-capture stores memories with inherited `_normalize_scope(NEXUS_SCOPE)`; graph-boost neighbors intentionally unfiltered (explicit relations). MCP-based Claude Code setups inherit v0.18.4 automatically.
 - **Backward compatible**: no `NEXUS_SCOPE` set → the agent sees everything (old behavior); memories without a scope field behave as `default`.
 
 ## Tests
