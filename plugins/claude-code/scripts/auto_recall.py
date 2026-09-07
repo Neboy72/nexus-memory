@@ -10,6 +10,7 @@ Output JSON with additionalContext field injects text into Claude's context.
 
 import sys
 import json
+import logging
 import os
 import urllib.request
 import urllib.error
@@ -18,6 +19,10 @@ from pathlib import Path
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
+
+# Self-organizing memory (Nebo law 07.09: full automation): shared scope-auto
+# lib provides centroids + clear-match inference for recall gating.
+import scope_auto as _scope_auto  # noqa: E402 (same dir)
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
@@ -134,9 +139,17 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     # Client-side filter: only return memories the agent is allowed to see
     # Scope gating (project/agent areas): skip memories scoped to a different
     # area. Core principle: scopes steer AUTOMATIC recall only — explicit
-    # search (MCP recall tool) is NEVER scope-filtered. Fail-open: no
-    # NEXUS_SCOPE set → agent sees everything (old behavior).
+    # search (MCP recall tool) is NEVER scope-filtered. Self-organizing
+    # memory (Nebo law 07.09): the allowed set comes from the query itself
+    # (clear match against scoped centroids) — manual NEXUS_SCOPE overrides.
+    # Fail-open: no centroids / ambiguous query → no filtering (old behavior).
     my_scope = os.getenv("NEXUS_SCOPE", "").strip().lower()
+    allowed_scopes = None
+    try:
+        cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
+        allowed_scopes = _scope_auto.prefetch_allowed_scopes(query_embedding, cents, my_scope)
+    except Exception as exc:
+        logging.info("scope_auto: recall gating skipped (%s) — fail-open", exc)
     filtered = []
     for hit in results:
         payload = hit.get("payload", {})
@@ -144,7 +157,11 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
         mem_idx = level_order.index(mem_level) if mem_level in level_order else 2
         if mem_idx > agent_idx:
             continue
-        if my_scope:
+        if allowed_scopes is not None:
+            p_scope = (payload.get("scope") or "default").strip().lower() or "default"
+            if p_scope not in allowed_scopes:
+                continue
+        elif my_scope:
             p_scope = (payload.get("scope") or "default").strip().lower() or "default"
             if p_scope != "default" and p_scope != my_scope:
                 continue
