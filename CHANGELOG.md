@@ -1,3 +1,16 @@
+# v0.18.5 — Auto-Scoping: The Memory Organizes Itself
+
+**The memory now assigns its own areas — full automation, zero user setup (Nebo law: automate or it's useless).** Scope labels exist since v0.18.4, but they required a config value per agent. Now the memory infers the area itself: when a new memory is stored, it compares the content vector against the centroids of existing scoped areas and inherits the matching scope automatically. And at recall time, a question that clearly belongs to one area gets that area's memories plus the shared ones — no configuration anywhere in the loop.
+
+## New
+- **`scope_auto.py` — scope centroids + conservative inference**: centroid per scope from canonical scoped points (60s TTL cache, fail-open to "no areas"). `infer_scope()`: only tags a memory when its vector is CLEARLY closest to one area (margin ≥ 0.05 to runner-up AND ≥ 0.72 absolute similarity) — under-tagging is harmless, over-tagging is what we avoid. Zero LLM cost: pure vector math.
+- **Auto-tagging at `remember()`**: caller leaves `scope` at `default` → server inherits the inferred area automatically. Explicit non-default scopes are never overridden. Fail-open: any inference error → stays `default`.
+- **Query-side auto-filtering (Hermes plugin prefetch)**: a prompt that clearly belongs to one area surfaces only `default` + that area's memories; ambiguous prompts change nothing (old behavior). No `NEXUS_SCOPE` needed — the query steers itself.
+- **Fully backward compatible**: with no scoped memories in the store, centroids are empty → `default` everywhere → byte-for-byte old behavior. Users never see the word "scope".
+
+## Tests
+- 1063 passed (1048 previous + 15 new auto-scoping tests: centroid math, margin logic, dimension-mismatch skip, fail-open paths, remember-integration, prefetch integration)
+
 # v0.18.4 — Scopes: Project/Agent Areas (unreleased feature, first implementation)
 
 **Scopes answer "which project does this belong to?"** — access levels already answer "who may see this?". Every memory can now carry a scope label so multiple agents sharing one memory store get clean, focused auto-recall instead of cross-project noise.

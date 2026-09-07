@@ -581,6 +581,7 @@ class MemoryStore:
         self._embedder = EmbeddingProvider()
         self._hybrid_retriever = None
         self._skill_graph = None
+        self._scope_centroids = None  # scope_auto: lazy, fail-open
         self._ensure_collection()
         self._init_hybrid()
         self._init_skill_graph()
@@ -880,6 +881,30 @@ class MemoryStore:
         created_at = datetime.now(timezone.utc).isoformat()
         vector = await self._embed(text)
 
+        # ── Auto-scoping (self-organizing memory, Nebo law 07.09: full
+        # automation or useless): when the caller leaves scope at 'default',
+        # infer the area from existing scope centroids and inherit it
+        # automatically. Conservative margins (scope_auto) — under-tagging is
+        # harmless, over-tagging is what we must avoid. Callers with an
+        # EXPLICIT non-default scope are never overridden. Zero cost: pure
+        # vector math, no LLM call. Fail-open: any error → keep 'default'.
+        if scope == "default" and vector:
+            try:
+                if self._scope_centroids is None:
+                    from nexus_memory.scope_auto import ScopeCentroids
+                    self._scope_centroids = ScopeCentroids(self.client, COLLECTION_NAME)
+                from nexus_memory.scope_auto import infer_scope as _infer_scope
+                auto = _infer_scope(vector, self._scope_centroids.get())
+                if auto != "default":
+                    scope = auto
+                    logging.info(
+                        f"scope_auto: memory auto-scoped to '{auto}' "
+                        f"(caller left default)"
+                    )
+            except Exception as exc:
+                logging.info("scope_auto: inference skipped (%s) — fail-open", exc)
+                scope = "default"
+
         # ── Auto-Supersession: check for existing similar canonical facts ──
         # Review hardening:
         #   1. Access boundaries: a new fact may only supersede candidates
@@ -1111,6 +1136,7 @@ class MemoryStore:
             "id": entry_id,
             "access_level": access_level,
             "category": category,
+            "scope": scope,
             "superseded": superseded_ids if superseded_ids else None,
         }
 
