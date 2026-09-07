@@ -127,6 +127,15 @@ async function loadAgents() {
     const reads = agent.reads || 0;
     const logo = getAgentLogo(agent.id, agent.icon);
     const badge = getInstallBadge(agent.install_type);
+    // Nebo toggle: only pure-MCP agents get the On/Off switch — plugin
+    // agents are wired into the host core and must not be clickable off.
+    const isPureMcp = (agent.install_type || '') === 'mcp';
+    const toggle = isPureMcp
+      ? `<label class="ios-toggle" title="Nexus connection for ${esc(agent.name)}">
+           <input type="checkbox" checked onchange="toggleAgent('${agent.id}', this)">
+           <span class="ios-slider"></span>
+         </label>`
+      : '';
 
     return `
       <div class="agent-card">
@@ -136,6 +145,7 @@ async function loadAgents() {
           <span class="agent-install-badge">${badge}</span>
           ${hostBadge(agent)}
           <span class="agent-status"></span>
+          ${toggle}
         </div>
         <div class="agent-meta">Last seen: ${lastSeen} | ${reads} reads</div>
         <div class="trust-buttons">${buttons}</div>
@@ -188,6 +198,34 @@ async function connectAgent(agentId, ev) {
     loadAgents(); // agent moves to Connected once nexus_installed flips true
   } else {
     showToast(`${agentId}: connect failed — ${result?.error || 'unknown error'}`, 'error');
+  }
+}
+
+async function toggleAgent(agentId, checkbox) {
+  // Revert the visual state immediately; loadAgents() repaints after the
+  // backend answers (or after the cancel), so the slider never lies.
+  if (checkbox.checked) {
+    // OFF → ON: connect right away (starts at Trusted, per Nebo semantics).
+    const result = await fetchAPI(`/api/agents/${agentId}/connect`, { method: 'POST' });
+    if (result && !result.error) {
+      showToast(`${agentId}: connected — starts at Trusted`, 'success');
+      loadAgents();
+    } else {
+      showToast(`${agentId}: connect failed — ${result?.error || 'unknown error'}`, 'error');
+      checkbox.checked = false;
+    }
+    return;
+  }
+  // ON → OFF: confirm, then disconnect.
+  const ok = confirm(`${agentId}: really disconnect from Nexus Memory?\nThe agent loses memory access at its next start.`);
+  if (!ok) { checkbox.checked = true; return; }
+  const result = await fetchAPI(`/api/agents/${agentId}/disconnect`, { method: 'POST' });
+  if (result && !result.error) {
+    showToast(`${agentId}: disconnected — moves back to Available`, 'success');
+    loadAgents();
+  } else {
+    showToast(`${agentId}: disconnect failed — ${result?.error || 'unknown error'}`, 'error');
+    checkbox.checked = true;
   }
 }
 

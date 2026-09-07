@@ -701,6 +701,95 @@ async def connect_agent(agent_id: str):
     return {"status": "ok", "action": "connected" if not already else "already-connected", "config": str(cfg_path)}
 
 
+@app.post("/api/agents/{agent_id}/disconnect")
+async def disconnect_agent(agent_id: str):
+    """Toggle Off: remove the nexus MCP entry from the agent's own config.
+
+    Reverse of connect (Nebo toggle semantics). Guards:
+    - only pure-MCP agents are disconnectable via the dashboard; agents
+      whose install_type contains "plugin" are wired into the host core
+      and must never be touched by a web click (Regel 1 spirit).
+    - the config write is preceded by a timestamped .bak backup.
+    """
+    config_paths = {
+        "windsurf": (Path.home() / ".codeium" / "windsurf" / "mcp_config.json", "json"),
+        "pi": (Path.home() / ".pi" / "agent" / "settings.json", "json"),
+    }
+    if agent_id not in config_paths:
+        return JSONResponse({"error": f"no config target known for '{agent_id}'"}, status_code=400)
+
+    # Guard: never disconnect plugin-embedded agents from the web UI.
+    try:
+        from nexus_memory.agent_detect import load_agents_registry
+
+        reg_entry = next(
+            (a for a in load_agents_registry().get("agents", []) if a.get("id") == agent_id),
+            None,
+        )
+        if reg_entry and "plugin" in (reg_entry.get("install_type") or ""):
+            return JSONResponse(
+                {"error": "plugin-embedded agent — disconnect only via its host config"},
+                status_code=403,
+            )
+    except Exception:
+        pass  # registry read failure must not silently allow/deny; config is authoritative
+
+    cfg_path, fmt = config_paths[agent_id]
+
+    existing: dict = {}
+    if not cfg_path.exists():
+        # Nothing wired in the config: still drop a stale registry entry.
+        removed = False
+        try:
+            from nexus_memory.agent_detect import unregister_agent
+
+            removed = unregister_agent(agent_id)
+        except Exception:
+            removed = False
+        return {"status": "ok", "action": "not-wired", "registry_removed": removed}
+
+    try:
+        existing = json.loads(cfg_path.read_text())
+    except Exception as exc:
+        return JSONResponse({"error": f"config unreadable: {exc}"}, status_code=500)
+
+    servers = existing.get("mcpServers") or {}
+    if "nexus" not in servers:
+        removed = False
+        try:
+            from nexus_memory.agent_detect import unregister_agent
+
+            removed = unregister_agent(agent_id)
+        except Exception:
+            removed = False
+        return {"status": "ok", "action": "already-disconnected", "registry_removed": removed}
+
+    # Backup before write (Regel 1: proof first)
+    backup = cfg_path.with_suffix(
+        cfg_path.suffix + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
+    backup.write_text(cfg_path.read_text())
+
+    servers.pop("nexus")
+    if servers or existing.keys() - {"mcpServers"}:
+        existing["mcpServers"] = servers
+        cfg_path.write_text(json.dumps(existing, indent=2) + "\n")
+    else:
+        # The file existed ONLY to hold the nexus entry — remove it entirely
+        # so a bare leftover config does not re-trigger detection.
+        cfg_path.unlink()
+
+    # Drop the agent from the registry so it moves back to Available.
+    removed = False
+    try:
+        from nexus_memory.agent_detect import unregister_agent
+
+        removed = unregister_agent(agent_id)
+    except Exception:
+        removed = False
+    return {"status": "ok", "action": "disconnected", "registry_removed": removed}
+
+
 @app.get("/api/detect")
 async def detect_agents():
     """Run agent auto-detection."""
