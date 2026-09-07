@@ -9,7 +9,7 @@ const AGENT_LOGOS = {
   'kilo-code': '/assets/agent-logos/kilo-code.png',
   'openclaw': '/assets/agent-logos/openclaw.png',
   'claude-code': '/assets/agent-logos/claude-code.png',
-  'pi': '/assets/agent-logos/pi.png',
+  'pi': '/assets/agent-logos/pi.svg',
   'cline': '/assets/agent-logos/cline.png',
   'codex': '/assets/agent-logos/codex.png',
   'openhands': '/assets/agent-logos/openhands.png',
