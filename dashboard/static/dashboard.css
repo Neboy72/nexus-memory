@@ -529,6 +529,49 @@ h2 {
   box-shadow: 0 0 6px #00b894;
 }
 
+/* iOS-style On/Off toggle (Nebo design) — sits right of the status dot,
+   only rendered for pure-MCP agents. */
+.ios-toggle {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 22px;
+  margin-left: 8px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.ios-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.ios-slider {
+  position: absolute;
+  inset: 0;
+  border-radius: 22px;
+  background: #2a2a3e;
+  transition: background 0.2s ease;
+  box-shadow: inset 0 0 2px rgba(255, 255, 255, 0.12);
+}
+.ios-slider::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: #DEDDDE;
+  transition: transform 0.2s;
+}
+.ios-toggle input:checked + .ios-slider {
+  background: #00b894;
+}
+.ios-toggle input:checked + .ios-slider::before {
+  transform: translateX(16px);
+}
+
 .agent-meta {
   font-size: 12px;
   color: #636e72;

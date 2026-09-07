@@ -495,6 +495,24 @@ def save_agents_registry(registry: dict) -> None:
         _save_registry_unlocked(registry)
 
 
+def unregister_agent(agent_id: str) -> bool:
+    """Remove an agent from the registry (dashboard Disconnect semantics).
+
+    Returns True when an entry was removed, False when the id was not
+    registered. The whole read-modify-write cycle runs under the registry
+    lock, so a parallel connect/trust write cannot be lost.
+    """
+    with _registry_lock():
+        registry = _load_registry_unlocked()
+        agents = registry.get("agents", [])
+        remaining = [a for a in agents if a.get("id") != agent_id]
+        if len(remaining) == len(agents):
+            return False
+        registry["agents"] = remaining
+        _save_registry_unlocked(registry)
+        return True
+
+
 def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
                    install_type: str, config_dir: str = None) -> dict:
     """Register or update an agent in the registry.
