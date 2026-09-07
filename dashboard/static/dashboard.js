@@ -127,6 +127,14 @@ async function loadAgents() {
     const reads = agent.reads || 0;
     const logo = getAgentLogo(agent.id, agent.icon);
     const badge = getInstallBadge(agent.install_type);
+    // Disambiguation (Nebo): when several agents share the same harness name,
+    // the readable seat is part of the title — "Hermes Agent — Mac Mini" —
+    // instead of an anonymous "lokal". Tooltip keeps the full details.
+    const sameNameCount = registry.agents.filter(a => a.name === agent.name).length;
+    const seat = (agent.host_label || '').trim();
+    const displayName = (sameNameCount > 1 && seat && agent.host_type !== 'local')
+      ? `${agent.name} — ${seat}`
+      : agent.name;
     // Nebo toggle: only pure-MCP agents get the On/Off switch — plugin
     // agents are wired into the host core and must not be clickable off.
     const isPureMcp = (agent.install_type || '') === 'mcp';
@@ -141,7 +149,7 @@ async function loadAgents() {
       <div class="agent-card">
         <div class="agent-header">
           ${logo}
-          <span class="agent-name">${agent.name}</span>
+          <span class="agent-name">${esc(displayName)}</span>
           <span class="agent-install-badge">${badge}</span>
           ${hostBadge(agent)}
           <span class="agent-status"></span>
