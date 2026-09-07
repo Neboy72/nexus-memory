@@ -49,6 +49,36 @@ _CONFLICT_SIM_THRESHOLD = float(os.environ.get("NEXUS_CONSOLIDATION_SIM", "0.75"
 _CONSOLIDATED_BY = "consolidation-v1"
 _MAX_CONV_CHARS = 8000
 
+# ── Auto-Scope folder creation (Nebo GO 07.09., Startlücken-Fix) ──────
+# When a distilled fact-cluster forms a CLEAR new topic that fits NO
+# existing scope, the distill-LLM may found a new folder itself. The
+# ride-along fuel chain provides the LLM for every user type (Ollama =
+# free). Guards: min cluster size, strict name format, daily cap,
+# fail-open to 'default' on ANY error.
+_SCOPE_CREATE_MIN_FACTS = int(os.environ.get("NEXUS_SCOPE_AUTO_CREATE_MIN", "3"))
+_SCOPE_CREATE_MAX_PER_DAY = int(os.environ.get("NEXUS_SCOPE_AUTO_CREATE_MAX", "2"))
+_SCOPE_CREATE_ENABLED = os.environ.get("NEXUS_SCOPE_AUTO_CREATE", "1") == "1"
+_SCOPE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+SCOPE_FOUND_PROMPT = """You organize an AI agent's long-term memory into named topic folders (scopes).
+
+Existing folders: {existing}
+This batch of {n} facts was just distilled from a conversation. NONE of them clearly fits an existing folder.
+
+Facts:
+{facts}
+
+Question: Do these facts form ONE clear, coherent new topic that deserves its own folder?
+
+Rules:
+- Only if the facts share ONE clear subject (e.g. all about a specific project, hobby, or system).
+- Name: lowercase letters/digits/hyphens only, max 40 chars, descriptive (e.g. "voice-pipeline").
+- If the facts are unrelated to each other or too thin for a folder: refuse.
+
+Return ONLY one of:
+{{"scope": "folder-name"}}   — a clear new topic deserves its own folder
+{{"scope": null}}            — no clear topic, refuse"""
+
 
 def _source_date(payload: Any) -> str:
     """Date of the source point (YYYY-MM-DD) for relative-time resolution.
@@ -245,6 +275,7 @@ class Consolidator:
         self._embed_fn = embed_fn
         self._lock = threading.Lock()
         self._last_report: Dict[str, Any] = {}
+        self._scope_centroids: Optional[Any] = None
 
     # ── flags for the health tool ────────────────────────────────────
     def get_flags(self) -> Dict[str, Any]:
@@ -325,6 +356,8 @@ class Consolidator:
                     continue
                 src_access = _normalize_access_level(payload)
                 created_here = 0
+                batch_new_facts: List[str] = []
+                batch_assigned_scopes: set = set()
                 for fact in facts:
                     decision, supersede_ids = self._resolve_conflicts(
                         fact, access_level=src_access)
@@ -332,7 +365,10 @@ class Consolidator:
                         duplicates += 1
                         continue
                     if not dry_run:
-                        new_id = self._store_fact(fact, p.id, source_payload=payload)
+                        new_id, fact_scope = self._store_fact(
+                            fact, p.id, source_payload=payload)
+                        batch_new_facts.append(fact)
+                        batch_assigned_scopes.add(fact_scope)
                         for old_id in supersede_ids:
                             try:
                                 self._supersede_old(old_id, new_id)
@@ -352,6 +388,16 @@ class Consolidator:
                     facts_created += 1
                 if not dry_run:
                     self._mark_consolidated(p.id, created_here)
+                    # Folder founding (Startlücken-Fix): a coherent batch of
+                    # facts that all stayed 'default' may deserve a NEW scope.
+                    # Runs AFTER the facts are safely stored; on success the
+                    # batch facts are re-tagged to the new scope immediately.
+                    if batch_new_facts:
+                        new_scope = self._maybe_found_scope(
+                            batch_new_facts, {}, batch_assigned_scopes)
+                        if new_scope:
+                            self._retag_facts_to_scope(
+                                batch_new_facts, new_scope, p.id)
             except Exception as exc:
                 failed += 1
                 log.warning("consolidation: point %s failed (skipped): %s", p.id, exc)
@@ -458,7 +504,7 @@ class Consolidator:
 
     # ── write the distilled fact ─────────────────────────────────────
     def _store_fact(self, fact: str, source_point_id: str,
-                    source_payload: Optional[dict] = None) -> str:
+                    source_payload: Optional[dict] = None) -> Tuple[str, str]:
         import uuid
         from qdrant_client.models import PointStruct
 
@@ -475,12 +521,24 @@ class Consolidator:
         vec = self._embed(fact)
         new_id = str(uuid.uuid4())
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Auto-scope the distilled fact the same way direct saves are scoped
+        # (mcp_server remember-path): inherit a clearly matching existing
+        # folder, else stay 'default'. Fail-open — under-tagging is harmless.
+        fact_scope = "default"
+        try:
+            from nexus_memory.scope_auto import infer_scope as _infer_scope
+            centroids = self._centroids()
+            if centroids is not None:
+                fact_scope = _infer_scope(vec, centroids.get()) or "default"
+        except Exception as exc:
+            log.info("consolidation: scope inference skipped (%s) — fail-open", exc)
         self._store.client.upsert(
             self._collection,
             points=[PointStruct(
                 id=new_id, vector=vec,
                 payload={"content": fact, "category": "fact",
                          "access_level": access_level,
+                         "scope": fact_scope,
                          "source": "nexus-consolidation", "created_at": now,
                          "lifecycle_status": "canonical", "confidence": 0.8,
                          "consolidated_from": source_point_id,
@@ -489,7 +547,7 @@ class Consolidator:
                                         "timestamp": now}},
             )],
         )
-        return new_id
+        return new_id, fact_scope
 
     def _mark_consolidated(self, point_id: str, facts_created: int) -> None:
         self._store.client.set_payload(
@@ -555,6 +613,147 @@ class Consolidator:
                             "failing: %s", item["old_id"], item["new_id"], exc)
         self._save_pending_supersedes([i for i in pending if i not in done_ids])
         return retried, done_ids
+
+    # ── auto-scope folder creation (Startlücken-Fix, Nebo GO 07.09.) ──
+    def _scope_create_state_path(self):
+        import pathlib
+        base = os.environ.get("NEXUS_HOME", str(pathlib.Path.home() / ".nexus-memory"))
+        return pathlib.Path(base) / "scope_auto_create_state.json"
+
+    def _daily_creations_left(self) -> int:
+        """How many new folders may still be founded today? Fail-open to 0-cap."""
+        if not _SCOPE_CREATE_ENABLED or _SCOPE_CREATE_MAX_PER_DAY <= 0:
+            return 0
+        try:
+            path = self._scope_create_state_path()
+            with open(path, "r", encoding="utf-8") as fh:
+                state = json.load(fh)
+            today = time.strftime("%Y-%m-%d", time.gmtime())
+            if state.get("date") != today:
+                return _SCOPE_CREATE_MAX_PER_DAY
+            used = int(state.get("count", 0))
+            return max(0, _SCOPE_CREATE_MAX_PER_DAY - used)
+        except FileNotFoundError:
+            return _SCOPE_CREATE_MAX_PER_DAY
+        except Exception as exc:
+            log.warning("consolidation: scope-create state unreadable (%s) — cap 0", exc)
+            return 0
+
+    def _record_daily_creation(self) -> None:
+        try:
+            path = self._scope_create_state_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            today = time.strftime("%Y-%m-%d", time.gmtime())
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    state = json.load(fh)
+            except Exception:
+                state = {}
+            if state.get("date") != today:
+                state = {"date": today, "count": 0}
+            state["count"] = int(state.get("count", 0)) + 1
+            tmp = path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(state, fh)
+            os.replace(tmp, path)
+        except Exception as exc:
+            # Non-fatal: worst case one extra folder today.
+            log.warning("consolidation: scope-create state persist failed: %s", exc)
+
+    def _retag_facts_to_scope(self, facts: List[str], scope: str,
+                              source_point_id: str) -> None:
+        """Tag the batch's just-stored facts with the newly founded scope.
+
+        Best-effort: a failed re-tag leaves the fact in 'default' (harmless —
+        under-tagging is the safe failure mode). Centroid cache invalidated so
+        the new folder is immediately visible to the next save.
+        """
+        try:
+            from qdrant_client.models import (Filter, FieldCondition, MatchValue)
+            self._store.client.set_payload(
+                self._collection,
+                payload={"scope": scope},
+                points=Filter(must=[
+                    FieldCondition(key="consolidated_from",
+                                   match=MatchValue(value=source_point_id)),
+                    FieldCondition(key="scope",
+                                   match=MatchValue(value="default")),
+                ]),
+            )
+        except Exception as exc:
+            log.warning("consolidation: retag to '%s' failed (%s) — facts stay default",
+                        scope, exc)
+            return
+        # Invalidate centroid cache so the new folder counts immediately.
+        try:
+            centroids = self._centroids()
+            if centroids is not None:
+                centroids.invalidate()
+        except Exception:
+            pass
+
+    def _maybe_found_scope(self, facts: List[str], vectors: Dict[str, list],
+                           assigned_scopes: set) -> Optional[str]:
+        """After a distill batch: should these facts found a NEW folder?
+
+        Called with the batch's created facts, their vectors, and the scopes
+        they were actually assigned (post infer_scope). Returns the new scope
+        name or None. Guards: min cluster, all-default, daily cap, strict
+        name validation. ANY error → None (fail-open, facts stay default).
+        """
+        if not _SCOPE_CREATE_ENABLED:
+            return None
+        if len(facts) < _SCOPE_CREATE_MIN_FACTS:
+            return None
+        # Only consider founding when NONE of the facts found a home —
+        # otherwise an existing folder already covers the topic.
+        if assigned_scopes - {"default"}:
+            return None
+        if self._daily_creations_left() <= 0:
+            log.info("consolidation: scope-create daily cap reached — batch stays default")
+            return None
+        # Existing folder names for the prompt (so the LLM can't duplicate).
+        try:
+            centroids = self._centroids()
+            existing = sorted(centroids._probe_scopes()) if centroids else []
+        except Exception:
+            existing = []
+        facts_txt = "\n".join(f"- {f}" for f in facts[:10])
+        try:
+            raw = self._llm(SCOPE_FOUND_PROMPT.format(
+                existing=", ".join(existing) if existing else "(none yet)",
+                n=len(facts), facts=facts_txt))
+            txt = _extract_payload((raw or "").strip())
+            d = json.loads(txt)
+            name = d.get("scope")
+            if not isinstance(name, str):
+                return None
+            name = name.strip().lower()
+            if not _SCOPE_NAME_RE.match(name) or name == "default":
+                log.info("consolidation: scope-create refused invalid name %r", name)
+                return None
+            if name in existing:
+                log.info("consolidation: scope-create refused duplicate name %r", name)
+                return None
+            self._record_daily_creation()
+            log.info("consolidation: NEW SCOPE founded by distill-LLM: '%s' (%d facts)",
+                     name, len(facts))
+            return name
+        except Exception as exc:
+            # Any LLM/parse failure → folder stays unfounded, facts keep default.
+            log.info("consolidation: scope-create skipped (%s) — fail-open", exc)
+            return None
+
+    def _centroids(self):
+        """Lazy ScopeCentroids accessor (shared cache, None-safe)."""
+        if getattr(self, "_scope_centroids", None) is None:
+            try:
+                from nexus_memory.scope_auto import ScopeCentroids
+                self._scope_centroids = ScopeCentroids(self._store.client,
+                                                       self._collection)
+            except Exception as exc:
+                log.info("consolidation: centroids unavailable (%s) — fail-open", exc)
+        return getattr(self, "_scope_centroids", None)
 
     # ── daemon wiring (TrustService pattern) ─────────────────────────
     def start(self) -> None:

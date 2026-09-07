@@ -79,7 +79,7 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 # Event types emitted by the MCP server when memory state changes.
 # Subscriptions are stored as plain JSON in ~/.nexus-webhooks.json so the
 # feature has zero new dependencies and no impact on the Qdrant collection.
-WEBHOOK_EVENTS = ("memory.remember", "memory.update", "memory.forget")
+WEBHOOK_EVENTS = ("memory.remember", "memory.update", "memory.forget", "fuel.exhausted")
 WEBHOOK_STORE_PATH = Path.home() / ".nexus-webhooks.json"
 
 
@@ -279,7 +279,8 @@ def get_webhook_store() -> WebhookStore:
     return _webhook_store
 
 
-async def dispatch_event(event_type: str, memory_id: str) -> None:
+async def dispatch_event(event_type: str, memory_id: str,
+                         extra: Optional[dict] = None) -> None:
     """Fire-and-forget dispatch of ``event_type`` to every matching webhook.
 
     Each subscription is POSTed to in its own background task. Errors
@@ -287,7 +288,8 @@ async def dispatch_event(event_type: str, memory_id: str) -> None:
     a single broken subscriber can never crash the MCP server or block
     the main tool call.
 
-    Body shape: ``{"event": ..., "memory_id": ..., "timestamp": ...}``.
+    Body shape: ``{"event": ..., "memory_id": ..., "timestamp": ...}``
+    plus any ``extra`` fields (e.g. fuel budget info on ``fuel.exhausted``).
     """
     if event_type not in WEBHOOK_EVENTS:
         return  # unknown events are silently ignored — defense in depth
@@ -304,6 +306,8 @@ async def dispatch_event(event_type: str, memory_id: str) -> None:
         "memory_id": memory_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if isinstance(extra, dict):
+        payload.update(extra)
     for sub in subs:
         url = sub.get("webhook_url")
         if not url:
@@ -2388,6 +2392,37 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             response = result
             if guardrails:
                 response["warnings"] = guardrails
+
+            # Fuel notice (Nebo GO 07.09.): when the paid-fuel budget is
+            # freshly exhausted this month, tell the AGENT — it reports to
+            # the user in the user's language. Exactly once per month
+            # (budget_notification_pending latches), never on free stations'
+            # zero-cost months... except NEXUS_FUEL_BUDGET_USD=0, where the
+            # first remember IS the notice moment.
+            try:
+                from nexus_memory.fuel_chain import (
+                    budget_notification_pending as _notif_pending,
+                    fuel_exhausted_info as _fuel_info,
+                )
+                if _notif_pending():
+                    info = _fuel_info()
+                    response["fuel_notice"] = (
+                        "Heads-up for your user: the monthly Nexus paid-fuel "
+                        f"budget (${info['budget_usd']:.2f}) is now used up "
+                        f"(${info['spent_usd']:.2f} spent). Nothing is broken — "
+                        "memory storage and recall continue as usual. Only "
+                        "paid background thinking (folder founding) rests "
+                        f"until {info['reset']}. If your user wants it "
+                        "running again, they can raise the budget via the "
+                        "NEXUS_FUEL_BUDGET_USD environment variable — you "
+                        "can do that for them. Report this in the user's "
+                        "own language, briefly and calmly."
+                    )
+                    # One-shot webhook for integrations that listen.
+                    await dispatch_event("fuel.exhausted", "budget",
+                                         extra=info)
+            except Exception as exc:
+                logging.debug(f"fuel notice skipped: {exc}")
 
             return [types.TextContent(
                 type="text",
