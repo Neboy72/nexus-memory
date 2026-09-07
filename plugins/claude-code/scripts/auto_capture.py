@@ -24,6 +24,23 @@ EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
+_SCOPE_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def _normalize_scope(scope) -> str:
+    """Normalize a scope label (project/agent areas). Fail-open to 'default'.
+
+    Same contract as the MCP server's _normalize_scope: valid = non-empty
+    [a-z0-9-] string, max 40 chars; anything else (None, empty, uppercase,
+    too long, non-str) degrades to 'default' so callers never break.
+    """
+    if isinstance(scope, str):
+        s = scope.strip().lower()
+        if s and _SCOPE_RE.match(s):
+            return s
+    return "default"
+
+
 def _resolve_trust_level() -> str:
     """Gatekeeper: resolve this agent's trust level from agents.json.
 
@@ -102,7 +119,11 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
                 "source": "claude-code",
                 "access_level": _resolve_trust_level(),
                 "created_at": now,
-                "agent": "claude-code"
+                "agent": "claude-code",
+                # Scope: auto-captured memories inherit the agent's NEXUS_SCOPE
+                # (project/agent areas). Fail-open to 'default' — same
+                # normalization contract as the MCP server (_normalize_scope).
+                "scope": _normalize_scope(os.getenv("NEXUS_SCOPE", "default"))
             }
         }]
     }).encode()

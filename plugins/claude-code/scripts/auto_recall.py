@@ -132,13 +132,23 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
         return []
 
     # Client-side filter: only return memories the agent is allowed to see
+    # Scope gating (project/agent areas): skip memories scoped to a different
+    # area. Core principle: scopes steer AUTOMATIC recall only — explicit
+    # search (MCP recall tool) is NEVER scope-filtered. Fail-open: no
+    # NEXUS_SCOPE set → agent sees everything (old behavior).
+    my_scope = os.getenv("NEXUS_SCOPE", "").strip().lower()
     filtered = []
     for hit in results:
         payload = hit.get("payload", {})
         mem_level = payload.get("access_level", "private")
         mem_idx = level_order.index(mem_level) if mem_level in level_order else 2
-        if mem_idx <= agent_idx:
-            filtered.append(hit)
+        if mem_idx > agent_idx:
+            continue
+        if my_scope:
+            p_scope = (payload.get("scope") or "default").strip().lower() or "default"
+            if p_scope != "default" and p_scope != my_scope:
+                continue
+        filtered.append(hit)
         if len(filtered) >= limit:
             break
 
@@ -270,6 +280,9 @@ def main():
             memories.append(f"[{category}] (score: {score:.2f}) {text[:200]}")
 
     # Graph-boost: add 1-hop neighbors from top 3 vector hits (max 5 to prevent context bloat)
+    # NOTE: graph_boost reads raw vector hits — scoped-out memories can surface
+    # as graph neighbors; acceptable (graph relations are explicit connections,
+    # not noise), kept consistent with Hermes/OpenClaw plugin behavior.
     trust_level = _resolve_trust_level()
     graph_items = graph_boost(results, max_boost=3, access_level=trust_level)[:5]
     for gi in graph_items:
