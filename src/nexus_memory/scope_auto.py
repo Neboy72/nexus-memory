@@ -28,7 +28,7 @@ from typing import Any, Optional
 # Conservative thresholds (Spec /tmp/kiosha-think-gate.lock):
 # - Under-tagging is harmless (everything visible, like today).
 # - Over-tagging is dangerous (apparent forgetting) → require a clear margin.
-SCOPE_MATCH_THRESHOLD = float(os.getenv("NEXUS_SCOPE_AUTO_THRESHOLD", "0.55"))
+SCOPE_MATCH_THRESHOLD = float(os.getenv("NEXUS_SCOPE_AUTO_THRESHOLD", "0.65"))
 SCOPE_MARGIN = float(os.getenv("NEXUS_SCOPE_AUTO_MARGIN", "0.05"))
 CENTROID_TTL_SECONDS = int(os.getenv("NEXUS_SCOPE_CACHE_TTL", "300"))
 MAX_POINTS_PER_SCOPE = 200
@@ -51,11 +51,43 @@ class ScopeCentroids:
     the scope. Non-'default' scopes only. Pure functions, no LLM, no cost.
     """
 
+    # Known scope names for the centroid scroll filter, discovered from live
+    # data via Qdrant's match-except (scope != default is a POSITIVE match on
+    # existing field values — points WITHOUT a scope field are excluded, which
+    # must_not cannot do). Without this, the default-only universe (~8k
+    # canonical points) crowds scoped points out of the 1000-point window.
+    _SCOPE_PROBE_LIMIT = 500
+
     def __init__(self, client: Any, collection: str):
         self._client = client
         self._collection = collection
         self._cache: Optional[dict[str, list[float]]] = None
         self._cache_at: float = 0.0
+        self._known_scopes: list[str] = self._probe_scopes()
+
+    def _probe_scopes(self) -> list[str]:
+        """Discover existing scope values via match-except. Fail-open to []."""
+        try:
+            points, _ = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter={
+                    "must": [
+                        {"key": "scope", "match": {"except": ["default"]}},
+                    ],
+                },
+                with_payload=True,
+                with_vectors=False,
+                limit=self._SCOPE_PROBE_LIMIT,
+            )
+        except Exception as exc:
+            logging.info("scope_auto: scope probe failed (%s) — fail-open", exc)
+            return []
+        found = set()
+        for p in points:
+            scope = ((p.payload or {}).get("scope") or "").strip().lower()
+            if scope and scope != "default":
+                found.add(scope)
+        return sorted(found)
 
     def invalidate(self) -> None:
         self._cache = None
@@ -69,6 +101,10 @@ class ScopeCentroids:
                 scroll_filter={
                     "must": [
                         {"key": "lifecycle_status", "match": {"value": "canonical"}},
+                        # Scroll ONLY points that carry a real scope — the
+                        # default-only universe (~8k points) would otherwise
+                        # crowd scoped points out of the 1000-point window.
+                        {"key": "scope", "match": {"any": self._known_scopes}},
                     ]
                 },
                 with_payload=True,
