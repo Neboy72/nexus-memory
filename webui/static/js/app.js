@@ -275,6 +275,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.key === 'Escape') hideDetail();
   });
 
+  // ─── Memory Inspector (Astra-Punkt 3) ───
+  const inspOverlay = document.getElementById('inspectorOverlay');
+  const inspToggle = document.getElementById('inspectorToggle');
+  document.getElementById('inspectorClose').addEventListener('click', () => {
+    inspOverlay.classList.remove('insp-overlay--open');
+    document.body.style.overflow = '';
+  });
+  inspToggle.addEventListener('click', async () => {
+    const open = inspOverlay.classList.toggle('insp-overlay--open');
+    inspOverlay.setAttribute('aria-hidden', String(!open));
+    document.body.style.overflow = open ? 'hidden' : '';
+    if (open && typeof Inspector !== 'undefined' && !Inspector._inited) {
+      await Inspector.init('inspectorBody');
+      Inspector._initialized = true;
+    } else if (open && typeof Inspector !== 'undefined') {
+      await Inspector.load(); // fresh data on every open
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && inspOverlay.classList.contains('insp-overlay--open')) {
+      inspOverlay.classList.remove('insp-overlay--open');
+      document.body.style.overflow = '';
+    }
+  });
+
   // ─── Smooth scroll for anchor links ───
   document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     anchor.addEventListener('click', (e) => {

@@ -1528,3 +1528,80 @@ ul, ol { list-style: none; }
     font-size: 1.1rem;
   }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Memory Inspector (Astra-Punkt 3) — overlay, list, why-modal
+   ═══════════════════════════════════════════════════════════════════════ */
+.header__link--button {
+  background: none; border: 1px solid var(--border, #333); border-radius: 8px;
+  color: var(--text, #eee); cursor: pointer; padding: 6px 12px; font: inherit;
+}
+.header__link--button:hover { border-color: var(--accent, #3b82f6); color: var(--accent, #3b82f6); }
+
+.insp-overlay { position: fixed; inset: 0; z-index: 900; display: none; }
+.insp-overlay--open { display: block; }
+.insp-overlay__panel {
+  position: absolute; inset: 4% 6%; display: flex; flex-direction: column;
+  background: var(--bg, #0a0a0f); border: 1px solid var(--border, #2a2a35);
+  border-radius: 14px; box-shadow: 0 24px 80px rgba(0,0,0,.55); overflow: hidden;
+}
+.insp-overlay__header {
+  display: flex; align-items: center; gap: 14px; padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #2a2a35);
+}
+.insp-overlay__title { font-weight: 700; font-size: 1.05rem; }
+.insp-overlay__hint { opacity: .45; font-size: .82rem; margin-right: auto; }
+.insp-overlay__body { flex: 1; overflow-y: auto; padding: 12px 18px; }
+
+.insp-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.insp-toolbar .graph-controls__input { flex: 1; max-width: 480px; }
+.insp-count { opacity: .5; font-size: .85rem; }
+
+.insp-list { display: flex; flex-direction: column; gap: 4px; }
+.insp-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border-radius: 8px; background: rgba(255,255,255,.03);
+}
+.insp-row:hover { background: rgba(255,255,255,.07); }
+.insp-row__cat {
+  font-size: .72rem; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+  text-transform: uppercase; letter-spacing: .03em; flex-shrink: 0;
+}
+.insp-row__cat--fact { color:#3b82f6; background:#3b82f620; }
+.insp-row__cat--belief { color:#8b5cf6; background:#8b5cf620; }
+.insp-row__cat--session { color:#f59e0b; background:#f59e0b20; }
+.insp-row__cat--rule { color:#10b981; background:#10b98120; }
+.insp-row__cat--preference { color:#ec4899; background:#ec489920; }
+.insp-row__cat--temp { color:#6b7280; background:#6b728020; }
+.insp-row__text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .9rem; }
+.insp-row__meta { opacity: .45; font-size: .78rem; flex-shrink: 0; }
+.insp-row__btn {
+  background: none; border: 1px solid var(--border, #2a2a35); border-radius: 6px;
+  color: var(--text, #eee); cursor: pointer; padding: 3px 8px; font-size: .8rem;
+}
+.insp-row__btn:hover { border-color: var(--accent, #3b82f6); }
+.insp-row__btn--danger:hover { border-color: #ef4444; color: #ef4444; }
+.insp-more { opacity: .4; text-align: center; padding: 10px; font-size: .85rem; }
+.insp-error { color: #ef4444; padding: 20px; }
+
+.insp-modal { position: fixed; inset: 0; z-index: 950; display: none; }
+.insp-modal--open { display: block; }
+.insp-modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.6); }
+.insp-modal__content {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  max-width: 640px; width: 92%; max-height: 80vh; overflow-y: auto;
+  background: var(--bg, #0a0a0f); border: 1px solid var(--border, #2a2a35);
+  border-radius: 14px; padding: 22px 26px;
+}
+.insp-modal__content .detail-panel__close {
+  position: absolute; top: 10px; right: 14px; background: none; border: none;
+  color: var(--text, #eee); font-size: 1.5rem; cursor: pointer;
+}
+.insp-why__text {
+  background: rgba(255,255,255,.05); border-radius: 8px; padding: 12px 14px;
+  margin: 12px 0; white-space: pre-wrap; font-size: .9rem; max-height: 180px; overflow-y: auto;
+}
+.insp-why__table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.insp-why__table td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,.07); }
+.insp-why__table td:first-child { opacity: .5; width: 130px; }

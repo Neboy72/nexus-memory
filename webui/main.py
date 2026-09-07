@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import re
 import uuid
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -317,6 +318,110 @@ async def get_memory(memory_id: str):
 
 
 # ---------------------------------------------------------------------------
+
+def _qdrant_id(memory_id: str):
+    """Qdrant accepts UUIDs or unsigned ints — normalize numeric legacy IDs."""
+    mid = (memory_id or "").strip()
+    if re.fullmatch(r"\d+", mid):
+        return int(mid)
+    return memory_id
+
+
+# Memory Inspector (Astra-Punkt 3): WAS + WARUM + KORRIGIEREN + ZURÜCKROLLEN
+# Write-Operationen sind soft-only (lifecycle_status) — never hard delete.
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel
+
+
+class TextPatch(BaseModel):
+    text: str
+
+
+@app.patch("/api/memories/{memory_id}/text")
+async def patch_memory_text(memory_id: str, body: TextPatch):
+    """Edit-in-place: replace the memory's text in its payload."""
+    new_text = (body.text or "").strip()
+    if not new_text:
+        return JSONResponse({"error": "text must not be empty"}, status_code=400)
+    try:
+        found = qdrant.retrieve(collection_name=QDRANT_COLLECTION, ids=[_qdrant_id(memory_id)], with_payload=True)
+        if not found:
+            return JSONResponse({"error": "Memory not found"}, status_code=404)
+        payload = dict(found[0].payload or {})
+        if "content" in payload:
+            payload["content"] = new_text
+        if "text" in payload or "content" not in payload:
+            payload["text"] = new_text
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        qdrant.set_payload(collection_name=QDRANT_COLLECTION, payload=payload, points=[_qdrant_id(memory_id)])
+        _cache["ts"] = 0  # force reload
+        return {"status": "ok", "id": memory_id, "text": new_text[:120]}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/memories/{memory_id}/deprecate")
+async def deprecate_memory(memory_id: str):
+    """Soft-delete: mark deprecated (recoverable — Regel 1: never hard delete)."""
+    try:
+        found = qdrant.retrieve(collection_name=QDRANT_COLLECTION, ids=[_qdrant_id(memory_id)], with_payload=True)
+        if not found:
+            return JSONResponse({"error": "Memory not found"}, status_code=404)
+        payload = dict(found[0].payload or {})
+        payload["lifecycle_status"] = "deprecated"
+        payload["deprecated_at"] = datetime.now(timezone.utc).isoformat()
+        qdrant.set_payload(collection_name=QDRANT_COLLECTION, payload=payload, points=[_qdrant_id(memory_id)])
+        _cache["ts"] = 0
+        return {"status": "ok", "id": memory_id, "lifecycle_status": "deprecated"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/memories/{memory_id}/restore")
+async def restore_memory(memory_id: str):
+    """Undelete: deprecated → canonical (rollback of a soft-delete)."""
+    try:
+        found = qdrant.retrieve(collection_name=QDRANT_COLLECTION, ids=[_qdrant_id(memory_id)], with_payload=True)
+        if not found:
+            return JSONResponse({"error": "Memory not found"}, status_code=404)
+        payload = dict(found[0].payload or {})
+        payload["lifecycle_status"] = "canonical"
+        payload["restored_at"] = datetime.now(timezone.utc).isoformat()
+        qdrant.set_payload(collection_name=QDRANT_COLLECTION, payload=payload, points=[_qdrant_id(memory_id)])
+        _cache["ts"] = 0
+        return {"status": "ok", "id": memory_id, "lifecycle_status": "canonical"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/memories/{memory_id}/why")
+async def why_memory(memory_id: str):
+    """Full metadata: WHY this memory exists and how it behaves."""
+    try:
+        found = qdrant.retrieve(collection_name=QDRANT_COLLECTION, ids=[_qdrant_id(memory_id)], with_payload=True)
+        if not found:
+            return JSONResponse({"error": "Memory not found"}, status_code=404)
+        pl = found[0].payload or {}
+        return {
+            "id": memory_id,
+            "text": (pl.get("content") or pl.get("text") or "")[:2000],
+            "category": pl.get("category"),
+            "access_level": pl.get("access_level"),
+            "scope": pl.get("scope", "default"),
+            "lifecycle_status": pl.get("lifecycle_status"),
+            "source": pl.get("source"),
+            "source_url": pl.get("source_url"),
+            "confidence": pl.get("confidence"),
+            "created_at": pl.get("created_at") or pl.get("created"),
+            "deprecated_at": pl.get("deprecated_at"),
+            "superseded": pl.get("superseded"),
+            "agent": pl.get("agent"),
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
 # SPA catch-all
 # ---------------------------------------------------------------------------
 @app.get("/{path:path}")
@@ -336,7 +441,7 @@ async def spa(path: str):
 # after the server boots, open the browser ONCE per installation (marker file
 # prevents re-opening on every start) and ALWAYS print the URL + bookmark
 # hint — headless systems get the hint instead of the browser.
-WEBUI_URL = "http://127.0.0.1:9120"
+WEBUI_URL = "http://127.0.0.1:9210"
 _OPEN_MARKER = Path.home() / ".nexus-webui-opened"
 
 
@@ -376,7 +481,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="127.0.0.1",
-        port=9120,
+        port=9210,
         reload=True,
         log_level="info",
     )
