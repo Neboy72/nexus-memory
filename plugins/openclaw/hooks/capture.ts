@@ -118,6 +118,9 @@ export function buildCaptureHandler(
         source_url: "",
         confidence: 0.7,
         created_at: new Date().toISOString(),
+        // Scope: auto-captured memories inherit the agent's scope (unreleased).
+        // Empty scope → 'default' (same normalization as the Python server).
+        scope: cfg.scope || "default",
       }
 
       await qdrantClient.upsert(id, vector, payload)

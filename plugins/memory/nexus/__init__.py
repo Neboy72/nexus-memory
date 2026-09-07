@@ -377,6 +377,11 @@ class NexusMemoryProvider:
             vector = self._embed_cached(query)
             pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=10).points
             budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
+            # Scope filter (project/agent areas): auto-prefetch surfaces only
+            # 'default' memories plus the agent's OWN scope. Explicit recall()
+            # is never scope-filtered (core principle, Nebo 07.09.).
+            # Fail-open: no NEXUS_SCOPE set → agent sees everything (old behavior).
+            my_scope = os.environ.get("NEXUS_SCOPE", "").strip().lower()
             total = 0
             items: List[str] = []
             for p in pts:
@@ -385,6 +390,10 @@ class NexusMemoryProvider:
                 pl = p.payload or {}; text = pl.get("content", "")
                 # Roadmap 4.6: superseded facts never surface in prefetch.
                 if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
+                    continue
+                # Scope gating: skip memories scoped to a different area.
+                p_scope = (pl.get("scope") or "default").strip().lower() or "default"
+                if my_scope and p_scope != "default" and p_scope != my_scope:
                     continue
                 if text:
                     item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}"
@@ -437,7 +446,7 @@ class NexusMemoryProvider:
 
     def _upsert(self, text: str, category: str = "fact", access_level: str = "public",
                 source: str = "", confidence: float = 0.7, salience: Optional[float] = None,
-                source_url: str = "", **_: Any) -> Dict[str, Any]:
+                source_url: str = "", scope: str = "default", **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         vector = self._embedder.embed(text)
@@ -446,9 +455,17 @@ class NexusMemoryProvider:
         # unclampet gespeichert und sind jetzt sicher normalisiert).
         from nexus_memory.memory_dynamics import normalize_salience
         eff_salience = normalize_salience(salience, category)
+        # Scope: auto-captured memories inherit the agent's NEXUS_SCOPE
+        # (fail-open to 'default' — same normalization as the server).
+        try:
+            from nexus_memory.mcp_server import _normalize_scope as _nscope
+            scope = _nscope(scope or os.environ.get("NEXUS_SCOPE", "default"))
+        except Exception:
+            scope = (scope or os.environ.get("NEXUS_SCOPE", "default") or "default").strip().lower() or "default"
         payload = {"id": eid, "content": text, "access_level": access_level, "category": category,
                     "source": source, "source_url": source_url, "created_at": ts,
                     "lifecycle_status": "canonical", "salience": eff_salience, "use_count": 0,
+                    "scope": scope,
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
         self._qdrant.upsert(collection_name=self._collection,

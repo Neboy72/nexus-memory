@@ -158,11 +158,22 @@ export function buildRecallHandler(
         cfg.accessLevel,
       )
 
-      // Graph-boost: add 1-hop neighbors from top 3 vector hits
-      const graphItems = (await graphBoost(qdrantClient, results, 3, cfg.accessLevel)).slice(0, 5)  // cap to prevent context bloat
+      // Scope gating (project/agent areas, unreleased): auto-recall surfaces
+      // only 'default'-scoped memories plus this agent's own scope. Explicit
+      // search (nexus_search tool) is NEVER scope-filtered (core principle).
+      // Fail-open: cfg.scope === "" → no gating (old behavior).
+      const gated = cfg.scope
+        ? results.filter((r) => {
+            const s = (r.scope || "default").trim().toLowerCase() || "default"
+            return s === "default" || s === cfg.scope
+          })
+        : results
 
-      // Merge vector results with graph-boosted items
-      const allItems: SearchResult[] = [...results]
+      // Graph-boost: add 1-hop neighbors from top 3 vector hits
+      const graphItems = (await graphBoost(qdrantClient, gated, 3, cfg.accessLevel)).slice(0, 5)  // cap to prevent context bloat
+
+      // Merge gated vector results with graph-boosted items
+      const allItems: SearchResult[] = [...gated]
       for (const gi of graphItems) {
         allItems.push({
           id: "",

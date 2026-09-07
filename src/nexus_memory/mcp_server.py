@@ -445,6 +445,24 @@ def _is_valid_access_level(level) -> bool:
     return isinstance(level, str) and level in ACCESS_HIERARCHY
 
 
+# ── Scope (project/agent areas, unreleased) ─────────────────────────
+_SCOPE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def _normalize_scope(scope) -> str:
+    """Normalize a scope label for storage. Fail-open to 'default'.
+
+    Valid: non-empty [a-z0-9-] string, max 40 chars. Anything else
+    (None, empty, uppercase, too long, non-str) degrades to 'default'
+    so callers never break — scope is a filter hint, not a contract.
+    """
+    if isinstance(scope, str):
+        s = scope.strip().lower()
+        if s and _SCOPE_RE.match(s):
+            return s
+    return "default"
+
+
 def _access_levels_compatible(new_level: str, old_level) -> bool:
     """May a new fact at ``new_level`` supersede an old one at ``old_level``?
 
@@ -829,6 +847,7 @@ class MemoryStore:
         confidence: Optional[float] = None,
         salience: Optional[float] = None,
         effective_from: Optional[str] = None,
+        scope: str = "default",
     ) -> dict:
         """Store a memory with full v2.8.0 metadata support + auto TTL + auto supersession.
 
@@ -841,11 +860,21 @@ class MemoryStore:
         created_at; override via ``effective_from`` for retro-dated imports, e.g. mail)
         and 'valid_to' (None = still valid). The superseded old fact gets 'valid_to'
         stamped at the supersession time.
+
+        Scope (project/agent areas): optional area label. Auto-prefetch only surfaces
+        memories whose scope is 'default' or matches the agent's own NEXUS_SCOPE;
+        explicit recall() is NEVER scope-filtered. Empty/invalid values fall back to
+        'default' (behaves exactly like pre-scope memories).
         """
         # Validate category against MemoryCategory
         valid_categories = [c.value for c in MemoryCategory]
         if category not in valid_categories:
             category = MemoryCategory.FACT.value
+
+        # Validate scope (project/agent area label): [a-z0-9-], max 40 chars.
+        # Anything invalid (incl. empty string) degrades to 'default' — fail-open
+        # to the pre-scope behavior, never a hard error for callers.
+        scope = _normalize_scope(scope)
 
         entry_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
@@ -968,6 +997,9 @@ class MemoryStore:
             # Temporal Fact Validity (Unreleased)
             "valid_from": valid_from,
             "valid_to": None,
+            # Scope (project/agent areas, unreleased): area label for auto-prefetch
+            # filtering. 'default' = visible to every agent's auto-prefetch.
+            "scope": scope,
             # Memory Dynamics (v0.15): Salience via Helper — klemmt auf [0,1]
             # und setzt Kategorie-Defaults (Review-Fix: unclampete Werte).
             "salience": None,  # placeholder, replaced below
@@ -1824,6 +1856,17 @@ async def handle_list_tools() -> list[types.Tool]:
                         ),
                         "default": None,
                     },
+                    "scope": {
+                        "type": "string",
+                        "description": (
+                            "Optional project/agent area label ([a-z0-9-], max 40 chars). "
+                            "Scoped memories are excluded from OTHER agents' auto-prefetch "
+                            "(only the agent whose NEXUS_SCOPE matches sees them "
+                            "automatically); explicit recall() always finds them. "
+                            "Omit or 'default' = visible to every agent's auto-prefetch."
+                        ),
+                        "default": "default",
+                    },
                 },
                 "required": ["text", "category"],
             },
@@ -2308,6 +2351,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             result = await store.remember(
                 text, access_level, category, source, source_url, confidence,
                 effective_from=effective_from,
+                scope=arguments.get("scope", "default"),
             )
 
             # Fire-and-forget: dispatch "memory.remember" to any subscribers.
