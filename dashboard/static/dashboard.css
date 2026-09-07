@@ -472,6 +472,24 @@ h2 {
 .agent-install-badge.mcp { background: rgba(2, 193, 255, 0.15); color: #02C1FF; border: 1px solid rgba(2, 193, 255, 0.3); }
 .agent-install-badge.plugin-mcp { background: linear-gradient(90deg, rgba(149, 78, 255, 0.15), rgba(2, 193, 255, 0.15)); color: #DEDDDE; border: 1px solid rgba(149, 78, 255, 0.3); }
 
+/* Seat badge (Nebo design, 07.09.): machine name as pill next to Local/Remote */
+.seat-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.06);
+  color: #a0a0b8;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  white-space: nowrap;
+  /* Bei sehr schmalen Karten den Text stauchen MIT Auslassungspunkten —
+     nie Buchstaben wegflexen (Nebo: "Mac M von Nebojsa"-Falle). */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+  min-width: fit-content;
+}
+
 /* Host badge (local / remote) + hover tooltip showing the seat */
 .host-wrap { position: relative; display: inline-flex; }
 .host-badge {

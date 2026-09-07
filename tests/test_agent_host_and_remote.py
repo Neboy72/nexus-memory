@@ -93,8 +93,49 @@ def test_annotate_host_never_clobbers():
 
 
 def test_env_overrides_host_label(monkeypatch):
+    """NEXUS_HOST_LABEL wins over the hostname."""
     monkeypatch.setenv("NEXUS_HOST_LABEL", "Mac Mini")
     assert _local_host_label() == "Mac Mini"
+
+
+def test_host_label_prettifies_raw_hostname(monkeypatch):
+    """Universal fallback (Nebo, 07.09.): users who never set NEXUS_HOST_LABEL
+    still get a readable badge, not the raw technical hostname."""
+    cases = {
+        "Mac-mini-von-Nebojsa.local": "Mac Mini von Nebojsa",
+        "DESKTOP-AB12CD3": "DESKTOP AB12CD3",
+        "MacBook-Pro-von-Anna.lan": "Mac Book Pro von Anna",
+        "MacBookPro": "Mac Book Pro",
+        "WIN11-GAMING-PC": "WIN11 GAMING PC",
+        "server-1": "Server 1",
+        "windows-pc": "Windows PC",
+        "": "this machine",
+    }
+    monkeypatch.delenv("NEXUS_HOST_LABEL", raising=False)
+    monkeypatch.setattr(agent_detect.socket, "gethostname", lambda: "Mac-mini-von-Nebojsa.local")
+    assert _local_host_label() == "Mac Mini"
+
+
+def test_host_label_device_core_fleet(monkeypatch):
+    """Device-core rule: owner suffixes are dropped, badge shows machine type —
+    same clean label for every card in a fleet."""
+    cases = {
+        "Mac-mini-von-Nebojsa.local": "Mac Mini",
+        "MacBook-Pro-von-Anna.lan": "Mac Book Pro",
+        "MacBookPro": "Mac Book Pro",
+        "DESKTOP-AB12CD3": "Desktop",
+        "WIN11-GAMING-PC": "Gaming PC",
+        "server-1": "Server",
+        "windows-pc": "Windows PC",
+        "arbeits-pc": "Arbeits PC",
+        "homelab-nas-01": "Homelab NAS",
+        "": "this machine",
+        "kuechentablett": "Kuechentablett",
+    }
+    for hostname, expected in cases.items():
+        monkeypatch.delenv("NEXUS_HOST_LABEL", raising=False)
+        monkeypatch.setattr(agent_detect.socket, "gethostname", lambda h=hostname: h)
+        assert _local_host_label() == expected, f"hostname {hostname!r}"
 
 
 # ── remote registration ──────────────────────────────────────────────

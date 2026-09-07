@@ -29,6 +29,7 @@ Usage:
 import fcntl
 import json
 import os
+import re
 import shutil
 import socket
 import sys
@@ -620,13 +621,54 @@ def _local_host_label() -> str:
 
     ``NEXUS_HOST_LABEL`` wins (explicit config), else the macOS hostname.
     Used to auto-annotate locally-detected agents in the registry.
+
+    Universal fallback (Nebo, 07.09.): a raw technical hostname like
+    "Mac-mini-von-Nebojsa.local" is prettified for the badge — suffixes
+    (.local/.lan) stripped, dashes/underscores become spaces, first
+    letters capitalised. A user who never set NEXUS_HOST_LABEL still
+    gets a readable "Mac Mini Von Nebojsa" instead of the raw mDNS name.
     """
     env = os.environ.get("NEXUS_HOST_LABEL", "").strip()
     if env:
         return env
     try:
         name = socket.gethostname().strip()
-        return name or "this machine"
+        if not name:
+            return "this machine"
+        # Prettify: strip mDNS/DNS suffixes, split camel-case + separators.
+        # Device-core rule (Nebo, 07.09.): collect LEADING device words only —
+        # "Mac-mini-von-Nebojsa.local" → "Mac Mini" (owner suffix dropped, the
+        # badge shows the machine TYPE like every other card in the fleet).
+        name = name.split(".")[0]
+        name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)          # camelCase
+        name = re.sub(r"[-_]+", " ", name)                         # dash/underscore
+        DEVICE_WORDS = {"mac": "Mac", "mini": "Mini", "pc": "PC", "windows": "Windows",
+                        "pro": "Pro", "air": "Air", "studio": "Studio", "ultra": "Ultra",
+                        "server": "Server", "laptop": "Laptop", "book": "Book",
+                        "desktop": "Desktop", "workstation": "Workstation",
+                        "gaming": "Gaming", "nas": "NAS", "homelab": "Homelab",
+                        "office": "Office", "arbeits": "Arbeits", "buero": "Büro",
+                        "home": "Home"}
+        words = []
+        for word in name.split():
+            low = word.lower()
+            if low in DEVICE_WORDS:
+                words.append(DEVICE_WORDS[low])
+            elif not words:
+                continue                     # owner prefix before device words
+            else:
+                break                        # owner suffix after device words
+        if not words:
+            # No recognised device word: fall back to prettified full name.
+            for word in name.split():
+                low = word.lower()
+                if word.isupper() and len(word) >= 4:
+                    words.append(word)       # DESKTOP / AB12CD3 — serial-like
+                elif word.islower():
+                    words.append(word[0].upper() + word[1:])
+                else:
+                    words.append(word)       # Mixed case = real name, keep
+        return " ".join(words) or "this machine"
     except Exception:
         return "this machine"
 
@@ -641,6 +683,18 @@ def annotate_host(agent: dict, host_type: Optional[str] = None,
     """
     agent.setdefault("host_type", host_type or "local")
     agent.setdefault("host_label", host_label or _local_host_label())
+    # Universal self-heal (Nebo, 07.09.): registry entries that carry a raw
+    # technical hostname (with .local/.lan suffix) get prettified too — a
+    # user who connected BEFORE the prettify-fix existed still sees a
+    # readable badge.
+    current = (agent.get("host_label") or "").strip()
+    try:
+        raw_hostname = socket.gethostname().strip()
+    except Exception:
+        raw_hostname = ""
+    if current and raw_hostname and (current == raw_hostname or current == raw_hostname.split(".")[0]
+                                     or current.endswith(".local") or current.endswith(".lan")):
+        agent["host_label"] = _local_host_label()
     return agent
 
 
