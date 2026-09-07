@@ -19,6 +19,10 @@ export type NexusConfig = {
   thoughtFilter: boolean
   maxRecallResults: number
   accessLevel: AccessLevel
+  /** Project/agent area label (unreleased): auto-recall surfaces only
+   *  'default'-scoped memories plus this agent's own scope. Explicit
+   *  search (nexus_search) is never scope-filtered. Empty = no gating. */
+  scope: string
   debug: boolean
 }
 
@@ -31,6 +35,7 @@ const ALLOWED_KEYS = [
   "thoughtFilter",
   "maxRecallResults",
   "accessLevel",
+  "scope",
   "debug",
 ]
 
@@ -152,6 +157,22 @@ export function parseConfig(raw: unknown): NexusConfig {
     qdrantUrl = process.env.NEXUS_QDRANT_URL
   }
 
+  // Parse scope (project/agent area label, unreleased).
+  // Fail-open: empty/invalid → "" (no gating, old behavior).
+  let scope = ""
+  if (typeof cfg.scope === "string" && cfg.scope.trim()) {
+    const s = cfg.scope.trim().toLowerCase()
+    if (/^[a-z0-9][a-z0-9-]{0,39}$/.test(s)) {
+      scope = s
+    }
+  }
+  if (!scope && process.env.NEXUS_SCOPE) {
+    const s = process.env.NEXUS_SCOPE.trim().toLowerCase()
+    if (/^[a-z0-9][a-z0-9-]{0,39}$/.test(s)) {
+      scope = s
+    }
+  }
+
   return {
     qdrantUrl,
     collection: typeof cfg.collection === "string" && cfg.collection.trim()
@@ -163,6 +184,7 @@ export function parseConfig(raw: unknown): NexusConfig {
     thoughtFilter: (cfg.thoughtFilter as boolean) ?? true,
     maxRecallResults: (cfg.maxRecallResults as number) ?? 10,
     accessLevel,
+    scope,
     debug: (cfg.debug as boolean) ?? false,
   }
 }
@@ -189,6 +211,7 @@ export const nexusConfigSchema = {
       thoughtFilter: { type: "boolean" },
       maxRecallResults: { type: "number" },
       accessLevel: { type: "string", enum: VALID_ACCESS_LEVELS },
+      scope: { type: "string" },
       debug: { type: "boolean" },
     },
   },
