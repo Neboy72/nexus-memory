@@ -302,16 +302,20 @@ def _check_windsurf() -> dict:
     cli = shutil.which("windsurf")
     info["cli_path"] = cli
 
-    # Check MCP config
-    mcp_json = config_dir / "mcp.json" if config_dir.exists() else None
-    if mcp_json and mcp_json.exists():
-        try:
-            cfg = json.loads(mcp_json.read_text())
-            info["nexus_installed"] = "nexus" in json.dumps(cfg).lower()
-        except Exception:
-            info["nexus_installed"] = False
-    else:
-        info["nexus_installed"] = False
+    # Check MCP config — Windsurf uses mcp_config.json (NOT mcp.json);
+    # "nexus" anywhere in the config means Nexus Memory is connected.
+    nexus_installed = False
+    for mcp_name in ("mcp_config.json", "mcp.json"):
+        mcp_json = config_dir / mcp_name if config_dir.exists() else None
+        if mcp_json and mcp_json.exists():
+            try:
+                cfg = json.loads(mcp_json.read_text())
+                if "nexus" in json.dumps(cfg).lower():
+                    nexus_installed = True
+                    break
+            except Exception:
+                pass
+    info["nexus_installed"] = nexus_installed
 
     info["detected"] = bool(config_dir.exists() or cli)
     return info

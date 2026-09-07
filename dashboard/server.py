@@ -641,6 +641,66 @@ async def trigger_backup():
         return {"status": "error", "error": str(e)}
 
 
+@app.post("/api/agents/{agent_id}/connect")
+async def connect_agent(agent_id: str):
+    """One-click connect: write the nexus MCP entry into the agent's own config.
+
+    Connection (Nebo semantics) — Nexus registers itself in a detected agent.
+    Every config write is preceded by a timestamped .bak backup (Regel 1),
+    the operation is idempotent (already connected → no-op success).
+    """
+    config_paths = {
+        "windsurf": (Path.home() / ".codeium" / "windsurf" / "mcp_config.json", "json"),
+        "pi": (Path.home() / ".pi" / "agent" / "settings.json", "json"),
+    }
+    if agent_id not in config_paths:
+        return JSONResponse({"error": f"no config target known for '{agent_id}'"}, status_code=400)
+
+    cfg_path, fmt = config_paths[agent_id]
+    nexus_entry = {
+        "nexus": {"command": "nexus-memory", "args": [], "env": {}}
+    }
+
+    existing: dict = {}
+    if cfg_path.exists():
+        try:
+            existing = json.loads(cfg_path.read_text())
+        except Exception as exc:
+            return JSONResponse({"error": f"config unreadable: {exc}"}, status_code=500)
+
+    servers = existing.setdefault("mcpServers", {})
+    already = "nexus" in servers
+    if not already:
+        # Backup before write (Regel 1: proof first)
+        if cfg_path.exists():
+            backup = cfg_path.with_suffix(
+                cfg_path.suffix + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            )
+            backup.write_text(cfg_path.read_text())
+
+        servers.update(nexus_entry)
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps(existing, indent=2) + "\n")
+
+    # Register in the agents registry so the agent moves to Connected Agents.
+    try:
+        from nexus_memory.agent_detect import detect_all_agents, register_agent
+
+        detected = {a["id"]: a for a in detect_all_agents().get("detected_agents", [])}
+        meta = detected.get(agent_id) or {}
+        register_agent(
+            agent_id=agent_id,
+            name=meta.get("name") or agent_id,
+            icon=meta.get("icon") or "🔌",
+            trust_level="trusted",
+            install_type="mcp",
+            config_dir=meta.get("config_dir") or str(cfg_path.parent),
+        )
+    except Exception:
+        pass  # registration is best-effort; the config write itself succeeded
+    return {"status": "ok", "action": "connected" if not already else "already-connected", "config": str(cfg_path)}
+
+
 @app.get("/api/detect")
 async def detect_agents():
     """Run agent auto-detection."""
