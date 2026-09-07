@@ -1,6 +1,6 @@
 {
   "name": "@neboy72/nexus-memory",
-  "version": "0.18.5",
+  "version": "0.18.6",
   "type": "module",
   "description": "OpenClaw Nexus Memory plugin \u2014 Auto-Recall + Auto-Capture over Qdrant + ingestion-time consolidation",
   "license": "MIT",

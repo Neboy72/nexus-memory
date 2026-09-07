@@ -12,8 +12,8 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.18.5-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-1063%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.18.6-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-1076%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -652,6 +652,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.18.6** | 2026-09-07 | **Auto-Scoping Parity: All Three Plugins** — self-organizing memory now works identically on every integration path: OpenClaw TS plugin (`scope-auto.ts`: recall gating + capture tagging + store-tool tagging) and Claude Code hooks (`scope_auto.py` shared lib: recall gating from the prompt itself + capture tagging) join the Hermes plugin. Same conservative clear-match rule everywhere (≥0.72 absolute, ≥0.05 margin), manual scope added not replaced, fail-open on every path, zero user config. Cross-language parity test runs the actual TS module via node and asserts identical decisions. No release without plugin parity (Nebo law). 1076 tests |
 | **v0.18.5** | 2026-09-07 | **Auto-Scoping: The Memory Organizes Itself** (full automation, zero user setup): when a new memory is stored, the server infers its area from the centroids of existing scoped areas and inherits the matching scope automatically — conservative margins (clear-closest only), zero LLM cost, fail-open to `default` everywhere. Query-side: the Hermes plugin's auto-prefetch infers the area from the prompt itself and surfaces `default` + that area; ambiguous prompts change nothing. No config value anywhere in the loop — with an unscoped store the behavior is byte-for-byte identical to before. 1063 tests |
 | **v0.18.4** | 2026-09-07 | **Scopes: Project/Agent Areas** (unreleased feature, first implementation): every memory can carry a scope label (`scope`, `[a-z0-9-]`, max 40 chars, fail-open normalization to `default`) so agents sharing one store get focused auto-recall without cross-project noise. Core principle: scopes steer automatic prefetch — explicit recall/search is NEVER scope-filtered. Hermes plugin (`NEXUS_SCOPE` env) + OpenClaw plugin (`scope` config, capture + `nexus_store` tool) parity. Fully backward compatible: no `NEXUS_SCOPE` → old behavior. 1048 tests |
 | **v0.18.3** | 2026-09-06 | **Quality Hardening Wave**: all 36 medium-severity review findings fixed — consolidation (relative times resolve against the source session date, failed supersedes retried via persistent pending store), extraction (whole-word entity matching, pairwise-consistent result caps, valid empty LLM verdicts respected), retrieval watch (configurable min score, embedding failures surfaced, short intervals honored), selective forgetting (invalid timestamps counted not crashing, exact-score filtering, report cleanup path fixed), embeddings (no phantom providers after failed init, non-blocking HTTP in async paths, wizard/provider key-state sync, robust Ollama dimension probe), MCP server (truthful update status, correct point-id binding in hybrid results, complete fact-history chain traversal), wizards (hidden API-key input, checked pip retries, model reset on provider switch, corrupt config never silently overwritten), agent registry (trust validation, stats preserved on re-registration, remote seats with dedicated ghost horizon, naive timestamps tolerated); 1034 tests |
@@ -707,7 +708,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 1063 tests ✅
+pytest tests/ -v # 1076 tests ✅
 ```
 
 ---
@@ -737,4 +738,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.5 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.6 · One memory for all your agents</sub>

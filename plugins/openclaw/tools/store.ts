@@ -4,6 +4,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
+import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { log } from "../logger.ts"
 
 const MEMORY_CATEGORIES = ["fact", "belief", "session", "rule", "preference", "temp"] as const
@@ -15,6 +16,7 @@ export function registerStoreTool(
   qdrantClient: QdrantClient,
   cfg: NexusConfig,
   toolName = "nexus_store",
+  centroidCache?: ScopeCentroidCache,
 ): void {
   api.registerTool(
     {
@@ -34,7 +36,8 @@ export function registerStoreTool(
             description:
               "Optional project/agent area label ([a-z0-9-], max 40 chars). " +
               "Scoped memories are excluded from OTHER agents' auto-recall; " +
-              "explicit search always finds them. Omit for 'default'.",
+              "explicit search always finds them. Omit to let the memory " +
+              "infer the area automatically (self-organizing).",
           }),
         ),
       }),
@@ -44,12 +47,12 @@ export function registerStoreTool(
       ) {
         const category = params.category ?? "fact"
         const accessLevel = (params.access_level ?? cfg.accessLevel) as string
-        // Scope normalization ([a-z0-9-], max 40) — fail-open to cfg/agent scope
-        // or 'default' on invalid input (same regex as lib/config.ts + server).
-        let scope = (params.scope ?? cfg.scope ?? "").trim().toLowerCase()
-        if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(scope)) {
-          scope = cfg.scope || "default"
-        }
+        // Scope normalization ([a-z0-9-], max 40) — fail-open to 'default' on
+        // invalid input (same regex as lib/config.ts + server). Explicit
+        // param.scope wins; else cfg.scope; else AUTO-infer from centroids
+        // (self-organizing memory, Nebo law 07.09) inside the try below.
+        const explicit = (params.scope ?? cfg.scope ?? "").trim().toLowerCase()
+        let scope = /^[a-z0-9][a-z0-9-]{0,39}$/.test(explicit) ? explicit : ""
 
         log.debug(
           `store tool: category="${category}" accessLevel="${accessLevel}" textLen=${params.text.length}`,
@@ -58,6 +61,17 @@ export function registerStoreTool(
         try {
           const vector = await embedder.embed(params.text)
           const id = randomUUID()
+
+          // No explicit scope → infer the area from scoped centroids on a
+          // CLEAR match; else 'default'. Fail-open, zero cost.
+          if (!scope && centroidCache) {
+            try {
+              scope = inferScope(vector, await centroidCache.get())
+            } catch (err) {
+              log.debug("scope_auto: store inference failed — default", err)
+            }
+          }
+          if (!scope) scope = "default"
 
           const payload = {
             text: params.text,

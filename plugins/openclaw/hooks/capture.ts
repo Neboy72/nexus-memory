@@ -2,8 +2,31 @@ import { randomUUID } from "node:crypto"
 import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
+import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
+
+/**
+ * Resolve the scope for an auto-captured memory (self-organizing memory):
+ * explicit cfg.scope wins; otherwise infer from the vector against scoped
+ * centroids on a CLEAR match; else 'default'. Fail-open everywhere.
+ */
+async function inferCaptureScope(
+  embedder: Embedder,
+  vector: number[],
+  centroidCache: ScopeCentroidCache | undefined,
+  manualScope: string,
+): Promise<string> {
+  if (manualScope) return manualScope
+  if (!centroidCache) return "default"
+  try {
+    const cents = await centroidCache.get()
+    return inferScope(vector, cents)
+  } catch (err) {
+    log.debug("scope_auto: capture inference failed — fail-open to default", err)
+    return "default"
+  }
+}
 
 const SKIPPED_PROVIDERS = ["exec-event", "cron-event", "heartbeat"]
 
@@ -34,6 +57,7 @@ export function buildCaptureHandler(
   embedder: Embedder,
   qdrantClient: QdrantClient,
   cfg: NexusConfig,
+  centroidCache?: ScopeCentroidCache,
 ) {
   return async (
     event: Record<string, unknown>,
@@ -118,9 +142,10 @@ export function buildCaptureHandler(
         source_url: "",
         confidence: 0.7,
         created_at: new Date().toISOString(),
-        // Scope: auto-captured memories inherit the agent's scope (unreleased).
-        // Empty scope → 'default' (same normalization as the Python server).
-        scope: cfg.scope || "default",
+        // Scope (self-organizing memory, Nebo law 07.09): infer the area from
+        // existing scoped centroids on a CLEAR match; explicit cfg.scope wins;
+        // else 'default'. Fail-open, zero config, zero LLM cost.
+        scope: await inferCaptureScope(embedder, vector, centroidCache, cfg.scope),
       }
 
       await qdrantClient.upsert(id, vector, payload)

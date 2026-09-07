@@ -10,6 +10,7 @@ conversation and stores them as memories.
 
 import sys
 import json
+import logging
 import os
 import urllib.request
 import re
@@ -25,6 +26,34 @@ EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
 _SCOPE_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def _resolve_capture_scope(embedding) -> str:
+    """Self-organizing memory scope resolution for auto-capture.
+
+    Explicit NEXUS_SCOPE wins; else infer from scoped centroids (clear match
+    via the shared scope_auto lib); else 'default'. Fail-open everywhere.
+    """
+    manual = os.getenv("NEXUS_SCOPE", "").strip().lower()
+    if manual_scope_ok(manual):
+        return manual
+    try:
+        import scope_auto as _scope_auto  # same dir
+        cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
+        return _scope_auto.infer_scope(embedding, cents)
+    except Exception as exc:
+        logging.info("scope_auto: capture inference skipped (%s) — default", exc)
+        return "default"
+
+
+def _manual_scope_ok(s: str) -> bool:
+    return bool(s) and len(s) <= 40 and all(
+        ch in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in s
+    )
+
+
+def manual_scope_ok(s: str) -> bool:
+    return _manual_scope_ok(s)
 
 
 def _normalize_scope(scope) -> str:
@@ -120,10 +149,10 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
                 "access_level": _resolve_trust_level(),
                 "created_at": now,
                 "agent": "claude-code",
-                # Scope: auto-captured memories inherit the agent's NEXUS_SCOPE
-                # (project/agent areas). Fail-open to 'default' — same
-                # normalization contract as the MCP server (_normalize_scope).
-                "scope": _normalize_scope(os.getenv("NEXUS_SCOPE", "default"))
+                # Scope (self-organizing memory, Nebo law 07.09): explicit
+                # NEXUS_SCOPE wins; else infer from scoped centroids on a
+                # CLEAR match; else 'default'. Fail-open, zero config.
+                "scope": _resolve_capture_scope(embedding),
             }
         }]
     }).encode()
