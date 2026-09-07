@@ -1,6 +1,7 @@
 import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
+import { ScopeCentroidCache, prefetchFilterScopes } from "../lib/scope-auto.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
 
@@ -129,6 +130,7 @@ export function buildRecallHandler(
   embedder: Embedder,
   qdrantClient: QdrantClient,
   cfg: NexusConfig,
+  centroidCache?: ScopeCentroidCache,
 ) {
   return async (
     event: Record<string, unknown>,
@@ -158,14 +160,26 @@ export function buildRecallHandler(
         cfg.accessLevel,
       )
 
-      // Scope gating (project/agent areas, unreleased): auto-recall surfaces
-      // only 'default'-scoped memories plus this agent's own scope. Explicit
-      // search (nexus_search tool) is NEVER scope-filtered (core principle).
-      // Fail-open: cfg.scope === "" → no gating (old behavior).
-      const gated = cfg.scope
+      // Scope gating (project/agent areas): auto-recall surfaces only
+      // 'default'-scoped memories plus the CURRENTLY allowed area. Allowed
+      // set comes from (1) manual cfg.scope override (static, old behavior)
+      // or (2) auto-inference from the query itself (self-organizing memory,
+      // Nebo law: full automation — the query steers, no user ever configures).
+      // Explicit search (nexus_search tool) is NEVER scope-filtered.
+      // Fail-open: centroids empty/ambiguous → no gating at all.
+      let allowed: Set<string> | null = null
+      if (centroidCache) {
+        try {
+          const cents = await centroidCache.get()
+          allowed = prefetchFilterScopes(queryVector, cents, cfg.scope)
+        } catch (err) {
+          log.warn("scope_auto: prefetch inference failed — fail-open", err)
+        }
+      }
+      const gated = allowed
         ? results.filter((r) => {
             const s = (r.scope || "default").trim().toLowerCase() || "default"
-            return s === "default" || s === cfg.scope
+            return allowed!.has(s)
           })
         : results
 

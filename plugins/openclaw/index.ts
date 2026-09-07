@@ -2,6 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import { Embedder } from "./lib/embedder.ts"
 import { QdrantClient } from "./lib/qdrant-client.ts"
 import { nexusConfigSchema, parseConfig } from "./lib/config.ts"
+import { ScopeCentroidCache } from "./lib/scope-auto.ts"
 import { buildCaptureHandler } from "./hooks/capture.ts"
 import { buildRecallHandler } from "./hooks/recall.ts"
 import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
@@ -89,9 +90,13 @@ export default {
       api.registerMemoryFlushPlan?.(noopFlushPlan)
     }
 
+    // Self-organizing memory (Nebo law 07.09: full automation): one shared
+    // centroid cache feeds auto-recall gating + auto-capture tagging.
+    const centroidCache = new ScopeCentroidCache(cfg.qdrantUrl, cfg.collection)
+
     // Register tools
     registerSearchTool(api, embedder, qdrantClient, cfg)
-    registerStoreTool(api, embedder, qdrantClient, cfg)
+    registerStoreTool(api, embedder, qdrantClient, cfg, "nexus_store", centroidCache)
     registerForgetTool(api, embedder, qdrantClient, cfg)
     registerGuardrailCheckTool(api, qdrantClient, cfg)
     registerGuardrailOverrideTool(api, qdrantClient, cfg, embedder)
@@ -103,8 +108,10 @@ export default {
     registerGetRelatedTool(api, qdrantClient, cfg)
 
     // Register hooks
+    // Self-organizing memory (Nebo law 07.09: full automation): one shared
+    // centroid cache feeds auto-recall gating + auto-capture tagging.
     if (cfg.autoRecall) {
-      api.on("before_prompt_build", buildRecallHandler(embedder, qdrantClient, cfg))
+      api.on("before_prompt_build", buildRecallHandler(embedder, qdrantClient, cfg, centroidCache))
     }
 
     // Pre-Tool Gate: forces Nexus recall + plan before non-trivial actions
@@ -119,7 +126,7 @@ export default {
     }
 
     if (cfg.autoCapture) {
-      api.on("agent_end", buildCaptureHandler(embedder, qdrantClient, cfg))
+      api.on("agent_end", buildCaptureHandler(embedder, qdrantClient, cfg, centroidCache))
     }
 
     // Register service
