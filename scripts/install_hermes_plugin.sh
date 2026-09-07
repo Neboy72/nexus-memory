@@ -77,3 +77,13 @@ fi
 
 echo ""
 echo "=== Done! Restart Hermes Gateway to activate Nexus Memory. ==="
+echo ""
+# Success moment: the user must SEE their dashboard, not hunt for a URL.
+# Web-UI is optional; if installed, the address + bookmark hint goes here.
+echo "🧠  Want to SEE your memory? Start the dashboard:"
+echo ""
+echo "    pip install -e \".[webui]\" && python webui/main.py"
+echo ""
+echo "    → opens at http://127.0.0.1:9120 (browser opens automatically"
+echo "      on first start). Bookmark it — one click to your dashboard."
+echo ""
