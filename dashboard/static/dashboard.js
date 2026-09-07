@@ -159,7 +159,7 @@ async function loadAgents() {
             ${logo}
             <span class="agent-name">${agent.name}</span>
             <span class="agent-install-badge mcp">${pluginLabel}</span>
-            <span class="connect-hint">Run: nexus-memory setup</span>
+            <button class="connect-btn" onclick="toast('${agent.id}: setup runs in your terminal — nexus-memory setup', 'info')">Connect</button>
           </div>
         `;
       }).join('');

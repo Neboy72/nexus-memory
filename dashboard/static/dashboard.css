@@ -606,6 +606,25 @@ h2 {
   margin-left: auto;
 }
 
+/* Available-card connect button (clear user action instead of a dev command hint) */
+.available-card .connect-btn {
+  margin-left: auto;
+  padding: 6px 14px;
+  background: #12121f;
+  border: 1px solid #1a1a2e;
+  border-radius: 8px;
+  color: #02C1FF;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.available-card .connect-btn:hover {
+  background: #1a1a2e;
+  border-color: #954EFF;
+  color: #954EFF;
+}
+
 /* Graph */
 .graph-container {
   width: 100%;
