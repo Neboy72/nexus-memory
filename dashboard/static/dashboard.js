@@ -115,6 +115,13 @@ async function loadAgents() {
         </span>
       </span>`;
   };
+  // Seat badge (Nebo design): shows the machine name as a pill next to
+  // the Local/Remote badge — "Mac Mini" instead of a dash-in-title.
+  const seatBadge = (agent, seat) => {
+    if (!seat) return '';
+    return `<span class="seat-badge" title="Machine: ${esc(seat)}">${esc(seat)}</span>`;
+  };
+
   list.innerHTML = registry.agents.map(agent => {
     const levels = ['public', 'trusted', 'private'];
     const buttons = levels.map(level => {
@@ -127,14 +134,10 @@ async function loadAgents() {
     const reads = agent.reads || 0;
     const logo = getAgentLogo(agent.id, agent.icon);
     const badge = getInstallBadge(agent.install_type);
-    // Disambiguation (Nebo): when several agents share the same harness name,
-    // the readable seat is part of the title — "Hermes Agent — Mac Mini" —
-    // instead of an anonymous "lokal". Tooltip keeps the full details.
-    const sameNameCount = registry.agents.filter(a => a.name === agent.name).length;
+    // Disambiguation (Nebo, 07.09. v2): Sitzort als BADGE neben Local/Remote —
+    // nicht im Titel (kein KI-Langbindestrich). Das Local/Remote-Badge zeigt
+    // die Art, das Seat-Badge den Ort im Klartext ("Mac Mini").
     const seat = (agent.host_label || '').trim();
-    const displayName = (sameNameCount > 1 && seat && agent.host_type !== 'local')
-      ? `${agent.name} — ${seat}`
-      : agent.name;
     // Nebo toggle: only pure-MCP agents get the On/Off switch — plugin
     // agents are wired into the host core and must not be clickable off.
     const isPureMcp = (agent.install_type || '') === 'mcp';
@@ -149,9 +152,10 @@ async function loadAgents() {
       <div class="agent-card">
         <div class="agent-header">
           ${logo}
-          <span class="agent-name">${esc(displayName)}</span>
+          <span class="agent-name">${esc(agent.name)}</span>
           <span class="agent-install-badge">${badge}</span>
           ${hostBadge(agent)}
+          ${seatBadge(agent, seat)}
           <span class="agent-status"></span>
           ${toggle}
         </div>
