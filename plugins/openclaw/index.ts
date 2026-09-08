@@ -7,6 +7,7 @@ import { buildCaptureHandler } from "./hooks/capture.ts"
 import { buildRecallHandler } from "./hooks/recall.ts"
 import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
 import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts"
+import { buildCronFormGateHandler } from "./hooks/cron-form-gate.ts"
 import { initLogger, log } from "./logger.ts"
 import { buildMemoryRuntime, buildPromptSection, setUpdateCheckResult } from "./runtime.ts"
 import { checkForUpdate } from "./lib/update-check.ts"
@@ -123,6 +124,10 @@ export default {
     if (cfg.thoughtFilter !== false) {
       api.on("message_sending", buildThoughtFilterHandler())
       log.info("thought-filter: message_sending hook aktiv")
+      // Cron-Form-Gate (Astra-R6 P0, 08.09.2026): unbeaufsichtigte Sends
+      // nur als festes Formular, fail-closed.
+      api.on("message_sending", buildCronFormGateHandler())
+      log.info("cron-form-gate: message_sending hook aktiv")
     }
 
     if (cfg.autoCapture) {
