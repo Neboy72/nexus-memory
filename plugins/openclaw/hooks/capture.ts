@@ -68,6 +68,16 @@ export function buildCaptureHandler(
       return
     }
 
+    // Group-context privacy gate (Astra-R2 critical finding, 08.09.2026):
+    // group/channel turns MUST NOT flow into the private memory store.
+    // groupId is set for group chats, null for DMs (resolveGroupSessionKey).
+    // Fail-closed: if group membership is ambiguous (non-empty groupId string),
+    // skip capture — no group conversation ever becomes a private memory.
+    if (ctx.groupId) {
+      log.info("nexus: capture skipped — group context (privacy gate)")
+      return
+    }
+
     log.info(
       `agent_end fired: provider="${ctx.messageProvider}" success=${event.success}`,
     )
