@@ -21,7 +21,9 @@ import { log } from "../logger.ts"
 // Muster, die eindeutig internes Reasoning markieren (verifizierte Leaks).
 const REASONING_MARKERS: RegExp[] = [
   // Reflex-/Übergangs-Adverbien am Blockanfang (Miosha-leak-typisch)
-  /^(now|then|so|actually|wait|hmm|ok|okay|alright)\b[,\s]/i,
+  // "So"-False-Positive geschärft (08.09.): Nur "So, …" mit Komma = Leak-Marker,
+  // "So gehen wir vor:" / "So läuft's" bleibt legitime Antwort.
+  /^(now|then|so,|actually|wait|hmm|ok|okay|alright)\b[,.\s]/i,
   // DE/EN Selbststart-Marker
   /^\s*(let me (parse|think|work through|analyze|check|consider)|hmm[,.]|okay,? let'?s|i should|i need to)\b/i,
   /^(the user|nebo|miosha|kiosha)\s+(asks|is asking|wrote|sent)\b/i,
@@ -51,12 +53,31 @@ const REASONING_MARKERS: RegExp[] = [
   /^(critical honesty|important honesty|honesty requirement|note to self)\b/i,
   // System-Kontext-Wiedergabe ("The last system message: …" / "The last system message was a retry.")
   /^the (last |previous )?(system|incoming|visible) (message|context)\b/i,
+  // Re-Orientierungs-Blöcke (Leak-Welle 08.09.: "Let me (very carefully) re-orient on what is REAL/right now…")
+  /^let me (?:very |carefully )*re-?orient\b/i,
+  // Re-Orientierungs-Varianten mit Zustands-/Realitätsbezug
+  /^(the current|this) (message|user message|turn) (is|contains|says)\b/i,
+  // Zitat-/Verweis-Öffner ("The last message: Nebo's message at …", "THE CURRENT USER MESSAGE: …")
+  /^the (last|current) (user )?message\b/i,
+  // Cron-/Heartbeat-Selbstplanung (Release Tracker, Memory-Cron — 08.09.-Leak-Welle)
+  /^let me (parse this heartbeat|work through this task|analyze what i got|start by fetching)\b/i,
+  /^(steps?|my steps)\s*:\s*$/im,
+  /^(daily memory file exists|memory file exists)\b/i,
+  /^(\d+\.\s*)?(daily memory file exists|memory file exists)\b/i,
 ]
 
 /** true = Block besteht (sehr wahrscheinlich) NUR aus internem Reasoning. */
-function isPureReasoningBlock(text: string): boolean {
+function isPureReasoningBlock(text: string, prevWasLeak = false): boolean {
   const trimmed = text.trim()
   if (trimmed.length === 0) return false
+  // Fortsetzungen eines Leak-Blocks: Plan-Struktur direkt nach verifiziertem
+  // Reasoning ("Steps:\n\n1. Fetch …", "Let me analyze:\n\n**Last known release:** …").
+  // Nur NACH einem Leak-Block aktiv — legitime Antworten mit Aufzählungen
+  // ohne Leak-Vorgänger bleiben unangetastet.
+  if (prevWasLeak) {
+    if (/^\d+\.\s/.test(trimmed)) return true
+    if (/^\*\*[^*]{1,80}\*\*/.test(trimmed)) return true
+  }
   return REASONING_MARKERS.some((re) => re.test(trimmed))
 }
 
@@ -73,7 +94,17 @@ export function buildThoughtFilterHandler() {
       if (typeof raw !== "string" || raw.trim().length < 24) return { message: raw }
 
       const blocks = raw.split(/\n{2,}/)
-      const kept = blocks.filter((b) => !isPureReasoningBlock(b))
+      let prevWasLeak = false
+      const kept: string[] = []
+      for (const b of blocks) {
+        const isLeak = isPureReasoningBlock(b, prevWasLeak)
+        if (isLeak) {
+          prevWasLeak = true
+        } else {
+          prevWasLeak = false
+          kept.push(b)
+        }
+      }
       if (kept.length === blocks.length) return { message: raw }
 
       const out = kept.join("\n\n").trim()

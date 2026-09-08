@@ -87,6 +87,55 @@ const cases = [
     ["Ich prüfe es gleich."],
     [],
   ],
+  // --- Leak-Welle 08.09.2026 (echte Leaks aus dem Telegram-Chat) ---
+  [
+    "LEAK: Re-Orientierung (very carefully, REAL right now)",
+    "Let me very carefully re-orient on what is REAL right now.\n\nThe current message is an internal context wrapper.\n\nReplay-Noise komplett ignoriert — hier ist der frische Pairing-Link.",
+    ["Replay-Noise komplett ignoriert — hier ist der frische Pairing-Link."],
+    ["re-orient", "internal context wrapper"],
+  ],
+  [
+    "LEAK: Re-Orientierung (CURRENT state, letzte User-Nachricht)",
+    "Let me re-orient on the CURRENT state.\n\nThe last message: Nebo's message at 00:37:13: \"gute nacht\"\n\nGute Nacht Nebo! 🦊",
+    ["Gute Nacht Nebo! 🦊"],
+    ["CURRENT state", "00:37:13"],
+  ],
+  [
+    "LEAK: Cron-Selbstplanung (Release Tracker, 08.09. 08:30)",
+    "Let me work through this task. I'm the OpenClaw Release Tracker cron job. Steps:\n\n1. Fetch the Atom feed\n2. Compare with last known release",
+    [],
+    ["Release Tracker", "Fetch the Atom feed"],
+  ],
+  [
+    "LEAK: Cron-Analyse (Let me analyze what I got)",
+    "Let me analyze what I got:\n\n**Last known release:** `2026.9.2`",
+    [],
+    ["Last known release"],
+  ],
+  [
+    "LEAK: Heartbeat-Parse (Memory-Cron)",
+    "Let me parse this heartbeat. The scratch context says:\n\n1. Output discipline: If everything OK, reply NO_REPLY",
+    [],
+    ["parse this heartbeat", "Output discipline"],
+  ],
+  [
+    "LEAK: Daily-memory-Zeile (Memory-Cron 06:23)",
+    "1. Daily memory file exists (2026-09-08.md, last modified 00:24). Need to check if anything else is missing.",
+    [],
+    ["Daily memory file exists"],
+  ],
+  [
+    "NEGATIV: User zitiert 're-orient' in legitimer Frage bleibt",
+    "Was meinst du mit Re-Orientierung genau?\n\nIch erkläre es dir gern.",
+    ["Ich erkläre es dir gern."],
+    [],
+  ],
+  [
+    "NEGATIV: Stufenplan auf Deutsch bleibt (steps-Marker nur am Blockanfang)",
+    "So gehen wir vor:\n\n1. Erst prüfen.\n2. Dann bauen.",
+    ["1. Erst prüfen.", "2. Dann bauen."],
+    [],
+  ],
 ];
 
 let failed = 0;
