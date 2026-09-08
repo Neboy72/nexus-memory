@@ -113,16 +113,23 @@ Pick **one** — or none: the server auto-detects at runtime. The detection prio
 - **🦙 Ollama**: `ollama pull qwen3-embedding:0.6b` (preferred, 639 MB, 1024d, multilingual, instruction-aware) — alternatives: `ollama pull bge-m3` (1.2 GB, 1024d), smaller: `ollama pull nomic-embed-text` (274 MB, 768d)
 - **🏠 Local (default)**: sentence-transformers extras, no key — `pip install -e ".[local]"` from your repo clone
 
-### 🌐 Web UI (optional)
+### 🌐 Web Dashboard (optional)
 
-Nexus Memory comes with a live graph visualization: your memories as an interactive force-directed graph.
+Nexus Memory ships with the current dashboard: connected agents, memory graph, inspector, drift status.
 
 ```bash
-pip install -e ".[webui]"
 nexus-memory webui
 ```
 
-Opens a dashboard at `http://127.0.0.1:9120`: filter by category, search, click nodes to inspect details, and see drift status at a glance.
+Opens the dashboard at `http://127.0.0.1:9120` — connected agents, memory graph with filters, inspector for every memory.
+
+Alternative (from a repo checkout):
+
+```bash
+python3 dashboard/server.py --port 9120
+```
+
+> The legacy graph-only `webui/` UI was removed in v0.18.7; `nexus-memory webui` now starts this dashboard.
 
 ### 🔌 Platform Configuration
 
