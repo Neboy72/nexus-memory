@@ -72,7 +72,7 @@ const REASONING_MARKERS: RegExp[] = [
 ]
 
 /** true = Block besteht (sehr wahrscheinlich) NUR aus internem Reasoning. */
-function isPureReasoningBlock(text: string, prevWasLeak = false): boolean {
+export function isPureReasoningBlock(text: string, prevWasLeak = false): boolean {
   const trimmed = text.trim()
   if (trimmed.length === 0) return false
   // Fortsetzungen eines Leak-Blocks: Plan-Struktur direkt nach verifiziertem

@@ -5,6 +5,7 @@ import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
+import { enqueueCapture, drainQueue } from "./capture-retry-queue.ts"
 
 /**
  * Resolve the scope for an auto-captured memory (self-organizing memory):
@@ -161,8 +162,34 @@ export function buildCaptureHandler(
       await qdrantClient.upsert(id, vector, payload)
 
       log.debug(`capture stored (id=${id})`)
+
+      // Drain: nachholen, was bei früherem Storage-Ausfall angestanden hat
+      try {
+        const restored = await drainQueue(
+          (rid, rvec, rpayload) => qdrantClient.upsert(rid, rvec, rpayload),
+          (rtext) => embedder.embed(rtext),
+        )
+        if (restored > 0) log.info(`capture-retry: ${restored} nachgeholt`)
+      } catch {
+        // Drain-Fehler darf frisches Capture nicht torpedieren
+      }
     } catch (err) {
       log.error("capture failed", err)
+      // Retry-Queue (Astra-R6 P1): nichts geht verloren — Text + Payload
+      // in die Warteschlange, Drain beim nächsten Capture-Versuch.
+      try {
+        enqueueCapture({ id: randomUUID(), text: content, payload: {
+          access_level: cfg.accessLevel,
+          category: "session",
+          source: "openclaw",
+          source_url: "",
+          confidence: 0.7,
+          created_at: new Date().toISOString(),
+          scope: cfg.scope || "default",
+        } })
+      } catch {
+        // Queue selbst kaputt → alter Zustand (nur Log)
+      }
     }
   }
 }
