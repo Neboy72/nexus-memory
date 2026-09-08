@@ -11,8 +11,9 @@ import fs from "node:fs";
 import assert from "node:assert";
 
 const handlers = {};
+const handlerLists = {};
 const mockApi = {
-  on(event, handler) { handlers[event] = handler; },
+  on(event, handler) { if (!handlerLists[event]) handlerLists[event] = []; handlerLists[event].push(handler); handlers[event] = handlerLists[event][0]; },
   registerTool() {},
   registerProvider() {},
   registerService() {},
