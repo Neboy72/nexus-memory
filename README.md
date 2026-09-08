@@ -121,12 +121,12 @@ Nexus Memory ships with the current dashboard: connected agents, memory graph, i
 nexus-memory webui
 ```
 
-Opens the dashboard at `http://127.0.0.1:9120` — connected agents, memory graph with filters, inspector for every memory.
+Opens the dashboard at `http://127.0.0.1:9121` — connected agents, memory graph with filters, inspector for every memory.
 
 Alternative (from a repo checkout):
 
 ```bash
-python3 dashboard/server.py --port 9120
+python3 dashboard/server.py --port 9121
 ```
 
 > The legacy graph-only `webui/` UI was removed in v0.18.7; `nexus-memory webui` now starts this dashboard.
@@ -592,6 +592,10 @@ On startup, checks GitHub for new releases. If an update is available, the agent
 ### Pre-Update Safety Backup 🛡️
 
 Before any `do_update()`, a full backup is created automatically. If the update fails or breaks something, memories are safe in the backup file and can be restored via the `restore` tool.
+
+### Success Moment 🎉
+
+A finished install **and every update** shows the dashboard: after `do_update` succeeds, the dashboard boots detached and the browser opens once with your memory graph — same confirmation moment as a fresh install. On headless systems the URL banner is printed instead (see the agent's output). Bookmark `http://127.0.0.1:9121` so it's always one click away.
 
 ---
 

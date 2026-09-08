@@ -243,9 +243,9 @@ Restart gateway. Tools appear as `mcp_nexus_remember`, `mcp_nexus_recall`, etc.
 nexus-memory webui
 ```
 
-Opens the dashboard at `http://127.0.0.1:9120` — connected agents, memory graph with filters, inspector for every memory.
+Opens the dashboard at `http://127.0.0.1:9121` — connected agents, memory graph with filters, inspector for every memory.
 
-(From a repo checkout: `python3 dashboard/server.py --port 9120`. The legacy graph-only webui was removed in v0.18.7.)
+(From a repo checkout: `python3 dashboard/server.py --port 9121`. The legacy graph-only webui was removed in v0.18.7.)
 
 ## Available Tools (15)
 
@@ -259,7 +259,7 @@ Opens the dashboard at `http://127.0.0.1:9120` — connected agents, memory grap
 | `update` | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `health` | Check server status | — |
 | `check_update` | Check for newer version on GitHub | — |
-| `do_update` | Update + restart server | `confirm` (req, must be `true`) |
+| `do_update` | Update + restart server + open dashboard (success moment) | `confirm` (req, must be `true`) |
 | `subscribe` | Register a webhook for a memory event | `event_type` (req), `webhook_url` (req) |
 | `unsubscribe` | Remove a webhook subscription | `subscription_id` (req) |
 | `list_subscriptions` | List all registered webhook subscriptions | — |
