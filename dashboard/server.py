@@ -842,14 +842,65 @@ if assets_dir.exists():
     app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 
+# Success moment (Nebo law 07.09/09.09: a finished install AND every update must
+# SHOW the dashboard): after boot, open the browser ONCE per installation/update
+# (marker file prevents re-opening on every start) and ALWAYS print the URL +
+# bookmark hint — headless systems get the hint instead of the browser.
+_OPEN_MARKER = Path.home() / ".nexus-dashboard-opened"
+
+
+def print_url_banner(url: str) -> None:
+    """Always shown: the full URL + bookmark recommendation (belt & braces)."""
+    line = "\u2500" * 62
+    print()
+    print(line)
+    print("  \U0001f9e0 Nexus Memory Dashboard is running")
+    print()
+    print(f"      {url}")
+    print()
+    print("  Tip: bookmark this address in your browser so you can")
+    print("  open your memory dashboard anytime \u2014 one click, no setup.")
+    print(line)
+    print()
+
+
+def reset_open_marker() -> None:
+    """Called after a successful update so the next dashboard start re-opens
+    the browser \u2014 an update gets the same success moment as a fresh install."""
+    import contextlib
+    with contextlib.suppress(Exception):
+        _OPEN_MARKER.unlink()
+
+
+def maybe_open_browser(url: str) -> None:
+    """Open the browser once per installation/update. Never crash, never nag.
+    NEXUS_DASHBOARD_NO_OPEN=1 (headless hosts, e.g. the Mac Mini) skips the
+    browser pop and keeps the banner \u2014 the URL hint is the success moment."""
+    try:
+        import os
+        if os.environ.get("NEXUS_DASHBOARD_NO_OPEN", "").strip().lower() in ("1", "true", "yes"):
+            return
+        if _OPEN_MARKER.exists():
+            return  # already shown before \u2014 no spam
+        _OPEN_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        _OPEN_MARKER.write_text(url, encoding="utf-8")
+        import webbrowser
+        webbrowser.open(url)
+        print(f"Opened dashboard in your browser: {url}")
+    except Exception as exc:  # headless/SSH/no default browser \u2014 hint suffices
+        logging.info("dashboard: browser auto-open skipped (%s)", exc)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Nexus Memory Dashboard")
-    parser.add_argument("--port", type=int, default=9120)
+    parser.add_argument("--port", type=int, default=9121)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     args = parser.parse_args()
-    
-    print(f"Nexus Memory Dashboard starting on http://localhost:{args.port}")
+    url = f"http://127.0.0.1:{args.port}"
+
+    print_url_banner(url)
+    maybe_open_browser(url)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 

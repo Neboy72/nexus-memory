@@ -666,6 +666,8 @@ def _show_next_steps() -> None:
     _print(f"{DIM}═══════════════════════════════════════════════{RESET}")
     _print(f"\n  {BOLD}{GREEN}Setup complete!{RESET} Next steps:")
     _print(f"  {CYAN}•{RESET} Start the MCP server: {BOLD}nexus-memory{RESET}")
+    _print(f"  {CYAN}•{RESET} Open your dashboard: {BOLD}nexus-memory webui{RESET}")
+    _print(f"    (opens {BOLD}http://127.0.0.1:9121{RESET} in your browser \u2014 bookmark it!)")
     _print(f"  {CYAN}•{RESET} Or run {BOLD}hermes memory setup{RESET} if you use Hermes Agent")
     _print()
 

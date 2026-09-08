@@ -1749,6 +1749,44 @@ async def _check_for_update() -> dict:
                 "update_available": False, "error": str(e)}
 
 
+def dashboard_success_moment() -> None:
+    """Boot the dashboard detached after a successful update (Nebo law 09.09).
+    Never blocks the MCP loop, never raises — the update result must reach the
+    agent even if the dashboard can't start (headless, port busy, missing deps)."""
+    def _boot():
+        try:
+            import subprocess
+            repo_dir = Path(NEXUS_REPO_PATH)
+            server_py = repo_dir / "dashboard" / "server.py"
+            if not server_py.exists():
+                return
+            import contextlib
+            marker = Path.home() / ".nexus-dashboard-opened"
+            with contextlib.suppress(Exception):
+                marker.unlink()  # update = fresh-install moment, browser re-opens
+            creationflags = 0
+            preexec = None
+            if os.name == "nt":
+                creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+            else:
+                preexec = getattr(os, "setsid", None)
+            subprocess.Popen(
+                [sys.executable, str(server_py)],
+                cwd=str(repo_dir),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=creationflags, preexec_fn=preexec,
+            )
+            logging.info("🖥️ Dashboard started after update (success moment).")
+        except Exception as exc:
+            logging.warning(f"Dashboard success moment skipped: {exc}")
+    try:
+        import threading
+        threading.Thread(target=_boot, daemon=True).start()
+    except Exception as exc:
+        logging.warning(f"Dashboard success moment skipped: {exc}")
+
+
 async def _do_update(confirm: bool = False) -> dict:
     """Pull the latest version from GitHub, reinstall, then restart."""
     import subprocess
@@ -1803,6 +1841,11 @@ async def _do_update(confirm: bool = False) -> dict:
         import importlib
         importlib.reload(nexus)
         new_version = nexus.__version__
+
+        # Success moment (Nebo law 09.09): every update shows the dashboard like
+        # a fresh install. Reset the once-marker and boot the dashboard detached;
+        # its banner + browser-open are the update's confirmation moment.
+        dashboard_success_moment()
 
         return {
             "status": "success",
@@ -2990,18 +3033,18 @@ def cli():
             "\n"
             "  Nexus Memory Dashboard\n"
             "  ---------------------\n"
-            "  URL:  http://127.0.0.1:9120\n"
+            "  URL:  http://127.0.0.1:9121\n"
             "  Stop: Ctrl+C\n"
         )
         print(banner)
         dashboard_main = Path(__file__).parent.parent.parent / "dashboard" / "server.py"
         if dashboard_main.exists():
             import runpy
-            sys.argv = ["dashboard", "--port", "9120", "--host", "127.0.0.1"]
+            sys.argv = ["dashboard", "--port", "9121", "--host", "127.0.0.1"]
             runpy.run_path(str(dashboard_main), run_name="__main__")
         else:
             print("Dashboard not found at", dashboard_main)
-            print("Use the installed dashboard: python3 dashboard/server.py --port 9120")
+            print("Use the installed dashboard: python3 dashboard/server.py --port 9121")
             return 1
         return
 
