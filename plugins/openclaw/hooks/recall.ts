@@ -141,13 +141,23 @@ export function buildRecallHandler(
       return
     }
 
+    // Group-context privacy cap (Astra-R2 critical finding, 08.09.2026):
+    // in group/channel turns the effective access level is capped to "public"
+    // regardless of cfg — the agent must never surface private memories into
+    // a shared context. Fail-closed: unknown ctx → cap active only when
+    // groupId is present; DM turns keep the configured level.
+    const effectiveAccessLevel =
+      ctx?.groupId && cfg.accessLevel !== "public"
+        ? "public"
+        : cfg.accessLevel
+
     const rawPrompt = event.prompt as string | undefined
     if (!rawPrompt || rawPrompt.length < 5) return
 
     const query = stripInboundMetadata(rawPrompt)
     if (query.length < 5) return
 
-    log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${cfg.accessLevel})`)
+    log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${effectiveAccessLevel}${ctx?.groupId ? ", GROUP-CAP active" : ""})`)
 
     try {
       // Embed the query
@@ -157,7 +167,7 @@ export function buildRecallHandler(
       const results = await qdrantClient.search(
         queryVector,
         cfg.maxRecallResults,
-        cfg.accessLevel,
+        effectiveAccessLevel,
       )
 
       // Scope gating (project/agent areas): auto-recall surfaces only
@@ -184,7 +194,7 @@ export function buildRecallHandler(
         : results
 
       // Graph-boost: add 1-hop neighbors from top 3 vector hits
-      const graphItems = (await graphBoost(qdrantClient, gated, 3, cfg.accessLevel)).slice(0, 5)  // cap to prevent context bloat
+      const graphItems = (await graphBoost(qdrantClient, gated, 3, effectiveAccessLevel)).slice(0, 5)  // cap to prevent context bloat
 
       // Merge gated vector results with graph-boosted items
       const allItems: SearchResult[] = [...gated]
