@@ -55,8 +55,13 @@ const REASONING_MARKERS: RegExp[] = [
   /^the (last |previous )?(system|incoming|visible) (message|context)\b/i,
   // Re-Orientierungs-Blöcke (Leak-Welle 08.09.: "Let me (very carefully) re-orient on what is REAL/right now…")
   /^let me (?:very |carefully )*re-?orient\b/i,
-  // Re-Orientierungs-Varianten mit Zustands-/Realitätsbezug
-  /^(the current|this) (message|user message|turn) (is|contains|says)\b/i,
+  // Re-Orientierungs-Varianten (08.09., geschärft): nur die echten Leak-Formen —
+  // ein generisches "This message contains X" in einer LEGITIMEN Antwort darf
+  // nicht gefiltert werden (False-Positive-Gefahr des ersten Entwurfs).
+  /^(the current|this) (user )?message is (an internal|an? context|nebo|miosha)\b/i,
+  /^(the current|this) (user )?message contains\s*(:|$)/im,
+  /^the current user message\s*:/i,
+  /^(the current|this) turn (is|contains|says)\b/i,
   // Zitat-/Verweis-Öffner ("The last message: Nebo's message at …", "THE CURRENT USER MESSAGE: …")
   /^the (last|current) (user )?message\b/i,
   // Cron-/Heartbeat-Selbstplanung (Release Tracker, Memory-Cron — 08.09.-Leak-Welle)
@@ -76,6 +81,7 @@ function isPureReasoningBlock(text: string, prevWasLeak = false): boolean {
   // ohne Leak-Vorgänger bleiben unangetastet.
   if (prevWasLeak) {
     if (/^\d+\.\s/.test(trimmed)) return true
+    if (/^-\s/.test(trimmed)) return true
     if (/^\*\*[^*]{1,80}\*\*/.test(trimmed)) return true
   }
   return REASONING_MARKERS.some((re) => re.test(trimmed))
