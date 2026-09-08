@@ -266,7 +266,7 @@ echo ""
 # Success moment: the user must SEE their dashboard, not hunt for a URL.
 echo "🧠  Want to SEE your memory? Start the dashboard:"
 echo ""
-echo "    pip install -e \".[webui]\" && python webui/main.py"
+echo "    nexus-memory webui   # dashboard on http://127.0.0.1:9120"
 echo ""
 echo "    → opens at http://127.0.0.1:9210 (browser opens automatically"
 echo "      on first start). Bookmark it — one click to your dashboard."

@@ -2973,7 +2973,7 @@ def cli():
     import argparse
     parser = argparse.ArgumentParser(prog="nexus-memory", description="Nexus Memory - Universal Memory Layer for AI Agents")
     parser.add_argument("command", nargs="?", default="server", choices=["server", "webui"],
-                        help="server (default): start MCP server | webui: start Web UI dashboard")
+                        help="server (default): start MCP server | webui: start Web UI dashboard (the current dashboard)")
 
     args = parser.parse_args()
 
@@ -2982,24 +2982,27 @@ def cli():
             import fastapi  # noqa: F401
             import uvicorn
         except ImportError:
-            print("WebUI dependencies not installed.")
-            print("Install with: pip install nexus-memory[webui]")
+            print("Dashboard dependencies not installed (fastapi/uvicorn).")
+            print("Install with: pip install fastapi uvicorn")
             return 1
 
         banner = (
             "\n"
-            "  Nexus Memory WebUI\n"
+            "  Nexus Memory Dashboard\n"
             "  ---------------------\n"
             "  URL:  http://127.0.0.1:9120\n"
             "  Stop: Ctrl+C\n"
-            "\n"
-            "  Opens in your browser automatically.\n"
-            "  If not, copy the URL above.\n"
         )
         print(banner)
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "webui"))
-        from webui.main import app
-        uvicorn.run(app, host="127.0.0.1", port=9120, log_level="info")
+        dashboard_main = Path(__file__).parent.parent.parent / "dashboard" / "server.py"
+        if dashboard_main.exists():
+            import runpy
+            sys.argv = ["dashboard", "--port", "9120", "--host", "127.0.0.1"]
+            runpy.run_path(str(dashboard_main), run_name="__main__")
+        else:
+            print("Dashboard not found at", dashboard_main)
+            print("Use the installed dashboard: python3 dashboard/server.py --port 9120")
+            return 1
         return
 
     # Default: MCP server

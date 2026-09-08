@@ -237,14 +237,15 @@ Restart gateway. Tools appear as `mcp_nexus_remember`, `mcp_nexus_recall`, etc.
 }
 ```
 
-### 5. 🌐 Web UI (optional)
+### 5. 🌐 Web Dashboard (optional)
 
 ```bash
-pip install nexus-memory[webui]
 nexus-memory webui
 ```
 
-Opens a live graph dashboard at `http://127.0.0.1:9120` — explore your memory network visually.
+Opens the dashboard at `http://127.0.0.1:9120` — connected agents, memory graph with filters, inspector for every memory.
+
+(From a repo checkout: `python3 dashboard/server.py --port 9120`. The legacy graph-only webui was removed in v0.18.7.)
 
 ## Available Tools (15)
 
