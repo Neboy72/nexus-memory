@@ -68,6 +68,27 @@ async function loadStatus() {
   document.getElementById('stat-memories').textContent = status.points_count?.toLocaleString() || '0';
   document.getElementById('stat-provider').textContent = status.embedding_provider || 'unknown';
 
+  // Fuel-Zeile: eine Zeile, alles Wichtige drin (Modell · verbraucht von Cap)
+  const fuelEl = document.getElementById('stat-fuel');
+  if (fuelEl && status.fuel) {
+    const f = status.fuel;
+    const shortModel = f.model.replace(':cloud', '').replace('glm-5.3-flash', 'GLM-Flash');
+    // Zeile 1: Modellname (wächst — Auto-Fit per Länge), Zeile 2: Kosten (kurz, stabil)
+    const nameEl = document.getElementById('stat-fuel-model');
+    const costEl = document.getElementById('stat-fuel-cost');
+    if (nameEl && costEl) {
+      nameEl.textContent = f.enabled ? shortModel : 'OFF';
+      costEl.textContent = f.enabled ? `$${f.spent_usd.toFixed(2)} / $${f.budget_usd.toFixed(2)}` : '—';
+      let size = 20;
+      if (shortModel.length > 12) size = 16;
+      if (shortModel.length > 20) size = 13;
+      nameEl.style.fontSize = size + 'px';
+      fuelEl.title = f.enabled
+        ? `Nexus uses your existing AI to summarize & sort old memories. Provider: ${f.provider}. Hard monthly cap protects you.`
+        : 'Memory AI sorting is off — memories stay unsorted.';
+    }
+  }
+
   const healthDot = document.getElementById('health-indicator');
   const healthText = document.getElementById('health-text');
   if (status.qdrant_healthy) {
