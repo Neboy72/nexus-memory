@@ -295,9 +295,25 @@ async function loadMemoryStats() {
   const stats = await fetchAPI('/api/memories/stats');
   if (!stats) return;
 
-  const levels = Object.entries(stats.by_access_level || {})
-    .map(([k, v]) => `${k}:${v}`).join(', ');
-  document.getElementById('stat-access').textContent = levels || 'none';
+  // Drei Zeilen in fester Reihenfolge (Nebo-Regel: Public oben, dann Trusted, dann Private) — immer alle zeigen
+  const lv = stats.by_access_level || {};
+  const rows = [
+    ['Public', lv.public || 0],
+    ['Trusted', lv.trusted || 0],
+    ['Private', lv.private || 0],
+  ];
+  const el = document.getElementById('stat-access');
+  if (el) {
+    el.innerHTML = rows.map(([k, v]) =>
+      `<div class="access-row">${k}: ${v.toLocaleString('de-DE')}</div>`
+    ).join('');
+    // Auto-Fit: längere Zahlen → kleinere Schrift (zeilen bleiben immer lesbar, kein Umbruch)
+    const maxLen = Math.max(...rows.map(([k, v]) => `${k}: ${v.toLocaleString('de-DE')}`.length));
+    let as = 15;
+    if (maxLen > 20) as = 13;
+    if (maxLen > 26) as = 11;
+    el.style.fontSize = as + 'px';
+  }
 }
 
 // ── Graph: handled by app.js (from /graph page) ─────────────
