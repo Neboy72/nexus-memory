@@ -41,9 +41,9 @@ Environment variables (set in `.env` or shell):
 ## Manual Tools
 
 The MCP server (`nexus-memory`) provides explicit tools:
-- `nexus_remember` - Store a memory
-- `nexus_recall` - Search memories
-- `nexus_forget` - Delete a memory
+- `remember` - Store a memory
+- `recall` - Search memories
+- `forget` - Delete a memory
 
 ## Shared Store
 

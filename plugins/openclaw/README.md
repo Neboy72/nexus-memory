@@ -42,13 +42,13 @@ cp -r ~/nexus-memory/plugins/openclaw ~/.openclaw/plugins/nexus-memory
    | **OpenAI** | `OPENAI_API_KEY` | `text-embedding-3-small` | 1536 |
    | **Google** | `GOOGLE_API_KEY` | `text-embedding-004` | 768 |
    | **Jina** | `JINA_API_KEY` | `jina-embeddings-v3` | 1024 |
-   | **Ollama** | — (no key needed) | `nomic-embed-text` | 768 |
+   | **Ollama** | — (no key needed) | `qwen3-embedding` | 1024 |
 
    ```bash
    export VOYAGE_API_KEY="vo-your-key-here"
    ```
 
-   > **No API key?** If you have Ollama running locally with `nomic-embed-text`, it works out of the box.
+   > **No API key?** If you have Ollama running locally with `qwen3-embedding`, it works out of the box.
 
 ## Configuration
 
@@ -78,7 +78,7 @@ Add to `~/.openclaw/openclaw.json`:
           "autoRecall": true,
           "autoCapture": true,
           "maxRecallResults": 10,
-          "accessLevel": "public",
+          "accessLevel": "private",
           "debug": false
         }
       }
@@ -101,7 +101,7 @@ Add to `~/.openclaw/openclaw.json`:
 | `autoRecall` | `boolean` | `true` | Inject relevant memories before every AI turn |
 | `autoCapture` | `boolean` | `true` | Store conversation turns to Qdrant after each AI turn |
 | `maxRecallResults` | `number` | `10` | Max memories injected per turn (1–20) |
-| `accessLevel` | `string` | `public` | Agent access level: `public`, `trusted`, or `private` |
+| `accessLevel` | `string` | `private` | Agent access level: `public`, `trusted`, or `private` |
 | `debug` | `boolean` | `false` | Verbose debug logs |
 
 ### Access Levels
