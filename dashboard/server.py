@@ -265,11 +265,19 @@ async def get_system_status():
     except Exception:
         pass
 
+    # Echter Modellname (z.B. "voyage-4", "qwen3-embedding") statt nur Provider-Label — Nebo-Regel: volle Transparenz
+    embed_model = embed_provider
+    try:
+        from nexus_memory.embeddings import EmbeddingProvider
+        embed_model = EmbeddingProvider().name or embed_provider
+    except Exception:
+        pass
+
     return {
         "version": version,
         "qdrant_healthy": qdrant_healthy,
         "points_count": points_count,
-        "embedding_provider": embed_provider,
+        "embedding_provider": embed_model,  # echtes Modell, nicht nur Provider-Label
         "config_path": config_path,
         "fuel": fuel,
     }
