@@ -58,6 +58,7 @@ from nexus_memory.chat_wizard import get_status, TRUST_LEVELS
 try:
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse, JSONResponse
+    from pydantic import BaseModel
     from fastapi.staticfiles import StaticFiles
     import uvicorn
 except ImportError:
@@ -242,8 +243,13 @@ async def get_system_status():
         version = "unknown"
 
     # Fuel-Status: welche KI-Station nutzt der Konsolidierungs-Daemon, wie viel verbraucht?
+    try:
+        from nexus_memory.fuel_chain import _paid_enabled  # single source of truth
+        fuel_enabled = _paid_enabled()
+    except Exception:
+        fuel_enabled = True
     fuel = {
-        "enabled": True,           # Standard AN (Nebo-Entscheid: volle Qualität, Mitfahrer-Design)
+        "enabled": fuel_enabled,   # Default AN — User-Toggle via POST /api/fuel/paid
         "model": os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud"),
         "provider": "ollama-cloud" if ":cloud" in os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud") else "ollama-local",
         "budget_usd": float(os.environ.get("NEXUS_FUEL_BUDGET_USD", "5.00")),
@@ -267,6 +273,33 @@ async def get_system_status():
         "config_path": config_path,
         "fuel": fuel,
     }
+
+
+class FuelPaidRequest(BaseModel):
+    enabled: bool = True
+
+
+@app.post("/api/fuel/paid")
+async def api_fuel_paid(request: FuelPaidRequest):
+    """User-Toggle für PAID Konsolidierungs-Stationen (OpenAI/OpenRouter).
+
+    AN  (default): KI-Sortierung aktiv — Ollama immer, Fremd-Anbieter bei Budget.
+    AUS:                keine Fremd-Anbieter mehr; Ollama (lokal/Cloud) bleibt.
+    """
+    try:
+        enabled = bool(request.enabled)
+        from nexus_memory import fuel_chain
+        p = fuel_chain.FUEL_TOGGLE_PATH
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if enabled:
+            p.touch()
+            msg = "KI-Sortierung aktiviert — deine Erinnerungen werden wieder automatisch sortiert."
+        else:
+            p.unlink(missing_ok=True)
+            msg = "KI-Sortierung deaktiviert — deine Erinnerungen werden nicht mehr automatisch sortiert."
+        return JSONResponse({"ok": True, "enabled": enabled, "message": msg})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 @app.get("/api/agents")
