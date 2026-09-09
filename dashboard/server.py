@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import re
 import sys
 import urllib.request
@@ -240,12 +241,31 @@ async def get_system_status():
     except Exception:
         version = "unknown"
 
+    # Fuel-Status: welche KI-Station nutzt der Konsolidierungs-Daemon, wie viel verbraucht?
+    fuel = {
+        "enabled": True,           # Standard AN (Nebo-Entscheid: volle Qualität, Mitfahrer-Design)
+        "model": os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud"),
+        "provider": "ollama-cloud" if ":cloud" in os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud") else "ollama-local",
+        "budget_usd": float(os.environ.get("NEXUS_FUEL_BUDGET_USD", "5.00")),
+        "spent_usd": 0.0,
+    }
+    try:
+        spend_file = os.path.expanduser("~/.nexus-memory/fuel_spend.json")
+        if os.path.exists(spend_file):
+            with open(spend_file) as f:
+                spend = json.load(f)
+            month_key = time.strftime("%Y-%m")
+            fuel["spent_usd"] = round(float(spend.get(months := month_key, spend.get("total", 0)) or 0), 4)
+    except Exception:
+        pass
+
     return {
         "version": version,
         "qdrant_healthy": qdrant_healthy,
         "points_count": points_count,
         "embedding_provider": embed_provider,
         "config_path": config_path,
+        "fuel": fuel,
     }
 
 

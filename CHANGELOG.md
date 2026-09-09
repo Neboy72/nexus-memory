@@ -12,7 +12,7 @@
 ## v0.18.7 (unreleased)
 
 ### Removed
-- **Legacy `webui/` graph dashboard deleted** (the original DeepSeek-era UI). `nexus-memory webui` now starts the current dashboard (`dashboard/`): connected agents, memory graph with filters, memory inspector. Same port (9120), same command — no stale UI left behind.
+- **Legacy `webui/` graph dashboard deleted** (the original DeepSeek-era UI). `nexus-memory webui` now starts the current dashboard (`dashboard/`): connected agents, memory graph with filters, memory inspector. Same command, now on port 9121 — no stale UI left behind.
 
 ### Changed
 - README / AGENTS.md / install scripts point agents to the current dashboard. `pip install nexus-memory[webui]` extra removed from pyproject (fastapi/uvicorn needed only when running the dashboard from a checkout).
@@ -499,7 +499,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Drift ampel (traffic light) for belief health
   - Stats cards with tooltips
   - Filter by category, full-text search
-- **`nexus-memory webui` CLI command** — launches dashboard at `http://127.0.0.1:9120`
+- **`nexus-memory webui` CLI command** — launches dashboard at `http://127.0.0.1:9121`
 - **Ko-fi integration** in Web UI header and footer
 
 ### Fixed

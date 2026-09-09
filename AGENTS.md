@@ -156,7 +156,7 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
 ### Prerequisites
 
 - Python 3.11+
-- Qdrant running on localhost:6333
+- **Qdrant running on localhost:6333** — REQUIRED, the server will not start without it. One command: `docker run -d -p 6333:6333 -v qdrant_data:/qdrant/storage --name qdrant qdrant/qdrant` (verify: `curl http://localhost:6333/healthz`)
 - At least **one** embedding provider (auto-detected in this order):
 
   | Provider | Type | Dimensions | How to get |

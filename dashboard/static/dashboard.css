@@ -93,7 +93,7 @@ header {
 /* Stats Bar */
 .stats-bar {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 1fr 1fr 1fr 1.4fr 1.6fr;
   gap: 14px;
   margin-bottom: 24px;
 }
@@ -132,7 +132,7 @@ header {
 }
 
 .stat-value {
-  font-size: 32px;
+  font-size: 26px;
   font-weight: 700;
   color: #02C1FF;
   line-height: 1.15;
@@ -285,7 +285,7 @@ header {
 
 .full-graph-stats__grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 1fr 1fr 1fr 1.4fr 1.6fr;
   gap: 16px;
   margin-bottom: 12px;
 }
@@ -916,3 +916,13 @@ h2 {
 .action-btn--inspector:hover { border-color: #954EFF; color: #954EFF; }
 
 /* ═══ Ende Memory Inspector ═══ */
+
+
+/* Fuel-Karte: eine Zeile, kein Umbruch — font-size passt sich im JS an */
+#stat-fuel { white-space: nowrap; overflow: visible; }
+
+
+/* Fuel-Karte: Zeile 1 = Modellname (Auto-Fit-Größe via JS), Zeile 2 = Kosten */
+#stat-fuel { white-space: nowrap; overflow: visible; display: block; line-height: 1.1; }
+#stat-fuel-model { display: block; color: #02C1FF; font-weight: 700; }
+#stat-fuel-cost { display: block; font-size: 13px; font-weight: 600; color: #9aa5b5; margin-top: 2px; }

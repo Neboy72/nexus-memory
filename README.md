@@ -12,7 +12,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.18.6-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.18.7-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-1076%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -45,6 +45,20 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
 
 ## 🤖 Quick Start
 
+### Prerequisite: Qdrant (required)
+
+Nexus stores all memories in [Qdrant](https://qdrant.tech) — a local vector database. It must be running before the server starts. One command:
+
+```bash
+docker run -d -p 6333:6333 -v qdrant_data:/qdrant/storage --name qdrant qdrant/qdrant
+```
+
+No Docker? Alternatives: [official Qdrant install](https://qdrant.tech/documentation/guides/installation/) (macOS: `brew install qdrant`, then `qdrant`) or any existing Qdrant instance (point `NEXUS_QDRANT_URL` at it). Verify with:
+
+```bash
+curl http://localhost:6333/healthz   # → should respond
+```
+
 ### Tell your agent to install it
 
 Send this prompt to any MCP-compatible agent:
@@ -53,7 +67,7 @@ Send this prompt to any MCP-compatible agent:
 Read https://raw.githubusercontent.com/Neboy72/nexus-memory/main/AGENTS.md and follow the installation instructions.
 ```
 
-Your agent will check prerequisites, install everything, configure the provider, and verify — zero manual steps after the prerequisites are in place.
+Your agent will check prerequisites (including Qdrant), install everything, configure the provider, and verify — zero manual steps after the prerequisites are in place.
 
 ### Path 1: Hermes Native Plugin
 
@@ -437,7 +451,7 @@ Every memory carries its origin: `source_url`, `confidence` (0.0–1.0), `modifi
 
 Three levels: `public` (all agents), `trusted` (approved agents), `private` (owner only). Enforced at the MCP tool level.
 
-### Scopes — Project/Agent Areas 🗂️ *(unreleased)*
+### Scopes — Project/Agent Areas 🗂️ *(v0.18.4, on by default off via env — see below)*
 
 Access levels answer *"who may see this?"* — scopes answer *"which project does this belong to?"*. Every memory can carry a scope label (`nexus_remember(..., scope="voice")`, `[a-z0-9-]`, max 40 chars, defaults to `default`).
 
@@ -758,4 +772,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.6 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.7 · One memory for all your agents</sub>
