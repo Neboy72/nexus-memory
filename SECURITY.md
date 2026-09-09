@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.2.x | ✅ Active development |
-| < 0.2 | ❌ No longer maintained |
+| 0.18.x | ✅ Active development |
+| < 0.18 | ❌ No longer maintained |
 
 ## Reporting a Vulnerability
 
@@ -26,8 +26,13 @@ disclosure timeline.
 Nexus Memory is designed with a **security-first** approach:
 
 - **Local by default** — Qdrant runs on localhost:6333. No remote access.
-- **No outbound data** — memories stay on your machine. Only embedding API
-  calls (configurable) leave your network.
+- **Memories stay local by default** — Qdrant runs on localhost; memory content
+  never leaves your machine unless *you* opt in. Two things can leave your network:
+  (1) **Embedding API calls** (only if you configure a cloud embedding provider),
+  (2) **Memory consolidation** — if the consolidation daemon is enabled AND an
+  OpenAI/OpenRouter key is present, memory summaries are sent to that provider for
+  sorting/compression (hard-capped at $5/month, shown in the dashboard's
+  "Memory AI (Fuel)" card). Local models (Ollama) never send anything.
 - **Access control** — three levels: `public`, `trusted`, `private`,
   enforced by the MCP server before returning results.
 - **No cloud dependency** — works fully offline with local embeddings

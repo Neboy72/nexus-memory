@@ -22,7 +22,7 @@ Select **nexus** from the provider list. The wizard will guide you through confi
 | `voyage_api_key` | Voyage AI API key (secret, stored in `.env`) | No | — |
 | `collection_name` | Qdrant collection name | No | `nexus` |
 
-**Embedding auto-detection:** If `VOYAGE_API_KEY` is set (starts with `vo-` or `pa-`), the plugin uses Voyage AI's `voyage-4` (1024d, cloud). Otherwise it falls back to `sentence-transformers` with `all-MiniLM-L6-v2` (384d, local).
+**Embedding auto-detection:** Cloud keys first (Voyage → OpenAI → Google → Jina), then **Ollama with `qwen3-embedding`** (1024d, preferred local), then `bge-m3` (1024d) — same priority chain as the main server, so Hermes and MCP agents always share one model.
 
 ## Shared Store
 

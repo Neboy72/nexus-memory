@@ -13,7 +13,7 @@ Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
 [![Version](https://img.shields.io/badge/version-0.18.7-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-1076%20passing-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1091%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -534,7 +534,7 @@ Nexus doesn't just store raw conversation dumps — a background daemon (part of
 3. **OpenAI-compatible** — `OPENAI_API_KEY`, `NOUS_API_KEY`, or explicit `NEXUS_FUEL_BASE` + `NEXUS_FUEL_KEY`
 4. All closed → the daemon sleeps and retries next tick (fail-safe, never crashes, never blocks)
 
-**Monthly budget cap** for paid stations: `NEXUS_FUEL_BUDGET_USD` (default $1.00). Free Ollama is never affected. Spend tracker: `~/.nexus-memory/fuel_spend.json`.
+**Monthly budget cap** for paid stations: `NEXUS_FUEL_BUDGET_USD` (default $5.00). Free Ollama is never affected. Spend tracker: `~/.nexus-memory/fuel_spend.json`.
 
 Other knobs: `NEXUS_CONSOLIDATION=0` (kill-switch), `NEXUS_CONSOLIDATION_INTERVAL` (default 3600s), `NEXUS_CONSOLIDATION_MODEL`.
 
@@ -749,7 +749,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 1076 tests ✅
+pytest tests/ -v # 1091 tests ✅
 ```
 
 ---
