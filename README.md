@@ -43,6 +43,8 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
 - [Architecture: Two Paths, One Brain](#architecture-two-paths-one-brain)
   - [Which path should I use?](#which-path-should-i-use)
 - [🤖 Quick Start](#-quick-start)
+  - [Tell your agent to install it](#tell-your-agent-to-install-it)
+  - [Prerequisite: Qdrant (required)](#prerequisite-qdrant-required)
   - [Path 1: Hermes Native Plugin](#path-1-hermes-native-plugin)
   - [Path 2: OpenClaw Native Plugin](#path-2-openclaw-native-plugin)
   - [Path 3: MCP Server (any MCP-compatible agent)](#path-3-mcp-server-any-mcp-compatible-agent)
@@ -65,6 +67,18 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
 
 ## 🤖 Quick Start
 
+### Tell your agent to install it
+
+Send this prompt to any MCP-compatible agent:
+
+```
+Read https://raw.githubusercontent.com/Neboy72/nexus-memory/main/AGENTS.md and follow the installation instructions.
+```
+
+Your agent will check prerequisites (including Qdrant), install everything, configure the provider, and verify — zero manual steps after the prerequisites are in place.
+
+---
+
 ### Prerequisite: Qdrant (required)
 
 Nexus stores all memories in [Qdrant](https://qdrant.tech) — a local vector database. It must be running before the server starts. One command:
@@ -85,16 +99,6 @@ QDRANT__SERVICE__HTTP_PORT=6333 QDRANT__STORAGE__STORAGE_PATH=$HOME/qdrant-stora
 ```bash
 curl http://localhost:6333/healthz   # → should respond
 ```
-
-### Tell your agent to install it
-
-Send this prompt to any MCP-compatible agent:
-
-```
-Read https://raw.githubusercontent.com/Neboy72/nexus-memory/main/AGENTS.md and follow the installation instructions.
-```
-
-Your agent will check prerequisites (including Qdrant), install everything, configure the provider, and verify — zero manual steps after the prerequisites are in place.
 
 ### Path 1: Hermes Native Plugin
 
