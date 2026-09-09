@@ -935,3 +935,7 @@ h2 {
 .fuel-toggle-slider::before { content: ""; position: absolute; width: 15px; height: 15px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: transform .2s; }
 .fuel-toggle input:checked + .fuel-toggle-slider { background: #10b981; }
 .fuel-toggle input:checked + .fuel-toggle-slider::before { transform: translateX(15px); }
+
+/* ── Access Levels: drei geordnete Zeilen (Public / Trusted / Private) ── */
+.stat-access-rows { display: flex; flex-direction: column; gap: 2px; font-size: 15px; line-height: 1.25; transition: font-size .15s; }
+.access-row { white-space: nowrap; }
