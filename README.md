@@ -53,7 +53,14 @@ Nexus stores all memories in [Qdrant](https://qdrant.tech) — a local vector da
 docker run -d -p 6333:6333 -v qdrant_data:/qdrant/storage --name qdrant qdrant/qdrant
 ```
 
-No Docker? Alternatives: [official Qdrant install](https://qdrant.tech/documentation/guides/installation/) (macOS: `brew install qdrant`, then `qdrant`) or any existing Qdrant instance (point `NEXUS_QDRANT_URL` at it). Verify with:
+No Docker? Alternatives: [official Qdrant install](https://qdrant.tech/documentation/guides/installation/) — macOS via Homebrew:
+
+```bash
+brew install qdrant
+QDRANT__SERVICE__HTTP_PORT=6333 QDRANT__STORAGE__STORAGE_PATH=$HOME/qdrant-storage qdrant
+```
+
+(The brew binary is configured via environment variables, not CLI flags.) Or point Nexus at any existing Qdrant instance with `NEXUS_QDRANT_HOST` + `NEXUS_QDRANT_PORT`. Verify with:
 
 ```bash
 curl http://localhost:6333/healthz   # → should respond
