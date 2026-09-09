@@ -926,3 +926,12 @@ h2 {
 #stat-fuel { white-space: nowrap; overflow: visible; display: block; line-height: 1.1; }
 #stat-fuel-model { display: block; color: #02C1FF; font-weight: 700; }
 #stat-fuel-cost { display: block; font-size: 13px; font-weight: 600; color: #9aa5b5; margin-top: 2px; }
+
+/* ── Fuel-Toggle (iOS-Schieberegler in der Fuel-Karte) ── */
+.stat-label--row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fuel-toggle { position: relative; display: inline-block; width: 34px; height: 19px; flex-shrink: 0; cursor: pointer; }
+.fuel-toggle input { opacity: 0; width: 0; height: 0; }
+.fuel-toggle-slider { position: absolute; inset: 0; background: #4b5563; border-radius: 999px; transition: background .2s; }
+.fuel-toggle-slider::before { content: ""; position: absolute; width: 15px; height: 15px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: transform .2s; }
+.fuel-toggle input:checked + .fuel-toggle-slider { background: #10b981; }
+.fuel-toggle input:checked + .fuel-toggle-slider::before { transform: translateX(15px); }
