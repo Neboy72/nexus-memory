@@ -54,7 +54,7 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
   - [Guardrails 🛡️](#guardrails)
   - [SICA Self-Improvement Cycle 🔄](#sica-self-improvement-cycle)
 - [📊 vs Other Memory Solutions](#-vs-other-memory-solutions)
-- [🧩 Embedding Providers](#-embedding-providers)
+- [🧩 Embedding Providers](#embedding-providers)
 - [📦 Release History](#-release-history)
 - [🔧 Troubleshooting](#-troubleshooting)
 - [🧪 Tests](#-tests)
@@ -141,7 +141,7 @@ Pick **one** — or none: the server auto-detects at runtime. The detection prio
 
 > 💡 **Think of it like this:** the tiny built-in model is fine for your first hundred memories. Once your agent remembers weeks of context in German/mixed languages, switch to qwen3-embedding:0.6b — the upgrade is one command, and your memories re-embed automatically in a few minutes, free.
 
-→ Full provider table & details: [🧩 Embedding Providers](#-embedding-providers) below.
+→ Full provider table & details: [🧩 Embedding Providers](#embedding-providers) below.
 ### 🌐 Web Dashboard (optional)
 
 Nexus Memory ships with the current dashboard: connected agents, memory graph, inspector, drift status.
@@ -667,6 +667,8 @@ A finished install **and every update** shows the dashboard: after `do_update` s
 **Nexus Memory is the only self-hosted solution with hybrid retrieval, drift detection, provenance, fact lifecycle, temporal validity, staging/rollback, ingestion-time consolidation, auto-discovery, graph analytics, skill export, memory categories, access control, and active guardrails: all in one package. It is also the only one with brain-inspired Memory Dynamics (reinforcement, decay, salience). It is also the only memory layer that actively prevents destructive actions by checking protection rules before execution — not just storing knowledge, but guarding it. Plus native plugins for Hermes, OpenClaw, and Claude Code, plus an MCP server for every other agent: one brain, three paths, all agents.**
 
 ---
+
+<a id="embedding-providers"></a>
 
 ## 🧩 Embedding Providers
 
