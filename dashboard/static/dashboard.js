@@ -72,7 +72,7 @@ async function loadStatus() {
   const fuelEl = document.getElementById('stat-fuel');
   if (fuelEl && status.fuel) {
     const f = status.fuel;
-    const shortModel = f.model.replace(':cloud', '').replace('glm-5.3-flash', 'GLM-Flash');
+    const shortModel = f.model.replace(':cloud', '').replace('glm-5.3-flash', 'GLM-5.3-Flash').replace('bge-m3', 'BGE-M3').replace('qwen3-embedding', 'Qwen3-Embedding');
     // Zeile 1: Modellname (wächst — Auto-Fit per Länge), Zeile 2: Kosten (kurz, stabil)
     const nameEl = document.getElementById('stat-fuel-model');
     const costEl = document.getElementById('stat-fuel-cost');
@@ -85,7 +85,7 @@ async function loadStatus() {
         toggleEl.disabled = false;
       }
       let size = 20;
-      if (shortModel.length > 12) size = 16;
+      if (shortModel.length > 14) size = 16;
       if (shortModel.length > 20) size = 13;
       nameEl.style.fontSize = size + 'px';
       fuelEl.title = f.enabled
