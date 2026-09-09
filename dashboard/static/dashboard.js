@@ -79,6 +79,11 @@ async function loadStatus() {
     if (nameEl && costEl) {
       nameEl.textContent = f.enabled ? shortModel : 'OFF';
       costEl.textContent = f.enabled ? `$${f.spent_usd.toFixed(2)} / $${f.budget_usd.toFixed(2)}` : '—';
+      const toggleEl = document.getElementById('fuel-toggle');
+      if (toggleEl) {
+        toggleEl.checked = f.enabled;
+        toggleEl.disabled = false;
+      }
       let size = 20;
       if (shortModel.length > 12) size = 16;
       if (shortModel.length > 20) size = 13;
@@ -99,6 +104,26 @@ async function loadStatus() {
     healthText.textContent = 'Qdrant Offline';
   }
 }
+
+// ── Fuel-Toggle: KI-Sortierung an/aus ──
+document.getElementById('fuel-toggle')?.addEventListener('change', async (e) => {
+  const enabled = e.target.checked;
+  e.target.disabled = true;
+  try {
+    const res = await fetch('/api/fuel/paid', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled})
+    });
+    const d = await res.json();
+    if (!d.ok) throw new Error(d.error || 'failed');
+    if (d.message) showToast(d.message, enabled ? 'ok' : 'warn');
+    loadStatus();
+  } catch (err) {
+    e.target.checked = !enabled;  // zurückrollen bei Fehler
+    showToast('Toggle failed: ' + err.message, 'error');
+    e.target.disabled = false;
+  }
+});
 
 // ── Agents ───────────────────────────────────────────────────
 

@@ -576,8 +576,41 @@ def _default_ollama_generate(base: str, model: str, prompt: str) -> str:
         return json.loads(resp.read()).get("response", "")
 
 
+FUEL_TOGGLE_PATH = Path(os.environ.get(
+    "NEXUS_FUEL_TOGGLE_FILE", os.path.expanduser("~/.nexus-memory/fuel_paid_enabled")))
+
+
+def _ensure_toggle_default_on() -> None:
+    """Default-ON: first import creates the toggle file (paid stations allowed).
+
+    Never raises — a read-only home dir just means the toggle can't persist.
+    """
+    try:
+        FUEL_TOGGLE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if not FUEL_TOGGLE_PATH.exists():
+            FUEL_TOGGLE_PATH.touch()
+    except Exception:
+        pass
+
+
+def _paid_enabled() -> bool:
+    """User opt-out for PAID stations (dashboard toggle, default ON).
+
+    Toggle file EXISTS  -> paid stations allowed (default after install).
+    Toggle file MISSING -> user turned the slider off; paid stations closed.
+    Ollama (free) is never affected. Env NEXUS_FUEL_PAID=0 forces off (headless).
+    """
+    if os.environ.get("NEXUS_FUEL_PAID", "").strip() == "0":
+        return False
+    return FUEL_TOGGLE_PATH.exists()
+
+
 def _paid_station_allowed(station: Station) -> bool:
-    """Budget + persistence gate, re-evaluated before every paid call."""
+    """Budget + persistence + user-toggle gate, re-checked before every paid call."""
+    if not _paid_enabled():
+        log.info("fuel: user disabled paid stations (toggle off) — skipping %s",
+                 station.name)
+        return False
     if _persist_failed:
         log.warning("fuel: budget state persistence broken — paid station %s locked",
                     station.name)
@@ -687,3 +720,5 @@ def get_fuel(ollama_base: str, ollama_model: str,
             continue
     log.warning("fuel: all stations closed — daemon sleeps until next tick")
     return None
+
+_ensure_toggle_default_on()
