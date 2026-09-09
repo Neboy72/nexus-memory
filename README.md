@@ -8,6 +8,16 @@ Your agents forget. Your context gets lost. Your setup knowledge is scattered ac
 
 Hermes • OpenClaw • Claude Code • Codex • Cursor • Cline • Roo Code • GitHub Copilot • Pi • Continue • Odysseus • Kilo Code …and more!
 
+
+### Why not just use a CLAUDE.md?
+
+Every agent community runs into the same wall: the notes file. It works — until it doesn't.
+
+- **A notes file forgets.** You write it by hand, your agent reads it only in that one project, and it grows until nobody reads it. No search, no priority, no memory of where a fact came from.
+- **Nexus remembers on its own.** Facts are stored as they come up — no "remember this" required — and recalled automatically in the next session. Across every project, every agent, one shared brain.
+- **The honest bottom line:** For one small project, a text file is fine. It gets serious when you run multiple agents across weeks of context — that's when you want a memory, not a sticky note.
+
+
 [![Stars](https://img.shields.io/github/stars/Neboy72/nexus-memory?style=flat-square&logo=github)](https://github.com/Neboy72/nexus-memory)
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
@@ -41,6 +51,7 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
 ## 📖 Contents
 
 - [Architecture: Two Paths, One Brain](#architecture-two-paths-one-brain)
+  - [Why not just use a CLAUDE.md?](#why-not-just-use-a-claudemd)
   - [Which path should I use?](#which-path-should-i-use)
 - [🤖 Quick Start](#-quick-start)
   - [Tell your agent to install it](#tell-your-agent-to-install-it)
