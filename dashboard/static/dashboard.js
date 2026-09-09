@@ -66,7 +66,9 @@ async function loadStatus() {
 
   document.getElementById('version').textContent = `v${status.version}`;
   document.getElementById('stat-memories').textContent = status.points_count?.toLocaleString() || '0';
-  document.getElementById('stat-provider').textContent = status.embedding_provider || 'unknown';
+  const ep = (status.embedding_provider || 'unknown');
+  const epPretty = ep.split('-').map(w => /^(bge|llm|api)$/i.test(w) ? w.toUpperCase() : (w.charAt(0).toUpperCase() + w.slice(1))).join('-');
+  document.getElementById('stat-provider').textContent = epPretty;
 
   // Fuel-Zeile: eine Zeile, alles Wichtige drin (Modell · verbraucht von Cap)
   const fuelEl = document.getElementById('stat-fuel');
