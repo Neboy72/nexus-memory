@@ -536,7 +536,7 @@ MCP Client ← stdio → nexus-memory (MCP Server)
 
 - **nexus/** — core library (MemoryCategory, HybridRetriever, DriftDetector, Provenance, Lifecycle, Graph, Discovery, Export, ...)
 - **src/nexus_memory/mcp_server.py** — MCP server (5 tools, guardrails, access control)
-- **tests/** — 224 tests (pytest)
+- **tests/** — 1091 tests (pytest)
 
 ## Testing
 
