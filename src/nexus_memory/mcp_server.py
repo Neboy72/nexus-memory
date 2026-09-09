@@ -591,7 +591,7 @@ class MemoryStore:
         self._init_skill_graph()
         self._update_check_result: dict | None = None
         self._update_check_time: float = 0
-        self._update_nudged: bool = False  # Only nudge once per server lifetime
+        self._update_nudged_at: float = 0  # last nudge time (re-nudge every 7 days)
         self._backup_nudged: bool = False
         self._last_backup_path: str = ""
         self._last_backup_time: float = 0
@@ -639,38 +639,47 @@ class MemoryStore:
             except Exception as e:
                 logging.warning(f"Consolidation daemon unavailable: {e}")
 
+    _UPDATE_CHECK_INTERVAL = 24 * 3600  # re-check GitHub daily
+
     def _check_for_updates_async(self):
-        """Check GitHub for new releases on startup (non-blocking, cached 24h)."""
+        """Check GitHub for new releases on startup, then re-check every 24h
+        (non-blocking background loop; a long-running server still sees new releases)."""
         import threading, time
         def _bg_check():
-            try:
-                import urllib.request
-                req = urllib.request.Request(
-                    "https://api.github.com/repos/Neboy72/nexus-memory/releases/latest",
-                    headers={"Accept": "application/vnd.github.v3+json",
-                             "User-Agent": f"nexus-memory/{nexus_version}"}
-                )
-                data = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
-                latest_tag = data.get("tag_name", "").lstrip("v")
-                latest_name = data.get("name", latest_tag)
-                html_url = data.get("html_url", "")
-                from packaging.version import parse
-                is_newer = parse(latest_tag) > parse(nexus_version) if latest_tag else False
-                self._update_check_result = {
-                    "update_available": is_newer,
-                    "latest_version": latest_tag,
-                    "latest_name": latest_name,
-                    "release_url": html_url,
-                    "local_version": nexus_version,
-                }
-                if is_newer:
-                    logging.info(f"📦 Nexus Memory update available: v{nexus_version} → v{latest_tag}")
-            except Exception as e:
-                logging.debug(f"Update check failed: {e}")
-            finally:
-                self._update_check_time = time.time()
-        t = threading.Thread(target=_bg_check, daemon=True)
-        t.start()
+            while True:
+                self._do_update_check_once()
+                time.sleep(self._UPDATE_CHECK_INTERVAL)
+        threading.Thread(target=_bg_check, daemon=True).start()
+
+    def _do_update_check_once(self):
+        """One GitHub check; sets self._update_check_result. Never raises."""
+        import time
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://api.github.com/repos/Neboy72/nexus-memory/releases/latest",
+                headers={"Accept": "application/vnd.github.v3+json",
+                         "User-Agent": f"nexus-memory/{nexus_version}"}
+            )
+            data = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
+            latest_tag = data.get("tag_name", "").lstrip("v")
+            latest_name = data.get("name", latest_tag)
+            html_url = data.get("html_url", "")
+            from packaging.version import parse
+            is_newer = parse(latest_tag) > parse(nexus_version) if latest_tag else False
+            self._update_check_result = {
+                "update_available": is_newer,
+                "latest_version": latest_tag,
+                "latest_name": latest_name,
+                "release_url": html_url,
+                "local_version": nexus_version,
+            }
+            if is_newer:
+                logging.info(f"📦 Nexus Memory update available: v{nexus_version} → v{latest_tag}")
+        except Exception as e:
+            logging.debug(f"Update check failed: {e}")
+        finally:
+            self._update_check_time = time.time()
 
     def _start_auto_backup(self):
         """Start automatic daily backup of all memories."""
@@ -1544,11 +1553,12 @@ class MemoryStore:
             except Exception as track_err:
                 logging.debug(f"Access-tracking failed (non-blocking): {track_err}")
         
-        # One-time update nudge: if update available and not yet nudged, append a note
+        # Update nudge: if update available, append a note — first time immediately,
+        # then re-nudge every 7 days (a missed nudge is not lost forever, but no spam)
         if (self._update_check_result and 
             self._update_check_result.get("update_available") and 
-            not self._update_nudged):
-            self._update_nudged = True
+            time.time() - self._update_nudged_at >= 7 * 24 * 3600):
+            self._update_nudged_at = time.time()
             results.append({
                 "id": "update-notice",
                 "score": 0,

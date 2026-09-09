@@ -1,3 +1,14 @@
+## [Unreleased]
+
+### Changed
+
+- **Update notifications now re-check GitHub every 24h** (previously: a single
+  check at server startup — a long-running server never saw releases published
+  after it booted). The docstring's "cached 24h" promise is now real.
+- **Update nudge repeats every 7 days** instead of once per server lifetime:
+  a user who misses the first notice gets reminded weekly, without spam.
+  Failure paths unchanged: network errors fail open silently.
+
 ## v0.18.7 (unreleased)
 
 ### Removed
