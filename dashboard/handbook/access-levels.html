@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Who can see what — Handbook</title>
+<title>Who can see what, Handbook</title>
 <style>
 :root{--bg:#050810;--panel:#0a1020;--border:#1c2a45;--text:#DEDDDE;--muted:#8fa3c4;--purple:#954EFF;--cyan:#02C1FF;--grad:linear-gradient(90deg,#02C1FF,#954EFF);--link:#02C1FF}
 *{box-sizing:border-box}
@@ -24,7 +24,7 @@ code{background:var(--panel);border:1px solid var(--border);border-radius:4px;pa
 <body>
 <div class="wrap">
 <nav><a href="/handbook/index.html">← Handbook</a></nav>
-<h1>Who can see what — Access Levels</h1>
+<h1>Who can see what, Access Levels</h1>
 
 <p>Every memory carries one of three visibility levels. This is the privacy backbone of Nexus:</p>
 
@@ -36,32 +36,32 @@ code{background:var(--panel);border:1px solid var(--border);border-radius:4px;pa
 </table>
 
 <h2>How does Nexus "know" something is private?</h2>
-<p><b>It doesn't guess — you (or your agent) decide at save time.</b> Every memory is stored with
+<p><b>It doesn't guess, you (or your agent) decide at save time.</b> Every memory is stored with
 its access level as an explicit label. Rules of the road:</p>
 <ul>
-<li>If nothing is specified, memories are saved as <b>public</b> — so treat "unlabeled" as "visible to all my agents".</li>
-<li>Nexus <b>helps</b> you: it automatically detects patterns like e-mail addresses and phone numbers in a memory and then warns: "this looks sensitive — consider private."</li>
-<li>When facts get merged or summarized later, they <b>inherit</b> the strictest level involved — consolidation can never degrade a private memory into something more visible.</li>
+<li>If nothing is specified, memories are saved as <b>public</b>, so treat "unlabeled" as "visible to all my agents".</li>
+<li>Nexus <b>helps</b> you: it automatically detects patterns like e-mail addresses and phone numbers in a memory and then warns: "this looks sensitive, consider private."</li>
+<li>When facts get merged or summarized later, they <b>inherit</b> the strictest level involved, consolidation can never degrade a private memory into something more visible.</li>
 <li>If a memory has an unknown or missing level, it is treated as <b>private</b> (fail-closed), never as public.</li>
 </ul>
 
 <h2>Rules that protect you automatically</h2>
 <ul>
-<li><b>Supersession never crosses boundaries:</b> a public fact can never overwrite a private one. Newer is not automatically stronger — stricter visibility wins.</li>
-<li><b>Guardrail overrides (bypasses) are stored privately</b> and are excluded from any summarization — the reasoning behind an override never leaks into distilled facts.</li>
+<li><b>Supersession never crosses boundaries:</b> a public fact can never overwrite a private one. Newer is not automatically stronger, stricter visibility wins.</li>
+<li><b>Guardrail overrides (bypasses) are stored privately</b> and are excluded from any summarization, the reasoning behind an override never leaks into distilled facts.</li>
 <li><b>Backups include private memories</b> and are therefore written with restrictive file permissions (private folder, owner-only files).</li>
 </ul>
 
 <h2>Practical advice</h2>
 <div class="hint"><b>Rule of thumb:</b> if a memory would bother you being read by a stranger
-looking at your screen — make it <b>private</b>. If it should be shared knowledge among your own
-machines but isn't for outsiders — <b>trusted</b>. Everything else: <b>public</b>.</div>
+looking at your screen, make it <b>private</b>. If it should be shared knowledge among your own
+machines but isn't for outsiders, <b>trusted</b>. Everything else: <b>public</b>.</div>
 <div class="warn"><b>Never</b> store passwords or API keys in Nexus, even as private. Memory is
-for knowledge, not for credentials — use your system's keychain for secrets.</div>
+for knowledge, not for credentials, use your system's keychain for secrets.</div>
 
-<h2>What "public" means — and what it doesn't</h2>
+<h2>What "public" means, and what it doesn't</h2>
 <p>"Public" does <b>not</b> mean "on the internet". It means: visible to all agents connected to
-<b>your</b> Nexus instance. Nothing is ever sent to Nexus developers or third parties — the levels
+<b>your</b> Nexus instance. Nothing is ever sent to Nexus developers or third parties, the levels
 govern access <i>between your own agents</i>, nothing else.</p>
 
 <p>Next: <a href="/handbook/dashboard-guide.html">the Dashboard guide →</a></p>
