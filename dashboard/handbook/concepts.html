@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>The building blocks — Handbook</title>
+<title>The building blocks, Handbook</title>
 <style>
 :root{--bg:#050810;--panel:#0a1020;--border:#1c2a45;--text:#DEDDDE;--muted:#8fa3c4;--purple:#954EFF;--cyan:#02C1FF;--grad:linear-gradient(90deg,#02C1FF,#954EFF);--link:#02C1FF}
 *{box-sizing:border-box}
@@ -24,14 +24,14 @@ code{background:var(--panel);border:1px solid var(--border);border-radius:4px;pa
 <div class="wrap">
 <nav><a href="/handbook/index.html">← Handbook</a></nav>
 <h1>The building blocks</h1>
-<p class="muted">Every part of Nexus Memory, explained like to a friend. No blueprints — just what it does for you and when you should touch it.</p>
+<p class="muted">Every part of Nexus Memory, explained like to a friend. No blueprints, just what it does for you and when you should touch it.</p>
 
-<h2>🗄️ Qdrant — the archive</h2>
+<h2>🗄️ Qdrant, the archive</h2>
 <p>The database where all memories live. It never sends anything anywhere; it just stores and finds.
 You never need to configure it in daily use. The only interesting number for you:
 the memory count on the dashboard (should grow slowly and steadily).</p>
 
-<h2>🏷️ Memory categories — what kind of thing it is</h2>
+<h2>🏷️ Memory categories, what kind of thing it is</h2>
 <p>Every memory has a category, and the category controls its lifespan and treatment:</p>
 <table>
 <tr><th>Category</th><th>For</th><th>Lifespan</th></tr>
@@ -44,28 +44,28 @@ the memory count on the dashboard (should grow slowly and steadily).</p>
 </table>
 <p class="muted">Anything not marked disposable stays forever. Missing timestamps are never deleted.</p>
 
-<h2>🔄 SICA — the self-cleaning crew</h2>
+<h2>🔄 SICA, the self-cleaning crew</h2>
 <p>SICA is a routine that periodically walks through all memories and fixes what it can on its own:
 it deletes expired <code>temp</code> and <code>session</code> memories, spots contradictions
 (same thing, two different statements) and merges duplicate entities. Everything else becomes a
-<b>suggestion</b> for you to review — SICA never silently destroys real content.
+<b>suggestion</b> for you to review, SICA never silently destroys real content.
 You can run it from the dashboard at any time; it also runs on its own schedule.</p>
 
-<h2>🛡️ Guardrails — the bodyguard</h2>
+<h2>🛡️ Guardrails, the bodyguard</h2>
 <p>Guardrails protect your system <b>from your own agents</b>. Before a destructive action
 (delete files, wipe a database, kill processes), the agent must check Nexus for stored
 protection rules. If you once stored "Never delete ~/my-projects/", every agent using Nexus
-will be blocked from deleting it — automatically, on every machine that shares this memory.</p>
+will be blocked from deleting it, automatically, on every machine that shares this memory.</p>
 <div class="hint"><b>The safety logic:</b> if protection rules can't be read, destructive actions
 are <b>blocked</b> (never waved through). If Nexus itself is unreachable, guardrails step aside so
 they never block normal work by accident. Overrides need a written reason and are stored for audit.</div>
 
-<h2>⛽ Fuel — the tank station for memory AI</h2>
-<p>Old memories need sorting and condensing — that's work for an AI. Fuel is the rule for
+<h2>⛽ Fuel, the tank station for memory AI</h2>
+<p>Old memories need sorting and condensing, that's work for an AI. Fuel is the rule for
 <b>which AI does it and what it may cost</b>:</p>
 <table>
 <tr><th>Station</th><th>Cost</th><th>Needs</th></tr>
-<tr><td>1. Local Ollama</td><td>free</td><td>nothing — if you have Ollama running</td></tr>
+<tr><td>1. Local Ollama</td><td>free</td><td>nothing, if you have Ollama running</td></tr>
 <tr><td>2. OpenRouter</td><td>pennies</td><td>your existing OPENROUTER_API_KEY</td></tr>
 <tr><td>3. Other keys</td><td>pennies</td><td>OpenAI / Nous / custom keys you already have</td></tr>
 </table>
@@ -73,22 +73,34 @@ they never block normal work by accident. Overrides need a written reason and ar
 Nothing to configure if you have any one of these running.</p>
 <div class="hint"><b>The switch on the dashboard:</b>
 <b>ON</b> = old memories get summarized &amp; sorted automatically, spending against a hard
-<b>$5/month cap</b> (checked before every single paid call — it can never overrun).
+<b>$5/month cap</b> (checked before every single paid call, it can never overrun).
 <b>OFF</b> = nothing leaves your machine, memories stay unsorted; everything else still works.
 <b>When to use OFF:</b> if you have no Ollama and no keys, or you simply want zero external
 calls. When ON makes sense: you want the auto-sorting and accept a few cents a month.</div>
 
 <h2>🧬 Facts that never lie twice</h2>
-<p>If a new fact contradicts an old one, the old one isn't silently overwritten — it is marked
+<p>If a new fact contradicts an old one, the old one isn't silently overwritten, it is marked
 "superseded" and the new one becomes the current truth. A chain stays visible: what was believed
 when, what replaced it. No zombie facts, no silent rewrites.</p>
 
 <h2>🕸️ The knowledge graph</h2>
 <p>Related memories connect themselves (no manual linking). That's what powers the Graph view in
 the dashboard: clusters of your knowledge, isolated orphans, and the paths between facts.
-Purely informational — nothing to configure.</p>
+Purely informational, nothing to configure.</p>
 
 <p>Next: <a href="/handbook/access-levels.html">who can see what →</a></p>
+
+<h2>The quiet helpers</h2>
+<p>A few features work in the background. You never configure them, but you benefit daily:</p>
+<ul>
+<li><b>Automatic recall and capture.</b> Before your agent answers, fitting memories are laid on the table automatically. After the turn, new facts are saved on their own. You do nothing.</li>
+<li><b>Smart ranking.</b> Often-used memories rank a bit higher. Unused ones slowly sink (about 5% per month) but are never deleted. Important memories can be pinned so they never sink.</li>
+<li><b>Cleanup on schedule.</b> Short-term notes expire on their own (a note meant for today is gone tomorrow, a session note after a week). Everything else stays forever.</li>
+<li><b>Self-connection.</b> Nexus automatically recognizes when two stored facts belong together and links them. Over time this builds a knowledge map you can view in the dashboard's Graph tab.</li>
+<li><b>Origin tracking.</b> Every memory remembers where it came from: which agent, which conversation, which source. So you can always trace why the system believes something.</li>
+<li><b>Project drawers.</b> Memories can be sorted into areas (like "home" or "work"). Agents automatically see the memories of their own area, without you filtering anything.</li>
+</ul>
+<p class="muted">Deep dives: <a href="/handbook/safety.html">Safety and trust</a> (poisoning protection, trust handling, guardrails).</p>
 </div>
 </body>
 </html>

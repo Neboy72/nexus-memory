@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Safety and trust: Handbook</title>
+<style>
+:root{--bg:#050810;--panel:#0a1020;--border:#1c2a45;--text:#DEDDDE;--muted:#8fa3c4;--purple:#954EFF;--cyan:#02C1FF;--grad:linear-gradient(90deg,#02C1FF,#954EFF);--link:#02C1FF}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+.wrap{max-width:820px;margin:0 auto;padding:2rem 1.5rem 4rem}
+a{color:var(--link)}
+nav{margin-bottom:2rem;font-size:.9rem}
+h1{font-size:1.9rem;margin-top:0;background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+h2{margin-top:2.2rem;color:var(--cyan)}
+.hint{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--purple);border-radius:8px;padding:1rem 1.2rem;margin:1.2rem 0}
+.hint b{color:var(--cyan)}
+.muted{color:var(--muted)}
+table{border-collapse:collapse;width:100%;margin:1rem 0}
+td,th{border:1px solid var(--border);padding:.5rem .7rem;text-align:left}
+th{background:var(--panel)}
+nav a{color:var(--muted)}
+nav a:hover{color:var(--cyan)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a href="/handbook/index.html">← Handbook</a></nav>
+<h1>Safety and trust</h1>
+<p class="muted">How Nexus Memory protects what it stores, and how you can tell good information from bad.</p>
+
+<h2>Protection against poisoned memories</h2>
+<p>Imagine someone slips a wrong note into a filing cabinet, and that note happens to sit exactly where everyone looks first. That is "poisoning": misleading entries that sound plausible and rank high in search. Nexus has several layers against that.</p>
+<p><b>The strongest layer is the two-lane search.</b> Nexus never relies on meaning alone. It always runs two searches side by side: one by keyword (exact words, hard to fool), one by meaning (flexible, but easier to mislead). The results are then merged. A poisoned entry would need to be <i>both</i> topically exact and semantically perfect to rise to the top. That is very hard to fake.</p>
+<p><b>Source trust adds another layer.</b> Every memory carries a note of where it came from:</p>
+<table>
+<tr><th>🟢 Your agents and you</th><th>slightly boosted</th></tr>
+<tr><td>🟡 Curated external material</td><td>neutral</td></tr>
+<tr><td>🔴 Uncurated, unknown origin</td><td>slightly demoted</td></tr>
+</table>
+<p class="muted">Material of unknown origin can never outrank what you or your agents personally confirmed.</p>
+
+<h2>Trust and contradiction handling</h2>
+<p>Memories change over time. The newest statement is not automatically the truest one. Nexus tracks every important fact as a "belief" with a trust value and a status:</p>
+<ul>
+<li><b>Active</b> the statement stands as is.</li>
+<li><b>Contested</b> something contradicts it; both versions are kept visible, nothing silently replaced.</li>
+<li><b>Retracted</b> it was withdrawn (by you, or because a better source corrected it).</li>
+</ul>
+<p>When statements clash, a fixed ranking decides, roughly: a withdrawal beats an override, an override beats a confirmation, a confirmation beats an objection. No automatic "last write wins", no silent edits.</p>
+<div class="hint"><b>Good to know:</b> Nothing is deleted in this process. Old versions remain visible and searchable, so you can always reconstruct how a piece of knowledge changed.</div>
+
+<h2>Guardrails: when memory protects your machine</h2>
+<p>Nexus does not only store knowledge, it can also enforce it. You (or your agent) can save a rule like "never delete the folder X". From then on, whenever an agent wants to run a destructive command (delete a folder, drop a database, kill a process), Nexus checks that command against your stored rules and blocks it when it would hit a protected target.</p>
+<p>Three properties make this trustworthy in practice:</p>
+<ul>
+<li>It fails <b>closed</b>: if the protection rules cannot be read, destructive actions are blocked, not waved through.</li>
+<li>An override is possible, but only with an explicit reason that is stored for later review.</li>
+<li>Guardrails never accidentally paralyze everyday work: when the memory service itself is unreachable, the check steps aside and lets normal work continue.</li>
+</ul>
+
+<h2>What stays private</h2>
+<p>Every memory carries one of three access levels: <b>public</b> (all your agents), <b>trusted</b> (approved agents only), <b>private</b> (you alone). Private entries never leave your machine, and backups of the memory store are written so that only your user account can read them. See the full page: <a href="/handbook/access-levels.html">Who can see what</a>.</p>
+
+<h2>Self-cleaning</h2>
+<p>Memory needs hygiene. SICA, the built-in caretaker, scans regularly for expired short-term notes, low-confidence entries and contradictions. Expired throw-away notes get removed automatically, everything else is never deleted without review. Contradiction groups can be turned into one clean summary. You can run a check anytime from the dashboard (Health button) or just let it run on its schedule.</p>
+
+<p class="muted">Related: <a href="/handbook/concepts.html">The building blocks</a> · <a href="/handbook/howto.html">Everyday recipes</a></p>
+</div>
+</body>
+</html>
