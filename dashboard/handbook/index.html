@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus Memory — Handbook</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3; --muted:#8b949e;
+  --accent:#3fb950; --accent-dim:#238636; --link:#58a6ff;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:2rem 1.5rem 4rem}
+header{border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:2rem}
+header h1{margin:0;font-size:1.9rem}
+header .sub{color:var(--muted);margin-top:.3rem}
+.toc{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin-top:2rem}
+.toc a.card{display:block;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1.2rem 1.4rem;color:var(--text);transition:border-color .15s}
+.toc a.card:hover{border-color:var(--accent);text-decoration:none}
+.toc .card h2{margin:0 0 .4rem;font-size:1.15rem;color:var(--accent)}
+.toc .card p{margin:0;color:var(--muted);font-size:.92rem}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<h1>🧠 Nexus Memory Handbook</h1>
+<div class="sub">Your offline user guide — always installed with Nexus Memory, always matching your version.</div>
+</header>
+
+<div class="toc">
+<a class="card" href="what-is-nexus.html"><h2>What is Nexus Memory?</h2><p>The big picture: one long-term brain shared by all your AI agents.</p></a>
+<a class="card" href="concepts.html"><h2>The building blocks</h2><h2 style="display:none"></h2><p>Qdrant, embeddings, SICA, Guardrails, Fuel — what each part does.</p></a>
+<a class="card" href="access-levels.html"><h2>Who can see what</h2><p>public, trusted, private — and how sensitive data stays private.</p></a>
+<a class="card" href="dashboard-guide.html"><h2>Dashboard guide</h2><p>Every button, every number, explained in plain language.</p></a>
+<a class="card" href="howto.html"><h2>Everyday recipes</h2><p>Saving, searching, backups, updates — the tasks you actually do.</p></a>
+</div>
+
+<footer>Nexus Memory Handbook · ships with your installation · no internet needed</footer>
+</div>
+</body>
+</html>

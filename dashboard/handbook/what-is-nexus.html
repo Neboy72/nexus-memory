@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>What is Nexus Memory? — Handbook</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#3fb950;--link:#58a6ff}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+.wrap{max-width:820px;margin:0 auto;padding:2rem 1.5rem 4rem}
+a{color:var(--link)}
+nav{margin-bottom:2rem;font-size:.9rem}
+h1{font-size:1.8rem;margin-top:0}
+h2{color:var(--accent);margin-top:2.2rem}
+p{color:var(--text)}
+.hint{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:1rem 1.2rem;margin:1.2rem 0}
+.hint b{color:var(--accent)}
+.muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a href="index.html">← Handbook</a></nav>
+<h1>What is Nexus Memory?</h1>
+
+<p>Nexus Memory is a <b>long-term memory</b> for your AI agents. Think of it like this:
+your AI agents can chat fine, but everything they "know" evaporates when the conversation
+ends. Nexus Memory gives them a shared, permanent brain they can write to and read from —
+one brain for <i>all</i> your agents, so what one agent learns, every other agent can use.</p>
+
+<h2>What it does in one sentence</h2>
+<p>When your agent learns something worth keeping, it stores it in Nexus Memory. Next time —
+even weeks later, even a different agent — the knowledge is back on the table automatically,
+before your agent even answers.</p>
+
+<h2>Where it lives</h2>
+<p><b>100% on your own machine.</b> Nothing is sent to us. The two pieces are:</p>
+<ul>
+<li><b>Qdrant</b> — the archive itself. A small database whose whole job is to store memories
+and find them by <i>meaning</i>, not just by keywords. It runs as a local service on your computer.</li>
+<li><b>The Nexus service</b> — the librarian in front of the archive. It receives "remember this"
+and "what do we know about X" requests from your agents, sorts, connects and protects everything.</li>
+</ul>
+
+<h2>How "understanding" works (embeddings, no jargon)</h2>
+<p>Every memory is converted into a long list of numbers — think of it as a <b>fingerprint of
+the meaning</b>. "My dog is called Buddy" and "Buddy is the family dog" produce almost identical
+fingerprints, even though the words differ. When an agent asks a question, Nexus fingerprints the
+question and finds memories with the closest fingerprints. That is why you can ask for
+"the dog's birthday" and still find a memory that only says "Buddy, born in March".</p>
+
+<h2>Why it feels like the agent "remembers"</h2>
+<p>Most memory tools only answer when explicitly asked. Nexus also <b>pushes</b>: before every
+conversation turn, relevant memories are fetched automatically and laid on the table. You don't
+have to remember what to ask for — that's the point.</p>
+
+<div class="hint"><b>Good to know:</b> Deleting a chat history never deletes the memory store.
+And the reverse: memories persist even if you re-install an agent. The brain outlives the agents —
+"agents come and go, Nexus Memory stays."</p></div>
+
+<h2>What it is not</h2>
+<ul>
+<li>It is not a chat program — your agents chat elsewhere; Nexus is their memory.</li>
+<li>It is not a cloud service. No account, no upload, no telemetry. If it can't reach the internet, it still works.</li>
+<li>It is not magic: it only knows what was stored. Garbage stored → garbage found. That's what SICA (cleaning) and Guardrails (protection) are for — see <a href="concepts.html">The building blocks</a>.</li>
+</ul>
+
+<p>Next: <a href="concepts.html">the building blocks explained →</a></p>
+</div>
+</body>
+</html>

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>The building blocks — Handbook</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#3fb950;--link:#58a6ff}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+.wrap{max-width:820px;margin:0 auto;padding:2rem 1.5rem 4rem}
+a{color:var(--link)}
+nav{margin-bottom:2rem;font-size:.9rem}
+h1{font-size:1.8rem;margin-top:0}
+h2{color:var(--accent);margin-top:2.2rem;border-bottom:1px solid var(--border);padding-bottom:.4rem}
+.hint{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:1rem 1.2rem;margin:1.2rem 0}
+.hint b{color:var(--accent)}
+table{border-collapse:collapse;width:100%;margin:1rem 0}
+td,th{border:1px solid var(--border);padding:.5rem .7rem;text-align:left}
+th{background:var(--panel)}
+code{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.1rem .35rem;font-size:.9em}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a href="index.html">← Handbook</a></nav>
+<h1>The building blocks</h1>
+<p class="muted">Every part of Nexus Memory, explained like to a friend. No blueprints — just what it does for you and when you should touch it.</p>
+
+<h2>🗄️ Qdrant — the archive</h2>
+<p>The database where all memories live. It never sends anything anywhere; it just stores and finds.
+You never need to configure it in daily use. The only interesting number for you:
+the memory count on the dashboard (should grow slowly and steadily).</p>
+
+<h2>🏷️ Memory categories — what kind of thing it is</h2>
+<p>Every memory has a category, and the category controls its lifespan and treatment:</p>
+<table>
+<tr><th>Category</th><th>For</th><th>Lifespan</th></tr>
+<tr><td>fact</td><td>stable truths ("the NAS is at 192.168.31.40")</td><td>forever</td></tr>
+<tr><td>rule</td><td>standing instructions ("never delete X")</td><td>forever</td></tr>
+<tr><td>preference</td><td>how you like things ("concise answers")</td><td>forever</td></tr>
+<tr><td>procedure</td><td>how-to knowledge (workflows)</td><td>forever</td></tr>
+<tr><td>session</td><td>what happened in one work session</td><td>7 days, then cleaned</td></tr>
+<tr><td>temp</td><td>scratch notes, pointers</td><td>1 day, then cleaned</td></tr>
+</table>
+<p class="muted">Anything not marked disposable stays forever. Missing timestamps are never deleted.</p>
+
+<h2>🔄 SICA — the self-cleaning crew</h2>
+<p>SICA is a routine that periodically walks through all memories and fixes what it can on its own:
+it deletes expired <code>temp</code> and <code>session</code> memories, spots contradictions
+(same thing, two different statements) and merges duplicate entities. Everything else becomes a
+<b>suggestion</b> for you to review — SICA never silently destroys real content.
+You can run it from the dashboard at any time; it also runs on its own schedule.</p>
+
+<h2>🛡️ Guardrails — the bodyguard</h2>
+<p>Guardrails protect your system <b>from your own agents</b>. Before a destructive action
+(delete files, wipe a database, kill processes), the agent must check Nexus for stored
+protection rules. If you once stored "Never delete ~/my-projects/", every agent using Nexus
+will be blocked from deleting it — automatically, on every machine that shares this memory.</p>
+<div class="hint"><b>The safety logic:</b> if protection rules can't be read, destructive actions
+are <b>blocked</b> (never waved through). If Nexus itself is unreachable, guardrails step aside so
+they never block normal work by accident. Overrides need a written reason and are stored for audit.</div>
+
+<h2>⛽ Fuel — the tank station for memory AI</h2>
+<p>Old memories need sorting and condensing — that's work for an AI. Fuel is the rule for
+<b>which AI does it and what it may cost</b>:</p>
+<table>
+<tr><th>Station</th><th>Cost</th><th>Needs</th></tr>
+<tr><td>1. Local Ollama</td><td>free</td><td>nothing — if you have Ollama running</td></tr>
+<tr><td>2. OpenRouter</td><td>pennies</td><td>your existing OPENROUTER_API_KEY</td></tr>
+<tr><td>3. Other keys</td><td>pennies</td><td>OpenAI / Nous / custom keys you already have</td></tr>
+</table>
+<p>Nexus tries stations in order (cheapest first) and <b>skips closed ones automatically</b>.
+Nothing to configure if you have any one of these running.</p>
+<div class="hint"><b>The switch on the dashboard:</b>
+<b>ON</b> = old memories get summarized &amp; sorted automatically, spending against a hard
+<b>$5/month cap</b> (checked before every single paid call — it can never overrun).
+<b>OFF</b> = nothing leaves your machine, memories stay unsorted; everything else still works.
+<b>When to use OFF:</b> if you have no Ollama and no keys, or you simply want zero external
+calls. When ON makes sense: you want the auto-sorting and accept a few cents a month.</div>
+
+<h2>🧬 Facts that never lie twice</h2>
+<p>If a new fact contradicts an old one, the old one isn't silently overwritten — it is marked
+"superseded" and the new one becomes the current truth. A chain stays visible: what was believed
+when, what replaced it. No zombie facts, no silent rewrites.</p>
+
+<h2>🕸️ The knowledge graph</h2>
+<p>Related memories connect themselves (no manual linking). That's what powers the Graph view in
+the dashboard: clusters of your knowledge, isolated orphans, and the paths between facts.
+Purely informational — nothing to configure.</p>
+
+<p>Next: <a href="access-levels.html">who can see what →</a></p>
+</div>
+</body>
+</html>

@@ -38,6 +38,11 @@ include = ["nexus_memory*", "nexus*", "plugins*"]
 [tool.setuptools.package-data]
 "plugins.memory.nexus" = ["plugin.yaml", "README.md"]
 
+[tool.setuptools]
+# Handbook ships with the package: every install/update carries the offline user guide
+[tool.setuptools.data-files]
+"share/nexus-memory/handbook" = ["dashboard/handbook/*.html"]
+
 [tool.pytest.ini_options]
 # auto: every `async def test_...` is treated as an asyncio test
 # — no need to mark them explicitly. Keeps the existing test style

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Everyday recipes — Handbook</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#3fb950;--link:#58a6ff}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+.wrap{max-width:820px;margin:0 auto;padding:2rem 1.5rem 4rem}
+a{color:var(--link)}
+nav{margin-bottom:2rem;font-size:.9rem}
+h1{font-size:1.8rem;margin-top:0}
+h2{color:var(--accent);margin-top:2.2rem}
+.hint{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:1rem 1.2rem;margin:1.2rem 0}
+.hint b{color:var(--accent)}
+code{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.1rem .35rem;font-size:.9em}
+pre{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:.8rem 1rem;overflow-x:auto;font-size:.88rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a href="index.html">← Handbook</a></nav>
+<h1>Everyday recipes</h1>
+
+<h2>Save a memory</h2>
+<p>You rarely do this by hand — your agents call <code>remember</code> when they learn something
+worth keeping. If you want to add something yourself, just tell your agent in plain language:
+<i>"remember: the NAS backup runs every night at 3 AM"</i>. Specify privacy when it matters:
+<i>"remember privately: …"</i></p>
+
+<h2>Find something again</h2>
+<p>Ask your agent — it calls <code>recall</code> with your question. You can also search the
+Inspector on the dashboard. Search works by meaning, so describe <i>what you want</i>, not exact
+words. Explicit searches see everything; the automatic pre-fetch (before each conversation turn)
+shows only memories your agent is allowed to see.</p>
+
+<h2>Update something that changed</h2>
+<p>Don't delete and re-save — just tell your agent the new truth. Nexus marks the old fact as
+superseded and links the new one as current truth. History stays intact, nothing is lost,
+and contradictions resolve themselves.</p>
+
+<h2>Back up everything</h2>
+<p>Click <b>📥 Backup</b> in the dashboard. The backup contains every memory — including private
+ones — in one file with restrictive permissions. Keep it on another disk. Restoring is a
+single import: the backup file is fully self-contained.</p>
+<div class="hint"><b>How often?</b> A weekly backup is plenty for most people.
+Before big experiments or updates: one extra click, zero regrets.</div>
+
+<h2>Update Nexus Memory</h2>
+<p>Updates arrive the same way your agents manage other tools. After an update the dashboard
+opens automatically so you can see the new state ("success moment"). Your memories are never
+touched by an update — the brain survives, only the software around it gets better.</p>
+
+<h2>Something looks wrong</h2>
+<ul>
+<li><b>Health dot is yellow/red:</b> click ❤️ Health for the specific part that isn't answering.</li>
+<li><b>Memories count dropped:</b> check whether SICA cleaned expired temp/session entries (normal), then restore from your latest backup if real content is missing.</li>
+<li><b>Agent doesn't remember:</b> check it's connected (🔍 Detect Agents), then search the Inspector directly — if the memory exists, the agent's access level may be the limit.</li>
+<li><b>Nothing is being sorted (Fuel idle):</b> if the Fuel switch is OFF or no station is reachable, that's by design — flip the switch or provide Ollama/a key. Sorting is convenience, never a requirement.</li>
+</ul>
+
+<h2>Start fresh on a new machine</h2>
+<p>Install Nexus Memory, then import your backup file — everything comes back: memories,
+access levels, private entries. The archive travels; the agents reconnect automatically
+via 🔍 Detect Agents.</p>
+
+<nav style="margin-top:3rem"><a href="index.html">← Back to the Handbook</a></nav>
+</div>
+</body>
+</html>
