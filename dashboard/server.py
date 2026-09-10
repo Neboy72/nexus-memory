@@ -886,16 +886,29 @@ async def graph_page():
 # Static files — no-cache so the dashboard UI updates land immediately
 # (cached stale CSS was serving the inspector unstyled = "hingerotzt" look).
 static_dir = DASHBOARD_DIR / "static"
+
+class NoCacheStatic(StaticFiles):
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
 if static_dir.exists():
     from starlette.middleware import Middleware
 
-    class NoCacheStatic(StaticFiles):
-        def file_response(self, *args, **kwargs):
-            resp = super().file_response(*args, **kwargs)
-            resp.headers["Cache-Control"] = "no-cache"
-            return resp
-
     app.mount("/static", NoCacheStatic(directory=str(static_dir)), name="static")
+
+# Handbook (offline user guide) — ships with the package, opens from the Docs button
+handbook_dir = DASHBOARD_DIR / "handbook"
+if handbook_dir.exists():
+    app.mount("/handbook", NoCacheStatic(directory=str(handbook_dir)), name="handbook")
+
+    @app.get("/handbook", response_class=HTMLResponse, include_in_schema=False)
+    async def handbook_index():
+        idx = handbook_dir / "index.html"
+        if idx.exists():
+            return HTMLResponse(content=idx.read_text(), headers={"Cache-Control": "no-cache"})
+        return HTMLResponse(content="<h1>Handbook not found</h1>")
 
 # Assets directory (logos, brand)
 assets_dir = DASHBOARD_DIR / "assets"
