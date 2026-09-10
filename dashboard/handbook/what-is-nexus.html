@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>What is Nexus Memory? — Handbook</title>
+<title>What is Nexus Memory?, Handbook</title>
 <style>
 :root{--bg:#050810;--panel:#0a1020;--border:#1c2a45;--text:#DEDDDE;--muted:#8fa3c4;--purple:#954EFF;--cyan:#02C1FF;--grad:linear-gradient(90deg,#02C1FF,#954EFF);--link:#02C1FF}
 *{box-sizing:border-box}
@@ -27,25 +27,25 @@ nav a:hover{color:var(--cyan)}
 
 <p>Nexus Memory is a <b>long-term memory</b> for your AI agents. Think of it like this:
 your AI agents can chat fine, but everything they "know" evaporates when the conversation
-ends. Nexus Memory gives them a shared, permanent brain they can write to and read from —
+ends. Nexus Memory gives them a shared, permanent brain they can write to and read from,
 one brain for <i>all</i> your agents, so what one agent learns, every other agent can use.</p>
 
 <h2>What it does in one sentence</h2>
-<p>When your agent learns something worth keeping, it stores it in Nexus Memory. Next time —
-even weeks later, even a different agent — the knowledge is back on the table automatically,
+<p>When your agent learns something worth keeping, it stores it in Nexus Memory. Next time,
+even weeks later, even a different agent, the knowledge is back on the table automatically,
 before your agent even answers.</p>
 
 <h2>Where it lives</h2>
 <p><b>100% on your own machine.</b> Nothing is sent to us. The two pieces are:</p>
 <ul>
-<li><b>Qdrant</b> — the archive itself. A small database whose whole job is to store memories
+<li><b>Qdrant</b>, the archive itself. A small database whose whole job is to store memories
 and find them by <i>meaning</i>, not just by keywords. It runs as a local service on your computer.</li>
-<li><b>The Nexus service</b> — the librarian in front of the archive. It receives "remember this"
+<li><b>The Nexus service</b>, the librarian in front of the archive. It receives "remember this"
 and "what do we know about X" requests from your agents, sorts, connects and protects everything.</li>
 </ul>
 
 <h2>How "understanding" works (embeddings, no jargon)</h2>
-<p>Every memory is converted into a long list of numbers — think of it as a <b>fingerprint of
+<p>Every memory is converted into a long list of numbers, think of it as a <b>fingerprint of
 the meaning</b>. "My dog is called Buddy" and "Buddy is the family dog" produce almost identical
 fingerprints, even though the words differ. When an agent asks a question, Nexus fingerprints the
 question and finds memories with the closest fingerprints. That is why you can ask for
@@ -54,17 +54,17 @@ question and finds memories with the closest fingerprints. That is why you can a
 <h2>Why it feels like the agent "remembers"</h2>
 <p>Most memory tools only answer when explicitly asked. Nexus also <b>pushes</b>: before every
 conversation turn, relevant memories are fetched automatically and laid on the table. You don't
-have to remember what to ask for — that's the point.</p>
+have to remember what to ask for, that's the point.</p>
 
 <div class="hint"><b>Good to know:</b> Deleting a chat history never deletes the memory store.
-And the reverse: memories persist even if you re-install an agent. The brain outlives the agents —
+And the reverse: memories persist even if you re-install an agent. The brain outlives the agents,
 "agents come and go, Nexus Memory stays."</div>
 
 <h2>What it is not</h2>
 <ul>
-<li>It is not a chat program — your agents chat elsewhere; Nexus is their memory.</li>
+<li>It is not a chat program, your agents chat elsewhere; Nexus is their memory.</li>
 <li>It is not a cloud service. No account, no upload, no telemetry. If it can't reach the internet, it still works.</li>
-<li>It is not magic: it only knows what was stored. Garbage stored → garbage found. That's what SICA (cleaning) and Guardrails (protection) are for — see <a href="/handbook/concepts.html">The building blocks</a>.</li>
+<li>It is not magic: it only knows what was stored. Garbage stored → garbage found. That's what SICA (cleaning) and Guardrails (protection) are for, see <a href="/handbook/concepts.html">The building blocks</a>.</li>
 </ul>
 
 <p>Next: <a href="/handbook/concepts.html">the building blocks explained →</a></p>

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Dashboard guide — Handbook</title>
+<title>Dashboard guide, Handbook</title>
 <style>
 :root{--bg:#050810;--panel:#0a1020;--border:#1c2a45;--text:#DEDDDE;--muted:#8fa3c4;--purple:#954EFF;--cyan:#02C1FF;--grad:linear-gradient(90deg,#02C1FF,#954EFF);--link:#02C1FF}
 *{box-sizing:border-box}
@@ -35,21 +35,21 @@ th{background:var(--panel)}
 <h2>The stat cards</h2>
 <table>
 <tr><th>Card</th><th>What it means</th></tr>
-<tr><td><b>Memories</b></td><td>how many memories are stored right now. Grows as your agents learn. A sudden drop is worth investigating — check the backup section in <a href="/handbook/howto.html">recipes</a>.</td></tr>
+<tr><td><b>Memories</b></td><td>how many memories are stored right now. Grows as your agents learn. A sudden drop is worth investigating, check the backup section in <a href="/handbook/howto.html">recipes</a>.</td></tr>
 <tr><td><b>Connected Agents</b></td><td>how many of your agents (Hermes, OpenClaw, Claude Code, …) are registered to use this brain.</td></tr>
 <tr><td><b>Embedding Provider</b></td><td>which "fingerprinting" engine is active. Local providers (like Ollama) keep everything on your machine; cloud providers may cost per use but are usually higher quality.</td></tr>
-<tr><td><b>Access Levels</b></td><td>the distribution of public / trusted / private across your memories — your privacy mix at a glance.</td></tr>
-<tr><td><b>Memory AI (Fuel)</b></td><td>which AI currently sorts old memories, and this month's spend against the $5 cap. The switch next to it turns memory-sorting on or off — see <a href="/handbook/concepts.html">Fuel</a> for when to flip it.</td></tr>
+<tr><td><b>Access Levels</b></td><td>the distribution of public / trusted / private across your memories, your privacy mix at a glance.</td></tr>
+<tr><td><b>Memory AI (Fuel)</b></td><td>which AI currently sorts old memories, and this month's spend against the $5 cap. The switch next to it turns memory-sorting on or off, see <a href="/handbook/concepts.html">Fuel</a> for when to flip it.</td></tr>
 </table>
 
 <h2>The action bar</h2>
 <table>
 <tr><th>Button</th><th>What it does</th></tr>
-<tr><td>🔎 <b>Inspector</b></td><td>opens a detailed view to browse individual memories — search, read, edit, delete single entries.</td></tr>
+<tr><td>🔎 <b>Inspector</b></td><td>opens a detailed view to browse individual memories, search, read, edit, delete single entries.</td></tr>
 <tr><td>📥 <b>Backup</b></td><td>creates a complete backup of all memories (including private ones), written with restrictive permissions. Do this regularly; it's your undo button for anything.</td></tr>
 <tr><td>❤️ <b>Health</b></td><td>checks that Qdrant, the Nexus service and configured providers respond. Green = all good. Problems show with a short reason.</td></tr>
 <tr><td>🔍 <b>Detect Agents</b></td><td>scans your machine for AI agents (Hermes, OpenClaw, Claude Code, Cursor, …) and registers the ones that should use Nexus.</td></tr>
-<tr><td>🔄 <b>Refresh</b></td><td>re-reads all numbers. No side effects — safe to click anytime.</td></tr>
+<tr><td>🔄 <b>Refresh</b></td><td>re-reads all numbers. No side effects, safe to click anytime.</td></tr>
 <tr><td>📘 <b>Docs</b></td><td>opens this handbook in a new tab.</td></tr>
 </table>
 
@@ -59,7 +59,7 @@ Backup (creates a file) and single-entry edits in the Inspector. Rest easy, clic
 <h2>The graph view</h2>
 <p>The Graph shows how your memories connect: clusters = related knowledge areas;
 isolated dots = knowledge nothing points to (candidates for cleanup);
-lines = discovered relationships. It's a map, not a control panel — browse it to discover
+lines = discovered relationships. It's a map, not a control panel, browse it to discover
 what your agents collectively know.</p>
 
 <p>Next: <a href="/handbook/howto.html">everyday recipes →</a></p>
