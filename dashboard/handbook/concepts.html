@@ -18,6 +18,9 @@ table{border-collapse:collapse;width:100%;margin:1rem 0}
 td,th{border:1px solid var(--border);padding:.5rem .7rem;text-align:left}
 th{background:var(--panel)}
 code{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.1rem .35rem;font-size:.9em}
+footer{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem}
+footer .links{margin-top:.4rem}
+footer .links a{color:var(--cyan)}
 </style>
 </head>
 <body>
@@ -35,7 +38,7 @@ the memory count on the dashboard (should grow slowly and steadily).</p>
 <p>Every memory has a category, and the category controls its lifespan and treatment:</p>
 <table>
 <tr><th>Category</th><th>For</th><th>Lifespan</th></tr>
-<tr><td>fact</td><td>stable truths ("the NAS is at 192.168.31.40")</td><td>forever</td></tr>
+<tr><td>fact</td><td>stable truths ("the printer is at 192.168.1.50")</td><td>forever</td></tr>
 <tr><td>rule</td><td>standing instructions ("never delete X")</td><td>forever</td></tr>
 <tr><td>preference</td><td>how you like things ("concise answers")</td><td>forever</td></tr>
 <tr><td>procedure</td><td>how-to knowledge (workflows)</td><td>forever</td></tr>
@@ -101,6 +104,16 @@ Purely informational, nothing to configure.</p>
 <li><b>Project drawers.</b> Memories can be sorted into areas (like "home" or "work"). Agents automatically see the memories of their own area, without you filtering anything.</li>
 </ul>
 <p class="muted">Deep dives: <a href="/handbook/safety.html">Safety and trust</a> (poisoning protection, trust handling, guardrails).</p>
+
+<footer>
+<div>Nexus Memory Handbook · ships with your installation · no internet needed</div>
+<div class="links">
+<a href="https://github.com/Neboy72/nexus-memory" target="_blank">GitHub</a> ·
+<a href="mailto:neboy72@googlemail.com">Email the author</a> ·
+<a href="https://ko-fi.com/nexusmemory" target="_blank">Buy me a coffee</a> ·
+<a href="https://github.com/sponsors/Neboy72" target="_blank">GitHub Sponsors</a>
+</div>
+</footer>
 </div>
 </body>
 </html>
