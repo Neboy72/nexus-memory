@@ -21,6 +21,7 @@ import re
 import stat as stat_module
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1555,8 +1556,8 @@ class MemoryStore:
         
         # Update nudge: if update available, append a note — first time immediately,
         # then re-nudge every 7 days (a missed nudge is not lost forever, but no spam)
-        if (self._update_check_result and 
-            self._update_check_result.get("update_available") and 
+        if (self._update_check_result and
+            self._update_check_result.get("update_available") and
             time.time() - self._update_nudged_at >= 7 * 24 * 3600):
             self._update_nudged_at = time.time()
             results.append({
