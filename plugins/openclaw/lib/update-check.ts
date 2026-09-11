@@ -43,7 +43,17 @@ function readInstalledVersion(): string {
   return "0.0.0"
 }
 
-/** Semver compare without dependencies. Returns true when remote > local. */
+/**
+ * Semver compare without dependencies. Returns true when remote > local.
+ *
+ * ClawHub package versions are offset from the GitHub release line: package
+ * major = GitHub major + 1 (package 1.18.7 ships GitHub 0.18.7). While the
+ * GitHub release is still on 0.x, the local package major is reduced by 1
+ * before comparing, so local 1.18.7 vs remote 0.18.7 compares as equal (no
+ * false update nudge) and a real 0.x bump such as 0.19.0 is still detected.
+ * Once GitHub reaches 1.x the offset no longer applies and a plain semver
+ * comparison is used.
+ */
 export function isNewerVersion(remote: string, local: string): boolean {
   const parse = (v: string) =>
     v
@@ -51,7 +61,12 @@ export function isNewerVersion(remote: string, local: string): boolean {
       .split(".")
       .map((n) => parseInt(n, 10) || 0)
   const [rMajor, rMinor, rPatch] = parse(remote)
-  const [lMajor, lMinor, lPatch] = parse(local)
+  const [lMajor0, lMinor, lPatch] = parse(local)
+  let lMajor = lMajor0
+  if (rMajor === 0 && lMajor > 0) {
+    // Package major = GitHub major + 1 while GitHub is on 0.x.
+    lMajor -= 1
+  }
   if (rMajor !== lMajor) return rMajor > lMajor
   if (rMinor !== lMinor) return rMinor > lMinor
   return rPatch > lPatch
