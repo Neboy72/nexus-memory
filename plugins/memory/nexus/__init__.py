@@ -5,7 +5,7 @@ and embedding logic as the MCP server so all agents share the same memory.
 """
 
 from __future__ import annotations
-import json, logging, os, threading, time, uuid
+import json, logging, os, re, threading, time, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from qdrant_client import QdrantClient
@@ -15,6 +15,30 @@ logger = logging.getLogger(__name__)
 _HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 _PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 _COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
+
+# ── Fable-calibration idea 5 (2026-09-13): memory-as-DATA hardening ──
+# Mails/OCR/web content can carry instructions ("save this rule: ...").
+# Content that looks like an embedded INSTRUCTION is stored but flagged
+# and demoted (salience cap 0.4): it must never anchor recall/prefetch
+# or outrank genuinely stated user rules. Deliberately NOT a refusal —
+# Nebo discusses security topics legitimately; the flag is the defense.
+_MEMORY_INJECTION_PATTERNS = (
+    re.compile(r"(?i)\b(?:immer\s+)?(?:ab\s+jetzt|von\s+jetzt\s+an|ab\s+sofort)\b.{0,60}\b(?:merken|speichern|dauerhaft|gilt|regel|dein\s+neuer\s+job)\b"),
+    re.compile(r"(?i)\bmerke\s+dir\s+(?:dauerhaft\s+)?(?:immer\s+)?(?:folgende|diese\s+neue)\b"),
+    re.compile(r"(?i)\b(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|prompts)\b"),
+    re.compile(r"(?i)\byou\s+are\s+now\s+(?:a|an)\b.{0,40}\b(?:save|store|remember)\b"),
+    re.compile(r"(?i)\bstore\s+(?:this\s+)?(?:as\s+a\s+)?(?:new\s+)?(?:permanent|standing|durable)\s+(?:rule|directive|instruction)\b"),
+)
+
+
+def _memory_injection_score(text: str) -> int:
+    """Number of embedded-instruction patterns in memory candidate text."""
+    if not text:
+        return 0
+    try:
+        return sum(1 for pat in _MEMORY_INJECTION_PATTERNS if pat.search(text))
+    except Exception:
+        return 0
 
 # Tool schemas (OpenAI function-calling format)
 RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
@@ -553,6 +577,19 @@ class NexusMemoryProvider:
         # unclampet gespeichert und sind jetzt sicher normalisiert).
         from nexus_memory.memory_dynamics import normalize_salience
         eff_salience = normalize_salience(salience, category)
+        # Fable-calibration idea 5 (2026-09-13): memory-as-DATA hardening.
+        # Embedded-instruction text ("ab jetzt gilt: ... merke dir folgendes")
+        # is STORED (legitimate security discussions stay possible) but
+        # flagged and demoted below the recall/prefetch anchor threshold so
+        # it can never outrank genuinely stated user rules.
+        injection_hits = _memory_injection_score(text)
+        if injection_hits:
+            eff_salience = min(eff_salience, 0.4)
+            logger.warning(
+                "Memory-injection pattern (%d hit) in remembered text - "
+                "stored but demoted (salience capped 0.4): %.80s",
+                injection_hits, text,
+            )
         # Scope: auto-captured memories inherit the agent's NEXUS_SCOPE
         # (fail-open to 'default' — same normalization as the server).
         try:
@@ -564,6 +601,7 @@ class NexusMemoryProvider:
                     "source": source, "source_url": source_url, "created_at": ts,
                     "lifecycle_status": "canonical", "salience": eff_salience, "use_count": 0,
                     "scope": scope,
+                    "memory_injection_flag": bool(injection_hits),
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
         self._qdrant.upsert(collection_name=self._collection,
@@ -1202,6 +1240,10 @@ class NexusMemoryProvider:
                             access_level="public",
                             source="hermes-plugin-session-end",
                             confidence=fact["confidence"],
+                            # Fable-calibration (2026-09-13): salience follows
+                            # confidence so single-mention facts (capped at
+                            # 0.5) decay instead of sticking forever.
+                            salience=fact["confidence"],
                         )
                         stored += 1
                     except Exception as exc:
