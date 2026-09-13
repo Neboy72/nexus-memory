@@ -439,7 +439,7 @@ Query → ┌─ BM25 Index ──────→ Keyword Rankings
 | **Vector** 🧠 | Semantic matching, fuzzy queries | Vulnerable to poisoning |
 | **Hybrid (RRF)** 🏆 | Best of both | Adds fusion complexity; needs a populated BM25 index (empty index = vector-only) |
 
-### Query Rewriting 🔁 (v0.19.0, default ON)
+### Query Rewriting 🔁 (v0.19.0)
 
 Sloppy conversational queries are rewritten into concrete search terms before embedding: "what was that thing for the car" becomes "wallbox charging cable rfid return". A tiny LLM call on the cheapest-open fuel station handles it, memoized per unique query, with a 10 s per-station timeout on interactive paths. Fail-open in every failure mode — station down, timeout, any wiring error returns the original query unchanged, so recall never degrades. Queries containing digits (ports, IDs) are never rewritten. Emergency brake: set `NEXUS_REWRITE=0`.
 

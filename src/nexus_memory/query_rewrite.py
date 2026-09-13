@@ -36,7 +36,7 @@ _PROMPT = (
 
 
 def enabled() -> bool:
-    """Default ON (v0.19.0): rewriting ships active so every user benefits
+    """Ships enabled (v0.19.0): rewriting ships active so every user benefits
     without configuration. NEXUS_REWRITE=0 is the emergency OFF brake;
     anything else (unset, 1, true, yes) keeps it enabled."""
     return os.getenv("NEXUS_REWRITE", "").strip().lower() not in ("0", "false", "no", "off")
