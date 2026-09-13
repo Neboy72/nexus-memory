@@ -1,3 +1,36 @@
+## [0.19.0] - 2026-09-13
+
+### New
+
+- **Query rewriting before embedding (default ON)** — sloppy conversational
+  queries are rewritten into concrete search terms before embedding, so the
+  keyword+vector search finds what the user actually meant ("what was that
+  thing for the car" -> "wallbox charging cable rfid return"). Live-store
+  bench: 12 real queries, hit-rate 67% -> 75%, zero regressions, EUR 0.00
+  (fuel stations resolve cheapest-open-first; interactive rewrites get a
+  10 s per-station timeout). Fail-open in EVERY failure mode: any wiring,
+  station, timeout or generation error returns the original query unchanged.
+  The search never degrades. Emergency brake: set `NEXUS_REWRITE=0`.
+  Queries with digits stay untouched (ports, IDs); rewritten results are
+  memoized (64-entry FIFO) so the prefetch thread and explicit recall share
+  ONE rewrite per unique query. Logs on the hot path are DEBUG-only (no
+  query content in INFO).
+
+### Changed
+
+- `consolidation.get_default_fuel(timeout)` — one canonical station-chain
+  resolver shared by the consolidation daemon and query-rewrite (was
+  copy-pasted resolution logic).
+- GLM think-strip deduplicated: `_extract_payload` is the canonical
+  implementation; `query_rewrite._clean_output` delegates to it.
+- Hot-path logging downgraded to DEBUG in query-rewrite paths.
+
+### Tests
+
+- 1097 passed / 0 failed (was 1096 + 25 recon/wiring tests for rewrite,
+  incl. default-ON and brake cases). Runtime proof on live Qdrant: 5/5
+  (rewrite hit, memo dedup, fail-open, bounded timeout, disabled-neutral).
+
 ## [0.18.7] - 2026-09-09
 
 ### Changed

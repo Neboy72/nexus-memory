@@ -161,9 +161,27 @@ def _ollama_generate(prompt: str, timeout: int = 120) -> str:
         return json.loads(resp.read()).get("response", "")
 
 
+def get_default_fuel(timeout: Optional[int] = None):
+    """Shared default fuel dispatcher — consolidation daemon AND query_rewrite
+    (v0.19.0) resolve their station chain HERE, not copy-pasted (simplify-
+    review 13.09.: one canonical place).
+
+    ``timeout`` bounds the Ollama station per call via functools.partial:
+    None = daemon default 120 s (distill batch), interactive paths pass a
+    short timeout (query-rewrite: 10 s so a hanging station never blocks a
+    gateway turn)."""
+    from functools import partial as _partial
+    from nexus_memory.fuel_chain import get_fuel
+    gen = _ollama_generate if timeout is None else _partial(_ollama_generate, timeout=timeout)
+    return get_fuel(OLLAMA_BASE, OLLAMA_MODEL, gen)
+
+
 def _extract_payload(txt: str) -> str:
     """Strip GLM reasoning wrappers: prefer the LAST </think> block, else the
-    FIRST {..} JSON object found anywhere in the text."""
+    FIRST {..} JSON object found anywhere in the text.
+
+    CANONICAL think-strip — consolidation daemon AND query_rewrite import
+    this (simplify-review 13.09.: one shared implementation, no drift)."""
     if "</think>" in txt:
         parts = txt.split("</think>")
         candidate = parts[-1].strip()
@@ -294,8 +312,7 @@ class Consolidator:
     def _llm(self, prompt: str) -> str:
         if self._llm_fn:
             return self._llm_fn(prompt)
-        from nexus_memory.fuel_chain import get_fuel
-        fn = get_fuel(OLLAMA_BASE, OLLAMA_MODEL, _ollama_generate)
+        fn = get_default_fuel()
         if fn is None:
             raise RuntimeError("no fuel station available (daemon sleeps)")
         return fn(prompt)

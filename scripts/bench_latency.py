@@ -49,7 +49,7 @@ prov._qdrant = QdrantClient(host="localhost", port=6333)
 queries = [
     "wallbox ocpp", "tailscale routing fix", "gateway restart", "voyage embedding",
     "paperless backup", "odessa kasse", "serbien bankkonto", "design refero",
-    "cron job audit", "expense tracking", "bleki hund", "mac mini ram",
+    "cron job audit", "expense tracking", "hund spaziergange", "mac mini ram",
     "voice plan b desktop", "nexus memory roadmap", "kimi k3 designer",
 ]
 
