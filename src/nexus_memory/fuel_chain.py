@@ -594,7 +594,7 @@ def _ensure_toggle_default_on() -> None:
 
 
 def _paid_enabled() -> bool:
-    """User opt-out for PAID stations (dashboard toggle, default ON).
+    """User opt-out for PAID stations (dashboard toggle, enabled by default).
 
     Toggle file EXISTS  -> paid stations allowed (default after install).
     Toggle file MISSING -> user turned the slider off; paid stations closed.

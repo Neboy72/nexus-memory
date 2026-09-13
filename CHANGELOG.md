@@ -2,7 +2,7 @@
 
 ### New
 
-- **Query rewriting before embedding (default ON)** — sloppy conversational
+- **Query rewriting before embedding** — sloppy conversational
   queries are rewritten into concrete search terms before embedding, so the
   keyword+vector search finds what the user actually meant ("what was that
   thing for the car" -> "wallbox charging cable rfid return"). Live-store
