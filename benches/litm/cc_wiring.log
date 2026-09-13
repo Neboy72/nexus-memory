@@ -1,0 +1,13 @@
+[claude-code:unrecognized_model] {"model":"deepseek-v4.1-flash:cloud","query_source":"sdk"}
+Fertig. Beide Dateien sind grün.
+
+**Was geändert:**
+- `plugins/memory/nexus/__init__.py:518-525` (`_recall`) — lazy imports, env-gated (`query_rewrite.enabled()`); bei enabled wird `get_fuel(OLLAMA_BASE, OLLAMA_MODEL, _ollama_generate)` gebaut und `rewrite_query(query, fn)` vor `_embed_cached` angewandt. `as_of` unberührt.
+- `plugins/memory/nexus/__init__.py:376-385` (`_do_prefetch`) — identischer Block vor dem Embedding.
+- `tests/test_query_rewrite_wiring.py` — neu, 6 Fälle (recall-rewrite, prefetch-rewrite, disabled-passthrough, kein fuel-Call wenn disabled, fuel-fail-open, as_of intakt). Keine Netz-Calls, alles gemockt.
+- `query_rewrite.py` selbst unangetastet.
+
+**Test-Evidenz:**
+- `pytest tests/test_query_rewrite_recon.py tests/test_query_rewrite_wiring.py` → `6 passed in 3.81s` (recon ist ein Script ohne pytest-Testfunktionen, daher separat verifiziert: `python3 tests/test_query_rewrite_recon.py` → `ALLE TESTS PASS — Rekonstruktion bestaetigt`, exit=0).
+
+**Annahmen:** Import von `OLLAMA_BASE`/`OLLAMA_MODEL`/`_ollama_generate` aus `nexus_memory.consolidation` (wie in der Spec vorgegeben); keine try/except-Hülle in `_recall` — Fail-open kommt aus `rewrite_query` selbst. Prod-Repo `~/nexus-memory` nicht angefasst.
