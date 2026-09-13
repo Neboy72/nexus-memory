@@ -1,3 +1,36 @@
+## [0.19.1] - 2026-09-13
+
+### New
+
+- **Memory Quality Gates** — recall quality is decided at ingestion, not
+  search time. Four gates between a raw conversation and the long-term
+  store: (1) stated rule, only user-stated content becomes durable facts
+  about the user; (2) horizon rule, soon-obsolete task state is never
+  stored as a fact; (3) single-mention rule, passing remarks are capped
+  (confidence 0.5) so salience follows and they decay; (4) memory-as-data
+  hardening, embedded-instruction text is stored but flagged
+  (memory_injection_flag) and demoted (salience cap 0.4) so it can never
+  anchor recall/prefetch or outrank genuine user rules. Deterministic
+  validation in the extraction path, LLM-assisted filtering in the
+  consolidation distiller, zero new dependencies.
+
+### Changed
+
+- Extracted fact validation moved into testable `_validate_llm_facts()`
+  (pure refactor, behavior unchanged).
+- Session-end extraction now passes fact confidence through as salience
+  (single-mention facts decay instead of sticking forever).
+- Retention-priority hint in the consolidation distiller: user-stated
+  rules, corrections and repeated requests rank above one-off research
+  findings. No deletes introduced - the established supersede pattern is
+  untouched (no deletes, ever).
+
+### Tests
+
+- 1106 passed / 0 failed / 0 errors (10 new: single-mention cap,
+  memory-injection score, salience wiring, validation refactor) via
+  isolated disposable-venv verify run (library recipe: bootstrap+pytest).
+
 ## [0.19.0] - 2026-09-13
 
 ### New
