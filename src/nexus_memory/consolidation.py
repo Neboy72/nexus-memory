@@ -13,7 +13,7 @@ Runs as an in-process daemon thread inside the MCP server
 works after plain `pip install` on any host).
 
 Design rules (agreed with Nebo 2026-09-05):
-  - Kill-switch: NEXUS_CONSOLIDATION=0 disables the daemon (default ON).
+  - Kill-switch: NEXUS_CONSOLIDATION=0 disables the daemon (enabled by default).
   - Every per-memory exception is logged and skipped; the daemon never dies.
   - No deletes, EVER — superseded facts stay in Qdrant with lifecycle fields
     (audit trail preserved, recall skips them via existing filters).
