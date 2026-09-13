@@ -1,7 +1,7 @@
 # DESIGN.md — Nexus Memory Dashboard
 
 Agent-readable design spec. Every change to dashboard UI follows this file.
-Source of truth: `dashboard/static/webui-style.css` + `dashboard.css` + Nebo's design laws (Nexus rules 4a418b0f, bed51bc2).
+Source of truth: `dashboard/static/webui-style.css` + `dashboard.css` + the project's design laws.
 Format follows the emerging DESIGN.md convention (like llms.txt, but for looks).
 
 ## Brand
@@ -89,7 +89,7 @@ Nexus Memory is the memory layer for AI agents. Look: dark, precise, calm. No cl
 
 ## Icons
 
-* Silhouette/single-color style (Nebo's design language, voice UI + dashboard)
+* Silhouette/single-color style (the project's icon language: voice UI + dashboard)
 * 20px default, 16px in rows
 * One color from palette, no gradients, no filled+outline mixing
 
@@ -105,7 +105,7 @@ Nexus Memory is the memory layer for AI agents. Look: dark, precise, calm. No cl
 * Numbers: monospace, tabular
 * Status words: lowercase (`running`, `degraded`) — no shouting
 
-## Hard laws (from Nebo, non-negotiable)
+## Hard laws (project design laws, non-negotiable)
 
 1. **Auto-fit, never clip:** variable values shrink font instead of wrapping/truncating.
 2. **Cards grow vertically** when content can grow — never horizontal scroll.
