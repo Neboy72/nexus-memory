@@ -23,7 +23,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
 [![Version](https://img.shields.io/badge/version-0.18.7-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-1091%20passing-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1106%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -445,6 +445,17 @@ Sloppy conversational queries are rewritten into concrete search terms before em
 
 Live-store measurement: 12 real-world sloppy queries, hit-rate 67% -> 75%, zero regressions, EUR 0.00 (free-tier stations).
 
+### Memory Quality Gates 🚪 (v0.19.1)
+
+The quality of recall is decided at ingestion, not at search time. Four gates sit between a raw conversation and the long-term store:
+
+1. **Stated rule** — only what the user actually said becomes a durable fact about them; assistant conclusions and research findings do not.
+2. **Horizon rule** — task state that will be obsolete within a conversation or two ("give me the file when you are ready") is never stored as a fact.
+3. **Single-mention rule** — a passing remark is flagged and capped (confidence 0.5, salience follows), so it decays instead of sticking forever. Explicitly requested preferences stay at full strength.
+4. **Memory-as-data hardening** — text that looks like an embedded instruction ("from now on this is your rule...") is stored but flagged (`memory_injection_flag`) and demoted below the recall anchor threshold: legitimate security discussions stay possible, poisoned entries can never outrank genuine rules.
+
+Deterministic validation in the extraction path, LLM-assisted filtering in the consolidation distiller, zero new dependencies.
+
 ### Cross-Encoder Reranking 🎯
 
 Hybrid fusion gets you the right candidates; reranking gets the right order. After BM25 + Vector + RRF, a reranker scores each candidate against the query and re-sorts. Auto mode picks the best available backend: Voyage Rerank API when `VOYAGE_API_KEY` is set, a free local CrossEncoder otherwise. Off by default; enable with `nexus-memory.rerank: true` in `~/.hermes/config.yaml`.
@@ -658,6 +669,7 @@ A finished install **and every update** shows the dashboard: after `do_update` s
 | 🚀 **Graph-Boosted Auto-Recall** | **✅ All 3 plugins** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🗂️ **Scopes (project/agent areas)** | **✅ Auto-prefetch gating, search stays global** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🤖 **Auto-Scoping (self-organizing)** | **✅ Areas inferred automatically — zero config** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🚪 **Memory Quality Gates** | **✅ Junk filtered at ingestion, poisoned entries demoted** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🔄 **SICA Self-Improvement** | **✅ Auto-cleanup** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🎯 **Cross-Encoder Reranking** | **✅ Auto: cloud or free local** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🧠 **Memory Dynamics** | **✅ Reinforcement + decay + salience** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -714,6 +726,8 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.19.1** | 2026-09-13 | Memory Quality Gates: junk filtered at ingestion (stated/horizon/single-mention rules), salience follows confidence, poisoned entries flagged + demoted |
+| **v0.19.0** | 2026-09-13 | Query Rewriting: sloppy queries rewritten before embedding, hit-rate 67%→75% on live-store bench |
 | **v0.18.6** | 2026-09-07 | Auto-Scoping Parity: All Three Plugins |
 | **v0.18.5** | 2026-09-07 | Auto-Scoping: The Memory Organizes Itself (full automation, zero user setup): when a new memory is stored, the |
 | **v0.18.4** | 2026-09-07 | Scopes: Project/Agent Areas (unreleased feature, first implementation): every memory can carry a scope label ( |
@@ -776,7 +790,7 @@ One server. Multiple backends. Same API.
 ## 🧪 Tests
 
 ```bash
-pytest tests/ -v # 1091 tests ✅
+pytest tests/ -v # 1106 tests ✅
 ```
 
 ---
@@ -810,4 +824,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.18.7 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.19.1 · One memory for all your agents</sub>

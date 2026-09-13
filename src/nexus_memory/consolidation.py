@@ -13,7 +13,7 @@ Runs as an in-process daemon thread inside the MCP server
 works after plain `pip install` on any host).
 
 Design rules (agreed with Nebo 2026-09-05):
-  - Kill-switch: NEXUS_CONSOLIDATION=0 disables the daemon (enabled by default).
+  - Kill-switch: NEXUS_CONSOLIDATION=0 disables the daemon (default ON).
   - Every per-memory exception is logged and skipped; the daemon never dies.
   - No deletes, EVER — superseded facts stay in Qdrant with lifecycle fields
     (audit trail preserved, recall skips them via existing filters).
@@ -130,6 +130,20 @@ Rules:
 - Skip greetings, task progress, tool output, chit-chat.
 - Each fact under 250 chars. Language: same as the conversation.
 - Only facts worth remembering weeks from now.
+
+Memory-worthiness filter (Fable-calibration, 2026-09-13) - reject candidates that fail ANY of these:
+- STATED RULE: only what the USER actually said counts as a durable fact
+  about them. Assistant conclusions and research findings about the user
+  are not durable user facts. (Assistant statements about SYSTEMS,
+  services and technical setups are fine.)
+- HORIZON RULE: task state that will be DONE within a conversation or
+  two ("give me the video when ready", "I will test tomorrow") fails
+  the horizon test - store only the stable remainder.
+
+Retention-priority hint: when you must choose between candidate facts,
+rank USER-stated rules, corrections and repeated requests ABOVE one-off
+research findings and assistant-derived context. Never drop a user rule
+in favor of a research detail.
 
 Today's date (resolve relative times against this): {date}
 

@@ -32,7 +32,24 @@ Rules:
 - Language: same as the conversation (German stays German, English stays English)
 - Only extract things worth remembering weeks from now
 
-Return: {"facts": [{"text": "...", "category": "fact|rule|preference|belief", "confidence": 0.9}]}
+Memory-worthiness filter (Fable-calibration, 2026-09-13) - reject candidates that fail ANY of these:
+- STATED RULE: only what the USER actually said counts as a durable fact.
+  Assistant conclusions, research findings and your own enrichment about the
+  user or the conversation are NOT durable user facts (skip them; an
+  assistant statement about SYSTEMS/services is fine).
+- HORIZON RULE: the state of a task that will be DONE within one or two
+  conversations fails the horizon test ("you can send me the video when
+  you are ready", "I will test it tomorrow") - store only the stable
+  remainder (a pending handoff is temp/session material, not fact).
+- SINGLE-MENTION RULE: a passing remark, mentioned once, is not memory
+  material yet - either skip it or mark it with "single_mention": true
+  (its confidence is then capped at 0.5 automatically). Upgrade only
+  when the user repeats or insists. Never generalize a single mention
+  into a category ("likes X" -> "likes all of X"). A preference the
+  user explicitly asked for ("always answer in German") is NOT a
+  single mention.
+
+Return: {"facts": [{"text": "...", "category": "fact|rule|preference|belief", "confidence": 0.9, "single_mention": false}]}
 If no durable facts: return {"facts": []}
 
 Conversation:
@@ -114,6 +131,44 @@ def _quick_health_check(base_url: str, timeout: float = 1.0) -> bool:
         return True
     except Exception:
         return False
+
+
+def _validate_llm_facts(facts: List[Any]) -> List[Dict[str, Any]]:
+    """Validate and normalize the LLM's fact list.
+
+    Fable-calibration (2026-09-13): the LLM flags passing remarks
+    ("single_mention": true). Those are capped at 0.5 so they decay fast
+    and never reach rule/insight strength on first sight. Explicitly
+    stated preferences stay at their stated confidence.
+    """
+    result = []
+    for f in facts:
+        if not isinstance(f, dict):
+            continue
+        fact_text = f.get("text", "").strip()
+        category = f.get("category", "fact").strip().lower()
+        confidence = f.get("confidence", 0.7)
+        if not fact_text:
+            continue
+        if category not in ("fact", "rule", "preference", "belief"):
+            category = "fact"
+        try:
+            confidence = float(confidence)
+            confidence = max(0.0, min(1.0, confidence))
+        except (TypeError, ValueError):
+            confidence = 0.7
+        if f.get("single_mention") and confidence > 0.5:
+            logger.info(
+                "SessionExtractor: single-mention cap applied (%.2f -> 0.5): %.80s",
+                confidence, fact_text,
+            )
+            confidence = 0.5
+        result.append({
+            "text": fact_text[:1000],
+            "category": category,
+            "confidence": confidence,
+        })
+    return result
 
 
 def _llm_extract(
@@ -213,27 +268,7 @@ def _llm_extract(
         facts = data.get("facts", [])
 
         # Validate and normalize
-        result = []
-        for f in facts:
-            if not isinstance(f, dict):
-                continue
-            fact_text = f.get("text", "").strip()
-            category = f.get("category", "fact").strip().lower()
-            confidence = f.get("confidence", 0.7)
-            if not fact_text:
-                continue
-            if category not in ("fact", "rule", "preference", "belief"):
-                category = "fact"
-            try:
-                confidence = float(confidence)
-                confidence = max(0.0, min(1.0, confidence))
-            except (TypeError, ValueError):
-                confidence = 0.7
-            result.append({
-                "text": fact_text[:1000],
-                "category": category,
-                "confidence": confidence,
-            })
+        result = _validate_llm_facts(facts)
 
         logger.info(
             "SessionExtractor: LLM extracted %d facts from %d messages",

@@ -83,6 +83,20 @@ Nothing to configure if you have any one of these running.</p>
 <b>When to use OFF:</b> if you have no Ollama and no keys, or you simply want zero external
 calls. When ON makes sense: you want the auto-sorting and accept a few cents a month.</div>
 
+<h2>🚪 Quality gates, what gets remembered at all</h2>
+<p>Not everything said in a conversation deserves a permanent spot in memory. Nexus checks
+new candidates at the door, like a doorkeeper with four questions:</p>
+<table>
+<tr><th>Gate</th><th>The doorkeeper's question</th><th>Effect</th></tr>
+<tr><td>Stated rule</td><td>Did the user actually say this?</td><td>Only user-stated content becomes a durable fact about the user. Assistant conclusions and research findings don't count.</td></tr>
+<tr><td>Horizon rule</td><td>Will this be outdated tomorrow?</td><td>Task chatter ("send me the file when ready") is not remembered as a fact.</td></tr>
+<tr><td>Single mention</td><td>Said once, in passing?</td><td>Stored weak, fades quickly. A repeated request grows strong. Explicitly requested rules stay strong from day one.</td></tr>
+<tr><td>Poison check</td><td>Does this look like an embedded order?</td><td>Suspicious text is kept but marked and held down, it can never rise above your real rules.</td></tr>
+</table>
+<div class="hint"><b>What this means for you:</b> memory stays small and dense. What matters
+survives, what fades is forgettable by design. Nothing is deleted by the gates, weak entries
+just age out naturally.</div>
+
 <h2>🧬 Facts that never lie twice</h2>
 <p>If a new fact contradicts an old one, the old one isn't silently overwritten, it is marked
 "superseded" and the new one becomes the current truth. A chain stays visible: what was believed
