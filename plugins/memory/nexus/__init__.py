@@ -33,6 +33,12 @@ COST_ROUTING_STATS_SCHEMA = {"name": "nexus_cost_routing_stats", "description": 
 COST_ROUTING_EXPLAIN_SCHEMA = {"name": "nexus_cost_routing_explain", "description": "Cost-Aware Routing: Explain the routing decision for a memory category.", "parameters": {"type": "object", "properties": {"category": {"type": "string", "description": "Memory category: fact, rule, preference, belief, session, temp, entity, procedure"}}, "required": ["category"]}}
 SICA_RUN_SCHEMA = {"name": "nexus_sica_run", "description": "SICA Self-Improvement: Run a self-improvement cycle that scans memories for drift, stale facts, low confidence, and contradictions. Auto-patches non-destructive issues (stale temp deletion). Returns issues found, auto-patches applied, and suggestions for review.", "parameters": {"type": "object", "properties": {"auto_patch": {"type": "boolean", "description": "Apply non-destructive patches automatically (default true)", "default": True}}, "required": []}}
 
+# v0.19.0 query-rewrite module state (simplify-review 13.09.): a module-level
+# lock guards the lazy per-instance init (memo/dispatcher/executor) so provider
+# instances built via __new__ (bench/test pattern) are safe without __init__.
+_PLUGIN_REWRITE_LOCK = threading.Lock()
+_MIN_KEEP_LEN = 2  # rewritten/empty below this falls back to the original query
+
 
 class _Embedder:
     """Auto-detect embedding provider — reuses the shared EmbeddingProvider.
@@ -371,9 +377,84 @@ class NexusMemoryProvider:
             logger.warning("Graph boost skipped: %s", exc)
         return boosted
 
+    # ── v0.19.0 query rewrite (env-gated, fail-open, bounded, memoized) ──
+    # simplify-review 13.09. hardening: the WHOLE wiring is exception-safe
+    # (any import/generation error -> original query), wall-clock bounded
+    # (single-thread executor + future.result timeout), the fuel dispatcher
+    # is built ONCE per provider, and identical queries share ONE rewrite
+    # between the prefetch thread and explicit recall (insertion-ordered FIFO
+    # memo — also stabilizes EmbedCache keys against non-deterministic rewrites).
+    _REWRITE_MEMO_MAX = 64
+
+    def _rewrite_if_enabled(self, query: str) -> str:
+        """Rewrite the query before embedding when NEXUS_REWRITE=1.
+
+        Fail-open in EVERY failure mode: disabled flag, no fuel station,
+        station error, timeout, invalid env values, any wiring exception —
+        the original query is returned unchanged so recall/prefetch NEVER
+        degrade. Memo eviction is FIFO (insertion order), not LRU."""
+        q = (query or "").strip()
+        if not q:
+            return query
+        try:
+            from nexus_memory import query_rewrite as _qr
+            if not _qr.enabled():
+                return query
+            with self._rewrite_lock():
+                memo = getattr(self, "_rewrite_memo", None)
+                if memo is None:
+                    memo = self._rewrite_memo = {}
+            hit = memo.get(q)
+            if hit is not None:
+                return hit if len(hit) >= _MIN_KEEP_LEN else query
+            timeout_raw = os.environ.get("NEXUS_REWRITE_TIMEOUT", "")
+            try:
+                timeout_s = int(timeout_raw) if timeout_raw.strip() else int(
+                    getattr(_qr, "_TIMEOUT_S", 10))
+            except (ValueError, TypeError):
+                timeout_s = int(getattr(_qr, "_TIMEOUT_S", 10))
+            with self._rewrite_lock():
+                disp = getattr(self, "_fuel_dispatcher", None)
+                if disp is None:
+                    from nexus_memory.consolidation import get_default_fuel
+                    disp = self._fuel_dispatcher = get_default_fuel(timeout=timeout_s)
+            future = self._rewrite_executor().submit(_qr.rewrite_query, q, disp)
+            try:
+                rewritten = future.result(timeout=timeout_s + 2)
+            except Exception:
+                rewritten = q  # timeout or generation error -> original
+            with self._rewrite_lock():
+                if len(memo) >= self._REWRITE_MEMO_MAX:
+                    memo.pop(next(iter(memo)))  # FIFO eviction (insertion order)
+                memo[q] = rewritten
+            return rewritten if len(rewritten) >= _MIN_KEEP_LEN else query
+        except Exception:
+            return query
+
+    def _rewrite_lock(self):
+        lock = getattr(self, "_rewrite_lock_obj", None)
+        if lock is None:
+            with _PLUGIN_REWRITE_LOCK:
+                lock = getattr(self, "_rewrite_lock_obj", None)
+                if lock is None:
+                    lock = self._rewrite_lock_obj = threading.Lock()
+        return lock
+
+    def _rewrite_executor(self):
+        ex = getattr(self, "_rewrite_exec", None)
+        if ex is None:
+            with self._rewrite_lock():
+                ex = getattr(self, "_rewrite_exec", None)
+                if ex is None:
+                    from concurrent.futures import ThreadPoolExecutor
+                    ex = self._rewrite_exec = ThreadPoolExecutor(
+                        max_workers=1, thread_name_prefix="nexus-rewrite")
+        return ex
+
     def _do_prefetch(self, query: str) -> None:
         if not self._embedder or not self._qdrant: return
         try:
+            query = self._rewrite_if_enabled(query)
             vector = self._embed_cached(query)
             budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
             # Scope filter (project/agent areas): auto-prefetch surfaces only
@@ -518,6 +599,7 @@ class NexusMemoryProvider:
                 if self._rerank_cfg is None:
                     from nexus_memory.reranker import load_rerank_config
                     self._rerank_cfg = load_rerank_config()
+        query = self._rewrite_if_enabled(query)
         vector = self._embed_cached(query)
         cfg = self._rerank_cfg
         fetch_k = max(limit, 1)
