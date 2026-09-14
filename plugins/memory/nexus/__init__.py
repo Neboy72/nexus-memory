@@ -107,6 +107,11 @@ class NexusMemoryProvider:
         self._last_backup_path: str = ""
         self._skill_graph = None  # cached SkillGraph for graph-boost
         self._skill_graph_lock = threading.Lock()
+        # ScopeCentroids cache for prefetch auto-scoping (roadmap: scope_auto).
+        # Must exist before the first prefetch: _do_prefetch checks it for
+        # None, so a missing attribute raised AttributeError on fresh
+        # instances (prefetch before any other scope-touching path).
+        self._scope_centroids: ScopeCentroids | None = None
         self._rerank_cfg = None  # cached rerank config (lazy, roadmap 1.2)
         self._embed_cache = None  # roadmap 3.1 L0: lazy EmbedCache
         self._embed_cache_lock = threading.Lock()
@@ -1166,7 +1171,7 @@ class NexusMemoryProvider:
         store = None
         try:
             from nexus.graph.store import EdgeStore
-            store = EdgeStore(qdrant_url=f"{_HOST}:{_PORT}", collection=self._collection)
+            store = EdgeStore(qdrant_url=f"http://{_HOST}:{_PORT}", collection=self._collection)
         except Exception as exc:
             logger.warning("EdgeStore init failed: %s", exc)
         try:
