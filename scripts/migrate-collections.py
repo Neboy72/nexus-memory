@@ -74,7 +74,12 @@ def scroll_all_points(collection: str) -> list[dict]:
 
 def deduplicate(points: list[dict]) -> dict:
     """Deduplicate by content hash (sha256 of text in payload).
-    Returns: {hash: point} mapping."""
+    Returns: {key: point} mapping.
+
+    Points WITHOUT text/content are never deduplicated: hashing the empty
+    string would collapse every textless point onto sha256("") and silently
+    keep just one. Each such point gets its own unique key instead.
+    """
     seen = {}
     dupes = 0
     for pt in points:
@@ -84,7 +89,12 @@ def deduplicate(points: list[dict]) -> dict:
         if not isinstance(raw, str):
             raw = str(raw)
         text = raw if isinstance(raw, str) else str(raw)
-        h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if text:
+            h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        else:
+            # Textless point: unique key from collection + point id so it
+            # keeps its own slot instead of colliding on sha256("").
+            h = f"notxt:{payload.get('_source_collection', '')}:{pt.get('id')}"
         if h in seen:
             dupes += 1
             continue
@@ -94,10 +104,50 @@ def deduplicate(points: list[dict]) -> dict:
     return seen
 
 
+def merge_points(all_points: dict, deduped: dict) -> int:
+    """Merge deduped points into the global pool without silent overwrites.
+
+    Two source collections can legitimately contain the same point ID. A plain
+    ``dict.update`` would let the later collection overwrite the earlier one
+    silently (data loss). On an ID collision from a *different* source
+    collection we keep both points under a disambiguated key and record the
+    provenance in ``_migrated_from``.
+
+    Returns the number of points added.
+    """
+    added = 0
+    seen_ids = {str(pt.get("id")): key for key, pt in all_points.items()}
+    for key, pt in deduped.items():
+        pid = str(pt.get("id"))
+        src_new = pt.get("payload", {}).get("_source_collection", "")
+        if pid in seen_ids:
+            existing = all_points.get(seen_ids[pid]) or {}
+            src_old = existing.get("payload", {}).get("_source_collection", "")
+            if src_new == src_old:
+                # Same ID from the same collection: genuine duplicate, skip.
+                continue
+            # Same ID from a different collection: keep both, disambiguated.
+            suffix = hashlib.sha256(f"{src_new}:{pid}".encode("utf-8")).hexdigest()[:8]
+            new_key = f"{key}:{suffix}"
+            pt.setdefault("payload", {})["_migrated_from"] = src_new
+            all_points[new_key] = pt
+            added += 1
+            continue
+        all_points[key] = pt
+        seen_ids[pid] = key
+        added += 1
+    return added
+
+
 def upsert_points(points: list[dict], dry_run: bool = False) -> int:
-    """Batch upsert points into target collection."""
+    """Batch upsert points into target collection.
+
+    Returns the number of successfully upserted points; failed batches are
+    counted and reported so callers can detect an incomplete migration.
+    """
     total = len(points)
     upserted = 0
+    failures = 0
     for i in range(0, total, BATCH_SIZE):
         batch = points[i : i + BATCH_SIZE]
         qdrant_batch = []
@@ -119,7 +169,10 @@ def upsert_points(points: list[dict], dry_run: bool = False) -> int:
             upserted += len(qdrant_batch)
             print(f"  Upserted {len(qdrant_batch)} points (batch {i//BATCH_SIZE + 1}, {upserted}/{total})", file=sys.stderr)
         except Exception as e:
+            failures += len(qdrant_batch)
             print(f"  ❌ Batch {i//BATCH_SIZE + 1} failed: {e}", file=sys.stderr)
+    if failures:
+        print(f"  ❌ {failures}/{total} points failed to upsert", file=sys.stderr)
     return upserted
 
 
@@ -152,10 +205,9 @@ def main():
         deduped = deduplicate(raw_points)
         print(f"  → {len(deduped)} unique points after dedup", file=sys.stderr)
 
-        # Merge into global dict
-        before = len(all_points)
-        all_points.update(deduped)
-        print(f"  → {len(all_points) - before} new points added to global pool", file=sys.stderr)
+        # Merge into global dict (collision-safe, see merge_points)
+        added = merge_points(all_points, deduped)
+        print(f"  → {added} new points added to global pool", file=sys.stderr)
 
     total_points = len(all_points)
     print(f"\n{'='*50}", file=sys.stderr)
@@ -183,6 +235,13 @@ def main():
     upserted = upsert_points(points_list)
 
     print(f"\n{'='*50}", file=sys.stderr)
+    if upserted < total_points:
+        print(
+            f"❌ Migration incomplete: {upserted}/{total_points} points upserted "
+            f"into '{TARGET_COLLECTION}' ({total_points - upserted} missing)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     print(f"✅ Migration complete: {upserted}/{total_points} points upserted into '{TARGET_COLLECTION}'", file=sys.stderr)
 
     # Verify

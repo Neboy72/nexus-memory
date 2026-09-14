@@ -127,11 +127,22 @@ def nexus_update(
     import requests as _req
 
     url = f"http://{qdrant_host}:{qdrant_port}/collections/{collection_name}/points/scroll"
-    r = _req.post(url, json={"limit": 1, "with_payload": True,
-                              "filter": {"must": [{"key": "id", "match": {"value": point_id}}]}}
-                   if isinstance(point_id, str) and len(point_id) > 20
-                   else {"limit": 100, "with_payload": True},
-                   timeout=10)
+    # Always use the id-based filter when an id is present. The previous
+    # length heuristic (> 20 chars) dropped the filter for short ids and
+    # only scanned the first 100 points, so existing points were reported
+    # as "not found" (or the wrong point was picked up). The broad scan is
+    # only a fallback for a missing id filter (i.e. no id at all).
+    if point_id:
+        scroll_body = {"limit": 1, "with_payload": True,
+                       "filter": {"must": [{"key": "id", "match": {"value": point_id}}]}}
+    else:
+        scroll_body = {"limit": 100, "with_payload": True}
+    r = _req.post(url, json=scroll_body, timeout=10)
+    if not is_success(r.status_code):
+        raise RuntimeError(
+            f"nexus_update: scroll failed for point {point_id!r} "
+            f"(HTTP {r.status_code})"
+        )
 
     # Find the point
     points = r.json().get("result", {}).get("points", [])
@@ -147,6 +158,11 @@ def nexus_update(
             f"http://{qdrant_host}:{qdrant_port}/collections/{collection_name}/points/{point_id}",
             timeout=10,
         )
+        if not is_success(r2.status_code):
+            raise RuntimeError(
+                f"nexus_update: point lookup failed for {point_id!r} "
+                f"(HTTP {r2.status_code})"
+            )
         target = r2.json().get("result", None)
 
     if not target:
@@ -192,6 +208,11 @@ def nexus_update(
         }]
     }
     r3 = _req.put(update_url, json=update_data, timeout=10)
+    if not is_success(r3.status_code):
+        raise RuntimeError(
+            f"nexus_update: upsert failed for point {point_id!r} "
+            f"(HTTP {r3.status_code}): {r3.text[:200]}"
+        )
     return r3.json()
 
 

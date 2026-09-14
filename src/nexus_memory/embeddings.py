@@ -128,6 +128,17 @@ def _same_local_model(a: str, b: str) -> bool:
     return na == nb
 
 
+def _model_in_inventory(name: str, models: list[str]) -> bool:
+    """True when *name* is present in an Ollama inventory.
+
+    Uses the same tag normalization as _same_local_model so an untagged
+    stored name ('bge-m3') matches the tagged inventory entry
+    ('bge-m3:latest') — a plain ``name in models`` check missed that and
+    wrongly reported a still-installed model as unavailable.
+    """
+    return any(_same_local_model(name, m) for m in models)
+
+
 # Cloud fallback is opt-in: switching to a cloud provider happens only when
 # the user explicitly asked for it via the preferred-provider setting.
 # Security review fix: a failed *explicitly chosen local* provider used to
@@ -137,19 +148,25 @@ def _same_local_model(a: str, b: str) -> bool:
 CLOUD_PROVIDER_IDS = frozenset({"voyage", "openai", "google", "jina"})
 
 
-def _allowed_cloud_fallback() -> bool:
+def _allowed_cloud_fallback(preferred: str = "") -> bool:
     """True when the user explicitly allowed cloud fallback providers.
 
     Allowed configurations (checked for the *explicitly preferred* provider
     only, never during pure auto-detection):
     - preferred provider is "auto" (cloud-first auto-detect by design)
-    - NEXUS_ALLOWED_CLOUD_FALLBACK contains one or more provider ids
-      (comma-separated; "1"/"true"/"yes" allows any cloud provider)
+    - NEXUS_ALLOWED_CLOUD_FALLBACK is "1"/"true"/"yes" (any cloud provider)
+    - NEXUS_ALLOWED_CLOUD_FALLBACK is a comma-separated list of provider ids
+      and *preferred* is one of them. A non-empty value that does NOT list
+      the requested provider does not allow the fallback (the docstring used
+      to promise a whitelist while the code accepted any non-empty string).
     """
     env = os.environ.get("NEXUS_ALLOWED_CLOUD_FALLBACK", "").strip().lower()
+    if not env:
+        return False
     if env in ("1", "true", "yes"):
         return True
-    return bool(env)
+    allowed = {p.strip() for p in env.split(",") if p.strip()}
+    return bool(preferred) and preferred.strip().lower() in allowed
 
 
 class EmbeddingProvider:
@@ -196,7 +213,7 @@ class EmbeddingProvider:
             # "auto" (cloud-first by design) or an explicitly allowed cloud
             # fallback may continue into auto-detection.
             allowed_fallback = preferred == "auto" or (
-                explicit_cloud and _allowed_cloud_fallback()
+                explicit_cloud and _allowed_cloud_fallback(preferred)
             )
             logging.info(f"Embedding: trying preferred provider '{preferred}'")
             if self._try_provider(preferred):
@@ -393,7 +410,7 @@ class EmbeddingProvider:
                     # real Ollama inventory and fail explicitly instead.
                     existing_model = _read_existing_collection_model()
                     if existing_model and not _same_local_model(existing_model, emb_model):
-                        if existing_model in models:
+                        if _model_in_inventory(existing_model, models):
                             logging.info(
                                 f"Embedding: keeping existing local model '{existing_model}' "
                                 f"(collection already uses it; '{emb_model}' also available)"
@@ -472,6 +489,7 @@ class EmbeddingProvider:
                 probe = self._model.encode("nexus dimension probe")
                 self._name = model_name
                 self._dim = int(len(probe))
+                self._backend = "sentence-transformers"
                 logging.info(f"Embedding: {self._name} ({self._dim}d, local HF)")
                 return True
             except Exception as exc:
@@ -481,6 +499,7 @@ class EmbeddingProvider:
             self._model = SentenceTransformer("all-MiniLM-L6-v2")
             self._name = "all-MiniLM-L6-v2"
             self._dim = 384
+            self._backend = "sentence-transformers"
             logging.info(f"Embedding: {self._name} (384d, local)")
             return True
         except ImportError:
