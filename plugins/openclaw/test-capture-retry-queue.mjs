@@ -8,6 +8,9 @@
  */
 import assert from "node:assert"
 import { readFileSync, writeFileSync, unlinkSync } from "node:fs"
+// H3/H4: Direkt-Import der lokalen Quelle (Node type-stripping, kein Build nötig).
+import { enqueueCapture, readQueue, writeQueue, drainQueue, queueSize } from "./hooks/capture-retry-queue.ts"
+import { buildCaptureHandler } from "./hooks/capture.ts"
 
 const QUEUE = "/Users/miosha/.openclaw/workspace/data/capture-retry-queue.jsonl"
 try { unlinkSync(QUEUE) } catch {}
@@ -68,6 +71,62 @@ await t("Storage up → nächster Capture draint Queue", async () => {
   await new Promise((r) => setTimeout(r, 500))
   const q = readFileSync(QUEUE, "utf8").trim()
   assert.strictEqual(q, "", "Queue muss nach Drain leer sein")
+})
+
+// ── H4: readQueue darf EINE korrupte Zeile nicht als "Queue leer" werten ──
+await t("H4: korrupte Zeile zwischen guten → nur gute gelesen (kein Datenverlust)", async () => {
+  const goodA = { id: "a", text: "erster", payload: { scope: "default" } }
+  const goodB = { id: "b", text: "zweiter", payload: { scope: "default" } }
+  writeFileSync(
+    QUEUE,
+    JSON.stringify(goodA) + "\n" + '{"id":"corrupt' + "\n" + JSON.stringify(goodB) + "\n",
+    "utf8",
+  )
+  const entries = readQueue()
+  assert.strictEqual(entries.length, 2, `2 gute Einträge erwartet, bekam ${entries.length}`)
+  assert.deepStrictEqual(entries.map((e) => e.id), ["a", "b"])
+})
+
+await t("H4: korrupte Zeile fällt beim nächsten writeQueue raus", async () => {
+  writeQueue(readQueue())
+  assert.ok(!readFileSync(QUEUE, "utf8").includes("corrupt"), "korrupte Zeile muss weg sein")
+  assert.strictEqual(readQueue().length, 2, "gute Einträge bleiben erhalten")
+})
+
+// ── H3: enqueue ist append-only (single-writer), drain holt beide ──
+await t("H3: zwei enqueue → drain stellt beide wieder her, Queue danach leer", async () => {
+  writeQueue([]) // saubere Queue
+  enqueueCapture({ id: "id-1", text: "eins", payload: { scope: "default" } })
+  enqueueCapture({ id: "id-2", text: "zwei", payload: { scope: "default" } })
+  // Append-only: KEIN Rewrite in enqueue → beide Einträge müssen erhalten sein.
+  assert.deepStrictEqual(readQueue().map((e) => e.id), ["id-1", "id-2"])
+
+  const restored = []
+  const n = await drainQueue(
+    async (id) => { restored.push(id) },
+    async () => [0.1],
+  )
+  assert.strictEqual(n, 2, `drain muss 2 wiederherstellen, war ${n}`)
+  assert.deepStrictEqual(restored.sort(), ["id-1", "id-2"])
+  assert.strictEqual(queueSize(), 0, "Queue muss nach drain leer sein (single-writer)")
+})
+
+// ── H5: Requeue darf ID + inferred Scope nicht verlieren ──
+await t("H5: Requeue nutzt dieselbe ID UND den inferierten Scope", async () => {
+  writeQueue([])
+  const seenIds = []
+  const embedder = { embed: async () => [1, 0, 0] }
+  const qdrant = { upsert: async (id) => { seenIds.push(id); throw new Error("storage down") } }
+  const centroidCache = { get: async () => ({ work: [1, 0, 0] }) } // klarer Match → scope "work"
+  const handler = buildCaptureHandler(embedder, qdrant, { accessLevel: "private" }, centroidCache)
+  await handler(
+    { success: true, messages: [{ role: "user", content: "Wichtige Erinnerung: Requeue-ID-und-Scope-Test" }] },
+    { trigger: "user", messageProvider: "telegram", groupId: null },
+  )
+  const q = readQueue()
+  assert.strictEqual(q.length, 1, "genau ein Queue-Eintrag erwartet")
+  assert.strictEqual(q[0].id, seenIds[0], "Requeue muss dieselbe ID nutzen (kein Doppel-Speicher)")
+  assert.strictEqual(q[0].payload.scope, "work", `inferierter Scope erwartet, bekam ${q[0].payload.scope}`)
 })
 
 process.exit(failed ? 1 : 0)

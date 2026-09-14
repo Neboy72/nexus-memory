@@ -9,6 +9,9 @@
  */
 import fs from "node:fs";
 import assert from "node:assert";
+// H1: Direkt-Import der lokalen Quelle (Node type-stripping, kein Build nötig).
+import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts";
+import { initLogger } from "./logger.ts";
 
 const handlers = {};
 const handlerLists = {};
@@ -170,6 +173,26 @@ for (const [name, input, mustContain, mustNotContain] of cases) {
     console.log(`FAIL  ${name}\n      ${e.message.slice(0, 120)}\n      Output war: ${JSON.stringify(out.slice(0, 80))}`);
   }
 }
+
+// ── H1: Fail-open darf die Message nicht droppen (lokale Quelle) ──
+// Payload liegt in ctx.content (ctx.message === undefined) und der Gate-Crash
+// wird über einen werfenden Logger erzwungen. Der catch MUSS den Original-Text
+// zurückgeben — vor dem Fix kam { message: undefined } zurück (Message gedroppt).
+try {
+  initLogger(
+    { info() {}, warn() { throw new Error("simulierter Gate-Crash") }, error() {}, debug() {} },
+    false,
+  );
+  const localHook = buildThoughtFilterHandler();
+  const leak = "The runtime context is just a replay.\n\nAlles läuft stabil und grün. 🦊";
+  const r = await localHook({ content: leak });
+  assert.strictEqual(r?.message, leak, "Fail-open muss den Original-Text liefern, nicht undefined");
+  console.log("PASS  H1: Fail-open bei Gate-Crash liefert Original-Text (kein Drop)");
+} catch (e) {
+  failed++;
+  console.log(`FAIL  H1: Fail-open — ${e.message}`);
+}
+initLogger({ info() {}, warn() {}, error() {}, debug() {} }, false); // Backend zurücksetzen
 
 console.log(`\n${cases.length - failed}/${cases.length} PASS`);
 process.exit(failed === 0 ? 0 : 1);
