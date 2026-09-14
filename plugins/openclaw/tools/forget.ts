@@ -5,6 +5,13 @@ import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { log } from "../logger.ts"
 
+/**
+ * Minimum vector-search score for the "forget by query" path. Vector search
+ * ALWAYS returns the nearest hits, however bad — without this threshold an
+ * unrelated memory would be silently deleted.
+ */
+const FORGET_MIN_SCORE = 0.8
+
 function limitText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
@@ -73,6 +80,24 @@ export function registerForgetTool(
             }
 
             const target = results[0]
+
+            // Guard against a low-confidence match: refuse to delete when the
+            // best hit is below the threshold, and ask for a precise query or
+            // a direct memory_id instead.
+            if (target.score < FORGET_MIN_SCORE) {
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text:
+                      `Unsicher (Score ${target.score.toFixed(3)} unter Threshold ` +
+                      `${FORGET_MIN_SCORE}) — bitte mit memory_id löschen oder ` +
+                      `präziser formulieren.`,
+                  },
+                ],
+              }
+            }
+
             await qdrantClient.delete(target.id)
 
             const preview = limitText(target.text, 100)
