@@ -39,12 +39,12 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Terminal|Write|Edit|Delete",
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/guardrail_check.py\"",
-            "timeout": 5,
+            "timeout": 15,
             "statusMessage": "Nexus: checking guardrails..."
           }
         ]

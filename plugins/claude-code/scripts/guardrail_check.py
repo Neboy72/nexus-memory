@@ -195,7 +195,7 @@ def main():
             command = tool_input.get("command", tool_input.get("path", ""))
 
         # Only check destructive tools
-        destructive_tools = ["Bash", "Terminal", "Write", "Edit", "Delete"]
+        destructive_tools = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"]
         if tool_name not in destructive_tools:
             print(json.dumps({"allow": True}))
             return
