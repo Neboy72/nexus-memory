@@ -183,14 +183,17 @@ def _llm_extract(
     """
     config = _load_llm_config(hermes_home)
     if not config["model"]:
+        # No LLM available at all — that is a failure (None), not a valid
+        # "no facts found" verdict. Returning [] here would suppress the
+        # caller's heuristic fallback.
         logger.debug("SessionExtractor: no model configured, skipping LLM")
-        return []
+        return None
 
     # Quick health check — 1s TCP probe. If unreachable, skip to heuristic
     # immediately instead of waiting 30s for the API timeout.
     if not _quick_health_check(config["base_url"]):
-        logger.debug("SessionExtractor: LLM endpoint unreachable, using heuristic")
-        return []
+        logger.warning("SessionExtractor: LLM endpoint unreachable — heuristic fallback")
+        return None
 
     # Build conversation text
     conv_parts = []
@@ -277,8 +280,10 @@ def _llm_extract(
         return result
 
     except Exception as exc:
-        logger.warning("SessionExtractor: LLM extraction failed: %s", exc)
-        return []
+        # Failure — return None so the caller falls back to the heuristic
+        # (docstring contract: list on success, None on failure).
+        logger.warning("SessionExtractor: LLM extraction failed — heuristic fallback: %s", exc)
+        return None
 
 
 # ─── Heuristic Extraction (fallback, always works) ──────────────────────────

@@ -66,7 +66,15 @@ interface ProtectionRule {
   sourceId: string
 }
 
-async function loadProtectionRules(qdrantClient: QdrantClient, _collection: string): Promise<ProtectionRule[]> {
+/**
+ * Load protection rules from Qdrant.
+ *
+ * Returns the (possibly empty) rule list on a successful load, or `null` when
+ * the rules could NOT be loaded. The caller must treat `null` as "protection
+ * rules unavailable" and fail closed for destructive actions — a confirmed
+ * empty list is the only state that may pass.
+ */
+async function loadProtectionRules(qdrantClient: QdrantClient, _collection: string): Promise<ProtectionRule[] | null> {
   try {
     // QdrantClient is already bound to the configured collection.
     const points = await qdrantClient.scrollFiltered(
@@ -100,8 +108,11 @@ async function loadProtectionRules(qdrantClient: QdrantClient, _collection: stri
     }
     return rules
   } catch (exc) {
-    log.warn(`Guardrail: Failed to load rules (fail-open): ${exc}`)
-    return []
+    // Fail-closed: signal that the rule store is unavailable instead of
+    // pretending there are no protection rules. The caller blocks
+    // destructive actions when rules are missing (never fail open).
+    log.warn(`Guardrail: Failed to load protection rules (fail-closed): ${exc}`)
+    return null
   }
 }
 
@@ -152,7 +163,14 @@ export function registerGuardrailCheckTool(
             result = { verdict: "allow", reason: `Destructive action (${action}) but no protected target` }
           } else {
             const rules = await loadProtectionRules(qdrantClient, cfg.collection || "nexus")
-            if (rules.length === 0) {
+            if (rules === null) {
+              // Rules could not be loaded — we cannot prove the target is
+              // unprotected, so block the destructive action (fail-closed).
+              result = {
+                verdict: "block",
+                reason: `Destructive action (${action}) but protection rules unavailable — fail-closed`,
+              }
+            } else if (rules.length === 0) {
               result = { verdict: "allow", reason: `Destructive action (${action}) but no protection rules` }
             } else {
               const matched: Array<Record<string, unknown>> = []

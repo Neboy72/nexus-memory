@@ -102,6 +102,24 @@ def _point(
     return {"id": belief_id, "vector": [0.0] * 1024, "payload": base}
 
 
+def _route_posts(scroll_responses, payload_status: int = 200):
+    """Side-effect router for ``requests.post``.
+
+    Scroll requests consume ``scroll_responses`` in order; ``set_payload``
+    requests (URL ends with ``/points/payload``) always answer with
+    ``payload_status``. Needed because recompute_all now uses POST for both
+    the scroll and the trust merge.
+    """
+    queue = list(scroll_responses)
+
+    def _side_effect(url, **_kwargs):
+        if str(url).endswith("/points/payload"):
+            return _fake_resp(payload_status)
+        return queue.pop(0)
+
+    return _side_effect
+
+
 # ---------------------------------------------------------------------------
 # 1. resolve_belief()
 # ---------------------------------------------------------------------------
@@ -561,20 +579,23 @@ class TestRecomputeAll:
         empty = []
 
         # First two calls return pages with next_offset; third returns empty.
-        mock_post.side_effect = [
+        mock_post.side_effect = _route_posts([
             _fake_resp(200, {"result": {"points": page_1, "next_page_offset": "opaque1"}}),
             _fake_resp(200, {"result": {"points": page_2, "next_page_offset": "opaque2"}}),
             _fake_resp(200, {"result": {"points": empty, "next_page_offset": None}}),
-        ]
-        mock_put.return_value = _fake_resp(200)
+        ])
 
         stats = recompute_all()
 
         assert stats["total"] == 2
         assert stats["changed"] == 2
-        # Scroll was called 3 times (2 pages + terminator), and PUT twice
-        assert mock_post.call_count == 3
-        assert mock_put.call_count == 2
+        # 3 scroll calls + 2 set_payload calls, and never a partial-payload PUT
+        payload_calls = [
+            c for c in mock_post.call_args_list
+            if str(c.args[0]).endswith("/points/payload")
+        ]
+        assert len(payload_calls) == 2
+        assert mock_put.call_count == 0
 
     @patch("nexus.apply.requests.post")
     def test_scroll_failure_increments_errors(self, mock_post):
@@ -588,8 +609,8 @@ class TestRecomputeAll:
 
     @patch("nexus.apply.requests.put")
     @patch("nexus.apply.requests.post")
-    def test_batch_update_failure_counts_errors(self, mock_post, mock_put):
-        """If the batch PUT fails, every queued belief is counted as an error."""
+    def test_payload_update_failure_counts_errors(self, mock_post, mock_put):
+        """If a set_payload write fails, that belief is counted as an error."""
         page_points = [
             {
                 "id": "x",
@@ -610,15 +631,52 @@ class TestRecomputeAll:
                 },
             },
         ]
-        mock_post.return_value = _fake_resp(
-            200, {"result": {"points": page_points, "next_page_offset": None}}
+        mock_post.side_effect = _route_posts(
+            [_fake_resp(200, {"result": {"points": page_points, "next_page_offset": None}})],
+            payload_status=500,
         )
-        mock_put.return_value = _fake_resp(500)
 
         stats = recompute_all()
 
         assert stats["total"] == 2
         assert stats["errors"] == 2
+        # The trust merge must never go through PUT /points (payload replace)
+        mock_put.assert_not_called()
+
+    @patch("nexus.apply.requests.put")
+    @patch("nexus.apply.requests.post")
+    def test_uses_set_payload_endpoint_not_put(self, mock_post, mock_put):
+        """recompute_all merges trust via POST /points/payload (data safe)."""
+        page_points = [
+            {
+                "id": "x",
+                "payload": {
+                    "belief_id": "x",
+                    "trust": 0.1,
+                    "evidences": [{"trust_contribution": 0.9}],
+                    "explicitly_set": False,
+                },
+            }
+        ]
+        mock_post.side_effect = _route_posts(
+            [_fake_resp(200, {"result": {"points": page_points, "next_page_offset": None}})]
+        )
+
+        stats = recompute_all()
+
+        assert stats["changed"] == 1
+        payload_calls = [
+            c for c in mock_post.call_args_list
+            if str(c.args[0]).endswith("/points/payload")
+        ]
+        assert len(payload_calls) == 1
+        url = payload_calls[0].args[0]
+        assert "nexus_beliefs/points/payload" in url
+        body = payload_calls[0].kwargs["json"]
+        # Only the trust field is sent — set_payload merges it, so fact/
+        # status/evidences/explicitly_set survive.
+        assert body == {"payload": {"trust": 0.9}, "points": ["x"]}
+        mock_put.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -319,7 +319,10 @@ def recompute_all() -> dict:
         if not points:
             break
 
-        # Batch-update: collect all points needing changes, then one PUT per page
+        # Collect all points needing a trust change for this page. The write
+        # below uses the set_payload endpoint (merge), NOT PUT /points —
+        # PUT replaces the payload wholesale and would drop fact/status/
+        # evidences/explicitly_set (see the 18.06.2026 data-loss class).
         batch_updates = []
         for p in points:
             stats["total"] += 1
@@ -344,20 +347,23 @@ def recompute_all() -> dict:
             if abs(new_trust - old_trust) > TRUST_EPSILON:
                 batch_updates.append({
                     "id": p["id"],
-                    "payload": {"trust": new_trust},
+                    "trust": new_trust,
                 })
                 stats["changed"] += 1
 
-        # Batch PUT — one request per page instead of N individual requests
-        if batch_updates:
-            r2 = requests.put(
-                f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}/points",
-                json={"points": batch_updates},
+        # set_payload — merges {"trust": ...} into the existing payload, so
+        # every other field survives. The endpoint takes one payload for N
+        # points; each point has its OWN trust, so we issue one call per point
+        # (grouping identical trusts would add bookkeeping for no real gain).
+        for upd in batch_updates:
+            r2 = requests.post(
+                f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}/points/payload",
+                json={"payload": {"trust": upd["trust"]}, "points": [upd["id"]]},
                 timeout=30,
             )
-            if r2.status_code not in (200, 201):
-                log.error(f"❌ Batch-update failed: {r2.status_code}")
-                stats["errors"] += len(batch_updates)
+            if not is_success(r2.status_code):
+                log.error(f"❌ Payload-update failed for {upd['id']}: {r2.status_code}")
+                stats["errors"] += 1
 
         page_offset = result.get("next_page_offset")
         if page_offset is None:

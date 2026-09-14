@@ -179,18 +179,63 @@ class TestLLMExtraction:
     """Tests for the LLM extraction path. These use mocking since we
     don't want to call a real API in unit tests."""
 
-    def test_llm_returns_empty_on_no_model(self):
-        """When no model is configured, LLM extraction should return []."""
-        # _load_llm_config with empty hermes_home should give no model
-        # Actually it falls back to gemma3:4b, so this tests the fallback path
+    def test_llm_returns_none_when_no_model_configured(self, monkeypatch):
+        """No model → LLM impossible → None (caller falls back to heuristic)."""
+        import nexus_memory.extractor as ex
+
+        monkeypatch.setattr(
+            ex, "_load_llm_config",
+            lambda _home: {"model": "", "base_url": "http://localhost:1", "api_key": ""},
+        )
         msgs = [{"role": "user", "content": "test"}]
-        # This will try to connect to localhost ollama, which may or may not be running
-        # We just verify it doesn't crash
-        try:
-            result = _llm_extract(msgs, "/nonexistent/path")
-            assert isinstance(result, list)
-        except Exception:
-            pass  # OK if it fails gracefully
+        assert _llm_extract(msgs, "/nonexistent/path") is None
+
+    def test_llm_returns_none_when_endpoint_unreachable(self, monkeypatch):
+        """Unreachable endpoint → None, so the caller uses the heuristic."""
+        import nexus_memory.extractor as ex
+
+        monkeypatch.setattr(
+            ex, "_load_llm_config",
+            lambda _home: {"model": "m", "base_url": "http://localhost:1", "api_key": "k"},
+        )
+        monkeypatch.setattr(ex, "_quick_health_check", lambda _url: False)
+        msgs = [{"role": "user", "content": "hi"}]
+        assert _llm_extract(msgs, "/x") is None
+
+    def test_llm_returns_empty_list_for_empty_conversation(self, monkeypatch):
+        """No user/assistant text is a valid input-empty → [] (NOT None)."""
+        import nexus_memory.extractor as ex
+
+        monkeypatch.setattr(
+            ex, "_load_llm_config",
+            lambda _home: {"model": "m", "base_url": "http://localhost:1", "api_key": "k"},
+        )
+        monkeypatch.setattr(ex, "_quick_health_check", lambda _url: True)
+        msgs = [{"role": "tool", "content": "ignored output"}]
+        assert _llm_extract(msgs, "/x") == []
+
+    def test_llm_returns_none_on_exception(self, monkeypatch):
+        """An exception during the LLM call → None, not []."""
+        import builtins
+
+        import nexus_memory.extractor as ex
+
+        monkeypatch.setattr(
+            ex, "_load_llm_config",
+            lambda _home: {"model": "m", "base_url": "http://localhost:1", "api_key": "k"},
+        )
+        monkeypatch.setattr(ex, "_quick_health_check", lambda _url: True)
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "openai":
+                raise RuntimeError("openai unavailable")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        msgs = [{"role": "user", "content": "hi"}]
+        assert _llm_extract(msgs, "/x") is None
 
     def test_llm_parses_json_response(self):
         """Verify that the JSON parsing logic handles markdown code blocks."""
