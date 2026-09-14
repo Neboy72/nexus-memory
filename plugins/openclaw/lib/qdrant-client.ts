@@ -51,8 +51,23 @@ export class QdrantClient {
     log.info(`Qdrant client initialized (url=${this.qdrantUrl}, collection=${collection}, dims=${dimensions})`)
   }
 
-  /** Ensures the Qdrant collection exists with the correct vector dimensions. */
-  async ensureCollection(dimensions: number): Promise<void> {
+  /**
+   * Ensures the Qdrant collection exists with the correct vector dimensions.
+   *
+   * On a dimension mismatch this NEVER auto-deletes the collection (the
+   * 18.06.2026 Qdrant wipe incident): deleting drops every stored point.
+   * Instead it throws, so a human can back up and recreate deliberately.
+   *
+   * @param dimensions   Expected vector size.
+   * @param allowRecreate Only when explicitly `true` AND `backupPath` is
+   *   provided may an existing mismatch be deleted and recreated.
+   * @param backupPath   Path to a verified backup — required for recreate.
+   */
+  async ensureCollection(
+    dimensions: number,
+    allowRecreate: boolean = false,
+    backupPath?: string,
+  ): Promise<void> {
     const url = `${this.qdrantUrl}/collections/${this.collection}`
 
     // Check if collection exists
@@ -82,9 +97,25 @@ export class QdrantClient {
     }
 
     if (exists && currentDim !== undefined && currentDim !== dimensions) {
-      log.warn(`collection ${this.collection} has dimensions=${currentDim}, expected ${dimensions} — recreating`)
-      await fetch(url, { method: "DELETE" })
-      exists = false
+      const mismatch =
+        `Qdrant collection "${this.collection}" has dimensions=${currentDim}, expected=${dimensions}.`
+      if (allowRecreate && backupPath) {
+        // Explicit opt-in + verified backup path: recreate is permitted.
+        log.warn(
+          `${mismatch} — recreating (allowRecreate=true, backup=${backupPath}). ` +
+          `All existing points are deleted!`,
+        )
+        await fetch(url, { method: "DELETE" })
+        exists = false
+      } else {
+        // Default: never delete. Refuse and point at the manual procedure.
+        throw new Error(
+          `${mismatch} Refusing to auto-delete the collection (data-loss risk). ` +
+          `Back up the collection and recreate it manually, or call ` +
+          `ensureCollection(${dimensions}, allowRecreate=true, backupPath="/path/to/backup") ` +
+          `once a verified backup exists.`,
+        )
+      }
     }
 
     // If collection exists with unknown dimensions, assume it's fine

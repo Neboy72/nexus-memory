@@ -56,4 +56,9 @@ jobs:
       - name: Run Tests
         run: |
           echo "=== Running tests ==="
-          python -m pytest tests/ -v --tb=short -x 2>&1 | head -80
+          # No pipefail: capture pytest's exit code explicitly so a failing
+          # suite can never be masked by `head` exiting 0.
+          python -m pytest tests/ -v --tb=short > /tmp/pytest-out.txt 2>&1
+          EXIT=$?
+          tail -80 /tmp/pytest-out.txt
+          exit $EXIT

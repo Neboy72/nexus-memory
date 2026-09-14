@@ -151,10 +151,15 @@ interface GuardrailResult {
 function checkGuardrails(toolName: string, params: Record<string, unknown>): GuardrailResult {
   // Block rm -rf on protected paths
   if (toolName === "exec") {
-    const command = String(params.command ?? "")
+    // Normalize case: the keyword checks below are lowercase, so `RM -RF /x`
+    // or `KILL ollama` must be lowercased here too — otherwise uppercase
+    // commands bypass the guardrail entirely.
+    const command = String(params.command ?? "").toLowerCase()
     if (command.includes("rm") && command.includes("-rf")) {
       for (const p of PROTECTED_PATHS) {
-        if (command.includes(p)) {
+        // PROTECTED_PATHS mixes case (/Users/miosha/...) — compare lowercased
+        // on both sides so the match does not depend on the command's case.
+        if (command.includes(p.toLowerCase())) {
           return {
             block: true,
             reason: `BLOCKED: rm -rf auf ${p} ist verboten. Nie kritische Pfade löschen.`,

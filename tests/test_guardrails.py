@@ -440,6 +440,53 @@ class TestGuardrailEngine:
 
 
 # ---------------------------------------------------------------------------
+# Path-less (text-only) rules must not raise KeyError (A6)
+# ---------------------------------------------------------------------------
+
+class TestPathlessRuleNoKeyError:
+    """Text rules carry 'protected_rule_text', not 'protected_path'.
+
+    Both the block-reason builder and record_override() must consume such a
+    matched dict without crashing with a KeyError.
+    """
+
+    def _engine_with_text_rule(self) -> GuardrailEngine:
+        client = MagicMock()
+        client.scroll.return_value = ([MockPoint(
+            id="rule-text",
+            payload={
+                "content": "NIEMALS das testgelände-alpha löschen - kritisch",
+                "category": "rule",
+                "access_level": "private",
+            },
+        )], None)
+        return GuardrailEngine(client)
+
+    def test_block_reason_does_not_raise_for_text_rule(self):
+        engine = self._engine_with_text_rule()
+        result = engine.check_action("rm -rf testgelände-alpha")
+
+        assert result.verdict == GuardrailVerdict.BLOCK
+        # The matched dict has no 'protected_path' — the fallback must still
+        # render a reason (this used to raise KeyError).
+        assert result.matched_rules, "text rule should have matched"
+        assert result.matched_rules[0].get("protected_path") is None
+        assert "testgelände-alpha" in result.reason
+
+    def test_record_override_survives_text_rule(self):
+        engine = self._engine_with_text_rule()
+        result = engine.check_action("rm -rf testgelände-alpha")
+
+        override_id = engine.record_override(
+            command="rm -rf testgelände-alpha",
+            matched_rules=result.matched_rules,
+            reasoning="Backup verified, deletion explicitly authorized by Nebo",
+        )
+        assert override_id is not None
+        assert engine.client.upsert.called
+
+
+# ---------------------------------------------------------------------------
 # Override recording tests
 # ---------------------------------------------------------------------------
 

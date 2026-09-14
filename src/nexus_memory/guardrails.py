@@ -495,8 +495,11 @@ class GuardrailEngine:
         # Block!
         reasons = []
         for m in matched:
+            # Path-less text rules carry 'protected_rule_text' instead of
+            # 'protected_path' — fall back so this never raises KeyError.
+            protected = m.get("protected_path") or m.get("protected_rule_text") or "?"
             reasons.append(
-                f"Target '{m['target']}' matches protected path '{m['protected_path']}'"
+                f"Target '{m['target']}' matches protected rule '{protected}'"
                 f" (rule: {m['rule_text'][:80]}...)"
             )
 
@@ -539,7 +542,10 @@ class GuardrailEngine:
             f"Overridden rules: {len(matched_rules)}\n"
         )
         for m in matched_rules:
-            audit_text += f"  - {m['protected_path']}: {m['rule_text'][:100]}\n"
+            # Same fallback as check_action: text rules have no path, only the
+            # matched rule text — keep both visible in the audit trail.
+            protected = m.get("protected_path") or m.get("protected_rule_text") or "?"
+            audit_text += f"  - {protected}: {m['rule_text'][:100]}\n"
 
         try:
             from qdrant_client import models as qmodels
