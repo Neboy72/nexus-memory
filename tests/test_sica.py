@@ -37,6 +37,15 @@ MAX_SUGGESTIONS = _CFG["max_suggestions"]
 @pytest.fixture
 def qdrant_client():
     """Return a QdrantClient connected to the local Qdrant instance."""
+    # Integration fixture: needs a live Qdrant on localhost:6333. Skip the
+    # consuming tests when none is present (CI/fresh containers) instead of
+    # failing them — see conftest.py "Environment-dependent test detection".
+    import socket
+    try:
+        with socket.create_connection(("localhost", 6333), timeout=0.5):
+            pass
+    except OSError:
+        pytest.skip("requires a live Qdrant on localhost:6333")
     from qdrant_client import QdrantClient
     client = QdrantClient(host="localhost", port=6333)
     yield client

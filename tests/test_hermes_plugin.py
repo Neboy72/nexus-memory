@@ -69,6 +69,12 @@ def tmp_hermes_home():
 @pytest.fixture
 def initialized_provider(tmp_hermes_home):
     """Return a fully initialised provider (connected to real Qdrant)."""
+    import socket
+    try:
+        with socket.create_connection((nexus_plugin._HOST, nexus_plugin._PORT), timeout=0.5):
+            pass
+    except OSError:
+        pytest.skip("requires a live Qdrant on localhost:6333")
     p = NexusMemoryProvider()
     p.initialize("test-session", hermes_home=tmp_hermes_home)
     yield p
@@ -93,6 +99,12 @@ class TestProviderBasics:
 
     def test_is_available(self, provider):
         """is_available returns True when Qdrant is up and nexus_memory is importable."""
+        import socket
+        try:
+            with socket.create_connection((nexus_plugin._HOST, nexus_plugin._PORT), timeout=0.5):
+                pass
+        except OSError:
+            pytest.skip("requires a live Qdrant on localhost:6333")
         assert provider.is_available() is True
 
     def test_tool_schemas(self, provider):
@@ -127,6 +139,11 @@ class TestEmbedder:
 
     def test_embedder_init(self):
         """_Embedder initialises and reports dim > 0."""
+        if not os.environ.get("VOYAGE_API_KEY"):
+            pytest.skip(
+                "1024-dim assertion requires VOYAGE_API_KEY "
+                "(intentionally absent on CI/fresh containers)"
+            )
         embedder = _Embedder()
         assert embedder.dim > 0
         # With VOYAGE_API_KEY set, we expect 1024
@@ -147,6 +164,12 @@ class TestProviderInitialized:
 
     def test_initialize(self, tmp_hermes_home):
         """initialize() does not crash and sets up internals."""
+        import socket
+        try:
+            with socket.create_connection((nexus_plugin._HOST, nexus_plugin._PORT), timeout=0.5):
+                pass
+        except OSError:
+            pytest.skip("requires a live Qdrant on localhost:6333")
         p = NexusMemoryProvider()
         p.initialize("test-session-init", hermes_home=tmp_hermes_home)
         assert p._session_id == "test-session-init"

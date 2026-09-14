@@ -62,7 +62,7 @@ def test_as_of_filters_newer():
 def test_supersede_reason_written():
     importer_ready = True  # mcp_server import erfordert mcp - stattdessen regex auf src
     import re
-    src = open("/Users/miosha/nexus-memory/src/nexus_memory/mcp_server.py").read()
+    src = open(str(_REPO_ROOT / "src" / "nexus_memory" / "mcp_server.py"), encoding="utf-8").read()
     assert "supersede_reason" in src
     assert "similarity" in src
 

@@ -29,7 +29,21 @@ console.log(JSON.stringify(out));
 """
 
 
+def _node_supports_ts_strip() -> bool:
+    """The test imports TS directly — needs node >= 22.6 (type stripping)."""
+    try:
+        r = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=15)
+        parts = r.stdout.strip().lstrip("v").split(".")
+        major, minor = int(parts[0]), int(parts[1])
+        return (major, minor) >= (22, 6)
+    except Exception:
+        return False
+
+
 def test_ts_scope_auto_parity():
+    if not _node_supports_ts_strip():
+        import pytest
+        pytest.skip("requires node >= 22.6 with --experimental-strip-types")
     r = subprocess.run(
         ["node", "--experimental-strip-types", "--input-type=module", "-e", NODE_SCRIPT],
         capture_output=True, text=True, cwd=PLUGIN.parent.parent, timeout=60,
