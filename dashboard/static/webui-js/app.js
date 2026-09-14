@@ -1,5 +1,16 @@
 /* nexus-memory Web UI — Main Application */
 
+// Escape untrusted values before interpolating them into innerHTML templates.
+// Everything rendered into the DOM must pass through this helper.
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
 
   // ─── State ───
@@ -134,7 +145,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.error('Failed to load data:', err);
       graphLoading.innerHTML = `
         <p style="color:var(--color-drift-drifted)">⚠️ Failed to load graph data</p>
-        <p style="font-size:0.8rem;opacity:0.5;margin-top:8px">${err.message}</p>
+        <p style="font-size:0.8rem;opacity:0.5;margin-top:8px">${escapeHtml(err.message)}</p>
       `;
     }
   }
@@ -263,12 +274,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     detailBody.innerHTML = `
       <div class="detail-node">
         <div class="detail-node__header">
-          <span class="detail-node__category" style="background:${color}20;color:${color}">${d.category || d._category || 'fact'}</span>
-          <span class="detail-node__access">${d.access_level || d.access || 'unknown'}</span>
-          <span style="margin-left:auto;font-size:0.8rem;opacity:0.4">${driftIcons[d.drift] || '⚪'} ${d.drift || 'unknown'}</span>
+          <span class="detail-node__category" style="background:${color}20;color:${color}">${escapeHtml(d.category || d._category || 'fact')}</span>
+          <span class="detail-node__access">${escapeHtml(d.access_level || d.access || 'unknown')}</span>
+          <span style="margin-left:auto;font-size:0.8rem;opacity:0.4">${driftIcons[d.drift] || '⚪'} ${escapeHtml(d.drift || 'unknown')}</span>
         </div>
-        ${paperCat ? `<div class="detail-node__paper-cat" style="margin-top:4px;font-size:0.85rem;opacity:0.5">${paperCat}</div>` : ''}
-        <div class="detail-node__text">${cleanLabel(d.fullText || d.text || d.title || '')}</div>
+        ${paperCat ? `<div class="detail-node__paper-cat" style="margin-top:4px;font-size:0.85rem;opacity:0.5">${escapeHtml(paperCat)}</div>` : ''}
+        <div class="detail-node__text">${escapeHtml(cleanLabel(d.fullText || d.text || d.title || ''))}</div>
         <div class="detail-node__meta">
           <div class="detail-node__meta-item">
             <span class="detail-node__meta-label">Confidence</span>
@@ -277,15 +288,15 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
           <div class="detail-node__meta-item">
             <span class="detail-node__meta-label">Source</span>
-            <span>${d.source}</span>
+            <span>${escapeHtml(d.source)}</span>
           </div>
           <div class="detail-node__meta-item">
             <span class="detail-node__meta-label">Memory ID</span>
-            <span style="font-family:var(--font-mono);font-size:0.75rem">${d.id}</span>
+            <span style="font-family:var(--font-mono);font-size:0.75rem">${escapeHtml(d.id)}</span>
           </div>
           <div class="detail-node__meta-item">
             <span class="detail-node__meta-label">Created</span>
-            <span>${created}</span>
+            <span>${escapeHtml(created)}</span>
           </div>
         </div>
       </div>
@@ -330,7 +341,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       tooltipEl = document.createElement('div');
       tooltipEl.className = 'tooltip-badge';
-      tooltipEl.innerHTML = `<span class="tooltip-badge__author">${author}</span><span class="tooltip-badge__quote">${quote}</span>`;
+      tooltipEl.innerHTML = `<span class="tooltip-badge__author">${escapeHtml(author)}</span><span class="tooltip-badge__quote">${escapeHtml(quote)}</span>`;
       document.body.appendChild(tooltipEl);
 
       positionTooltip(e);
