@@ -138,24 +138,30 @@ export function buildCaptureHandler(
 
     log.debug(`capturing ${captured.length} texts (${content.length} chars)`)
 
+    // ID und Payload VOR dem try: der Retry-Requeue (catch) muss exakt dieselbe
+    // ID und denselben (ggf. inferierten) Scope wiederverwenden — sonst kann
+    // derselbe Text unter 2 IDs doppelt im Store landen.
+    const id = randomUUID()
+    let payload: Record<string, unknown> = {
+      text: content,
+      access_level: cfg.accessLevel,
+      category: "session",
+      source: "openclaw",
+      source_url: "",
+      confidence: 0.7,
+      created_at: new Date().toISOString(),
+      scope: cfg.scope || "default",
+    }
+
     try {
       // Embed the captured content
       const vector = await embedder.embed(content)
 
-      // Generate a UUID for this memory
-      const id = randomUUID()
-
-      const payload = {
-        text: content,
-        access_level: cfg.accessLevel,
-        category: "session",
-        source: "openclaw",
-        source_url: "",
-        confidence: 0.7,
-        created_at: new Date().toISOString(),
-        // Scope (self-organizing memory, Nebo law 07.09): infer the area from
-        // existing scoped centroids on a CLEAR match; explicit cfg.scope wins;
-        // else 'default'. Fail-open, zero config, zero LLM cost.
+      // Scope (self-organizing memory, Nebo law 07.09): infer the area from
+      // existing scoped centroids on a CLEAR match; explicit cfg.scope wins;
+      // else 'default'. Fail-open, zero config, zero LLM cost.
+      payload = {
+        ...payload,
         scope: await inferCaptureScope(embedder, vector, centroidCache, cfg.scope),
       }
 
@@ -175,18 +181,10 @@ export function buildCaptureHandler(
       }
     } catch (err) {
       log.error("capture failed", err)
-      // Retry-Queue (Astra-R6 P1): nichts geht verloren — Text + Payload
-      // in die Warteschlange, Drain beim nächsten Capture-Versuch.
+      // Retry-Queue (Astra-R6 P1): nichts geht verloren — dieselbe ID + Payload
+      // (mit inferiertem Scope) in die Warteschlange, Drain beim nächsten Versuch.
       try {
-        enqueueCapture({ id: randomUUID(), text: content, payload: {
-          access_level: cfg.accessLevel,
-          category: "session",
-          source: "openclaw",
-          source_url: "",
-          confidence: 0.7,
-          created_at: new Date().toISOString(),
-          scope: cfg.scope || "default",
-        } })
+        enqueueCapture({ id, text: content, payload })
       } catch {
         // Queue selbst kaputt → alter Zustand (nur Log)
       }

@@ -9,6 +9,8 @@
  * 6. isUnattendedSession: Key-Erkennung korrekt
  */
 import assert from "node:assert"
+// H6/H7: Direkt-Import der lokalen Quelle (Node type-stripping, kein Build nötig).
+import { buildCronFormGateHandler } from "./hooks/cron-form-gate.ts"
 
 const mod = await import("/Users/miosha/nexus-memory/plugins/openclaw/dist/index.js")
 // Einzeldatei nicht gebundelt (esbuild bundled nur index.ts) — Gate-Funktionen via internem Export prüfen:
@@ -97,6 +99,49 @@ await t("cron + zu langer Text (>900) → BLOCKED", async () => {
   const long = "🚀 OpenClaw Release\n" + "X".repeat(950)
   const res = await sendingHandler({ to: "telegram:5763330319", content: long }, { sessionKey: CRON_KEY })
   assert.ok(res && res.cancel === true, "übergroße Nachricht MUSS geblockt werden")
+})
+
+// ── H6/H7: Kurz-Token-Whitelist + message/text-Payload (lokale Quelle) ──
+const gate = buildCronFormGateHandler()
+const cronCtx = { sessionKey: CRON_KEY }
+const shortSpam = "abc def ghi jkl mno pqr" // 23 Zeichen: kein Token, kein Formular
+assert.strictEqual(shortSpam.length, 23, "Fixture muss 23 Zeichen haben")
+
+await t("H6: 23-Zeichen-Non-Token → BLOCKED (Lücke geschlossen)", async () => {
+  const res = await gate({ to: "telegram:5763330319", content: shortSpam }, cronCtx)
+  assert.ok(res && res.cancel === true, "Kurz-Non-Token MUSS geblockt werden")
+})
+
+await t("H6: NO_REPLY → durchgelassen", async () => {
+  const res = await gate({ to: "telegram:5763330319", content: "NO_REPLY" }, cronCtx)
+  assert.ok(!res || !res.cancel, "NO_REPLY darf NICHT geblockt werden")
+})
+
+await t("H6: Whitelist-Tokens ([SILENT]/ok/OK/-/leer) → durchgelassen", async () => {
+  for (const tok of ["[SILENT]", "ok", "OK", "-", "   "]) {
+    const res = await gate({ to: "telegram:5763330319", content: tok }, cronCtx)
+    assert.ok(!res || !res.cancel, `Token «${tok}» darf nicht geblockt werden`)
+  }
+})
+
+await t("H7: Payload in event.message → Gate greift", async () => {
+  const res = await gate({ to: "telegram:5763330319", message: shortSpam }, cronCtx)
+  assert.ok(res && res.cancel === true, "message-Payload muss das Gate treffen")
+})
+
+await t("H7: Payload in event.text → Gate greift", async () => {
+  const res = await gate({ to: "telegram:5763330319", text: shortSpam }, cronCtx)
+  assert.ok(res && res.cancel === true, "text-Payload muss das Gate treffen")
+})
+
+await t("H7: gültiges Formular über event.message → durchgelassen", async () => {
+  const res = await gate({ to: "telegram:5763330319", message: goodForm }, cronCtx)
+  assert.ok(!res || !res.cancel, "gültiges Formular darf nicht geblockt werden")
+})
+
+await t("H7: interactiv (DM) bleibt unangetastet, auch via message", async () => {
+  const res = await gate({ to: "telegram:5763330319", message: shortSpam }, { sessionKey: DM_KEY })
+  assert.ok(!res || !res.cancel, "interaktive DM darf NIE geblockt werden")
 })
 
 process.exit(failed ? 1 : 0)

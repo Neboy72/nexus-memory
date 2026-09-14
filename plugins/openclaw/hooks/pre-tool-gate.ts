@@ -168,8 +168,11 @@ function checkGuardrails(toolName: string, params: Record<string, unknown>): Gua
       }
     }
 
-    // Block kill/pkill on ollama
-    if ((command.includes("kill") || command.includes("pkill")) && command.includes("ollama")) {
+    // Block kill/pkill on ollama.
+    // Wortgrenzen statt Substring: 'skill'/'grill'/'killfile' und Pfade wie
+    // ~/ollama-notes dürfen NICHT als kill-auf-ollama fehlklassifiziert werden
+    // (case-insensitive wie oben — command ist bereits lowercased).
+    if (/\b(?:kill|pkill|killall)\b/i.test(command) && /\bollama\b/i.test(command)) {
       return {
         block: true,
         reason: "BLOCKED: Ollama killen = alle Agenten tot. Erst Nexus Memory lesen, Config-Chain prüfen, Nebo GO holen.",
