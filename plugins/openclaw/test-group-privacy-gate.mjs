@@ -8,6 +8,15 @@
  * 4. recall: OHNE groupId → Suche nutzt cfg.accessLevel (private).
  */
 import assert from "node:assert";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+// T1: Pfad relativ zum Test-File (nicht machine-specific hardcoded) → portabel.
+const DIST_ENTRY = fileURLToPath(new URL("./dist/index.js", import.meta.url));
+if (!existsSync(DIST_ENTRY)) {
+  console.error("dist/index.js fehlt — erst `npm run build` im plugins/openclaw-Verzeichnis ausführen.");
+  process.exit(1);
+}
 
 const handlers = {};
 const capturedUpserts = [];
@@ -38,10 +47,10 @@ const mockApi = {
   },
 };
 
-const mod = await import("/Users/miosha/nexus-memory/plugins/openclaw/dist/index.js");
+const mod = await import(DIST_ENTRY);
 
 // Fetch-Mock: Voyage (Fake-Vektoren) + Qdrant (Recorder) — keine Netzwerk-/API-Abhängigkeit
-const realFetch = globalThis.fetch;
+const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : url.url;
   if (u.includes("voyageai.com")) {
@@ -74,70 +83,80 @@ globalThis.fetch = async (url, opts) => {
     }
     return { ok: true, status: 200, json: async () => ({ result: {} }) };
   }
-  return realFetch(url, opts);
+  return originalFetch(url, opts);
 };
-try {
-  await mod.default.register(mockApi, {
-    qdrantUrl: "http://localhost:6333",
-    collection: "nexus-test-gate",
-    agentId: "kiosha-test",
-    autoRecall: true,
-    autoCapture: true,
-    accessLevel: "private",
-    embedding: { provider: "voyage", apiKey: "test" },
-    nexusUrl: "http://localhost:9121",
-  });
-} catch (e) {
-  // Qdrant/Embedder-Fehler ok — Hooks sind trotzdem registriert
-}
 
 let failed = 0;
-const t = (name, fn) => fn().then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e.message); });
+try {
+  try {
+    await mod.default.register(mockApi, {
+      qdrantUrl: "http://localhost:6333",
+      collection: "nexus-test-gate",
+      agentId: "kiosha-test",
+      autoRecall: true,
+      autoCapture: true,
+      accessLevel: "private",
+      embedding: { provider: "voyage", apiKey: "test" },
+      nexusUrl: "http://localhost:9121",
+    });
+  } catch (e) {
+    // T2: Register-Fehler NICHT schlucken — die Test-Umgebung ist kaputt und
+    // spätere Fehler wären sonst unerklärliche TypeErrors.
+    console.error("Plugin-Registrierung fehlgeschlagen — Test-Umgebung kaputt:", e);
+    globalThis.fetch = originalFetch; // Mock VOR dem Exit zurückgeben
+    process.exit(1);
+  }
 
-// 1. capture MIT groupId → kein Upsert
-await t("capture group → skip", async () => {
-  const before = capturedUpserts.length;
-  await handlers["agent_end"](
-    { success: true, messages: [{ role: "user", content: "Gruppengeheimnis: Token abc123" }] },
-    { trigger: "user", messageProvider: "telegram", groupId: "-1001234" },
-  );
-  assert.strictEqual(capturedUpserts.length, before, "Gruppen-Turn darf NICHT gespeichert werden");
-});
+  const t = (name, fn) => fn().then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e.message); });
 
-// 2. capture DM → speichert
-await t("capture DM → upsert", async () => {
-  const before = capturedUpserts.length;
-  await handlers["agent_end"](
-    { success: true, messages: [{ role: "user", content: "DM-Nachricht fürs private Gedächtnis" }] },
-    { trigger: "user", messageProvider: "telegram", groupId: null },
-  );
-  assert.ok(capturedUpserts.length > before, "DM-Turn MUSS gespeichert werden");
-});
+  // 1. capture MIT groupId → kein Upsert
+  await t("capture group → skip", async () => {
+    const before = capturedUpserts.length;
+    await handlers["agent_end"](
+      { success: true, messages: [{ role: "user", content: "Gruppengeheimnis: Token abc123" }] },
+      { trigger: "user", messageProvider: "telegram", groupId: "-1001234" },
+    );
+    assert.strictEqual(capturedUpserts.length, before, "Gruppen-Turn darf NICHT gespeichert werden");
+  });
 
-// 3. recall MIT groupId → accessLevel=public im Search
-await t("recall group → capped public", async () => {
-  searches.length = 0;
-  await handlers["before_prompt_build"](
-    { prompt: "was weißt du über geheimnisse?" },
-    { trigger: "user", groupId: "-1001234" },
-  );
-  assert.ok(searches.length > 0, "Suche muss stattfinden");
-  assert.strictEqual(searches[0].accessLevel, "public", "Gruppen-Recall MUSS auf public gecappt sein");
-});
+  // 2. capture DM → speichert
+  await t("capture DM → upsert", async () => {
+    const before = capturedUpserts.length;
+    await handlers["agent_end"](
+      { success: true, messages: [{ role: "user", content: "DM-Nachricht fürs private Gedächtnis" }] },
+      { trigger: "user", messageProvider: "telegram", groupId: null },
+    );
+    assert.ok(capturedUpserts.length > before, "DM-Turn MUSS gespeichert werden");
+  });
 
-// 4. recall DM → cfg-Level (private)
-await t("recall DM → private", async () => {
-  searches.length = 0;
-  await handlers["before_prompt_build"](
-    { prompt: "was weißt du über mein privates gedächtnis?" },
-    { trigger: "user", groupId: null },
-  );
-  assert.ok(searches.length > 0, "Suche muss stattfinden");
-  // private sieht ALLES → Qdrant-Client schickt bewusst KEINEN Filter → implizit "private"
-  assert.ok(
-    searches[0].accessLevel.startsWith("private"),
-    "DM-Recall nutzt cfg.accessLevel (private = kein Filter, sieht alles) — got: " + searches[0].accessLevel,
-  );
-});
+  // 3. recall MIT groupId → accessLevel=public im Search
+  await t("recall group → capped public", async () => {
+    searches.length = 0;
+    await handlers["before_prompt_build"](
+      { prompt: "was weißt du über geheimnisse?" },
+      { trigger: "user", groupId: "-1001234" },
+    );
+    assert.ok(searches.length > 0, "Suche muss stattfinden");
+    assert.strictEqual(searches[0].accessLevel, "public", "Gruppen-Recall MUSS auf public gecappt sein");
+  });
+
+  // 4. recall DM → cfg-Level (private)
+  await t("recall DM → private", async () => {
+    searches.length = 0;
+    await handlers["before_prompt_build"](
+      { prompt: "was weißt du über mein privates gedächtnis?" },
+      { trigger: "user", groupId: null },
+    );
+    assert.ok(searches.length > 0, "Suche muss stattfinden");
+    // private sieht ALLES → Qdrant-Client schickt bewusst KEINEN Filter → implizit "private"
+    assert.ok(
+      searches[0].accessLevel.startsWith("private"),
+      "DM-Recall nutzt cfg.accessLevel (private = kein Filter, sieht alles) — got: " + searches[0].accessLevel,
+    );
+  });
+} finally {
+  // T3: Mock IMMER restaurieren (läuft vor dem finalen process.exit).
+  globalThis.fetch = originalFetch;
+}
 
 process.exit(failed ? 1 : 0);

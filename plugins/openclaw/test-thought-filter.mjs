@@ -9,9 +9,24 @@
  */
 import fs from "node:fs";
 import assert from "node:assert";
+import { fileURLToPath } from "node:url";
 // H1: Direkt-Import der lokalen Quelle (Node type-stripping, kein Build nötig).
 import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts";
 import { initLogger } from "./logger.ts";
+
+// T1: Pfad relativ zum Test-File (nicht machine-specific hardcoded) → portabel.
+const DIST_ENTRY = fileURLToPath(new URL("./dist/index.js", import.meta.url));
+if (!fs.existsSync(DIST_ENTRY)) {
+  console.error("dist/index.js fehlt — erst `npm run build` im plugins/openclaw-Verzeichnis ausführen.");
+  process.exit(1);
+}
+
+// T5: Test-Config gebündelt. Nur Test-Dummy-Werte — KEIN echter API-Key.
+// localhost bleibt ok: der Test macht keinen echten Netz-Call (nur Handler-Asserts).
+const TEST_BASE_URL = "http://localhost:6333"; // Qdrant-Mock
+const TEST_NEXUS_URL = "http://localhost:9121"; // Nexus-API-Mock
+const TEST_AGENT_ID = "kiosha-test";
+const TEST_API_KEY = "dummy"; // nur Test-Dummy, kein echter Key
 
 const handlers = {};
 const handlerLists = {};
@@ -23,19 +38,22 @@ const mockApi = {
   logger: { info: () => {}, warn: () => {}, error: () => {} },
 };
 
-const mod = await import("/Users/miosha/nexus-memory/plugins/openclaw/dist/index.js");
+const mod = await import(DIST_ENTRY);
 try {
   await mod.default.register(mockApi, {
-    qdrantUrl: "http://localhost:6333",
+    qdrantUrl: TEST_BASE_URL,
     collection: "nexus-test-filter",
-    agentId: "kiosha-test",
+    agentId: TEST_AGENT_ID,
     thoughtFilter: true,
     autoCapture: false,
-    embedding: { provider: "voyage", apiKey: "dummy" },
-    nexusUrl: "http://localhost:9121",
+    embedding: { provider: "voyage", apiKey: TEST_API_KEY },
+    nexusUrl: TEST_NEXUS_URL,
   });
 } catch (e) {
-  // Qdrant/Embedder-Fehler sind hier ok — der Hook wird trotzdem registriert.
+  // T2: Register-Fehler NICHT schlucken — die Test-Umgebung ist kaputt und
+  // spätere Fehler wären sonst unerklärliche TypeErrors.
+  console.error("Plugin-Registrierung fehlgeschlagen — Test-Umgebung kaputt:", e);
+  process.exit(1);
 }
 
 const hook = handlers["message_sending"];
