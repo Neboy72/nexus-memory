@@ -399,7 +399,13 @@ class TestDockerRunLocalhostOnly:
         repo_src = _REPO_ROOT / "src"
         offenders = []
         for py in repo_src.rglob("*.py"):
-            text = py.read_text()
+            try:
+                text = py.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # Binary-looking file (e.g. macOS AppleDouble xattr leftovers)
+                # can never contain the docker-run pattern — skip it, do not
+                # fail the invariant on encoding noise.
+                continue
             if 'docker run' in text and '-p 6333:6333' in text:
                 offenders.append(str(py))
         assert offenders == []

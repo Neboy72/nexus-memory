@@ -30,6 +30,7 @@ const Inspector = {
       const data = await res.json();
       this.items = (data.memories || []).map(m => ({ id: m.id, text: (m.text || m.title || ''), category: m.category, access_level: m.access_level, created_at: m.created_at }));
       this._renderList();
+      this.view = 'list';
       document.getElementById('inspSearch').addEventListener('input', (e) => { this.filter = e.target.value.trim(); this._renderList(); });
       document.getElementById('inspCat').addEventListener('change', (e) => { this.cat = e.target.value; this._renderList(); });
     } catch (err) {
@@ -59,7 +60,7 @@ const Inspector = {
                    (!f || (m.text || '').toLowerCase().includes(f)))
       .slice(0, 300);
     el.innerHTML = rows.map(m => `
-      <div class="insp-row" onclick="Inspector._detail('${this._esc(m.id)}')">
+      <div class="insp-row" data-mem-id="${this._esc(m.id)}">
         <span class="insp-badge insp-badge--${this._esc(m.category || 'fact')}">${this._esc(m.category || 'fact')}</span>
         <span class="insp-row__text">${this._esc((m.text || '').slice(0, 220))}</span>
         <span style="font-size:11px;color:#636e72;flex:0 0 auto">${this._esc(m.access_level || '')}</span>
@@ -75,7 +76,7 @@ const Inspector = {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const d = await res.json();
       el.innerHTML = `
-        <button class="insp-back" onclick="Inspector.load()">← Back to list</button>
+        <button class="insp-back" data-insp-action="back">← Back to list</button>
         <div class="insp-why" style="margin-top:12px">
           <div style="white-space:pre-wrap;font-size:14px;color:#e8ecf4">${this._esc(d.text || '')}</div>
           <dl class="insp-why-grid">
@@ -88,14 +89,15 @@ const Inspector = {
             <dt>Memory ID</dt><dd>${this._esc(d.id)}</dd>
           </dl>
           <div class="insp-actions">
-            <button class="insp-btn" onclick="Inspector.edit('${this._esc(d.id)}')">✎ Correct text</button>
+            <button class="insp-btn" data-insp-action="edit" data-mem-id="${this._esc(d.id)}">✎ Correct text</button>
             ${d.lifecycle_status === 'deprecated'
-              ? `<button class="insp-btn" onclick="Inspector.restore('${this._esc(d.id)}')">↩ Restore</button>`
-              : `<button class="insp-btn insp-btn--danger" onclick="Inspector.deprecate('${this._esc(d.id)}')">🗑 Roll back (soft)</button>`}
+              ? `<button class="insp-btn" data-insp-action="restore" data-mem-id="${this._esc(d.id)}">↩ Restore</button>`
+              : `<button class="insp-btn insp-btn--danger" data-insp-action="deprecate" data-mem-id="${this._esc(d.id)}">🗑 Roll back (soft)</button>`}
           </div>
           <div id="inspMsg" style="margin-top:10px;font-size:12.5px;color:#00b894"></div>
         </div>`;
       this.current = id;
+      this.view = 'why';
     } catch (err) {
       el.innerHTML = `<div class="insp-error">Load failed: ${this._esc(String(err))}</div>`;
     }
@@ -103,15 +105,16 @@ const Inspector = {
 
   async edit(id) {
     const el = document.getElementById('inspList');
+    this.view = 'edit';
     try {
       const res = await fetch(`/api/memories/${encodeURIComponent(id)}/why`);
       const d = await res.json();
       el.innerHTML = `
-        <button class="insp-back" onclick="Inspector.why('${this._esc(id)}')">← Back</button>
+        <button class="insp-back" data-insp-action="back">← Back</button>
         <textarea class="insp-textarea" id="inspTextarea">${this._esc(d.text || '')}</textarea>
         <div class="insp-actions">
-          <button class="insp-btn" onclick="Inspector.save('${this._esc(id)}')">Save</button>
-          <button class="insp-btn" onclick="Inspector.why('${this._esc(id)}')">Cancel</button>
+          <button class="insp-btn" data-insp-action="save" data-mem-id="${this._esc(id)}">Save</button>
+          <button class="insp-btn" data-insp-action="back">Cancel</button>
         </div>`;
     } catch (err) { el.innerHTML = `<div class="insp-error">${this._esc(String(err))}</div>`; }
   },
@@ -148,4 +151,27 @@ const Inspector = {
 function openInspector() { Inspector.open(); }
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') Inspector.close();
+});
+
+// Delegated click handling — replaces the former inline onclick handlers so
+// that interpolated memory ids never live inside HTML attributes (an id like
+// `');alert(document.cookie)//` escaped to &#39; is decoded back to ' by the
+// HTML parser before JS compilation and would break out of the attribute).
+document.addEventListener('click', (e) => {
+  const row = e.target.closest('.insp-row');
+  if (row) { Inspector._detail(row.getAttribute('data-mem-id')); return; }
+  const btn = e.target.closest('[data-insp-action]');
+  if (!btn) return;
+  const action = btn.getAttribute('data-insp-action');
+  const id = btn.getAttribute('data-mem-id') || Inspector.current;
+  if (action === 'back') {
+    // Back from the edit view returns to the detail view; back from the
+    // detail view returns to the list.
+    if (Inspector.view === 'edit') Inspector.why(Inspector.current);
+    else Inspector.load();
+  }
+  else if (action === 'edit') Inspector.edit(id);
+  else if (action === 'save') Inspector.save(id);
+  else if (action === 'restore') Inspector.restore(id);
+  else if (action === 'deprecate') Inspector.deprecate(id);
 });

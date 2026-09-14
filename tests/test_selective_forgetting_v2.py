@@ -104,8 +104,19 @@ class TestScorePoint:
 # ---------- Integration: run() gegen TEMP-Collection ----------
 
 class TestRunIntegration:
+    @staticmethod
+    def _require_qdrant():
+        """Skip when no live Qdrant (CI/fresh containers)."""
+        import socket
+        try:
+            with socket.create_connection(("localhost", 6333), timeout=0.5):
+                pass
+        except OSError:
+            pytest.skip("requires a live Qdrant on localhost:6333")
+
     def test_run_against_temp_collection(self, tmp_path):
         """Kompletter run() mit echtem Qdrant-Client gegen TEMP-Collection."""
+        self._require_qdrant()
         from qdrant_client import QdrantClient, models
 
         client = QdrantClient(host="localhost", port=6333)
@@ -159,6 +170,7 @@ class TestRunIntegration:
 
     def test_run_never_deletes(self, tmp_path):
         """Härte-Garantie: nach run() existieren alle Punkte noch (READ-ONLY)."""
+        self._require_qdrant()
         from qdrant_client import QdrantClient, models
 
         client = QdrantClient(host="localhost", port=6333)

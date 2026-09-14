@@ -145,3 +145,53 @@ class _FakePoint:
 def make_fake_point(point_id: str, payload: dict, score: float = 0.9) -> _FakePoint:
     """Public helper so test files can build fake Qdrant points."""
     return _FakePoint(point_id, payload, score)
+
+
+# ---------------------------------------------------------------------------
+# Environment-dependent test detection (CI portability).
+#
+# A subset of the suite requires a REAL, live environment:
+#   * a Qdrant server listening on localhost:6333 (integration tests)
+#   * a VOYAGE_API_KEY (the production 1024-dim embedder)
+#   * the openclaw plugin's built dist/ bundle
+#
+# On machines that lack these (GitHub runners, fresh containers) those tests
+# are skipped with an explicit reason instead of failing — the failures were
+# environmental, not code bugs (proven 2026-09-14: identical failures on a
+# bare ubuntu-python3.11 docker replica and the GitHub runner).
+# ---------------------------------------------------------------------------
+
+def _qdrant_reachable() -> bool:
+    """True when a Qdrant server answers on the configured host:port."""
+    try:
+        from qdrant_client import QdrantClient  # noqa: F401
+    except Exception:
+        return False
+    host = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
+    try:
+        port = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
+    except ValueError:
+        port = 6333
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+_requires_qdrant = pytest.mark.skipif(
+    not _qdrant_reachable(),
+    reason="requires a live Qdrant on localhost:6333 (CI/fresh containers have none)",
+)
+
+_requires_voyage = pytest.mark.skipif(
+    not os.environ.get("VOYAGE_API_KEY"),
+    reason="requires VOYAGE_API_KEY for the production 1024-dim embedder "
+           "(intentionally absent on CI/fresh containers)",
+)
+
+_requires_openclaw_dist = pytest.mark.skipif(
+    not (Path(__file__).resolve().parent.parent / "plugins" / "openclaw" / "dist" / "index.js").exists(),
+    reason="requires the built openclaw plugin bundle (plugins/openclaw/dist/index.js)",
+)
