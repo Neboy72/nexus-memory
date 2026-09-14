@@ -2,9 +2,10 @@
  * Cron-Form-Gate (Astra-R6 P0, 08.09.2026)
  *
  * Unbeaufsichtigte Nachrichten (Cron-/Heartbeat-Sessions) dürfen nur als
- * festes Formular gesendet werden. Fail-closed: Kaputtes Formular → Senden
- * wird abgebrochen (cancel) + 1 Zeile ins Daily Log. Interaktive Sessions
- * (DM/Gruppe mit User) bleiben unangetastet.
+ * festes Formular gesendet werden. Fail-closed für Formular-Verletzungen:
+ * kaputtes Formular → Senden wird abgebrochen (cancel) + 1 Zeile ins Daily Log.
+ * Fail-open NUR bei Gate-eigenem Crash (nie den Sendepfad kaputtmachen).
+ * Interaktive Sessions (DM/Gruppe mit User) bleiben unangetastet.
  *
  * sessionKey-Formate (Log-Beweise 08.09.):
  * - Cron:   agent:main:cron:<jobId>:run:<runId>
@@ -25,6 +26,10 @@ const ALLOWED_TITLES = [
 ]
 const MAX_LINES = 6
 const MAX_CHARS = 900
+
+// Erlaubte Kurz-Nachrichten (Cron-/Heartbeat-Steuersignale). Alles andere —
+// auch Kurz-Texte < 24 Zeichen — muss das Formular erfüllen, sonst Gate-Umgehung.
+const SHORT_TOKENS = new Set(["NO_REPLY", "[SILENT]", "-", "ok", "OK"])
 
 export function isUnattendedSession(sessionKey: string | undefined | null): boolean {
   if (typeof sessionKey !== "string" || !sessionKey) return false
@@ -68,8 +73,13 @@ export function buildCronFormGateHandler() {
     try {
       const sessionKey = ctx?.sessionKey
       if (!isUnattendedSession(sessionKey)) return // interaktiv → nichts tun
-      const raw = event?.content
-      if (typeof raw !== "string" || raw.trim().length < 24) return // NO_REPLY etc.
+      // Gleiche Payload-Kette wie thought-filter: der Sender kann den Text in
+      // content ODER message ODER text legen — sonst wäre das Gate umgehbar.
+      const raw = event?.content ?? (event as any)?.message ?? (event as any)?.text
+      if (typeof raw !== "string") return
+      const trimmed = raw.trim()
+      if (trimmed.length === 0) return // leer/whitespace
+      if (SHORT_TOKENS.has(trimmed)) return // explizite Steuersignale (NO_REPLY etc.)
       if (isCompliantForm(raw)) return // Formular ok → durchlassen
       log.warn(
         `cron-form-gate: BLOCKED (kein gültiges Formular, ${raw.length} Zeichen, session=${sessionKey})`

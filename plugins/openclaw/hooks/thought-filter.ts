@@ -95,8 +95,12 @@ type MessageSendingCtx = { message?: string; content?: string; text?: string } &
  */
 export function buildThoughtFilterHandler() {
   return async (ctx: { message?: string; content?: string; text?: string }) => {
+    // raw VOR dem try deklarieren: der Fail-open-catch muss den ORIGINAL-Text
+    // zurückgeben können. ctx.message ist undefined, wenn die Payload in
+    // content/text lag — die Message würde sonst gedroppt statt durchzugehen.
+    let raw: string | undefined
     try {
-      const raw = ctx?.message ?? ctx?.content ?? ctx?.text
+      raw = ctx?.message ?? ctx?.content ?? ctx?.text
       if (typeof raw !== "string" || raw.trim().length < 24) return { message: raw }
 
       const blocks = raw.split(/\n{2,}/)
@@ -120,7 +124,7 @@ export function buildThoughtFilterHandler() {
       if (out.length < 12) return { message: undefined } // alles war Leak → nicht senden
       return { message: out }
     } catch {
-      return { message: ctx?.message } // Fail-open
+      return { message: raw } // Fail-open: Original unverändert durchlassen
     }
   }
 }

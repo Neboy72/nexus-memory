@@ -52,4 +52,27 @@ await t("unschädliches Kommando wird nicht vom Guardrail geblockt", async () =>
   assert.ok(!res || res.block !== true, "ls darf nicht geblockt werden")
 })
 
+// ── H2: Wortgrenzen statt Substring (kill/pkill/killall + ollama) ──
+
+await t("H2: 'skill'-Substring + 'ollama' → KEIN Ollama-Guardrail-Block mehr", async () => {
+  // Vor dem Fix: command.includes("kill") matcht "skill.md" → False-Positive-Block.
+  const res = await exec("cat skill.md in ~/ollama-notes")
+  assert.ok(
+    !res?.blockReason || !/Ollama killen/.test(res.blockReason),
+    `Guardrail-False-Positive nicht behoben, Grund: ${res?.blockReason}`,
+  )
+})
+
+await t("H2: pkill -f ollama → weiter Guardrail-BLOCK", async () => {
+  const res = await exec("pkill -f ollama runner")
+  assert.ok(res && res.block === true, "pkill auf ollama muss geblockt werden")
+  assert.match(res.blockReason, /Ollama/i, `Guardrail-Grund erwartet, bekam: ${res.blockReason}`)
+})
+
+await t("H2: killall ollama → weiter Guardrail-BLOCK", async () => {
+  const res = await exec("killall ollama")
+  assert.ok(res && res.block === true, "killall auf ollama muss geblockt werden")
+  assert.match(res.blockReason, /Ollama/i, `Guardrail-Grund erwartet, bekam: ${res.blockReason}`)
+})
+
 process.exit(failed ? 1 : 0)

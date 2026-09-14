@@ -23,18 +23,17 @@ export interface QueuedCapture {
   payload: Record<string, unknown>
 }
 
+/**
+ * Single-writer-Prinzip: enqueueCapture ist APPEND-ONLY (appendFileSync).
+ * Rewrites der Queue (Drain + Überlauf-Trim) macht ausschließlich drainQueue
+ * bzw. trimQueue — so können zwei Hook-Prozesse sich nicht mehr gegenseitig
+ * durch read-modify-write clobberen (verlorene Einträge).
+ */
 export function enqueueCapture(entry: QueuedCapture): void {
   try {
     appendFileSync(QUEUE_FILE, JSON.stringify(entry) + "\n", "utf8")
-    // Ring-Größe erzwingen: bei Überlauf älteste Hälfte verwerfen (Memory-Hygiene,
-    // Verlust begrenzt und protokolliert)
-    const current = readQueue()
-    if (current.length > MAX_QUEUE) {
-      const keep = current.slice(Math.floor(current.length / 2))
-      writeQueue(keep)
-      log.warn(`capture-retry: Queue auf ${keep.length} verkleinert (Überlauf)`)
-    }
-    log.warn(`capture-retry: queued (${current.length + 1} in Queue)`)
+    // Kein read-modify-write hier: Trim läuft single-writer in drainQueue.
+    log.warn(`capture-retry: queued (id=${entry.id})`)
   } catch (err) {
     log.error("capture-retry: enqueue fehlgeschlagen", err)
   }
@@ -44,9 +43,39 @@ export function readQueue(): QueuedCapture[] {
   try {
     if (!existsSync(QUEUE_FILE)) return []
     const lines = readFileSync(QUEUE_FILE, "utf8").split("\n").filter(Boolean)
-    return lines.map((l) => JSON.parse(l) as QueuedCapture)
+    // Zeilenweise parsen: EINE korrupte Zeile (abgeschnittener Crash-Write) darf
+    // nicht die ganze Queue als "leer" erscheinen lassen → Datenverlust.
+    // Die korrupte Zeile wird beim nächsten writeQueue automatisch weggeschrieben
+    // (sie war nie in entries) — Verlust bleibt auf maximal 1 Zeile begrenzt.
+    const out: QueuedCapture[] = []
+    for (let i = 0; i < lines.length; i++) {
+      try {
+        out.push(JSON.parse(lines[i]) as QueuedCapture)
+      } catch {
+        log.warn(`capture-retry: korrupte Queue-Zeile ${i + 1} übersprungen`)
+      }
+    }
+    return out
   } catch {
+    // NUR wenn die DATEI selbst unlesbar ist (kein Zugriff) → leer.
     return []
+  }
+}
+
+/**
+ * Überlauf-Trimmung (Ring-Größe). SINGLE-WRITER: wird nur von drainQueue
+ * aufgerufen — niemals aus enqueueCapture (sonst Rewrite-Race zwischen Prozessen).
+ */
+export function trimQueue(): void {
+  try {
+    const current = readQueue()
+    if (current.length > MAX_QUEUE) {
+      const keep = current.slice(Math.floor(current.length / 2))
+      writeQueue(keep)
+      log.warn(`capture-retry: Queue auf ${keep.length} verkleinert (Überlauf)`)
+    }
+  } catch (err) {
+    log.error("capture-retry: trim fehlgeschlagen", err)
   }
 }
 
@@ -86,5 +115,7 @@ export async function drainQueue(
   }
   const kept = entries.filter((e) => !restoredIds.has(e.id))
   writeQueue(kept)
+  // Single-writer: NUR drainQueue trimmt die Queue (Append-Only-enqueue).
+  trimQueue()
   return entries.length - kept.length
 }
