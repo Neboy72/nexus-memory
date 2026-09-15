@@ -23,7 +23,9 @@ if command -v python3 >/dev/null 2>&1; then
     LOCAL_VER=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb")).get("project", {}).get("version", ""))' "$PYPROJECT" 2>/dev/null || true)
 fi
 if [ -z "$LOCAL_VER" ]; then
-    LOCAL_VER=$(grep -m1 '^version' "$PYPROJECT" | sed 's/version = "\(.*\)"/\1/')
+    # `|| true`: a missing version line makes grep exit 1; under set -e the
+    # substitution would abort the script without any GATE output.
+    LOCAL_VER=$(grep -m1 '^version' "$PYPROJECT" | sed 's/version = "\(.*\)"/\1/' || true)
 fi
 
 if [ -z "$LOCAL_VER" ]; then
@@ -42,15 +44,34 @@ if ! TAGS_LIST=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name' 2>/dev/nul
     echo "GATE-ERROR: 'gh api' failed (gh missing, unauthenticated, or network error) — cannot verify tags for $REPO"
     exit 1
 fi
-REMOTE_TAG=$(printf '%s\n' "$TAGS_LIST" | sort -V | tail -1)
-if [ -z "$REMOTE_TAG" ]; then
+if [ -z "$TAGS_LIST" ]; then
     echo "GATE-ROT: keine Tags in $REPO gefunden (Repository hat noch kein Release)"
     exit 1
 fi
+# Only version-shaped tags (X.Y.Z, optional "v" prefix and an optional
+# -pre-release/+build suffix) take part — a stray non-version tag must not
+# become the "latest release". The suffix is allowed here so the
+# normalization below can actually tolerate pre-release/build metadata.
+VERSION_TAGS=$(printf '%s\n' "$TAGS_LIST" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' || true)
+REMOTE_TAG=$(printf '%s\n' "$VERSION_TAGS" | sort -V | tail -1 || true)
+if [ -z "$REMOTE_TAG" ]; then
+    echo "GATE-ROT: keine version-shaped Tags in $REPO gefunden (erwartet X.Y.Z)"
+    exit 1
+fi
+# Normalize only a single optional "-<suffix>" / "+<build>" tail off the tag
+# before comparing (pre-release / build metadata must not fail the gate).
 REMOTE_TAG_VER="${REMOTE_TAG#v}"
+REMOTE_TAG_VER="${REMOTE_TAG_VER%%[-+]*}"
 
 if [ "$LOCAL_VER" = "$REMOTE_TAG_VER" ]; then
     echo "GATE-GRUEN: pyproject=$LOCAL_VER == Tag=$REMOTE_TAG"
+    # HEAD-tagged check: alarm-only. A normal commit between releases is
+    # untagged, so this must not turn the gate red (and a shallow clone / CI
+    # without local tags simply yields the warning, never a failure).
+    HEAD_TAG="$(git -C "$REPO_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)"
+    if [ -z "$HEAD_TAG" ]; then
+        echo "GATE-WARN: HEAD ist untagged — der aktuelle Commit trägt kein Tag (Push ohne Version-Bump würde sonst still passieren)"
+    fi
 else
     echo "GATE-ROT: Release fehlt! pyproject=$LOCAL_VER aber neuester Tag=$REMOTE_TAG"
     echo "AKTION: git tag v$LOCAL_VER <commit> && git push origin v$LOCAL_VER && gh release create v$LOCAL_VER --generate-notes"

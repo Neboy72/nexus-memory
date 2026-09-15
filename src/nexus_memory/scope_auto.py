@@ -155,6 +155,10 @@ class ScopeCentroids:
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
+    if len(a) != len(b):
+        # Dimension mismatch (model change / named vectors): a truncated dot
+        # product is meaningless — fail closed to 'no match' (0.0).
+        return 0.0
     na = sum(x * x for x in a) ** 0.5 or 1.0
     nb = sum(x * x for x in b) ** 0.5 or 1.0
     return sum(x * y for x, y in zip(a, b)) / (na * nb)

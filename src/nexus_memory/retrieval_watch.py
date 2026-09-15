@@ -7,8 +7,12 @@ in-process daemon (HealthAuditor-Pattern). Nebo-Grundentscheidung 02.09.2026:
 'Nexus Memory ist unabhängig — Wartung läuft im Server, nie extern.'
 
 TÄGLICHER CHECK: kritische Entities müssen im Prefetch/Semantic-Search gefunden
-werden. Wenn Score < 0.5 oder Expected-Keyword fehlt → Flag für health-Tool
-+ Webhook (falls NEXUS_WEBHOOK_URL gesetzt).
+werden. Wenn Score < 0.5 oder Expected-Keyword fehlt → Report + Flag via
+get_flags().
+
+Hinweis (Stand dieses Fixes): get_flags() wird derzeit von keinem Aufrufer im
+Codebase konsumiert — die Flags sind noch NICHT in das health-Tool verdrahtet.
+Ein Webhook ist NICHT implementiert (der frühere Docstring-Claim war falsch).
 
 Env:
   NEXUS_RETRIEVAL_WATCH=0   → Daemon deaktiviert (Kill-Switch)
@@ -24,8 +28,28 @@ from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("nexus.retrieval_watch")
 
-RETRIEVAL_START_DELAY_SECONDS = int(os.environ.get("NEXUS_RETRIEVAL_START_DELAY", 120))
-RETRIEVAL_INTERVAL_SECONDS = int(os.environ.get("NEXUS_RETRIEVAL_INTERVAL_SEC", 24 * 3600))
+
+def _env_int(name: str, default: int, minimum: int) -> int:
+    """Parse an int env var, falling back to *default* when it is missing,
+    unparsable or below *minimum* (a negative start delay raises in
+    time.sleep; an interval < 1 would full-scan every second)."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        log.warning("%s=%r is not an integer — using default %d", name, raw, default)
+        return default
+    if val < minimum:
+        log.warning("%s=%d out of range (min %d) — using default %d",
+                    name, val, minimum, default)
+        return default
+    return val
+
+
+RETRIEVAL_START_DELAY_SECONDS = _env_int("NEXUS_RETRIEVAL_START_DELAY", 120, 0)
+RETRIEVAL_INTERVAL_SECONDS = _env_int("NEXUS_RETRIEVAL_INTERVAL_SEC", 24 * 3600, 1)
 # Configurable minimum score: results below it count as retrieval failures
 # (a hit is worthless when the similarity is too low to be meaningful).
 MIN_SCORE = float(os.environ.get("NEXUS_WATCH_MIN_SCORE", "0.5"))

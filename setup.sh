@@ -41,18 +41,33 @@ done
 [ -n "$PYTHON" ] || fail "Python 3.11+ required"
 
 # ── Step 2: Check / Install Qdrant ────────────────────────────────────
+# Health probe with a hard timeout and a curl-less fallback (minimal images
+# have no curl; a black-holed host must not hang the install forever).
+qdrant_healthy() {
+    if command -v curl &>/dev/null; then
+        curl -sf --max-time 5 http://127.0.0.1:6333/healthz >/dev/null 2>&1
+    else
+        "$PYTHON" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6333/healthz', timeout=5)" >/dev/null 2>&1
+    fi
+}
+
 info "Checking Qdrant..."
-if curl -sf http://127.0.0.1:6333/healthz >/dev/null 2>&1; then
+if qdrant_healthy; then
     ok "Qdrant is running"
 else
     warn "Qdrant not running"
     if [[ "$OSTYPE" == "darwin"* ]]; then
         if command -v brew &>/dev/null; then
             info "Installing Qdrant via Homebrew..."
-            brew install qdrant 2>/dev/null || true
-            brew services start qdrant 2>/dev/null || true
+            if ! brew install qdrant; then
+                warn "brew install failed"
+                warn "Install manually: https://qdrant.tech/documentation/quick-start/ (or: docker run -p 6333:6333 qdrant/qdrant)"
+            fi
+            if ! brew services start qdrant; then
+                warn "brew services start failed — start manually: brew services start qdrant"
+            fi
             sleep 2
-            if curl -sf http://127.0.0.1:6333/healthz >/dev/null 2>&1; then
+            if qdrant_healthy; then
                 ok "Qdrant installed and running"
             else
                 warn "Qdrant installed but not responding — start manually: brew services start qdrant"
@@ -68,9 +83,13 @@ fi
 # ── Step 3: Clone / Update Repo ───────────────────────────────────────
 info "Setting up ${REPO}..."
 if [ -d "$INSTALL_DIR" ]; then
-    info "Repository exists — pulling latest..."
-    cd "$INSTALL_DIR"
-    git pull origin main --ff-only 2>/dev/null || warn "Could not pull (uncommitted changes?)"
+    if git -C "$INSTALL_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        info "Repository exists — pulling latest..."
+        cd "$INSTALL_DIR"
+        git pull origin main --ff-only 2>/dev/null || warn "Could not pull (uncommitted changes?)"
+    else
+        fail "$INSTALL_DIR exists but is not a git checkout — remove it or point INSTALL_DIR elsewhere (refusing to install from unknown code)"
+    fi
 else
     git clone "$REPO_URL" "$INSTALL_DIR"
     ok "Cloned ${REPO}"

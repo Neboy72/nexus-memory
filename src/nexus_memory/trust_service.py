@@ -23,6 +23,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -114,8 +115,11 @@ class TrustService:
     """
 
     def __init__(self, store, collection: str, data_dir: Optional[str] = None) -> None:
+        """collection is required for explicitness; it defaults to
+        store.collection_name when None is passed, and all reads/writes go
+        through self._collection."""
         self._store = store
-        self._collection = collection
+        self._collection = collection or self._store.collection_name
         self._data_dir = Path(data_dir or (Path.home() / ".nexus-memory" / "reports"))
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._last_report: Dict[str, Any] = {}
@@ -167,8 +171,14 @@ class TrustService:
 
             if not dry_run and (new_trust != old_trust or new_status != old_status):
                 self._store.client.set_payload(
-                    collection_name=self._store.collection_name,
-                    payload={"trust": new_trust, "status": new_status},
+                    collection_name=self._collection,
+                    payload={
+                        "trust": new_trust,
+                        "status": new_status,
+                        # Module contract: trust/status/updated_at are the only
+                        # fields this service writes.
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
                     points=[p.id],
                 )
                 updated += 1
@@ -192,7 +202,7 @@ class TrustService:
         points, offset = [], None
         while True:
             batch, offset = self._store.client.scroll(
-                self._store.collection_name, limit=limit, offset=offset,
+                self._collection, limit=limit, offset=offset,
                 with_payload=True, with_vectors=False,
             )
             points.extend(batch)
@@ -211,7 +221,7 @@ class TrustService:
         events, offset = [], None
         while True:
             batch, offset = self._store.client.scroll(
-                self._store.collection_name, limit=500, offset=offset,
+                self._collection, limit=500, offset=offset,
                 scroll_filter=qmodels.Filter(must=[
                     qmodels.FieldCondition(
                         key="event_type",

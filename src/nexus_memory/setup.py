@@ -502,6 +502,11 @@ def cli_interactive():
         parts = choice.split(maxsplit=1)
         try:
             idx = int(parts[0]) - 1
+            # Negative indices wrap in Python (choice "0" → last provider) and
+            # an out-of-range positive index raises IndexError; validate the
+            # range explicitly and fall through to the raw-string path.
+            if idx < 0 or idx >= len(scan["providers"]):
+                raise IndexError(f"index out of range: {idx + 1}")
             provider_id = scan["providers"][idx]["id"]
             api_key = parts[1] if len(parts) > 1 else None
         except (ValueError, IndexError):

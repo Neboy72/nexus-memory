@@ -106,6 +106,10 @@ PROVIDERS = [
 QUALITY_ORDER = {"excellent": 0, "good": 1, "basic": 2}
 TYPE_ORDER = {"cloud": 0, "local": 1}
 
+# Set when the user explicitly declined the sentence-transformers install in
+# _setup_local; _install_pip_package honours it instead of installing anyway.
+_LOCAL_ST_SKIP_INSTALL = False
+
 
 @dataclass
 class ProviderStatus:
@@ -246,11 +250,14 @@ def _check_pip_package(package: str) -> bool:
         "sentence-transformers": "sentence_transformers",
     }
     import_name = import_map.get(package, package.replace("-", "_"))
+    import importlib.util
     try:
-        # Use pkgutil to avoid actually importing
-        import pkgutil
-        return pkgutil.find_loader(import_name) is not None
-    except Exception:
+        # find_spec avoids actually importing the package.
+        spec = importlib.util.find_spec(import_name)
+        return spec is not None
+    except (ImportError, ValueError):
+        # find_spec raises ImportError for malformed names (e.g. missing
+        # parent package) — that IS a reliable "not installed" signal.
         return False
 
 
@@ -344,8 +351,19 @@ def _save_config(provider_id: str, embedding_model: str = "") -> None:
     if config_path.exists():
         try:
             config = json.loads(config_path.read_text())
-        except Exception:
-            pass
+        except json.JSONDecodeError:
+            # Corrupt config: never silently discard the user's file — keep a
+            # timestamped backup and warn, then start from a fresh dict.
+            import time as _time
+
+            backup = config_path.with_name(
+                f"{config_path.name}.corrupt-{_time.strftime('%Y%m%d-%H%M%S')}"
+            )
+            try:
+                shutil.copy2(config_path, backup)
+                _print(f"  {YELLOW}⚠ config.json is corrupt — backup kept at {backup}{RESET}")
+            except OSError as exc:
+                _print(f"  {YELLOW}⚠ config.json is corrupt (backup failed: {exc}){RESET}")
 
     config["embedding_provider"] = provider_id
     if embedding_model:
@@ -400,11 +418,19 @@ def _verify_embedding(provider_id: str, provider_name: str, dims: int, quality: 
                 return True
             return False
 
-        loop = asyncio.new_event_loop()
         try:
-            success = loop.run_until_complete(_test())
+            # asyncio.run creates/tears down the loop itself and raises a
+            # clear RuntimeError if one is already running in this thread.
+            success = asyncio.run(_test())
         finally:
-            loop.close()
+            # Release HTTP session/connection pool if the provider exposes a
+            # close(); providers without close() are left untouched.
+            close = getattr(provider, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
         if success:
             _print(f"\n  {GREEN}✅ Embedding configured: {provider_name} ({dims}d, {quality}){RESET}")
@@ -604,20 +630,25 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
     else:
         # Service-Flow: no Ollama? Offer direct HuggingFace route instead of giving up.
         if _confirm("  Install bge-m3 via HuggingFace instead? (no Ollama needed, ~2.3 GB first download, then offline)"):
-            _run_pip("sentence-transformers")
-            _print(f"\n  {CYAN}Downloading bge-m3 from HuggingFace (one-time, cached afterwards)...{RESET}")
-            import sys as _sys
-            ret, out, err = _run_cmd(
-                [_sys.executable, "-c",
-                 "from sentence_transformers import SentenceTransformer; "
-                 "SentenceTransformer('BAAI/bge-m3'); print('ok')"],
-                timeout=1800,
-            )
-            if ret == 0:
-                _save_api_key("NEXUS_HF_BGE3", "1")  # activate HF route in .env
-                _print(f"  {GREEN}✓{RESET} bge-m3 (HuggingFace) ready and activated (NEXUS_HF_BGE3=1 in .env).")
-                return True
-            _print(f"  {RED}✗{RESET} HuggingFace download failed: {err[:200] if err else out[:200]}")
+            if not _run_pip("sentence-transformers"):
+                # Deps could not be installed: the download would only fail on
+                # the import — skip it instead of running a doomed 30-min step.
+                _print(f"  {YELLOW}⚠{RESET} sentence-transformers install failed — skipping HuggingFace download step.")
+                _print(f"  {YELLOW}  Install manually: pip install sentence-transformers{RESET}")
+            else:
+                _print(f"\n  {CYAN}Downloading bge-m3 from HuggingFace (one-time, cached afterwards)...{RESET}")
+                import sys as _sys
+                ret, out, err = _run_cmd(
+                    [_sys.executable, "-c",
+                     "from sentence_transformers import SentenceTransformer; "
+                     "SentenceTransformer('BAAI/bge-m3'); print('ok')"],
+                    timeout=1800,
+                )
+                if ret == 0:
+                    _save_api_key("NEXUS_HF_BGE3", "1")  # activate HF route in .env
+                    _print(f"  {GREEN}✓{RESET} bge-m3 (HuggingFace) ready and activated (NEXUS_HF_BGE3=1 in .env).")
+                    return True
+                _print(f"  {RED}✗{RESET} HuggingFace download failed: {err[:200] if err else out[:200]}")
         _print(f"  {YELLOW}Skipping local model setup. Built-in MiniLM fallback will be used (384d, fine to start).{RESET}")
         _print(f"  You can upgrade later: {CYAN}ollama pull qwen3-embedding:0.6b{RESET} — memories re-embed in minutes, free.")
         return True  # Not a hard failure
@@ -640,6 +671,10 @@ def _setup_local(ps: ProviderStatus) -> bool:
             return False
     else:
         _print(f"  {YELLOW}Skipping. Install manually: pip install sentence-transformers{RESET}")
+        # Remember the explicit rejection so _install_pip_package does not
+        # install it anyway a few lines later.
+        global _LOCAL_ST_SKIP_INSTALL
+        _LOCAL_ST_SKIP_INSTALL = True
         return True  # Not a hard failure
 
 
@@ -655,6 +690,13 @@ def _install_pip_package(ps: ProviderStatus) -> bool:
     if _check_pip_package(pkg):
         _print(f"\n  {GREEN}✓{RESET} {pkg} is already installed.")
         return True
+
+    if pkg == "sentence-transformers" and _LOCAL_ST_SKIP_INSTALL:
+        # User explicitly declined the install in _setup_local — do not
+        # silently install anyway.
+        _print(f"\n  {YELLOW}⚠{RESET} '{pkg}' was declined during setup — not installing.")
+        _print(f"  {YELLOW}  Install manually later: pip install {pkg}{RESET}")
+        return False
 
     _print(f"\n  {YELLOW}⚠{RESET} Required package '{pkg}' is not installed.")
     return _run_pip(pkg)
@@ -710,7 +752,9 @@ def _run_wizard() -> None:
         if api_key is None:
             _print(f"  {YELLOW}⚠ No API key provided. The provider will use auto-detect at runtime.{RESET}")
     elif provider_id == "ollama":
-        _setup_ollama(selected)
+        if not _setup_ollama(selected):
+            _print(f"  {RED}Failed to set up Ollama. Exiting.{RESET}")
+            sys.exit(1)
     elif provider_id == "local":
         if not _setup_local(selected):
             _print(f"  {RED}Failed to set up sentence-transformers. Exiting.{RESET}")

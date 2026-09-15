@@ -223,7 +223,10 @@ class SelectiveForgettingAuditor:
             report["report_file"] = os.path.join(
                 self._data_dir, f"forget-{report['timestamp'][:10]}.json"
             )
-            with open(report["report_file"], "w") as f:
+            # Explicit UTF-8: ensure_ascii=False emits non-ASCII characters, so the
+            # platform default encoding (C/POSIX locale) would raise
+            # UnicodeEncodeError and silently lose the report.
+            with open(report["report_file"], "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False, default=str)
             # Cleanup uses the SAME naming scheme as the writer above
             # (forget-YYYY-MM-DD.json). The old pattern ('forget-audit*')

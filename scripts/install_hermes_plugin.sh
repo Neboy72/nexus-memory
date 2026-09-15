@@ -40,7 +40,9 @@ if [ ! -d "${HERMES_PLUGIN_DIR}" ]; then
     echo -e "${YELLOW}⚠${NC} Hermes Agent not found (${HERMES_PLUGIN_DIR} missing)."
     echo "  Use the MCP server instead: run 'nexus-memory' and configure your agent's mcpServers."
     echo "  See AGENTS.md for MCP setup instructions."
-    exit 0
+    # Exit 2 (distinct from a hard error 1): "Hermes not installed" is a
+    # valid no-op, so callers/CI can tell it apart from a real failure.
+    exit 2
 fi
 
 # --- Link the plugin ---
@@ -54,6 +56,26 @@ backup_path() {
     fi
 }
 
+# Move an existing target to a collision-free backup path and confirm the
+# move. Never clobbers an earlier backup (timestamp suffix above) and aborts
+# instead of continuing when the source is gone or the backup cannot be
+# verified — a second run must not lose the first run's backup.
+backup_and_remove() {
+    local src="$1"
+    if [ ! -e "${src}" ]; then
+        echo -e "${RED}✗${NC} ${src} vanished before backup — aborting." >&2
+        return 1
+    fi
+    local dst
+    dst="$(backup_path)"
+    mv "${src}" "${dst}"
+    if [ ! -e "${dst}" ]; then
+        echo -e "${RED}✗${NC} Backup ${dst} missing after move — aborting." >&2
+        return 1
+    fi
+    printf '%s' "${dst}"
+}
+
 if [ -L "${PLUGIN_DST}" ]; then
     current_target="$(readlink "${PLUGIN_DST}")"
     if [ "${current_target}" = "${PLUGIN_SRC}" ]; then
@@ -65,19 +87,17 @@ if [ -L "${PLUGIN_DST}" ]; then
         echo -e "${GREEN}✓${NC} Plugin linked: ${PLUGIN_DST} → ${PLUGIN_SRC}"
     fi
 elif [ -d "${PLUGIN_DST}" ]; then
-    BACKUP_DST="$(backup_path)"
     echo -e "${YELLOW}⚠${NC} ${PLUGIN_DST} exists as a directory (not a symlink)."
-    echo "  Backing up to ${BACKUP_DST} and replacing with symlink."
-    mv "${PLUGIN_DST}" "${BACKUP_DST}"
+    echo "  Backing up and replacing with symlink."
+    BACKUP_DST="$(backup_and_remove "${PLUGIN_DST}")"
     ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
     echo -e "${GREEN}✓${NC} Plugin linked (backup at ${BACKUP_DST})"
 elif [ -e "${PLUGIN_DST}" ]; then
     # Regular file (or other non-dir) at the target path: back it up rather
     # than clobbering it with ln -s.
-    BACKUP_DST="$(backup_path)"
     echo -e "${YELLOW}⚠${NC} ${PLUGIN_DST} exists as a regular file (not a symlink)."
-    echo "  Backing up to ${BACKUP_DST} and replacing with symlink."
-    mv "${PLUGIN_DST}" "${BACKUP_DST}"
+    echo "  Backing up and replacing with symlink."
+    BACKUP_DST="$(backup_and_remove "${PLUGIN_DST}")"
     ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
     echo -e "${GREEN}✓${NC} Plugin linked (backup at ${BACKUP_DST})"
 else
@@ -88,8 +108,15 @@ fi
 # --- Set memory.provider ---
 
 if command -v hermes &> /dev/null; then
-    hermes config set memory.provider nexus
-    echo -e "${GREEN}✓${NC} Hermes config: memory.provider = nexus"
+    # Do not let set -e kill the script on a CLI failure: the symlink above is
+    # already valid, so a failed config write only needs a recovery hint.
+    if hermes config set memory.provider nexus; then
+        echo -e "${GREEN}✓${NC} Hermes config: memory.provider = nexus"
+    else
+        echo -e "${YELLOW}⚠${NC} 'hermes config set memory.provider nexus' failed."
+        echo "  The plugin symlink is still in place and valid."
+        echo "  Recovery: run manually once the CLI works: hermes config set memory.provider nexus"
+    fi
 else
     echo -e "${YELLOW}⚠${NC} 'hermes' CLI not found on PATH. Set manually: hermes config set memory.provider nexus"
 fi
@@ -103,6 +130,6 @@ echo "🧠  Want to SEE your memory? Start the dashboard:"
 echo ""
 echo "    nexus-memory webui   # dashboard on http://127.0.0.1:9121"
 echo ""
-echo "    → opens at http://127.0.0.1:9210 (browser opens automatically"
+echo "    → opens at http://127.0.0.1:9121 (browser opens automatically"
 echo "      on first start). Bookmark it — one click to your dashboard."
 echo ""
