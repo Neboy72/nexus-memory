@@ -90,18 +90,29 @@ class CostAwareRouter:
         self._available_providers: Dict[str, Any] = {}
         self._configured_provider: str = ""
         self._routing_enabled = False
+        # Explicit config value for cost_aware_routing (None = not configured).
+        # When set it must win over the provider-count heuristic in initialize().
+        self._routing_config_override: Optional[bool] = None
         self._routing_decisions: Dict[str, int] = {}
 
     def initialize(self) -> None:
         """Detect available providers and read config.
 
-        Cost-aware routing is only enabled when MULTIPLE providers are
-        available (e.g. Voyage API key + local Ollama). With a single
+        An explicit ``cost_aware_routing`` value in config.json always wins.
+        Otherwise cost-aware routing is only enabled when MULTIPLE providers
+        are available (e.g. Voyage API key + local Ollama). With a single
         provider, all categories use that provider.
         """
         self._detect_available_providers()
         self._read_config()
-        if len(self._available_providers) >= 2:
+        if self._routing_config_override is not None:
+            self._routing_enabled = self._routing_config_override
+            logger.info(
+                "CostAwareRouter: %s (config override cost_aware_routing=%s)",
+                "enabled" if self._routing_enabled else "disabled",
+                self._routing_config_override,
+            )
+        elif len(self._available_providers) >= 2:
             self._routing_enabled = True
             logger.info(
                 "CostAwareRouter: enabled (%d providers available: %s)",
@@ -109,6 +120,7 @@ class CostAwareRouter:
                 ", ".join(self._available_providers.keys()),
             )
         else:
+            self._routing_enabled = False
             logger.info(
                 "CostAwareRouter: disabled (%d provider available, need 2+ for routing)",
                 len(self._available_providers),
@@ -158,7 +170,10 @@ class CostAwareRouter:
                     with open(path) as f:
                         cfg = json.load(f)
                     if "cost_aware_routing" in cfg:
-                        self._routing_enabled = cfg["cost_aware_routing"]
+                        # Remember the explicit setting; initialize() applies
+                        # it AFTER the provider-count heuristic so a user's
+                        # deliberate on/off choice is never overwritten.
+                        self._routing_config_override = bool(cfg["cost_aware_routing"])
                     if "configured_embedding_provider" in cfg:
                         self._configured_provider = cfg["configured_embedding_provider"]
                     break
