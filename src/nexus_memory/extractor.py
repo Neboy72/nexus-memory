@@ -14,7 +14,6 @@ import json
 import logging
 import os
 import re
-import time
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -368,7 +367,7 @@ def _heuristic_extract(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if not matched_pref:
                 for pattern in _RULE_PATTERNS:
                     if re.search(pattern, content, re.IGNORECASE):
-                        sentences = re.split(r"[.!?\s]\s+", content)
+                        sentences = re.split(r"[.!?]\s+", content)
                         for sent in sentences:
                             if re.search(pattern, sent, re.IGNORECASE) and len(sent) > 10:
                                 key = sent.lower()[:80]

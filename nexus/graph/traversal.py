@@ -288,15 +288,34 @@ class GraphTraversal:
         """Graph statistics including KG-specific counts."""
         base_stats = self._graph.stats()
 
-        # Count KG-specific relations
+        # Nr 442: no second full Qdrant scroll just to count KG relations — the
+        # NetworkX cache already holds every active edge. The cache is only
+        # populated after initialize(); an empty graph therefore falls back to
+        # the old scroll-based path so behavior is unchanged when it is cold.
+        # ``edges(data=True)`` also yields the ``contradicts`` reverse-edges
+        # (same edge_id), hence total_relations counts DISTINCT edge_ids, not
+        # len(edges). KG_RELATIONS never contains contradicts, so kg_edges is
+        # not affected by those duplicates.
+        graph = self._graph.graph
         kg_edge_count = 0
-        all_edges = self._graph.list_edges(status="active")
-        for edge in all_edges:
-            if edge.relation in KG_RELATIONS:
-                kg_edge_count += 1
+        if graph.number_of_nodes():
+            edge_ids = set()
+            for _u, _v, data in graph.edges(data=True):
+                if data.get("relation") in KG_RELATIONS:
+                    kg_edge_count += 1
+                edge_id = data.get("edge_id")
+                if edge_id:
+                    edge_ids.add(edge_id)
+            total_relations = len(edge_ids)
+        else:
+            all_edges = self._graph.list_edges(status="active")
+            for edge in all_edges:
+                if edge.relation in KG_RELATIONS:
+                    kg_edge_count += 1
+            total_relations = len(all_edges)
 
         return {
             **base_stats,
             "kg_edges": kg_edge_count,
-            "total_relations": len(all_edges),
+            "total_relations": total_relations,
         }

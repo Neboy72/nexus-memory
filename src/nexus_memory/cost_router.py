@@ -52,6 +52,11 @@ PROVIDER_TIERS: Dict[str, str] = {
     "sentence-transformers": TIER_ECONOMY,
 }
 
+# Nr 453: deterministic within-tier preference. Without this the "priority
+# order" comment was a lie — the choice followed the dict insertion order of
+# ``_available_providers``. Providers not listed sort last (stable).
+PROVIDER_PRIORITY = ("voyage", "openai", "google", "jina", "ollama")
+
 # Provider → estimated cost per 1M tokens (USD, approximate)
 PROVIDER_COSTS: Dict[str, float] = {
     "voyage": 0.02,        # voyage-4
@@ -218,6 +223,15 @@ class CostAwareRouter:
         ]
 
         if tier_providers:
+            # Deterministic priority order (Nr 453): sort by PROVIDER_PRIORITY,
+            # unknown providers last; Python's sort is stable.
+            tier_providers.sort(
+                key=lambda n: (
+                    PROVIDER_PRIORITY.index(n)
+                    if n in PROVIDER_PRIORITY
+                    else len(PROVIDER_PRIORITY)
+                )
+            )
             # Prefer the first available in the tier (priority order)
             chosen = tier_providers[0]
             self._record_decision(chosen, record)

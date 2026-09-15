@@ -211,6 +211,13 @@ def check_action(command: str, tool_name: str = "", tool_input: dict = None) -> 
             if isinstance(v, str) and ("/" in v or "~" in v):
                 targets.extend(extract_targets(v))
 
+    # Nr 441: the command field is itself a tool_input value (or equals
+    # tool_input["path"]), so a path could be collected from BOTH sources and
+    # produce duplicate matched_rules entries. Dedupe (order-preserving) rather
+    # than dropping either extraction — the two sources are not always
+    # redundant, only overlapping.
+    targets = list(dict.fromkeys(targets))
+
     if not targets:
         return {"verdict": "allow", "reason": f"Destructive action ({action}) but no protected target"}
 
