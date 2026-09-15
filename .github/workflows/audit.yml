@@ -9,6 +9,13 @@ on:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    # Least-privilege: this job only reads code and runs tests — no write
+    # token scope. Without an explicit `permissions:` key the job inherits
+    # the repository default (potentially read/write).
+    permissions:
+      contents: read
+    # Bound the runner: a hung test/install must not occupy it indefinitely.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +34,9 @@ jobs:
         run: |
           echo "=== Checking for stale collection names ==="
           BAD_PATTERNS='("openclaw-memory"|"openclaw_beliefs"|"openclaw_events"|"nexus_beliefs"|"nexus_events"|"hermes-memory-1024d"|"kiosha-memory")'
-          FOUND=$(grep -rn "$BAD_PATTERNS" nexus/ src/ --include="*.py" --exclude="__pycache__" || true)
+          # -E: the pattern is an ERE alternation; plain grep (BRE) treats
+          # parentheses/pipe as literals, which made this check a silent no-op.
+          FOUND=$(grep -rnE "$BAD_PATTERNS" nexus/ src/ --include="*.py" --exclude="__pycache__" || true)
           if [ -n "$FOUND" ]; then
             echo "❌ Stale collection names found:"
             echo "$FOUND"
@@ -39,7 +48,7 @@ jobs:
         run: |
           echo "=== Checking for hardcoded status_code == 200 / != 200 ==="
           # Allow only is_success() calls, not raw == 200 / != 200
-          FOUND=$(grep -rn '\.status_code == 200\|\.status_code != 200' nexus/ src/ --include="*.py" --exclude="__pycache__" || true)
+          FOUND=$(grep -rnE '\.status_code == 200|\.status_code != 200' nexus/ src/ --include="*.py" --exclude="__pycache__" || true)
           if [ -n "$FOUND" ]; then
             echo "❌ Raw status_code checks found (use is_success() instead):"
             echo "$FOUND"
