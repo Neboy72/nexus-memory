@@ -41,12 +41,60 @@ export function registerForgetTool(
         _toolCallId: string,
         params: { memoryId?: string; query?: string },
       ) {
+        const memoryId = params.memoryId
+        const query = params.query
+        const hasMemoryId = typeof memoryId === "string" && memoryId.length > 0
+        const hasQuery = typeof query === "string" && query.length > 0
+
+        // Ambiguous input must never silently pick one of the two paths:
+        // `memoryId` takes precedence today, so a stray query would be ignored.
+        if (hasMemoryId && hasQuery) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: "Provide either memoryId OR query, not both.",
+              },
+            ],
+          }
+        }
+
         // Direct delete by ID
-        if (params.memoryId) {
-          log.debug(`forget tool: direct delete id="${params.memoryId}"`)
+        if (memoryId) {
+          log.debug(`forget tool: direct delete id="${memoryId}"`)
 
           try {
-            await qdrantClient.delete(params.memoryId)
+            // Verify the point exists BEFORE deleting: Qdrant's delete is a
+            // no-op for an unknown id, so the tool used to report "Memory
+            // forgotten." for ids that were never there.
+            let existing: { id: string; payload?: Record<string, unknown> } | null = null
+            try {
+              existing = await qdrantClient.scrollPoint(memoryId)
+            } catch (err) {
+              // Fail-open on a lookup error: do NOT delete (deleting on an
+              // unverified id is the unsafe direction). Not an isError — the
+              // caller can retry.
+              log.error("forget tool (by ID) lookup failed", err)
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Memory not found (lookup failed, delete skipped).",
+                  },
+                ],
+              }
+            }
+
+            if (existing === null) {
+              return {
+                content: [
+                  { type: "text" as const, text: "Memory not found (id does not exist)." },
+                ],
+              }
+            }
+
+            await qdrantClient.delete(memoryId)
             return {
               content: [{ type: "text" as const, text: "Memory forgotten." }],
             }
@@ -65,11 +113,11 @@ export function registerForgetTool(
         }
 
         // Search-then-delete by query
-        if (params.query) {
-          log.debug(`forget tool: search-then-delete query="${params.query}"`)
+        if (query) {
+          log.debug(`forget tool: search-then-delete query="${query}"`)
 
           try {
-            const queryVector = await embedder.embed(params.query)
+            const queryVector = await embedder.embed(query)
             const results = await qdrantClient.searchByVector(queryVector, 5, _cfg.accessLevel)
 
             if (results.length === 0) {

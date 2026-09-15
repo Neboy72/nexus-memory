@@ -55,13 +55,27 @@ function readInstalledVersion(): string {
  * comparison is used.
  */
 export function isNewerVersion(remote: string, local: string): boolean {
-  const parse = (v: string) =>
-    v
-      .replace(/^v/, "")
-      .split(".")
-      .map((n) => parseInt(n, 10) || 0)
-  const [rMajor, rMinor, rPatch] = parse(remote)
-  const [lMajor0, lMinor, lPatch] = parse(local)
+  // A component that is not a whole number (e.g. "1.2.x", "1.2.beta") makes
+  // the WHOLE comparison fail-open (false) instead of being masked to 0 —
+  // `parseInt(...) || 0` turned "1.x.0" into "1.0.0" and could report an
+  // update that does not exist (or hide a real one). Missing trailing
+  // components are padded with 0 (unchanged behaviour).
+  const parse = (v: string): number[] | null => {
+    const segments = v.replace(/^v/, "").split(".")
+    const out: number[] = []
+    for (const segment of segments) {
+      const n = Number(segment)
+      if (!Number.isInteger(n)) return null
+      out.push(n)
+    }
+    while (out.length < 3) out.push(0)
+    return out
+  }
+  const remoteParts = parse(remote)
+  const localParts = parse(local)
+  if (remoteParts === null || localParts === null) return false
+  const [rMajor, rMinor, rPatch] = remoteParts
+  const [lMajor0, lMinor, lPatch] = localParts
   let lMajor = lMajor0
   if (rMajor === 0 && lMajor > 0) {
     // Package major = GitHub major + 1 while GitHub is on 0.x.
@@ -171,8 +185,18 @@ async function checkForUpdateOnce(): Promise<UpdateCheckResult> {
   return {
     available,
     latest: typeof entry.latest === "string" ? entry.latest : local,
-    url: entry.url ?? `https://github.com/${REPO}/releases`,
+    url: entry.url && entry.url.length > 0 ? entry.url : `https://github.com/${REPO}/releases`,
   }
+}
+
+/**
+ * Strip everything but `v`/digits/`.`/`-`/`+` and spaces from a version tag
+ * before it is interpolated into a prompt line. The tag comes from a remote
+ * (GitHub) response, so an attacker-influenced value must never be able to
+ * carry instructions or markup into the nudge.
+ */
+export function sanitizeVersionTag(v: string): string {
+  return v.trim().replace(/[^v0-9.\-+ ]/g, "")
 }
 
 /** Prompt nudge lines (once per process lifetime, tracked by caller). */
@@ -181,10 +205,14 @@ export function buildUpdateNudgeLines(result: UpdateCheckResult, nudged: boolean
   nudged: boolean
 } {
   if (!result.available || nudged) return { lines: [], nudged }
+  const safeTag = sanitizeVersionTag(result.latest)
+  // Nothing version-like survived sanitising → no nudge line at all rather
+  // than interpolating an empty/garbage tag.
+  if (safeTag.length === 0) return { lines: [], nudged }
   return {
     lines: [
       "",
-      `📦 Nexus Memory update available: v${result.latest}. Tell your user about this update and ask if they want to upgrade.`,
+      `📦 Nexus Memory update available: v${safeTag}. Tell your user about this update and ask if they want to upgrade.`,
     ],
     nudged: true,
   }

@@ -30,6 +30,9 @@ function makeTool(results) {
     { embed: async () => [0.1, 0.2] },
     {
       searchByVector: async () => results,
+      // Nr 388 (W22): delete geht jetzt nur nach bestandenem Lookup —
+      // der Mock muss scrollPoint existieren lassen (Punkt vorhanden).
+      scrollPoint: async (id) => ({ id }),
       delete: async (id) => { deleted.push(id) },
     },
     {},
