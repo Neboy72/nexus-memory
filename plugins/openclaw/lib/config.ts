@@ -1,4 +1,5 @@
 import { detectProvider, type EmbeddingProvider } from "./embedder.ts"
+import { validateConfigScope } from "./scope-auto.ts"
 
 export type AccessLevel = "public" | "trusted" | "private"
 
@@ -195,18 +196,9 @@ export function parseConfig(raw: unknown): NexusConfig {
 
   // Parse scope (project/agent area label, unreleased).
   // Fail-open: empty/invalid → "" (no gating, old behavior).
-  let scope = ""
-  if (typeof cfg.scope === "string" && cfg.scope.trim()) {
-    const s = cfg.scope.trim().toLowerCase()
-    if (/^[a-z0-9][a-z0-9-]{0,39}$/.test(s)) {
-      scope = s
-    }
-  }
-  if (!scope && process.env.NEXUS_SCOPE) {
-    const s = process.env.NEXUS_SCOPE.trim().toLowerCase()
-    if (/^[a-z0-9][a-z0-9-]{0,39}$/.test(s)) {
-      scope = s
-    }
+  let scope = validateConfigScope(cfg.scope)
+  if (!scope) {
+    scope = validateConfigScope(process.env.NEXUS_SCOPE)
   }
 
   return {

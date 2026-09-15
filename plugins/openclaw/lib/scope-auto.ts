@@ -230,3 +230,17 @@ export function normalizeScope(scope: unknown): string {
   }
   return "default"
 }
+
+/**
+ * Config-scope validator: the same [a-z0-9-] contract as normalizeScope, but
+ * FAIL-OPEN to "" for absent/invalid input. Callers use "" to mean "not
+ * configured" (no gating) — distinct from normalizeScope's "default". This is
+ * the single implementation shared by config.ts (cfg.scope + NEXUS_SCOPE).
+ */
+export function validateConfigScope(scope: unknown): string {
+  if (typeof scope === "string") {
+    const s = scope.trim().toLowerCase()
+    if (s && /^[a-z0-9][a-z0-9-]{0,39}$/.test(s)) return s
+  }
+  return ""
+}

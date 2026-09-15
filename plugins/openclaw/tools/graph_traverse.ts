@@ -11,6 +11,7 @@ import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { clampInt } from "../lib/num.ts"
 import { isActiveEdge, normalizeEdge } from "../lib/edge.ts"
+import { bfsEdges } from "../lib/bfs.ts"
 import { log } from "../logger.ts"
 
 // H123: hard bounds for the graph tools, mirrored by their Typebox schemas.
@@ -78,59 +79,11 @@ export function registerGraphTraverseTool(
             }
           }
 
-          // BFS traversal over edges in Qdrant payloads
-          const visited = new Set<string>([factId])
-          const queue: Array<{ id: string; depth: number; path: string[] }> = [
-            { id: factId, depth: 0, path: [] },
-          ]
-          const results: Array<Record<string, unknown>> = []
-
-          while (queue.length > 0) {
-            const { id, depth, path } = queue.shift()!
-            if (depth >= maxDepth) continue
-
-            const pt = await qdrantClient.scrollPoint(id)
-            if (!pt) continue
-
-            const edges = (pt.payload?.edges ?? []) as Array<Record<string, unknown>>
-            for (const edge of edges) {
-              if (!isActiveEdge(edge)) continue
-
-              // H125: validate before the id enters visited/queue/results — an
-              // unvalidated `as string` used to push `undefined` into the graph.
-              const normalized = normalizeEdge(edge)
-              if (!normalized) {
-                log.debug(`graph_traverse: skipping malformed edge on ${id}`)
-                continue
-              }
-              const targetId = normalized.targetId
-              const edgeRelation = normalized.relation
-
-              if (relation && edgeRelation !== relation) continue
-              if (visited.has(targetId)) continue
-              visited.add(targetId)
-
-              const step: Record<string, unknown> = {
-                fact_id: targetId,
-                depth: depth + 1,
-                relation: edgeRelation,
-                path: [...path, targetId],
-              }
-
-              // Filter by target_type if specified
-              if (targetType) {
-                const targetPoint = await qdrantClient.scrollPoint(targetId)
-                const entityType = targetPoint?.payload?.entity_type
-                if (entityType !== targetType) {
-                  queue.push({ id: targetId, depth: depth + 1, path: step.path as string[] })
-                  continue
-                }
-              }
-
-              results.push(step)
-              queue.push({ id: targetId, depth: depth + 1, path: step.path as string[] })
-            }
-          }
+          // BFS traversal over edges in Qdrant payloads (shared lib/bfs.ts).
+          const { steps: results } = await bfsEdges(qdrantClient, factId, maxDepth, {
+            relation,
+            targetType,
+          })
 
           if (results.length === 0) {
             return {
@@ -304,54 +257,10 @@ export function registerGetSubgraphTool(
         const maxDepth = clampInt(params.max_depth, SUBGRAPH_DEPTH_DEFAULT, 1, SUBGRAPH_DEPTH_MAX)
 
         try {
-          // Reuse BFS logic
-          const visited = new Set<string>([factId])
-          const queue: Array<{ id: string; depth: number; path: string[] }> = [
-            { id: factId, depth: 0, path: [] },
-          ]
-          const nodes: Array<Record<string, unknown>> = [{ id: factId, depth: 0 }]
-          const edges: Array<Record<string, unknown>> = []
-          const nodeSet = new Set<string>([factId])
-
-          while (queue.length > 0) {
-            const { id, depth, path } = queue.shift()!
-            if (depth >= maxDepth) continue
-
-            const pt = await qdrantClient.scrollPoint(id)
-            if (!pt) continue
-
-            const ptEdges = (pt.payload?.edges ?? []) as Array<Record<string, unknown>>
-            for (const edge of ptEdges) {
-              if (!isActiveEdge(edge)) continue
-              // H125: same validation gate as traverse/get_related — a
-              // malformed edge must not push undefined into nodes/edges.
-              const normalizedSub = normalizeEdge(edge)
-              if (!normalizedSub) {
-                log.debug(`get_subgraph: skipping malformed edge (missing target/relation)`)
-                continue
-              }
-              const targetId = normalizedSub.targetId
-              const edgeRelation = normalizedSub.relation
-
-              if (visited.has(targetId)) {
-                // Still add the edge even if node already exists
-                const source = path.length > 0 ? path[path.length - 1] : factId
-                edges.push({ source, target: targetId, relation: edgeRelation })
-                continue
-              }
-              visited.add(targetId)
-
-              if (!nodeSet.has(targetId)) {
-                nodes.push({ id: targetId, depth: depth + 1 })
-                nodeSet.add(targetId)
-              }
-
-              const source = path.length > 0 ? path[path.length - 1] : factId
-              edges.push({ source, target: targetId, relation: edgeRelation })
-
-              queue.push({ id: targetId, depth: depth + 1, path: [...path, targetId] })
-            }
-          }
+          // Shared BFS (lib/bfs.ts), subgraph mode: collect nodes + edges.
+          const { nodes, edges } = await bfsEdges(qdrantClient, factId, maxDepth, {
+            collectEdges: true,
+          })
 
           if (nodes.length <= 1) {
             return {

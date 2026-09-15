@@ -55,12 +55,16 @@ export function isCompliantForm(text: string): boolean {
 
 function appendDailyNote(line: string): void {
   try {
-    const d = new Date()
-    const ymd = d.toISOString().slice(0, 10)
-    const file = join(homedir(), ".openclaw", "workspace", "memory", `${ymd}.md`)
+    // Local date parts: toISOString() is UTC, so between local midnight and
+    // the UTC offset the note landed in the wrong day's file.
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, "0")
+    const localDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    const file = join(homedir(), ".openclaw", "workspace", "memory", `${localDate}.md`)
     appendFileSync(file, `${line}\n`, "utf8")
-  } catch {
+  } catch (err) {
     // Daily-Log nicht kritisch — Senden bleibt trotzdem geblockt
+    log.warn("cron-form-gate: memory-file note failed", err)
   }
 }
 
