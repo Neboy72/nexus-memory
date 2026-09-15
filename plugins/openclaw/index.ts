@@ -27,8 +27,6 @@ import {
   registerGetRelatedTool,
 } from "./tools/graph_traverse.ts"
 
-const PLUGIN_VERSION = "0.9.1"
-
 export default {
   id: "nexus-memory",
   name: "Nexus Memory",
@@ -144,8 +142,6 @@ export default {
     registerGetRelatedTool(api, qdrantClient, cfg)
 
     // Register hooks
-    // Self-organizing memory (Nebo law 07.09: full automation): one shared
-    // centroid cache feeds auto-recall gating + auto-capture tagging.
     if (cfg.autoRecall) {
       api.on("before_prompt_build", buildRecallHandler(embedder, qdrantClient, cfg, centroidCache))
     }

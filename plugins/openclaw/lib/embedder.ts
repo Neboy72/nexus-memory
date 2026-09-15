@@ -26,8 +26,11 @@ export function detectProvider(): EmbeddingProvider | null {
   if (process.env.OPENAI_API_KEY) return "openai"
   if (process.env.GOOGLE_API_KEY) return "google"
   if (process.env.JINA_API_KEY) return "jina"
-  // Ollama needs no key — check if baseUrl is reachable is too expensive here,
-  // just assume it's available if no other provider is configured.
+  // Ollama needs no key. Reachability is NOT probed here (too expensive in
+  // detectProvider): if no other provider is configured we assume Ollama is
+  // intended. An unreachable Ollama is only surfaced later, when embed() calls
+  // it — the constructor does NOT fail on it (verified: it only resolves
+  // provider/model/baseUrl and logs).
   if (process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL) return "ollama"
   return null
 }

@@ -180,7 +180,9 @@ export function buildMemoryRuntime(
   }
 }
 
-// Roadmap v0.13.1: update-check state (set async by index.ts, consumed here)
+// Roadmap v0.13.1: update-check state (set async by index.ts, consumed here).
+// `url` is carried for the cache format but unused at runtime (nudge text
+// contains only the version).
 let updateInfo: UpdateCheckResult | null = null
 let updateNudged = false
 
