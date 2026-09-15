@@ -35,8 +35,6 @@ docs/logo/
 /2026*_*.md
 /*-bak-*
 /*.bak-*
-__pycache__/
-*.egg-info/
 
 # Accidental '~' directory from backup script bug
 ~/

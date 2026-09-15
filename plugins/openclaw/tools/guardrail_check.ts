@@ -9,7 +9,7 @@ import { log } from "../logger.ts"
 const DESTRUCTIVE_PATTERNS: Array<{ action: string; patterns: RegExp[] }> = [
   { action: "delete", patterns: [/\brm\b.*-r/i, /\brm\b.*-f/i, /\brmdir\b/i, /\bdel\b\s+\/[fsq]/i, /\bdrop\b/i, /\btruncate\b/i, /\buninstall\b/i, /\bfind\b.*-delete/i, /\bgit\b.*clean.*-[fd]/i, /\bdd\b.*\bof\b/i] },
   { action: "kill", patterns: [/\bkill\b.*-9/i, /\bpkill\b/i, /\bkillall\b/i, /\btaskkill\b/i] },
-  { action: "overwrite", patterns: [/\bwrite_file\b/i, />\s*[^|&]/] },
+  { action: "overwrite", patterns: [/\bwrite_file\b/i, /(?:^|[\s;&|])\s*>{1,2}\s*[^\s'"&|<>;]*([\/.~][^\s'"&|<>;]*|\.[a-z0-9]{1,6}\b)/i] },
   { action: "recreate", patterns: [/\brecreate_collection\b/i, /DELETE.*collection/i, /\bdrop\b.*collection/i] },
 ]
 

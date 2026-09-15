@@ -55,13 +55,11 @@ function visibleAccessLevels(level: string): string[] {
 export class QdrantClient {
   private qdrantUrl: string
   private collection: string
-  private dimensions: number
   private collectionReady: boolean = false
 
   constructor(qdrantUrl: string, collection: string, dimensions: number) {
     this.qdrantUrl = qdrantUrl.replace(/\/+$/, "")
     this.collection = collection
-    this.dimensions = dimensions
     log.info(`Qdrant client initialized (url=${this.qdrantUrl}, collection=${collection}, dims=${dimensions})`)
   }
 
