@@ -67,8 +67,10 @@ def scroll_facts(
             )
             r.raise_for_status()
         except requests.RequestException as e:
+            # Review #46: a failed scroll used to `break` and return a silently
+            # truncated corpus. Raise so callers can surface the failure.
             _logger.error("Qdrant scroll failed: %s", e)
-            break
+            raise RuntimeError(f"Qdrant scroll failed: {e}") from e
 
         data = r.json().get("result", {})
         batch = data.get("points", [])
@@ -114,8 +116,10 @@ def search_similar_facts(
         )
         r.raise_for_status()
     except requests.RequestException as e:
+        # Review #46: returning [] made an outage indistinguishable from
+        # "no matches". Raise so callers can record the error.
         _logger.error("Qdrant search failed: %s", e)
-        return []
+        raise RuntimeError(f"Qdrant search failed: {e}") from e
 
     results = r.json().get("result", [])
     return [

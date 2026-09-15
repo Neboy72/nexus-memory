@@ -192,7 +192,9 @@ class SkillGraph:
         queue: deque[tuple[str, list[dict]]] = deque()
         queue.append((source_fact_id, []))
 
-        while queue and len(visited) < max_depth * 10:
+        # Review #47: no visited cap — depth is already bounded at enqueue
+        # time (`len(new_path) < max_depth`), so a cap only hid valid paths.
+        while queue:
             current, path = queue.popleft()
 
             for _, neighbor, data in self._graph.edges(current, data=True):
@@ -233,14 +235,22 @@ class SkillGraph:
             )
 
     def _remove_edge_from_graph(self, edge: Edge) -> None:
-        """Remove a single edge from the NetworkX cache."""
+        """Remove a single edge from the NetworkX cache.
+
+        Review #48: a DiGraph holds at most one edge per node pair, so when
+        several relations connect the same pair the slot may belong to a
+        *different* edge. Only drop a cached edge when its ``edge_id``
+        matches — otherwise the cache silently loses the wrong relation.
+        """
         if not self._graph.has_node(edge.source_fact_id):
             return
         if self._graph.has_edge(edge.source_fact_id, edge.target_fact_id):
-            self._graph.remove_edge(edge.source_fact_id, edge.target_fact_id)
+            if self._graph.edges[edge.source_fact_id, edge.target_fact_id].get("edge_id") == edge.edge_id:
+                self._graph.remove_edge(edge.source_fact_id, edge.target_fact_id)
         if edge.relation == EdgeRelation.CONTRADICTS.value:
             if self._graph.has_edge(edge.target_fact_id, edge.source_fact_id):
-                self._graph.remove_edge(edge.target_fact_id, edge.source_fact_id)
+                if self._graph.edges[edge.target_fact_id, edge.source_fact_id].get("edge_id") == edge.edge_id:
+                    self._graph.remove_edge(edge.target_fact_id, edge.source_fact_id)
 
     def add_edge(
         self,
