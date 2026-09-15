@@ -79,7 +79,9 @@ def scroll_facts(
 
         points.extend(batch)
         offset = data.get("next_page_offset")
-        if not offset:
+        # H218: Qdrant point IDs can be 0, so `if not offset` treated a valid
+        # next_page_offset of 0 as the end of pagination. `is None` is correct.
+        if offset is None:
             break
 
     _logger.debug("Scrolled %d facts from Qdrant collection '%s'", len(points), collection)
@@ -160,10 +162,14 @@ def match_facts_against_each_other(
     """
     collection = get_collection(collection)
     candidates: list[dict] = []
-    fact_ids = {f.get("id", "") for f in facts}
+    # H219: normalise both sides to str. search_similar_facts() stringifies
+    # hit ids, while scroll_facts() returns raw JSON ids (int for integer
+    # point ids). Without this, `hit_id not in fact_ids` was always True and
+    # every candidate was silently discarded.
+    fact_ids = {str(f.get("id", "")) for f in facts}
 
     for fact in facts:
-        fact_id = fact.get("id", "")
+        fact_id = str(fact.get("id", ""))
         vector = fact.get("vector")
         payload = fact.get("payload", {})
 
