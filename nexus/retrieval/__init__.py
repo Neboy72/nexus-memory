@@ -287,33 +287,9 @@ class HybridRetriever:
                 self._ids.append(str(pid))
                 self._texts.append(text.lower())
 
-        # Build chunk graph: connect chunks from same session
-        self._chunk_graph = {}
-        self._chunk_text_lookup = {str(pid): txt for pid, txt in zip(self._ids, self._texts)}
-        session_groups: dict[str, list[str]] = {}
-        for p in points:
-            payload = p.get("payload", {})
-            sid = str(payload.get("session_id", payload.get("type", "unknown")))
-            pid_str = str(p.get("id", ""))
-            if pid_str not in session_groups:
-                session_groups[sid] = []
-            session_groups[sid].append(pid_str)
-        for sid, pids in session_groups.items():
-            if len(pids) < 2:
-                continue
-            pset = set(pids)
-            for pid in pids:
-                self._chunk_graph[pid] = pset - {pid}
-
-        # Build entity index: entity → set of chunk_ids
-        self._entity_index = {}
-        for i, cid in enumerate(self._ids):
-            if i < len(self._texts):
-                entities = self._extract_entities(self._texts[i])
-                for e in entities:
-                    if e not in self._entity_index:
-                        self._entity_index[e] = set()
-                    self._entity_index[e].add(cid)
+        # Build auxiliary indexes (chunk text lookup, session chunk graph,
+        # entity index) from the freshly built corpus.
+        self._rebuild_aux_indexes(points=points)
 
         # Build BM25 index
         if self._texts:
@@ -327,6 +303,52 @@ class HybridRetriever:
             "bm25_built": self._bm25 is not None,
             "collection": self.collection,
         }
+
+    def _rebuild_aux_indexes(self, points: list[dict[str, Any]] | None = None) -> None:
+        """Rebuild the auxiliary indexes from the current local corpus.
+
+        Rebuilds ``_chunk_text_lookup`` and ``_entity_index`` from
+        ``self._ids``/``self._texts`` and, when ``points`` (raw Qdrant points
+        with session metadata) is supplied, the session ``_chunk_graph``.
+
+        Args:
+            points: Qdrant points including payloads. Only available in the
+                full ``index_memories()`` path. In the incremental/cache paths
+                this is ``None`` — the session graph cannot be derived without
+                session metadata, so ``_chunk_graph`` is left empty (honest
+                state: ``graph_expand`` skips) rather than serving stale data.
+        """
+        # chunk_id → text (always derivable from the local corpus)
+        self._chunk_text_lookup = {
+            str(pid): txt for pid, txt in zip(self._ids, self._texts)
+        }
+
+        # Session chunk graph — only derivable when session metadata is present.
+        self._chunk_graph = {}
+        if points:
+            session_groups: dict[str, list[str]] = {}
+            for p in points:
+                payload = p.get("payload", {})
+                sid = str(payload.get("session_id", payload.get("type", "unknown")))
+                pid_str = str(p.get("id", ""))
+                if pid_str not in session_groups:
+                    session_groups[sid] = []
+                session_groups[sid].append(pid_str)
+            for sid, pids in session_groups.items():
+                if len(pids) < 2:
+                    continue
+                pset = set(pids)
+                for pid in pids:
+                    self._chunk_graph[pid] = pset - {pid}
+
+        # entity_key → set of chunk_ids, extracted from the local corpus.
+        # Uses the retriever's own pattern extractor so the keys match the
+        # query-side entities in ``_entity_boost``.
+        self._entity_index = {}
+        for i, cid in enumerate(self._ids):
+            if i < len(self._texts):
+                for e in self._extract_entities(self._texts[i]):
+                    self._entity_index.setdefault(e, set()).add(cid)
 
     def index_from_texts(self, texts: list[str], ids: list[str]) -> dict:
         """Build BM25 index from a list of texts (no Qdrant needed).
@@ -400,11 +422,20 @@ class HybridRetriever:
                 self._ids.extend(new_ids)
                 self._texts.extend(new_texts)
 
+        # Keep the auxiliary indexes in sync with the mutated corpus —
+        # otherwise graph_expand/entity_boost would serve stale or empty data
+        # after add/remove.
+        if added > 0 or removed > 0:
+            self._rebuild_aux_indexes()
+
         # Rebuild BM25 from the updated corpus (only if something changed)
         if (added > 0 or removed > 0) and self._texts:
             corpus_tokens = bm25s.tokenize(self._texts)
             self._bm25 = bm25s.BM25()
             self._bm25.index(corpus_tokens)
+        elif not self._texts:
+            # Corpus fully emptied — invalidate so search_bm25 returns [].
+            self._bm25 = None
 
         return {
             "added": added,
@@ -430,6 +461,10 @@ class HybridRetriever:
                 self._ids = json.load(f)
             with open(texts_file) as f:
                 self._texts = json.load(f)
+            # Restore the auxiliary indexes from the reloaded corpus —
+            # they are not persisted, so without this they'd stay empty
+            # after a restart and graph_expand/entity_boost would no-op.
+            self._rebuild_aux_indexes()
             return True
         except Exception:
             self._bm25 = None
