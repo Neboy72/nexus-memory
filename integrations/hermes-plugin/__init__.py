@@ -16,6 +16,12 @@ _HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 _PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 _COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
 
+# H207: automatic-backup cadence. The loop sleeps in CHECK_INTERVAL slices, so
+# the iteration count * interval must equal the advertised 24h — the previous
+# hardcoded 360 x 60s was only 6h and contradicted the surrounding comment.
+BACKUP_CHECK_INTERVAL_SECONDS = 60
+BACKUP_INTERVAL_ITERATIONS = 1440  # 24h @ 60s per iteration
+
 # Tool schemas (OpenAI function-calling format)
 RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
                   "as_of": {"type": "string", "description": "Point-in-time: YYYY-MM-DD - only memories created on/before this date.", "default": ""}}, "required": ["query"]}}
@@ -128,10 +134,10 @@ class NexusMemoryProvider:
                 except Exception as e:
                     logger.warning(f"Auto-backup failed: {e}")
                 # Sleep 24h (check stop flag every 60s for responsive shutdown)
-                for _ in range(360):  # 6h, check every 60s
+                for _ in range(BACKUP_INTERVAL_ITERATIONS):
                     if self._write_stop.is_set():
                         return
-                    time.sleep(60)
+                    time.sleep(BACKUP_CHECK_INTERVAL_SECONDS)
 
         threading.Thread(target=_backup_loop, name="nexus-backup", daemon=True).start()
 
@@ -440,12 +446,16 @@ class NexusMemoryProvider:
             else: time.sleep(0.5)
 
     def _upsert(self, text: str, category: str = "fact", access_level: str = "public",
-                source: str = "", confidence: float = 0.7, **_: Any) -> Dict[str, Any]:
+                source: str = "", confidence: float = 0.7, source_url: str = "",
+                **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         vector = self._embedder.embed(text)
+        # H208: `source_url` was never accepted here (payload hardcoded "") even
+        # though REMEMBER_SCHEMA advertises it — the tool lied about two of its
+        # documented parameters (confidence was silently dropped by **_ too).
         payload = {"id": eid, "content": text, "access_level": access_level, "category": category,
-                    "source": source, "source_url": "", "created_at": ts,
+                    "source": source, "source_url": source_url or "", "created_at": ts,
                     "lifecycle_status": "canonical",
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
@@ -457,7 +467,7 @@ class NexusMemoryProvider:
         """Roadmap 4.5: as_of='YYYY-MM-DD' limits recall to memories
         created on/before that date (point-in-time view). Empty = no filter."""
         if not self._embedder or not self._qdrant: return []
-        flywheel: List[str] = []  # roadmap 4.9: top-3 recalled point ids
+        flywheel: List[tuple] = []  # roadmap 4.9: (pid, access_count, status) tuples
         # Rerank config is read once and cached (double-checked lock,
         # mirrors the _skill_graph caching pattern in this class).
         if self._rerank_cfg is None:
@@ -498,6 +508,9 @@ class NexusMemoryProvider:
             if as_of and (pl.get("created_at") or "")[:10] > as_of:
                 continue
             pid = pl.get("id") or str(p.id)
+            # H209: seen_ids was populated but never read, so duplicate recall
+            # results were not actually filtered. Use it for dedup.
+            if pid in seen_ids: continue
             seen_ids.add(pid)
             if len(flywheel) < 3:
                 flywheel.append((pid, pl.get("access_count", 0) or 0,
@@ -725,9 +738,12 @@ class NexusMemoryProvider:
                 result = self._recall(args.get("query", ""), args.get("limit", 5),
                                       as_of=args.get("as_of", ""))
             elif tool_name == "nexus_remember":
+                # H208: forward the schema-advertised confidence + source_url.
                 result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
                                       access_level=args.get("access_level", "public"),
-                                      source=args.get("source", ""))
+                                      source=args.get("source", ""),
+                                      confidence=args.get("confidence", 0.7),
+                                      source_url=args.get("source_url", ""))
                 # Roadmap 1.1/4.1: auto-enrich with entities + edges (async, fail-open)
                 try:
                     self._enqueue_entity_extraction(args.get("text", ""))
@@ -866,13 +882,34 @@ class NexusMemoryProvider:
 
         # Text auf 500 Zeichen begrenzen (Kosten + Signal-Rausch-Verhältnis)
         snippet = text[:500]
+        # H210: run extraction on a daemon thread under the shared entity-extract
+        # lock, like every other enrichment path. Previously this called
+        # _extract_entities_from_text synchronously inside sync_turn — an LLM
+        # extraction + embedding + Qdrant upserts on the turn hot path (seconds),
+        # and it bypassed _entity_extract_lock, so it could race the
+        # nexus_remember enrichment thread and duplicate work/writes.
+        if not self._entity_extract_lock.acquire(blocking=False):
+            return  # another extraction is in flight; skipping beats stacking
+
+        def _run():
+            try:
+                er = self._extract_entities_from_text(
+                    snippet, source="auto-hardware-detection",
+                    access_level=self._default_access_level)
+                if er.get("entities", 0) > 0:
+                    logger.info("Auto-hardware extraction: %d entities aus User-Aussage gespeichert",
+                                er.get("entities"))
+            except Exception as exc:
+                logger.warning("Hardware-auto-extract failed: %s", exc)
+            finally:
+                self._entity_extract_lock.release()
+
         try:
-            er = self._extract_entities_from_text(snippet, source="auto-hardware-detection", access_level=self._default_access_level)
-            if er.get("entities", 0) > 0:
-                logger.info("Auto-hardware extraction: %d entities aus User-Aussage gespeichert",
-                            er.get("entities"))
+            threading.Thread(target=_run, name="nexus-hw-entity-extract", daemon=True).start()
         except Exception as exc:
-            logger.warning("Hardware-auto-extract failed: %s", exc)
+            # Thread spawn failed: release the lock or enrichment dies forever.
+            logger.warning("Hardware-entity extraction thread start failed: %s", exc)
+            self._entity_extract_lock.release()
 
     def _extract_entities_from_text(self, text: str, source: str = "nexus_remember",
                                      access_level: Optional[str] = None) -> Dict[str, Any]:

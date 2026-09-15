@@ -359,6 +359,10 @@ class CanonicalView:
         self._canonical: dict[str, FactVersion] = {}
         # fact_id → list of version_ids (supersedes chain, newest first)
         self._chains: dict[str, list[str]] = {}
+        # fact_id → status of the latest version seen. Mirrors the newest-first
+        # ordering of _chains; H230: fact_ids_with_status() reads this instead
+        # of _canonical, which only ever holds CANONICAL versions.
+        self._latest_status: dict[str, str] = {}
 
     def set(self, version: FactVersion) -> None:
         """Register a version in the canonical view.
@@ -369,6 +373,9 @@ class CanonicalView:
         a PENDING version leaves the canonical entry untouched.
         """
         fid = version.fact_id
+        # H230: track the latest status per fact (same "last set() wins"
+        # ordering assumption as the _chains insert below).
+        self._latest_status[fid] = version.status
         if version.is_queryable():
             self._canonical[fid] = version
         elif (
@@ -400,19 +407,15 @@ class CanonicalView:
         return list(self._canonical.values())
 
     def fact_ids_with_status(self, status: str) -> list[str]:
-        """Get all fact_ids whose latest version has a given status."""
-        result = []
-        for fid, versions in self._chains.items():
-            # Latest version determines status
-            latest = versions[0] if versions else None
-            if latest is None:
-                continue
-            # Check: either the canonical entry exists with this status
-            if fid in self._canonical and self._canonical[fid].version_id == latest:
-                if self._canonical[fid].status == status:
-                    result.append(fid)
-            else:
-                # Not in canonical view — check if latest chain entry matches
-                # We don't store non-canonical versions, so search from storage
-                pass
-        return result
+        """Get all fact_ids whose latest version has a given status.
+
+        H230: reads ``_latest_status`` (maintained by :meth:`set`) instead of
+        ``_canonical``. The old implementation could only match a CANONICAL
+        latest version — the ``else`` branch did nothing — so
+        ``fact_ids_with_status("deprecated")`` always returned ``[]`` and the
+        documented contract was silently violated. It also skipped a fact
+        whose cached canonical was followed by a pending revision.
+        """
+        return [
+            fid for fid, st in self._latest_status.items() if st == status
+        ]
