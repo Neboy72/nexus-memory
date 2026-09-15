@@ -463,8 +463,8 @@ def nexus_consolidate(
                     result = r.json().get("result")
                     if result:
                         return result
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug("_fetch_point(%s): direct lookup failed: %s", pid, e)
             # Fallback: scroll filter
             try:
                 r = _req.post(
@@ -480,7 +480,8 @@ def nexus_consolidate(
                 )
                 points = r.json().get("result", {}).get("points", [])
                 return points[0] if points else None
-            except Exception:
+            except Exception as e:
+                _logger.debug("_fetch_point(%s): fallback scroll failed: %s", pid, e)
                 return None
 
         point_a = _fetch_point(id_a)
@@ -580,8 +581,8 @@ def _apply_consolidation(
         r = _req.get(f"{url}/{point_id}", timeout=10)
         if is_success(r.status_code):
             point = r.json().get("result")
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.debug("_apply_consolidation(%s): point fetch failed: %s", point_id, e)
 
     if not point:
         # Fallback scroll
@@ -599,8 +600,8 @@ def _apply_consolidation(
             )
             points = r.json().get("result", {}).get("points", [])
             point = points[0] if points else None
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug("_apply_consolidation(%s): fallback scroll failed: %s", point_id, e)
 
     if not point:
         return {"error": f"Point {point_id} not found"}
@@ -638,9 +639,10 @@ def nexus_query_valid(
     (``valid_from`` … ``valid_until``) covers the given date.
 
     Args:
-        query: The search query text (used via Qdrant scroll — for
-            proper vector search, embed first and use the Qdrant
-            search API directly).
+        query: Case-insensitive substring filter applied to ``payload.text``
+            or ``payload.fact``. Empty/``None`` disables text filtering
+            (pure Qdrant scroll — no vector search is performed; for real
+            vector search embed first and use the Qdrant search API).
         at_date: ISO-8601 date string (e.g. ``"2026-06-01"``).
             Defaults to today.
         qdrant_host: Qdrant host.
@@ -660,6 +662,11 @@ def nexus_query_valid(
     collection_name = get_collection(collection_name)
 
     target_date = at_date or _today_iso()
+
+    # H176: `query` was documented but never applied. Cheap case-insensitive
+    # substring filter over payload.text/fact — only when query is non-empty,
+    # so empty/None keeps the previous scroll-only behaviour at zero extra cost.
+    query_norm = (query or "").strip().lower()
 
     base = f"http://{qdrant_host}:{qdrant_port}"
     all_points = []
@@ -688,6 +695,10 @@ def nexus_query_valid(
     valid = []
     for p in all_points:
         payload = p.get("payload", {})
+        if query_norm:
+            haystack = f"{payload.get('text', '')}\n{payload.get('fact', '')}".lower()
+            if query_norm not in haystack:
+                continue
         vf = payload.get("valid_from")
         vu = payload.get("valid_until")
 
@@ -992,19 +1003,29 @@ def _embed_voyage(query: str) -> list[float] | None:
         )
         data = r.json()
         return data["data"][0]["embedding"]
-    except Exception:
+    except Exception as e:
+        _logger.debug("voyage embedding failed: %s", e)
         return None
+
+
+# H177: lazy module-level singleton — loading the model on EVERY call was the
+# dominant cost. First call loads it, later calls reuse it. ImportError (or any
+# load failure) still yields None so callers keep their fallback behaviour.
+_ST_MODEL = None
 
 
 def _embed_sentence_transformers(query: str) -> list[float] | None:
     """Embed locally via sentence-transformers (all-MiniLM-L6-v2, 384d)."""
+    global _ST_MODEL
     try:
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        vec = model.encode(query)
+        if _ST_MODEL is None:
+            _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        vec = _ST_MODEL.encode(query)
         return vec.tolist()
-    except Exception:
+    except Exception as e:
+        _logger.debug("sentence-transformers embedding failed: %s", e)
         return None
 
 
@@ -1020,7 +1041,8 @@ def _embed_ollama(query: str) -> list[float] | None:
         )
         data = r.json()
         return data.get("embedding")
-    except Exception:
+    except Exception as e:
+        _logger.debug("ollama embedding failed: %s", e)
         return None
 
 

@@ -220,6 +220,13 @@ class AutoDiscovery:
                 if hit_id == fact_id:
                     continue
 
+                # H195: the category filter was applied to the scanned SOURCE
+                # facts only — hits from other categories still flowed in and
+                # produced candidates whose target lives in a filtered-out
+                # category. Apply the same filter to the hit side.
+                if categories and _extract_category(hit_payload) not in categories:
+                    continue
+
                 # Directional dedup: only process A↔B once
                 pair_key = tuple(sorted([fact_id, hit_id]))
                 if pair_key in seen_pairs:

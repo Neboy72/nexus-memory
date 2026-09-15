@@ -92,8 +92,10 @@ def search_knowledge(
 
     results = []
     for r in raw:
-        # Extract content — handle nested payload
-        payload = r.get("payload", r)
+        # Extract content — handle nested payload. H199: `or {}` so a present
+        # but empty/None payload can't silently drop every field (the old
+        # `r.get("payload", r)` only fell back when the key was absent).
+        payload = r.get("payload") or {}
         fact_id = payload.get("fact_id") or r.get("id", "")
         content = payload.get("content") or payload.get("text") or r.get("text", "")
 
@@ -140,8 +142,13 @@ def cluster_facts(facts: list[dict]) -> dict[str, list[str]]:
             continue
         cat = (f.get("category") or "fact").lower()
 
-        # Categorize by category field
-        if cat in ("pattern", "procedure", "workflow", "step"):
+        # Categorize by category field.
+        # H198: "pattern" was in BOTH this chain and the heuristic chain below,
+        # so pattern facts always short-circuited to "steps" and the smarter
+        # content-based classification was dead for them. Pattern facts now
+        # fall through to the heuristic (pitfall/verification/prerequisite
+        # detection on content); procedure/workflow/step stay steps.
+        if cat in ("procedure", "workflow", "step"):
             clusters["steps"].append(content)
         elif cat in ("lesson", "pitfall", "warning", "gotcha"):
             clusters["pitfalls"].append(content)
@@ -396,7 +403,7 @@ def export_skill(
     with open(output_path, "w") as f:
         f.write(skill_md)
 
-    return {
+    result = {
         "name": name,
         "topic": topic,
         "facts_found": len(facts),
@@ -404,6 +411,16 @@ def export_skill(
         "output_path": output_path,
         "deployed": deploy,
     }
+
+    # H200: if every section came out empty (bad topic / empty collection) the
+    # caller otherwise sees silent empty sections. Add an ignorable note field.
+    if not any(clusters.values()):
+        result["warning"] = (
+            f"no facts found for topic {topic!r} ({len(facts)} search hits) — "
+            "the exported skill has empty sections"
+        )
+
+    return result
 
 
 def list_topics(

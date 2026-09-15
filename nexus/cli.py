@@ -42,13 +42,22 @@ def main():
 
     # scan
     p_scan = sub.add_parser("scan", help="Full-Scan + Trust-Recompute")
-    p_scan.add_argument("--recompute", action="store_true", help="Trust neu berechnen")
+    p_scan.add_argument(
+        "--recompute",
+        action="store_true",
+        help="Trust neu berechnen (ohne Flag: nur read-only Statusbericht)",
+    )
 
     # override
     p_override = sub.add_parser("override", help="User-Override setzen")
     p_override.add_argument("belief_id", type=str)
     p_override.add_argument("field", type=str)
     p_override.add_argument("value", type=str)
+    p_override.add_argument(
+        "--string",
+        action="store_true",
+        help="Wert roh als String übernehmen (keine numerische Coercion)",
+    )
 
     # verify
     p_verify = sub.add_parser("verify", help="Collection-Status")
@@ -117,8 +126,12 @@ def cmd_ingest(args):
         print(f"❌ File not found: {args.file}")
         sys.exit(1)
 
-    with open(args.file) as f:
-        beliefs = json.load(f)
+    try:
+        with open(args.file) as f:
+            beliefs = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"❌ JSON-Datei nicht lesbar ({args.file}): {e}")
+        sys.exit(1)
 
     if not isinstance(beliefs, list):
         beliefs = [beliefs]
@@ -149,9 +162,29 @@ def cmd_ingest(args):
 
 
 def cmd_scan(args):
-    from nexus.apply import recompute_all
+    from nexus.apply import recompute_all, QDRANT_URL, BELIEFS_COLLECTION
+    from nexus.config import is_success
+    import requests
 
     print("🔍 Full-Scan gestartet...")
+
+    if not getattr(args, "recompute", False):
+        # H188: --recompute is honored. Without it this is a pure READ-ONLY
+        # report of the current trust state — no writes, no recompute.
+        try:
+            r = requests.get(f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}", timeout=10)
+        except requests.RequestException as e:
+            print(f"\n❌ Qdrant nicht erreichbar: {e}")
+            sys.exit(1)
+        if not is_success(r.status_code):
+            print(f"\n❌ nexus_beliefs nicht erreichbar (HTTP {r.status_code})")
+            sys.exit(1)
+        result = r.json().get("result", {}) or {}
+        print(f"\n📊 Ergebnis (read-only, kein Recompute):")
+        print(f"  Beliefs: {result.get('points_count', 0)}")
+        print("  Trust unverändert — Neuberechnung mit: nexus scan --recompute")
+        return
+
     stats = recompute_all()
     print(f"\n📊 Ergebnis:")
     print(f"  Gesamt:  {stats['total']}")
@@ -165,14 +198,16 @@ def cmd_override(args):
     from nexus.apply import user_override
 
     value = args.value
-    # Try numeric conversion
-    try:
-        if "." in value:
-            value = float(value)
-        else:
-            value = int(value)
-    except ValueError:
-        pass  # Keep as string
+    # Numerische Coercion nur ohne --string (H187). Default bleibt bewusst
+    # unverändert, um bestehende Caller nicht still zu brechen.
+    if not getattr(args, "string", False):
+        try:
+            if "." in value:
+                value = float(value)
+            else:
+                value = int(value)
+        except ValueError:
+            pass  # Keep as string
 
     result = user_override(args.belief_id, args.field, value)
     if result.get("error"):
@@ -188,7 +223,7 @@ def cmd_override(args):
 def cmd_verify():
     from nexus.config import is_success
     from nexus.events import verify_collection as verify_events
-    from nexus.apply import ensure_beliefs_collection
+    from nexus.apply import ensure_beliefs_collection, QDRANT_URL, BELIEFS_COLLECTION
 
     # nexus_events
     ev = verify_events()
@@ -196,15 +231,21 @@ def cmd_verify():
     print(f"  Points:  {ev['points']}")
     print(f"  Indizes: {ev['indexes']}")
 
-    # nexus_beliefs
-    ok = ensure_beliefs_collection()
+    # nexus_beliefs — ensure collection exists (side effect only, return unused)
+    ensure_beliefs_collection()
     import requests
-    r = requests.get("http://localhost:6333/collections/nexus_beliefs", timeout=5)
+    # H183/H184: configurable base URL + guarded GET with defensive .get() chain.
+    try:
+        r = requests.get(f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}", timeout=5)
+    except requests.RequestException as e:
+        print(f"\n📦 nexus_beliefs (❌): Qdrant nicht erreichbar — {e}")
+        return
     if is_success(r.status_code):
-        d = r.json()["result"]
+        d = r.json().get("result", {}) or {}
+        vectors = d.get("config", {}).get("params", {}).get("vectors", {}) or {}
         print(f"\n📦 nexus_beliefs (✅):")
-        print(f"  Points:  {d['points_count']}")
-        print(f"  Vector:  {d['config']['params']['vectors']['size']}d")
+        print(f"  Points:  {d.get('points_count', 0)}")
+        print(f"  Vector:  {vectors.get('size', '?')}d")
     else:
         print(f"\n📦 nexus_beliefs (❌): not found")
 

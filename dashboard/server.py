@@ -57,6 +57,8 @@ from nexus_memory.agent_detect import (
 )
 from nexus_memory.chat_wizard import get_status, TRUST_LEVELS
 
+_logger = logging.getLogger(__name__)
+
 try:
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse, JSONResponse
@@ -208,8 +210,9 @@ async def get_system_status():
         # Qdrant returns "status" field (e.g. "green") not "collection_name"
         qdrant_healthy = result.get("status") in ("green", "yellow", "red") or "points_count" in result
         points_count = result.get("points_count", 0)
-    except Exception:
-        pass
+    except Exception as e:
+        # qdrant_healthy stays False (fail-closed) — log the reason for diagnosis.
+        _logger.debug("get_system_status: qdrant probe failed: %s", e)
 
     # Config - detect embedding provider from config or env
     embed_provider = "unknown"
@@ -230,10 +233,10 @@ async def get_system_status():
                     import urllib.request as ur
                     ur.urlopen("http://localhost:11434/api/tags", timeout=2)
                     embed_provider = "ollama"
-                except:
-                    pass
-    except Exception:
-        pass
+                except Exception as e:
+                    _logger.debug("get_system_status: ollama probe failed: %s", e)
+    except Exception as e:
+        _logger.debug("get_system_status: config read failed: %s", e)
 
     # Version — aus dem INSTALLIERTEN nexus_memory-Paket (importlib.metadata),
     # NICHT aus dem Legacy-Repo-Root-Paket `nexus` (dessen __init__ ist veraltet
@@ -263,17 +266,17 @@ async def get_system_status():
             with open(spend_file) as f:
                 spend = json.load(f)
             month_key = time.strftime("%Y-%m")
-            fuel["spent_usd"] = round(float(spend.get(months := month_key, spend.get("total", 0)) or 0), 4)
-    except Exception:
-        pass
+            fuel["spent_usd"] = round(float(spend.get(month_key, spend.get("total", 0)) or 0), 4)
+    except Exception as e:
+        _logger.debug("get_system_status: fuel spend read failed: %s", e)
 
     # Echter Modellname (z.B. "voyage-4", "qwen3-embedding") statt nur Provider-Label — Nebo-Regel: volle Transparenz
     embed_model = embed_provider
     try:
         from nexus_memory.embeddings import EmbeddingProvider
         embed_model = EmbeddingProvider().name or embed_provider
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.debug("get_system_status: embedding model lookup failed: %s", e)
 
     return {
         "version": version,
@@ -321,8 +324,9 @@ async def get_agents():
     """
     try:
         cleanup_removed_agents()
-    except Exception:
-        pass  # cleanup must never break the agents listing
+    except Exception as e:
+        # cleanup must never break the agents listing — log for diagnosis.
+        _logger.debug("agents list: cleanup_removed_agents failed: %s", e)
     registry = load_agents_registry()
     return registry
 
@@ -474,8 +478,19 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
             "fullText": f["text"],
         }
         memories.append(mem)
-        by_cat.setdefault(f["category"], []).append(mem)
-        by_source.setdefault(f["source"], []).append(mem)
+
+    # H189: trim to the requested limit FIRST. Edges and category_counts are
+    # then derived from the trimmed set — otherwise D3 gets dangling edges to
+    # memories that were cut off and counts that don't match `memories`.
+    if len(memories) > limit:
+        memories = memories[:limit]
+
+    # Group the (trimmed) memories for edge + count building.
+    by_cat: dict = {}
+    by_source: dict = {}
+    for mem in memories:
+        by_cat.setdefault(mem["category"], []).append(mem)
+        by_source.setdefault(mem["source"], []).append(mem)
 
     # Build edges: connect memories sharing the same source OR same category
     # Each memory connects to its nearest neighbors (max 3 per group) to avoid clutter
@@ -495,9 +510,6 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
                         seen_pairs.add(pair)
 
     category_counts = {cat: len(mems) for cat, mems in by_cat.items()}
-    # Respect the limit AFTER filtering — the client asked for a max set size.
-    if len(memories) > limit:
-        memories = memories[:limit]
 
     return {"memories": memories, "edges": edges, "category_counts": category_counts}
 
@@ -680,10 +692,10 @@ async def health_check():
                     import urllib.request as ur
                     r = ur.urlopen("http://localhost:11434/api/tags", timeout=2)
                     embed_provider = "ollama"
-                except:
-                    pass
-    except Exception:
-        pass
+                except Exception as e:
+                    _logger.debug("health: ollama probe failed: %s", e)
+    except Exception as e:
+        _logger.debug("health: config read failed: %s", e)
     checks["embedding"] = {
         "status": "ok" if embed_provider != "unknown" else "warning",
         "provider": embed_provider,
@@ -772,8 +784,9 @@ async def connect_agent(agent_id: str):
             install_type="mcp",
             config_dir=meta.get("config_dir") or str(cfg_path.parent),
         )
-    except Exception:
-        pass  # registration is best-effort; the config write itself succeeded
+    except Exception as e:
+        # registration is best-effort; the config write itself succeeded.
+        _logger.debug("connect: agent registration failed: %s", e)
     return {"status": "ok", "action": "connected" if not already else "already-connected", "config": str(cfg_path)}
 
 
@@ -807,8 +820,10 @@ async def disconnect_agent(agent_id: str):
                 {"error": "plugin-embedded agent — disconnect only via its host config"},
                 status_code=403,
             )
-    except Exception:
-        pass  # registry read failure must not silently allow/deny; config is authoritative
+    except Exception as e:
+        # registry read failure must not silently allow/deny; config is
+        # authoritative — log it for diagnosis.
+        _logger.debug("disconnect: registry read failed: %s", e)
 
     cfg_path, fmt = config_paths[agent_id]
 
