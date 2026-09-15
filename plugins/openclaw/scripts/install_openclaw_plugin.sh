@@ -29,6 +29,18 @@ case "$TARGET_DIR" in
   *) echo "❌ ERROR: target '$TARGET_DIR' is not under '$PLUGINS_DIR' — refusing to install"; exit 1;;
 esac
 
+# The install is remove-then-create: an interrupted run must not silently
+# leave a half-created plugin seat behind.
+trap 'echo "❌ ERROR: install incomplete — re-run this script (target: $TARGET_DIR)"; exit 1' ERR
+
+# Sanity: PLUGIN_DIR is derived from the script location — verify it really
+# holds the OpenClaw plugin manifest before touching the target.
+if [ ! -f "$PLUGIN_DIR/openclaw.plugin.json" ]; then
+  echo "❌ ERROR: $PLUGIN_DIR does not look like the Nexus Memory OpenClaw plugin"
+  echo "   (missing openclaw.plugin.json) — refusing to install"
+  exit 1
+fi
+
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║   Nexus Memory — OpenClaw Plugin Installer           ║"
 echo "╚══════════════════════════════════════════════════════╝"
@@ -40,9 +52,9 @@ echo ""
 
 # Check if OpenClaw state directory exists
 if [ ! -d "$OPENCLAW_STATE_DIR" ]; then
-  echo "⚠️  OpenClaw state directory not found at $OPENCLAW_STATE_DIR"
-  echo "   Make sure OpenClaw is installed. Creating plugins directory anyway..."
-  mkdir -p "$PLUGINS_DIR"
+  echo "❌ ERROR: OpenClaw state directory not found at $OPENCLAW_STATE_DIR"
+  echo "   aborting (set OPENCLAW_STATE_DIR oder installiere OpenClaw)"
+  exit 1
 fi
 
 # Create plugins directory if it doesn't exist
@@ -58,10 +70,16 @@ elif [ -d "$TARGET_DIR" ]; then
 fi
 
 # Try symlink first (preferred — stays in sync with repo)
-if ln -s "$PLUGIN_DIR" "$TARGET_DIR" 2>/dev/null; then
+if ln -s "$PLUGIN_DIR" "$TARGET_DIR"; then
   echo "✅ Symlinked: $TARGET_DIR → $PLUGIN_DIR"
 else
-  echo "Symlink failed, copying instead..."
+  err=$?
+  echo "⚠️  symlink failed (exit $err) — falling back to copy"
+  # A leftover target would make `cp -r` nest the copy inside it — refuse.
+  if [ -e "$TARGET_DIR" ]; then
+    echo "❌ ERROR: target already exists after failed symlink — aborting"
+    exit 1
+  fi
   cp -r "$PLUGIN_DIR" "$TARGET_DIR"
   echo "✅ Copied: $PLUGIN_DIR → $TARGET_DIR"
 fi
@@ -74,6 +92,10 @@ echo ""
 echo "Add the following to your OpenClaw config"
 echo "(~/.openclaw/openclaw.json):"
 echo ""
+echo "Least-privilege defaults are used below (prompt injection and conversation"
+echo "access disabled, accessLevel \"default\"). Raise them only for an isolated/"
+echo "trusted backend."
+echo ""
 echo '{'
 echo '  "plugins": {'
 echo '    "slots": {'
@@ -83,8 +105,8 @@ echo '    "entries": {'
 echo '      "nexus-memory": {'
 echo '        "enabled": true,'
 echo '        "hooks": {'
-echo '          "allowPromptInjection": true,'
-echo '          "allowConversationAccess": true'
+echo '          "allowPromptInjection": false,'
+echo '          "allowConversationAccess": false'
 echo '        },'
 echo '        "config": {'
 echo '          "qdrantUrl": "http://localhost:6333",'
@@ -97,7 +119,7 @@ echo '          },'
 echo '          "autoRecall": true,'
 echo '          "autoCapture": true,'
 echo '          "maxRecallResults": 10,'
-echo '          "accessLevel": "public"'
+echo '          "accessLevel": "default"'
 echo '        }'
 echo '      }'
 echo '    }'

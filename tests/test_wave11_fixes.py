@@ -431,6 +431,11 @@ class TestH9OpenclawGuard:
 
     def test_install_into_temp_state_dir(self, tmp_path):
         state = tmp_path / "oc"
+        # Wave-20 (Nr 345): a MISSING OPENCLAW_STATE_DIR is now a hard abort
+        # (installer refuses instead of mkdir-ing it). The test therefore has
+        # to model an existing OpenClaw state dir; the assertions themselves
+        # are unchanged.
+        state.mkdir()
         r = _run_openclaw(str(state))
         assert r.returncode == 0, r.stdout + r.stderr
         target = state / "plugins" / "nexus-memory"

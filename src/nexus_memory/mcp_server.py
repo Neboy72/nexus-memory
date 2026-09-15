@@ -44,6 +44,11 @@ from nexus.config import is_success
 _NEXUS_REPO = os.path.dirname(os.path.dirname(nexus.__file__))
 NEXUS_REPO_PATH = os.environ.get("NEXUS_REPO_PATH", _NEXUS_REPO)
 
+# Strong references to fire-and-forget tasks: asyncio only keeps weak
+# references, so an unreferenced task can be GC'd before it finishes and its
+# exception is never observed. Discarded again on completion.
+_BACKGROUND_TASKS: set = set()
+
 # ── Auto-load .env files ──────────────────────────────────────────
 # Load from NEXUS_ENV_FILE explicit path, then ~/.hermes/.env, then cwd/.env
 env_paths = []
@@ -315,7 +320,9 @@ async def dispatch_event(event_type: str, memory_id: str,
             continue
         # create_task is enough — the inner coroutine catches all errors.
         try:
-            asyncio.create_task(_post_webhook(url, payload))
+            task = asyncio.create_task(_post_webhook(url, payload))
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
         except RuntimeError as exc:
             # No running loop (e.g. during interpreter shutdown).
             logging.debug(f"Skipping webhook fire (no loop): {exc}")
@@ -415,7 +422,13 @@ def _to_point_id(val):
         return val
     if isinstance(val, str):
         if "-" in val and len(val) == 36:
-            return UUID(val)
+            # A 36-char string with dashes is not necessarily a valid UUID
+            # (non-hex shapes raise ValueError) — pass the raw id through
+            # instead of failing the whole request.
+            try:
+                return UUID(val)
+            except ValueError:
+                return val
         try:
             return int(val)
         except ValueError:
@@ -1534,33 +1547,45 @@ class MemoryStore:
             try:
                 import qdrant_client.models as _qm
                 now_iso = datetime.now(timezone.utc).isoformat()
-                # v0.15 (Review-Fix): bestehendes Payload mitschicken, damit
-                # use_count von seinem aktuellen Stand incrementiert —
-                # _aup({}) hätte den Zähler bei jedem Recall auf 1 resettet.
-                _existing = {
-                    str(p.id): (p.payload or {})
-                    for p in self.client.retrieve(
-                        collection_name=COLLECTION_NAME,
-                        ids=_point_ids_for_tracking[:limit],
-                        with_payload=True, with_vectors=False,
-                    )
-                }
-                for pid in _point_ids_for_tracking[:limit]:
-                    self.client.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload=_aup(_existing.get(pid, {}), now=now_iso),
-                        points=_qm.PointIdsList(points=[pid]),
-                    )
+                # Limit the tracked set once — retrieve + set_payloads use the
+                # same ids.
+                _track_pids = _point_ids_for_tracking[:limit]
+
+                def _track_access_sync() -> None:
+                    """Synchronous Qdrant writes, run off the event loop.
+
+                    v0.15 (Review-Fix): bestehendes Payload mitschicken, damit
+                    use_count von seinem aktuellen Stand incrementiert —
+                    _aup({}) hätte den Zähler bei jedem Recall auf 1 resettet.
+                    """
+                    existing = {
+                        str(p.id): (p.payload or {})
+                        for p in self.client.retrieve(
+                            collection_name=COLLECTION_NAME,
+                            ids=_track_pids,
+                            with_payload=True, with_vectors=False,
+                        )
+                    }
+                    for pid in _track_pids:
+                        self.client.set_payload(
+                            collection_name=COLLECTION_NAME,
+                            payload=_aup(existing.get(pid, {}), now=now_iso),
+                            points=_qm.PointIdsList(points=[pid]),
+                        )
+
+                # The qdrant client is thread-safe for retrieve/set_payload;
+                # running the O(results) block in a thread keeps the loop free.
+                await asyncio.to_thread(_track_access_sync)
             except Exception as track_err:
                 logging.debug(f"Access-tracking failed (non-blocking): {track_err}")
-        
+
         # Update nudge: if update available, append a note — first time immediately,
         # then re-nudge every 7 days (a missed nudge is not lost forever, but no spam)
+        notice = None
         if (self._update_check_result and
             self._update_check_result.get("update_available") and
             time.time() - self._update_nudged_at >= 7 * 24 * 3600):
-            self._update_nudged_at = time.time()
-            results.append({
+            notice = {
                 "id": "update-notice",
                 "score": 0,
                 "text": (
@@ -1572,9 +1597,17 @@ class MemoryStore:
                 "category": "system",
                 "source": "nexus-memory-server",
                 "_is_update_notice": True,
-            })
-        
-        return results[:limit]
+            }
+
+        results = results[:limit]
+        if notice is not None:
+            # Append AFTER the slice — otherwise a full result page cut the
+            # notice off while the nudge timestamp was already stamped (a
+            # 7-day void). Stamp it only when the notice is really returned.
+            self._update_nudged_at = time.time()
+            results.append(notice)
+
+        return results
 
     async def forget(self, memory_id: str) -> bool:
         result = self.client.delete(
@@ -2595,6 +2628,35 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             # update, which corrupted version history — valid_to /
             # superseded_at were left set although the point remained
             # canonical and valid.)
+            #
+            # The revert below mutates the store BEFORE nexus_update runs, so
+            # first prove the point exists and capture its original lifecycle
+            # fields — they are restored if the update fails.
+            try:
+                _orig_points = store.client.retrieve(
+                    collection_name=COLLECTION_NAME,
+                    ids=[memory_id],
+                    with_payload=True,
+                    with_vectors=False,
+                )
+            except Exception as look_err:
+                logging.warning(f"Update: pre-read failed for {memory_id}: {look_err}")
+                _orig_points = []
+            if not _orig_points:
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": f"point not found: {memory_id} (store was not modified)",
+                    }),
+                )]
+            _orig_payload = _orig_points[0].payload or {}
+            _orig_lifecycle = {
+                "lifecycle_status": _orig_payload.get("lifecycle_status"),
+                "superseded_at": _orig_payload.get("superseded_at"),
+                "superseded_by": _orig_payload.get("superseded_by"),
+                "valid_to": _orig_payload.get("valid_to"),
+            }
             try:
                 _revert_payload = {
                     "lifecycle_status": "canonical",
@@ -2659,6 +2721,27 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             else:
                 # Qdrant write result without a clear success marker
                 status = "unknown"
+
+            if status == "error":
+                # nexus_update failed AFTER the revert already mutated the
+                # store — restore the captured original lifecycle fields so a
+                # failed update does not silently drop the supersession marks.
+                try:
+                    store.client.set_payload(
+                        collection_name=COLLECTION_NAME,
+                        payload=_orig_lifecycle,
+                        points=[memory_id],
+                    )
+                    logging.warning(
+                        f"Update failed for {memory_id[:8]} — restored original "
+                        f"lifecycle fields"
+                    )
+                except Exception as restore_err:
+                    logging.warning(
+                        f"Update failed AND lifecycle restore failed for "
+                        f"{memory_id}: {restore_err}"
+                    )
+
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": status, "detail": result}),

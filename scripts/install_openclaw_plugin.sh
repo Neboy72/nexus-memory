@@ -68,7 +68,9 @@ if [ "${OPENCLAW_FOUND}" = false ]; then
     echo "  Install OpenClaw first, or use the MCP server instead:"
     echo "    nexus-memory  (then configure mcpServers in your agent)"
     echo "  See AGENTS.md for MCP setup instructions."
-    exit 0
+    # Exit 2 (distinct from a hard error 1): "OpenClaw not installed" is a
+    # valid no-op, so callers/CI can tell it apart from a real failure.
+    exit 2
 fi
 
 echo ""
@@ -268,7 +270,7 @@ echo "🧠  Want to SEE your memory? Start the dashboard:"
 echo ""
 echo "    nexus-memory webui   # dashboard on http://127.0.0.1:9121"
 echo ""
-echo "    → opens at http://127.0.0.1:9210 (browser opens automatically"
+echo "    → opens at http://127.0.0.1:9121 (browser opens automatically"
 echo "      on first start). Bookmark it — one click to your dashboard."
 echo ""
 echo "Shared store: same Qdrant 'nexus' collection as Hermes plugin and MCP server."
