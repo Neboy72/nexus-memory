@@ -158,7 +158,17 @@ class HealthAuditor:
         if dup.get("groups"):
             sweep = r.get("dedup_sweep") or {}
             merged = int(sweep.get("merged") or 0)
-            if merged:
+            if sweep.get("error"):
+                # The sweep errored: it may have deleted points before
+                # failing, so this is NOT a read-only run.
+                message = (
+                    f"⚠️ Nexus Memory health: {dup.get('groups')} duplicate groups "
+                    f"({dup.get('excess_copies')} redundant copies) detected during the last audit. "
+                    f"Dedup sweep errored (state unknown): {sweep.get('error')}. "
+                    f"Deletion state could not be verified — review the report at "
+                    f"{r.get('report_file', '')}."
+                )
+            elif merged:
                 # Truthful reporting: the sweep DID delete points.
                 message = (
                     f"⚠️ Nexus Memory health: {dup.get('groups')} duplicate groups "
@@ -220,6 +230,13 @@ class HealthAuditor:
                     report["dedup_sweep"] = self._dedup_sweep()
                 except Exception as sweep_exc:
                     log.warning("Dedup sweep failed: %s", sweep_exc)
+                    # The sweep may have deleted points before failing — the
+                    # deletion state is UNKNOWN. Record an error entry so the
+                    # flags/webhook never claim a clean read-only run.
+                    report["dedup_sweep"] = {
+                        "error": str(sweep_exc),
+                        "mode": "error",
+                    }
             self._write_report(report)
             self._maybe_webhook(report)
         except Exception as exc:  # never break the server
@@ -464,7 +481,15 @@ class HealthAuditor:
         # Truthful reporting: state whether the run actually deleted points.
         sweep = report.get("dedup_sweep") or {}
         merged = int(sweep.get("merged") or 0)
-        if merged:
+        if sweep.get("error"):
+            # Sweep errored mid-run: deletions may have happened. Never
+            # announce this as "read-only".
+            mode = "degraded (dedup sweep errored, deletion state unknown)"
+            action = (
+                f"Dedup sweep errored (state unknown): {sweep.get('error')}. "
+                "Deletion state could not be verified — check the report."
+            )
+        elif merged:
             mode = "destructive (opt-in dedup sweep ran)"
             action = (
                 f"⚠️ DELETED {merged} duplicate copies. "
