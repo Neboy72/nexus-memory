@@ -143,10 +143,15 @@ class CostAwareRouter:
         # Ollama (check if running)
         try:
             import socket
-            sock = socket.create_connection(("localhost", 11434), timeout=1)
-            sock.close()
+            with socket.create_connection(("localhost", 11434), timeout=1) as sock:
+                pass
             self._available_providers["ollama"] = TIER_ECONOMY
-        except Exception:
+        except OSError as exc:
+            # socket.timeout is an OSError subclass; referencing socket.timeout
+            # inside the except tuple would NameError if the import above ever
+            # failed, so OSError alone covers both.
+            logger.debug("cost_router: ollama probe failed: %s", exc)
+        except ImportError:
             pass
         # sentence-transformers (check if installed)
         try:
@@ -177,10 +182,15 @@ class CostAwareRouter:
                     if "configured_embedding_provider" in cfg:
                         self._configured_provider = cfg["configured_embedding_provider"]
                     break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("cost_router: config read failed (%s): %s", path, exc)
 
-    def get_provider_for_category(self, category: str) -> Optional[str]:
+    def _record_decision(self, provider: str, record: bool) -> None:
+        """Count a routing decision (skipped for read-only callers)."""
+        if record:
+            self._routing_decisions[provider] = self._routing_decisions.get(provider, 0) + 1
+
+    def get_provider_for_category(self, category: str, record: bool = True) -> Optional[str]:
         """Get the recommended provider name for a memory category.
 
         Returns the provider name (e.g. "voyage", "ollama") or None if
@@ -188,6 +198,10 @@ class CostAwareRouter:
 
         Args:
             category: Memory category (fact, rule, preference, belief, session, temp, entity, procedure)
+            record: When True (default) the decision is counted in
+                ``_routing_decisions``. Read-only callers (estimate_cost,
+                explain) pass False so inspecting a category does not mutate
+                the routing statistics.
 
         Returns:
             Provider name string, or None if routing is disabled.
@@ -206,23 +220,32 @@ class CostAwareRouter:
         if tier_providers:
             # Prefer the first available in the tier (priority order)
             chosen = tier_providers[0]
-            self._routing_decisions[chosen] = self._routing_decisions.get(chosen, 0) + 1
+            self._record_decision(chosen, record)
             return chosen
 
-        # No provider in the recommended tier — fall up (better quality is OK)
+        # No provider in the recommended tier — fall through to the other
+        # tiers instead of returning None (graceful degradation).
         if recommended_tier == TIER_ECONOMY:
             # Try standard, then premium
             for tier in [TIER_STANDARD, TIER_PREMIUM]:
                 fallback = [n for n, t in self._available_providers.items() if t == tier]
                 if fallback:
-                    self._routing_decisions[fallback[0]] = self._routing_decisions.get(fallback[0], 0) + 1
+                    self._record_decision(fallback[0], record)
                     return fallback[0]
         elif recommended_tier == TIER_STANDARD:
             # Try premium (fall up is OK), then economy
             for tier in [TIER_PREMIUM, TIER_ECONOMY]:
                 fallback = [n for n, t in self._available_providers.items() if t == tier]
                 if fallback:
-                    self._routing_decisions[fallback[0]] = self._routing_decisions.get(fallback[0], 0) + 1
+                    self._record_decision(fallback[0], record)
+                    return fallback[0]
+        elif recommended_tier == TIER_PREMIUM:
+            # No premium provider available: fall down to standard, then
+            # economy (same graceful degradation as the other tiers).
+            for tier in [TIER_STANDARD, TIER_ECONOMY]:
+                fallback = [n for n, t in self._available_providers.items() if t == tier]
+                if fallback:
+                    self._record_decision(fallback[0], record)
                     return fallback[0]
 
         # Shouldn't happen, but return None to use the default
@@ -250,7 +273,7 @@ class CostAwareRouter:
 
         Returns estimated cost in USD (0.0 for local providers).
         """
-        provider = self.get_provider_for_category(category)
+        provider = self.get_provider_for_category(category, record=False)
         if not provider:
             return 0.0
         cost_per_m = PROVIDER_COSTS.get(provider, 0.0)
@@ -275,7 +298,7 @@ class CostAwareRouter:
     def explain(self, category: str) -> str:
         """Human-readable explanation of the routing decision for a category."""
         tier = self.get_tier_for_category(category)
-        provider = self.get_provider_for_category(category)
+        provider = self.get_provider_for_category(category, record=False)
         desc = TIER_DESCRIPTIONS.get(tier, "")
         if provider:
             return f"Category '{category}' → tier '{tier}' → provider '{provider}'. {desc}"

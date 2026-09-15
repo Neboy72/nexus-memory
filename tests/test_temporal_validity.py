@@ -99,7 +99,7 @@ class _FakeEmbedder:
     _model = None
     _client = None
 
-    async def embed(self, text: str) -> list[float]:
+    async def embed(self, text: str, is_query: bool = True) -> list[float]:
         return [0.0] * 384
 
     @property

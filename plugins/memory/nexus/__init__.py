@@ -86,11 +86,11 @@ class _Embedder:
         except Exception as exc:
             raise RuntimeError(f"Could not init embedding provider: {exc}")
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str, is_query: bool = True) -> List[float]:
         import asyncio
         loop = asyncio.new_event_loop()
         try:
-            return loop.run_until_complete(self._impl.embed(text))
+            return loop.run_until_complete(self._impl.embed(text, is_query))
         finally:
             loop.close()
 
@@ -350,13 +350,16 @@ class NexusMemoryProvider:
                     self._embed_cache = EmbedCache()
         return self._embed_cache
 
-    def _embed_cached(self, text: str) -> List[float]:
-        """Embed with L0 cache: hit = no cloud call (~256ms saved)."""
+    def _embed_cached(self, text: str, is_query: bool = True) -> List[float]:
+        """Embed with L0 cache: hit = no cloud call (~256ms saved).
+
+        ``is_query`` is part of the cache key (query and document vectors for
+        the same text differ on instruction-aware models)."""
         cache = self._get_embed_cache()
-        vec = cache.get(text)
+        vec = cache.get(text, is_query)
         if vec is None:
-            vec = self._embedder.embed(text)
-            cache.put(text, vec)
+            vec = self._embedder.embed(text, is_query)
+            cache.put(text, vec, is_query)
         return vec
 
     def _get_skill_graph(self):
@@ -600,7 +603,7 @@ class NexusMemoryProvider:
                 source_url: str = "", scope: str = "default", **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        vector = self._embedder.embed(text)
+        vector = self._embedder.embed(text, is_query=False)  # stored doc, not a query
         # v0.15 Memory Dynamics: Salience via Helper (klemmt auf [0,1] und
         # setzt Kategorie-Defaults; Review-Fix: Werte außerhalb 0-1 wurden
         # unclampet gespeichert und sind jetzt sicher normalisiert).
@@ -1331,8 +1334,8 @@ class NexusMemoryProvider:
         if entity.attributes:
             attr_str = ", ".join(f"{k}={v}" for k, v in entity.attributes.items())
             text += f" ({attr_str})"
-        # Review fix R1: deterministic entity text - cache the embed
-        vector = self._embed_cached(text)
+        # Review fix R1: deterministic entity text - cache the embed (doc text)
+        vector = self._embed_cached(text, is_query=False)
         payload = {
             "id": eid,
             "content": text,

@@ -87,8 +87,11 @@ def test_same_local_model_tolerates_tags():
 
 
 def test_qwen3_query_gets_instruct_prefix(monkeypatch):
-    """Query embed calls must carry the Instruct prefix; doc-style calls (same method) too —
-    prefix lives in embed(), so a call always shows the prefix for qwen3 models."""
+    """Query embed calls (is_query defaults to True) carry the Instruct prefix.
+
+    Document embeddings are produced with is_query=False and stay plain — the
+    prefix is instruction-aware and applies to queries only.
+    """
     captured = {}
 
     class _PostResp:

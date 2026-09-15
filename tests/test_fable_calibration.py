@@ -94,7 +94,7 @@ class TestSalienceFollowsConfidence:
         plugin = _load_plugin_module()
 
         class FakeEmbedder:
-            def embed(self, text):
+            def embed(self, text, is_query=True):
                 return [0.1, 0.2, 0.3]
 
         class FakeQdrant:

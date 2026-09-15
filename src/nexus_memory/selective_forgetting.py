@@ -103,8 +103,18 @@ class SelectiveForgettingAuditor:
     def __init__(self, store, collection: str, data_dir: Optional[str] = None) -> None:
         self._store = store
         self._collection = collection
-        self._data_dir = data_dir or str(os.path.join(os.path.expanduser("~"), ".nexus-memory", "reports"))
-        os.makedirs(self._data_dir, exist_ok=True)
+        self._data_dir: Optional[str] = data_dir or str(
+            os.path.join(os.path.expanduser("~"), ".nexus-memory", "reports"))
+        # Fail-soft: this runs inside the daemon thread — an unwritable report
+        # dir must not take the whole audit down (reports are then skipped).
+        try:
+            os.makedirs(self._data_dir, exist_ok=True)
+        except OSError as exc:
+            log.warning(
+                "selective-forgetting: cannot create report dir %s (%s) — reports disabled",
+                self._data_dir, exc,
+            )
+            self._data_dir = None
 
     def score_point(self, payload: Dict[str, Any], now: float) -> Optional[float]:
         """Score in [0..1] oder None wenn geschützt/nicht bewertbar."""
@@ -143,7 +153,13 @@ class SelectiveForgettingAuditor:
         protected: Dict[str, int] = {}
         for p in points:
             payload = p.payload or {}
-            if payload.get("lifecycle_status") in ("superseded", "deleted"):
+            # Same lifecycle resolution as score_point(): lifecycle_status
+            # falls back to status. Without this, status="superseded"/"deleted"
+            # points slipped past the pre-filter and were mis-counted as
+            # invalid_timestamps.
+            lc = payload.get("lifecycle_status") or payload.get("status")
+            if lc in ("superseded", "deleted"):
+                protected["protected_lifecycle"] = protected.get("protected_lifecycle", 0) + 1
                 continue
             score = self.score_point(payload, now)
             if score is None:
@@ -201,6 +217,8 @@ class SelectiveForgettingAuditor:
         return report
 
     def _write_report(self, report: Dict[str, Any]) -> None:
+        if not self._data_dir:
+            return  # report dir unavailable (fail-soft) — skip persistence
         try:
             report["report_file"] = os.path.join(
                 self._data_dir, f"forget-{report['timestamp'][:10]}.json"

@@ -53,7 +53,9 @@ def months_since(value: Any, now: datetime | None = None) -> float:
     dt = parse_ts(value)
     if dt is None:
         return 0.0
-    now = now or datetime.now(timezone.utc)
+    # Normalize `now` too: callers may hand in a naive/aware datetime or an
+    # ISO string, and `now - dt` would raise on a string or a naive/aware mix.
+    now = parse_ts(now) or datetime.now(timezone.utc)
     return max(0.0, (now - dt).total_seconds() / (30 * 24 * 3600))
 
 
@@ -62,11 +64,9 @@ def decay_factor(payload: Dict[str, Any], now: datetime | None = None) -> float:
     Verlauf ist LINEAR (5 %-Punkte pro Monat, Floor nach 14 Monaten exakt erreicht) —
     bewusst vorhersagbar gewählt, kein exponentieller Verlauf.
     Immun wenn salience >= SALIENCE_IMMUNE."""
-    salience = payload.get("salience", DEFAULT_SALIENCE)
-    try:
-        salience = min(1.0, max(0.0, float(salience)))
-    except (TypeError, ValueError):
-        salience = DEFAULT_SALIENCE
+    # Same category-default logic as normalize_salience/default_salience: a
+    # missing salience on a rule/procedure is HIGH (decay-immune), not 0.5.
+    salience = normalize_salience(payload.get("salience"), str(payload.get("category") or "fact"))
     if salience >= SALIENCE_IMMUNE:
         return 1.0
     m = months_since(payload.get("last_accessed") or payload.get("created_at"), now)
@@ -111,10 +111,14 @@ def access_update_payload(payload: Dict[str, Any],
 
 
 def is_salient(payload: Dict[str, Any]) -> bool:
-    try:
-        return float(payload.get("salience", DEFAULT_SALIENCE)) >= SALIENCE_IMMUNE
-    except (TypeError, ValueError):
-        return False
+    """True when the payload is decay-immune.
+
+    Uses the same category-default logic as normalize_salience/default_salience
+    so every helper agrees on what a missing/invalid salience means.
+    """
+    return normalize_salience(
+        payload.get("salience"), str(payload.get("category") or "fact")
+    ) >= SALIENCE_IMMUNE
 
 
 def default_salience(category: str = "fact") -> float:
