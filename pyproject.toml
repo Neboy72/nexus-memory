@@ -38,10 +38,10 @@ include = ["nexus_memory*", "nexus*", "plugins*"]
 [tool.setuptools.package-data]
 "plugins.memory.nexus" = ["plugin.yaml", "README.md"]
 
-[tool.setuptools]
-# Handbook ships with the package: every install/update carries the offline user guide
-[tool.setuptools.data-files]
-"share/nexus-memory/handbook" = ["dashboard/handbook/*.html"]
+# Handbook is served from the dashboard source checkout (dashboard/handbook),
+# not installed globally — see dashboard/server.py handbook_dir. The old
+# data-files entry installed HTML into <prefix>/share/, where no code read it
+# (dashboard* is not even part of the wheel), so it was removed as dead config.
 
 [tool.pytest.ini_options]
 # auto: every `async def test_...` is treated as an asyncio test

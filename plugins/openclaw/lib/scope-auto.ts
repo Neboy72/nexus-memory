@@ -15,6 +15,11 @@ const CENTROID_TTL_MS = 60_000;
 const MARGIN = 0.05;          // must beat runner-up by this cosine margin
 const MIN_SIMILARITY = 0.72;  // absolute floor for the closest centroid
 
+// Hard cap on scroll pages for the centroid fetch (mirrors MAX_SCROLL_PAGES in
+// qdrant-client.ts). Prevents an "any-size collection" scan from unbounded
+// fan-out while still sampling well beyond the first 1000 canonical points.
+const MAX_SCROLL_PAGES = 5;
+
 export type Centroids = Record<string, number[]>;
 
 function dot(a: number[], b: number[]): number {
@@ -40,35 +45,51 @@ export async function fetchCentroids(
   qdrantUrl: string,
   collection: string,
 ): Promise<Centroids> {
-  const body = {
-    filter: { must: [{ key: "lifecycle_status", match: { value: "canonical" } }] },
-    with_payload: true,
-    with_vectors: true,
-    limit: 1000,
-  }
-  const resp = await fetch(
-    `${qdrantUrl}/collections/${collection}/points/scroll`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  )
-  if (!resp.ok) {
-    throw new Error(`qdrant scroll failed: ${resp.status}`)
-  }
-  const data = (await resp.json()) as {
-    result?: {
-      points?: Array<{
-        vector?: number[] | null
-        payload?: Record<string, unknown>
-      }>
+  // Paginated inline scroll (own fetch, NOT QdrantClient.scrollFiltered):
+  // the centroid computation needs `with_vectors: true`, which the shared
+  // helper does not request. Follows next_page_offset up to MAX_SCROLL_PAGES.
+  const allPoints: Array<{
+    vector?: number[] | null
+    payload?: Record<string, unknown>
+  }> = []
+  let offset: unknown = undefined
+  for (let page = 0; page < MAX_SCROLL_PAGES; page++) {
+    const body: Record<string, unknown> = {
+      filter: { must: [{ key: "lifecycle_status", match: { value: "canonical" } }] },
+      with_payload: true,
+      with_vectors: true,
+      limit: 1000,
     }
+    if (offset !== undefined && offset !== null) body.offset = offset
+    const resp = await fetch(
+      `${qdrantUrl}/collections/${collection}/points/scroll`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    )
+    if (!resp.ok) {
+      throw new Error(`qdrant scroll failed: ${resp.status}`)
+    }
+    const data = (await resp.json()) as {
+      result?: {
+        points?: Array<{
+          vector?: number[] | null
+          payload?: Record<string, unknown>
+        }>
+        next_page_offset?: unknown
+      }
+    }
+    for (const p of data.result?.points ?? []) allPoints.push(p)
+    const next = data.result?.next_page_offset
+    if (next === null || next === undefined) break
+    offset = next
   }
 
   const sums: Record<string, { sum: number[]; n: number }> = {}
   let dim: number | null = null
-  for (const p of data.result?.points ?? []) {
+  for (const p of allPoints) {
     const pl = p.payload ?? {}
     const scope = String(pl.scope ?? "default").trim().toLowerCase() || "default"
     if (scope === "default" || !Array.isArray(p.vector)) continue

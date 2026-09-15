@@ -72,6 +72,38 @@ function resolveEnvVars(value: string): string {
   })
 }
 
+/**
+ * Coerce a config value to boolean.
+ *
+ * The old `(v as boolean) ?? dflt` cast left string values ("false", "0")
+ * truthy. Accepted: real booleans; numbers (0 → false, non-zero → true);
+ * and the usual string spellings case-insensitively. Anything else → dflt.
+ */
+function toBool(v: unknown, dflt: boolean): boolean {
+  if (v === true || v === false) return v
+  if (typeof v === "number") return Number.isFinite(v) ? v !== 0 : dflt
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase()
+    if (s === "true" || s === "1" || s === "yes" || s === "on") return true
+    if (s === "false" || s === "0" || s === "no" || s === "off" || s === "") return false
+  }
+  return dflt
+}
+
+/**
+ * Coerce a config value to an integer clamped to [min, max].
+ *
+ * Decision: CLAMP (not reject). A non-numeric/NaN value → dflt; a numeric
+ * value outside the range is clamped to the nearest bound so an over-large
+ * limit still yields a usable, bounded result instead of silently resetting.
+ * Fractions are truncated toward zero.
+ */
+function toClampedInt(v: unknown, dflt: number, min: number, max: number): number {
+  const n = typeof v === "number" ? v : Number(v)
+  if (!Number.isFinite(n)) return dflt
+  return Math.min(max, Math.max(min, Math.trunc(n)))
+}
+
 export const DEFAULT_QDRANT_URL = "http://localhost:6333"
 export const DEFAULT_COLLECTION = "nexus"
 
@@ -179,13 +211,13 @@ export function parseConfig(raw: unknown): NexusConfig {
       ? cfg.collection.trim()
       : DEFAULT_COLLECTION,
     embedding,
-    autoRecall: (cfg.autoRecall as boolean) ?? true,
-    autoCapture: (cfg.autoCapture as boolean) ?? true,
-    thoughtFilter: (cfg.thoughtFilter as boolean) ?? true,
-    maxRecallResults: (cfg.maxRecallResults as number) ?? 10,
+    autoRecall: toBool(cfg.autoRecall, true),
+    autoCapture: toBool(cfg.autoCapture, true),
+    thoughtFilter: toBool(cfg.thoughtFilter, true),
+    maxRecallResults: toClampedInt(cfg.maxRecallResults, 10, 1, 20),
     accessLevel,
     scope,
-    debug: (cfg.debug as boolean) ?? false,
+    debug: toBool(cfg.debug, false),
   }
 }
 
@@ -209,7 +241,7 @@ export const nexusConfigSchema = {
       autoRecall: { type: "boolean" },
       autoCapture: { type: "boolean" },
       thoughtFilter: { type: "boolean" },
-      maxRecallResults: { type: "number" },
+      maxRecallResults: { type: "number", minimum: 1, maximum: 20 },
       accessLevel: { type: "string", enum: VALID_ACCESS_LEVELS },
       scope: { type: "string" },
       debug: { type: "boolean" },

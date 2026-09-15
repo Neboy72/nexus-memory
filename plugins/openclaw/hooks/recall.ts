@@ -105,12 +105,15 @@ async function graphBoost(
         if (!targetPoint) continue
 
         const tpPayload = (targetPoint.payload ?? {}) as Record<string, unknown>
-        // Access-level check: skip memories the agent can't see
-        const tpAccess = (tpPayload.access_level as string) || "public"
+        // Access-level check: skip memories the agent can't see.
+        // Fail-closed: an UNKNOWN (or missing) access_level yields indexOf -1
+        // and must be skipped, never treated as public — `-1 > agentIdx` was
+        // never true, so the old `|| "public"` made unknown levels visible.
+        const tpAccess = tpPayload.access_level as string
         const levelOrder = ["public", "trusted", "private"]
         const agentIdx = levelOrder.indexOf(accessLevel)
         const memIdx = levelOrder.indexOf(tpAccess)
-        if (memIdx > agentIdx) continue
+        if (memIdx === -1 || memIdx > agentIdx) continue
 
         const text = String(tpPayload.content ?? "")
         if (text) {
