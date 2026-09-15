@@ -18,6 +18,13 @@ if (!existsSync(DIST_ENTRY)) {
   process.exit(1);
 }
 
+// Nr 412: Qdrant-URL + Pfadfragmente zentral, damit pluginConfig und fetch-Mock
+// nicht auseinanderdriften (der Mock muss denselben Pfad sehen wie der echte Client).
+const QDRANT_BASE = "http://localhost:6333";
+const EP_SEARCH = "/points/search";
+const EP_QUERY = "/points/query";
+const EP_POINTS = "/points";
+
 const handlers = {};
 const capturedUpserts = [];
 const searches = [];
@@ -33,7 +40,7 @@ const mockApi = {
   // register(api) liest die Plugin-Config von api.pluginConfig — nicht als 2. Argument
   pluginConfig: {
     // Nur erlaubte Keys (ALLOWED_KEYS in config.ts): agentId/nexusUrl wären "unknown keys"
-    qdrantUrl: "http://localhost:6333",
+    qdrantUrl: QDRANT_BASE,
     collection: "nexus-test-gate",
     autoRecall: true,
     autoCapture: true,
@@ -57,8 +64,8 @@ globalThis.fetch = async (url, opts) => {
       json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }),
     };
   }
-  if (u.includes("localhost:6333")) {
-    if (u.includes("/points/search") || u.includes("/points/query")) {
+  if (u.includes(QDRANT_BASE)) {
+    if (u.includes(EP_SEARCH) || u.includes(EP_QUERY)) {
       // Filter-Format: { must: [{ key: "access_level", match: { any: [levels] } }] }
       // private sieht ALLES → kein filter-Feld → "no-filter" (legitim, kein Fehler).
       // H163: Ein Parse-Fehler wird als eigener Sentinel "parse-error" markiert,
@@ -81,7 +88,7 @@ globalThis.fetch = async (url, opts) => {
         ] }),
       };
     }
-    if (u.includes("/points") && opts && opts.method === "PUT") {
+    if (u.includes(EP_POINTS) && opts && opts.method === "PUT") {
       capturedUpserts.push({ body: JSON.parse(opts.body) });
       return { ok: true, status: 200, json: async () => ({ result: { status: "ok" } }) };
     }
@@ -93,16 +100,7 @@ globalThis.fetch = async (url, opts) => {
 let failed = 0;
 try {
   try {
-    await mod.default.register(mockApi, {
-      qdrantUrl: "http://localhost:6333",
-      collection: "nexus-test-gate",
-      agentId: "kiosha-test",
-      autoRecall: true,
-      autoCapture: true,
-      accessLevel: "private",
-      embedding: { provider: "voyage", apiKey: "test" },
-      nexusUrl: "http://localhost:9121",
-    });
+    await mod.default.register(mockApi);
   } catch (e) {
     // T2: Register-Fehler NICHT schlucken — die Test-Umgebung ist kaputt und
     // spätere Fehler wären sonst unerklärliche TypeErrors.

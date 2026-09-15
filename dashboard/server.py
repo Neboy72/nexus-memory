@@ -21,7 +21,6 @@ import time
 import re
 import sys
 import urllib.request
-import urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -55,7 +54,6 @@ from nexus_memory.agent_detect import (
     detect_all_agents,
     cleanup_removed_agents,
 )
-from nexus_memory.chat_wizard import get_status, TRUST_LEVELS
 
 _logger = logging.getLogger(__name__)
 
@@ -755,6 +753,11 @@ async def connect_agent(agent_id: str):
             existing = json.loads(cfg_path.read_text())
         except Exception as exc:
             return JSONResponse({"error": f"config unreadable: {exc}"}, status_code=500)
+        if not isinstance(existing, dict):
+            return JSONResponse(
+                {"error": "config unreadable: expected a JSON object"},
+                status_code=500,
+            )
 
     servers = existing.setdefault("mcpServers", {})
     already = "nexus" in servers
@@ -843,6 +846,11 @@ async def disconnect_agent(agent_id: str):
         existing = json.loads(cfg_path.read_text())
     except Exception as exc:
         return JSONResponse({"error": f"config unreadable: {exc}"}, status_code=500)
+    if not isinstance(existing, dict):
+        return JSONResponse(
+            {"error": "config unreadable: expected a JSON object"},
+            status_code=500,
+        )
 
     servers = existing.get("mcpServers") or {}
     if "nexus" not in servers:
@@ -913,8 +921,6 @@ class NoCacheStatic(StaticFiles):
         return resp
 
 if static_dir.exists():
-    from starlette.middleware import Middleware
-
     app.mount("/static", NoCacheStatic(directory=str(static_dir)), name="static")
 
 # Handbook (offline user guide) — ships with the package, opens from the Docs button

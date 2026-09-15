@@ -10,7 +10,7 @@
     "port": null,
     "readinessPath": null,
     "evidence": [
-      "Manifest override (2026-08-30): Detection erkannte fastapi (installiert in der Test-Umgebung) durch den Dashboard-Import.",
+      "Manifest override (2026-08-30): Detection erkannte fastapi (installiert in der Test-Umgebung) durch den Dashboard-Import. FastAPI/uvicorn kommen nicht aus einem 'webui'-Extra, sondern aus dem Extra `all` (pulls fastapi/uvicorn, pyproject.toml, seit v0.18.7).",
       "Nexus Memory ist keine standalone-App - dashboard/server.py laeuft getrennt auf Port 9121.",
       "Library-Verify = bootstrap + pytest, kein Start/Readiness."
     ]

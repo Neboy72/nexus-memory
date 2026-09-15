@@ -15,10 +15,10 @@
   },
   "include": [
     "*.ts",
-    "tools/*.ts",
-    "hooks/*.ts",
-    "types/*.d.ts",
-    "lib/*.ts"
+    "tools/**/*",
+    "hooks/**/*",
+    "types/**/*.d.ts",
+    "lib/**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }

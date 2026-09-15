@@ -116,7 +116,7 @@ def extract_text(payload: Dict[str, Any]) -> str:
 
 def reembed_collection(collection: str, dry_run: bool = False):
     """Re-embed all points in a collection."""
-    logger.info(f"=== Collection: {collection} ===")
+    logger.info("=== Collection: %s ===", collection)
 
     # Get collection info
     resp = requests.get(f"{QDRANT_URL}/collections/{collection}")
@@ -128,12 +128,12 @@ def reembed_collection(collection: str, dry_run: bool = False):
         dim = vectors_cfg["size"]
     elif isinstance(vectors_cfg, dict) and (vectors_cfg.get("params") or {}).get("map"):
         # Nr 262: named vectors — this script only handles the single-vector layout
-        logger.error(f"  Collection {collection} uses named vectors — not supported here, skipping")
+        logger.error("  Collection %s uses named vectors — not supported here, skipping", collection)
         return {"reembedded": 0, "skipped": 0, "errors": 0, "tokens": 0}
     else:
-        logger.error(f"  Cannot determine vector size for {collection} — skipping")
+        logger.error("  Cannot determine vector size for %s — skipping", collection)
         return {"reembedded": 0, "skipped": 0, "errors": 0, "tokens": 0}
-    logger.info(f"  Points: {total}, Dimensions: {dim}d")
+    logger.info("  Points: %s, Dimensions: %sd", total, dim)
 
     if dry_run:
         logger.info("  DRY RUN - not re-embedding")
@@ -166,7 +166,7 @@ def reembed_collection(collection: str, dry_run: bool = False):
                 valid_points.append(pt)
             else:
                 skipped += 1
-                logger.warning(f"  Skipping point {pt.get('id')} - no text content")
+                logger.warning("  Skipping point %s - no text content", pt.get('id'))
 
         if texts:
             # Embed in batches
@@ -183,16 +183,16 @@ def reembed_collection(collection: str, dry_run: bool = False):
                     except Exception as e:
                         if attempt < max_retries - 1:
                             wait = 2 ** (attempt + 1)
-                            logger.warning(f"  Embedding failed (attempt {attempt+1}): {e}. Retrying in {wait}s...")
+                            logger.warning("  Embedding failed (attempt %s): %s. Retrying in %ss...", attempt + 1, e, wait)
                             time.sleep(wait)
                         else:
-                            logger.error(f"  Embedding failed for batch: {e}")
+                            logger.error("  Embedding failed for batch: %s", e)
                             vectors = None
                             errors += len(batch_texts)
 
                 if vectors is not None and len(vectors) != len(batch_points):
                     # Nr 263: zip would silently truncate — abort the batch instead
-                    logger.error(f"  Voyage returned {len(vectors)} embeddings for {len(batch_points)} inputs — aborting batch")
+                    logger.error("  Voyage returned %s embeddings for %s inputs — aborting batch", len(vectors), len(batch_points))
                     errors += len(batch_texts)
                     vectors = None
 
@@ -214,7 +214,7 @@ def reembed_collection(collection: str, dry_run: bool = False):
                     total_tokens += batch_tokens
 
                     if reembedded % 500 < BATCH_SIZE:
-                        logger.info(f"  Progress: {reembedded}/{total} re-embedded ({skipped} skipped, {errors} errors)")
+                        logger.info("  Progress: %s/%s re-embedded (%s skipped, %s errors)", reembedded, total, skipped, errors)
 
         processed += len(points)
         # API-provided offset wins; the last point ID is the fallback. Break
@@ -226,9 +226,9 @@ def reembed_collection(collection: str, dry_run: bool = False):
         else:
             offset = points[-1]["id"]
 
-    logger.info(f"  DONE: {collection}")
-    logger.info(f"  Re-embedded: {reembedded}, Skipped: {skipped}, Errors: {errors}")
-    logger.info(f"  Estimated tokens used: ~{total_tokens:,}")
+    logger.info("  DONE: %s", collection)
+    logger.info("  Re-embedded: %s, Skipped: %s, Errors: %s", reembedded, skipped, errors)
+    logger.info("  Estimated tokens used: ~%,d", total_tokens)
 
     return {"reembedded": reembedded, "skipped": skipped, "errors": errors, "tokens": total_tokens}
 
@@ -243,17 +243,17 @@ def main():
     if args.collection:
         collections = [args.collection]
 
-    logger.info(f"Re-embedding with model: {NEW_MODEL}")
-    logger.info(f"Collections: {collections}")
-    logger.info(f"Dry run: {args.dry_run}")
+    logger.info("Re-embedding with model: %s", NEW_MODEL)
+    logger.info("Collections: %s", collections)
+    logger.info("Dry run: %s", args.dry_run)
     logger.info("")
 
     # First, verify voyage-4 works
     try:
         test_vec = voyage_embed_batch(["test"])
-        logger.info(f"Voyage-4 test: OK ({len(test_vec[0])}d)")
+        logger.info("Voyage-4 test: OK (%sd)", len(test_vec[0]))
     except Exception as e:
-        logger.error(f"Voyage-4 test failed: {e}")
+        logger.error("Voyage-4 test failed: %s", e)
         sys.exit(1)
 
     logger.info("")
@@ -265,7 +265,7 @@ def main():
             result = reembed_collection(col, dry_run=args.dry_run)
         except Exception as e:
             # Nr 264: one broken collection must not abort the rest
-            logger.error(f"  Collection {col} failed: {e}")
+            logger.error("  Collection %s failed: %s", col, e)
             failed_cols.append(col)
             result = None
         if result:
@@ -275,9 +275,10 @@ def main():
     # Summary
     logger.info("=== SUMMARY ===")
     for col, r in results.items():
-        logger.info(f"  {col}: {r['reembedded']} re-embedded, {r['skipped']} skipped, {r['errors']} errors, ~{r['tokens']:,} tokens")
+        logger.info("  %s: %s re-embedded, %s skipped, %s errors, ~%,d tokens",
+                    col, r['reembedded'], r['skipped'], r['errors'], r['tokens'])
     if failed_cols:
-        logger.info(f"  FAILED collections: {', '.join(failed_cols)}")
+        logger.info("  FAILED collections: %s", ', '.join(failed_cols))
 
 
 if __name__ == "__main__":

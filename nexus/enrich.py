@@ -11,10 +11,8 @@ Tiers:
 """
 
 from __future__ import annotations
-import json
 import re
 from enum import IntEnum
-from typing import Any
 
 
 # ── Known category taxonomy ──────────────────────────────────────────────────
@@ -139,7 +137,8 @@ def decide_tier(
     if HEURISTIC_HIGH_SIGNAL.search(content):
         return EnrichmentTier.LINKED
 
-    # Long content with proper nouns / technical terms → TAGGED
+    # Long content → TAGGED. Length-only heuristic: this branch checks nothing
+    # but ``content_len`` (no KEYWORD_PATTERNS / proper-noun detection).
     if content_len > 300:
         return EnrichmentTier.TAGGED
 

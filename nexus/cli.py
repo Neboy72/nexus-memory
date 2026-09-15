@@ -93,7 +93,7 @@ def cmd_resolve(args):
         print(f"❌ {result.get('message', 'Fehler')}")
         sys.exit(1)
 
-    status = "✅ Neu erstellt" if result["created"] else "🔁 Bereits vorhanden"
+    status = "✅ Neu erstellt" if result.get("created") else "🔁 Bereits vorhanden"
     print(f"{status}")
     print(f"  Belief-ID: {result['belief_id']}")
     print(f"  Status:    {result['status']}")
@@ -115,8 +115,8 @@ def cmd_events(args):
 
     for e in events:
         delta = e.get("delta", {})
-        print(f"  {e['event_type']:20s} | {e.get('status','?'):12s} | {str(delta)[:60]}")
-        print(f"  {'':20s}   Zeit: {e.get('event_time','')[:19]}")
+        print(f"  {e.get('event_type',''):20s} | {e.get('status','?'):12s} | {str(delta)[:60]}")
+        print(f"  {'':20s}   Zeit: {(e.get('event_time') or '')[:19]}")
 
 
 def cmd_ingest(args):
@@ -215,9 +215,9 @@ def cmd_override(args):
         sys.exit(1)
 
     print(f"🔒 Override gesetzt:")
-    print(f"  Feld: {result['field']}")
-    print(f"  Alt:  {result['old']}")
-    print(f"  Neu:  {result['new']}")
+    print(f"  Feld: {result.get('field')}")
+    print(f"  Alt:  {result.get('old')}")
+    print(f"  Neu:  {result.get('new')}")
 
 
 def cmd_verify():

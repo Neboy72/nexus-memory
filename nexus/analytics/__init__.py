@@ -14,8 +14,7 @@ Usage:
 
 from __future__ import annotations
 
-import logging
-from typing import Any, Optional
+from typing import Optional
 
 from nexus.graph.graph import SkillGraph
 from nexus.analytics.scoring import (
@@ -25,8 +24,6 @@ from nexus.analytics.scoring import (
     relation_distribution,
 )
 from nexus.analytics.clustering import cluster_summary, find_clusters
-
-_logger = logging.getLogger(__name__)
 
 
 class GraphAnalytics:

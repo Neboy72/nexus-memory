@@ -61,7 +61,7 @@ const hook = handlers["message_sending"];
 assert.ok(hook, "message_sending-Handler muss registriert sein");
 
 const cases = [
-  // [Name, Eingabe, Muss-enthalten (oder null = unverändert), Muss-NICHT-enthalten, exact?]
+  // [Name, Eingabe, Muss-enthalten, Muss-NICHT-enthalten, exact?]
   // H168: 5. Feld `exact` = true erzwingt volle Gleichheit out === input.
   // Für NEGATIV-Cases gesetzt, damit ein zu aggressiver Filter, der legitime
   // Teile abschneidet, nicht mehr nur per Substring durchrutscht.

@@ -7,7 +7,6 @@ v2.2.0: EdgeStore backed by Qdrant-Payloads (was SQLite). API unchanged.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from nexus.graph.store import EdgeStore
 
@@ -44,12 +43,21 @@ def filter_new_edges(
 
     new = []
     skipped = 0
+    skipped_malformed = 0
     for c in candidates:
         source = c.get("source", "")
         target = c.get("target", "")
         relation = c.get("relation", "")
 
         if not source or not target or not relation:
+            # H198: a candidate missing source/target/relation can never be
+            # deduped or stored — count it so the summary line reflects it
+            # instead of silently shrinking `new`.
+            skipped_malformed += 1
+            _logger.warning(
+                "Dedup skipped malformed candidate (missing source/target/relation): %r",
+                c,
+            )
             continue
 
         # list_edges is bidirectional → also require source_fact_id so only
@@ -70,8 +78,11 @@ def filter_new_edges(
 
         new.append(c)
 
-    if skipped:
-        _logger.info("Dedup: %d candidates skipped, %d new", skipped, len(new))
+    if skipped or skipped_malformed:
+        _logger.info(
+            "Dedup: %d candidates skipped, %d malformed, %d new",
+            skipped, skipped_malformed, len(new),
+        )
     return new
 
 

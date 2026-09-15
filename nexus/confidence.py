@@ -28,7 +28,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -55,7 +54,6 @@ except ImportError:
 
 HAS_SKLEARN = False
 try:
-    import numpy as np
     from sklearn.metrics.pairwise import cosine_similarity
     HAS_SKLEARN = True
 except ImportError:
@@ -85,11 +83,20 @@ class GroundingReport:
     label: str = ""
     num_chunks: int = 0
     top_chunk_score: float = 0.0
-    chunk_count: int = 0
     error: Optional[str] = None
 
+    @property
+    def chunk_count(self) -> int:
+        """Backwards-compatible alias for :attr:`num_chunks`."""
+        return self.num_chunks
+
     def json(self) -> str:
-        return json.dumps(asdict(self), indent=2, default=str)
+        # asdict() only walks dataclass *fields*, so the chunk_count alias
+        # (now a property) would silently vanish from the JSON payload. Keep
+        # the key present so the serialized contract is unchanged.
+        data = asdict(self)
+        data["chunk_count"] = self.num_chunks
+        return json.dumps(data, indent=2, default=str)
 
 
 # ── Helper: Cosine Similarity ──────────────────────────────────────
@@ -341,7 +348,7 @@ class GroundingScorer:
 
         # Step 5: Aggregate grounding + label
         report.grounding = self._aggregate(signals)
-        report.chunk_count = len(chunks)
+        report.num_chunks = len(chunks)
         report.label = self._label(report.grounding)
 
         return report
@@ -410,7 +417,7 @@ class GroundingScorer:
         # Konzepte
         "embedding", "token", "transformer", "attention", "finetune",
         "pretrain", "rlhf", "sft", "dpo", "ppo", "lora", "quantization",
-        "quantization", "vector", "cosine", "similarity",
+        "vector", "cosine", "similarity",
         # Fachbegriffe
         "grounding", "provenance", "hallucination", "chunk", "retrieval",
         "pipeline", "latency", "throughput", "inference",

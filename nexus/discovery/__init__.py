@@ -26,7 +26,7 @@ Usage::
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from nexus.discovery.matcher import scroll_facts, search_similar_facts
 from nexus.discovery.classifier import classify_relation
@@ -190,85 +190,93 @@ class AutoDiscovery:
 
         for fact in facts:
             fact_id = fact["id"]
-            payload = fact.get("payload", {})
-            vector = fact.get("vector")
-
-            if not vector:
-                continue
-
-            queries_run += 1
-
             try:
-                hits = search_similar_facts(
-                    query_vector=vector,
-                    qdrant_url=self._qdrant_url,
-                    collection=self._collection,
-                    top_k=self._top_k + 1,  # +1 because self-match is #1
-                )
-            except RuntimeError as e:
-                # Review #46: record the outage, keep going with other facts.
-                _logger.warning("Discovery search failed for %s: %s", fact_id, e)
-                errors.append(str(e))
+                payload = fact.get("payload", {})
+                vector = fact.get("vector")
+
+                if not vector:
+                    continue
+
+                queries_run += 1
+
+                try:
+                    hits = search_similar_facts(
+                        query_vector=vector,
+                        qdrant_url=self._qdrant_url,
+                        collection=self._collection,
+                        top_k=self._top_k + 1,  # +1 because self-match is #1
+                    )
+                except RuntimeError as e:
+                    # Review #46: record the outage, keep going with other facts.
+                    _logger.warning("Discovery search failed for %s: %s", fact_id, e)
+                    errors.append(str(e))
+                    continue
+
+                for hit in hits:
+                    hit_id = hit["id"]
+                    hit_payload = hit.get("payload", {})
+                    score = hit["score"]
+
+                    # Skip self-match
+                    if hit_id == fact_id:
+                        continue
+
+                    # H195: the category filter was applied to the scanned SOURCE
+                    # facts only — hits from other categories still flowed in and
+                    # produced candidates whose target lives in a filtered-out
+                    # category. Apply the same filter to the hit side.
+                    if categories and _extract_category(hit_payload) not in categories:
+                        continue
+
+                    # Directional dedup: only process A↔B once
+                    pair_key = tuple(sorted([fact_id, hit_id]))
+                    if pair_key in seen_pairs:
+                        continue
+                    seen_pairs.add(pair_key)
+
+                    if score < MIN_DISCOVERY_THRESHOLD:
+                        continue
+
+                    # 3. Stable direction: source < target alphabetically.
+                    #    Must be decided BEFORE classification — otherwise the
+                    #    relation is classified fact→hit but stored target→source
+                    #    whenever hit_id < fact_id, inverting the direction.
+                    source_id, target_id = sorted([fact_id, hit_id])
+                    if source_id == fact_id:
+                        source_payload, target_payload = payload, hit_payload
+                    else:
+                        source_payload, target_payload = hit_payload, payload
+
+                    classification = classify_relation(
+                        source_content=_extract_content(source_payload),
+                        target_content=_extract_content(target_payload),
+                        source_category=_extract_category(source_payload),
+                        target_category=_extract_category(target_payload),
+                        source_id=source_id,
+                        target_id=target_id,
+                        similarity_score=score,
+                    )
+
+                    if classification is None:
+                        continue
+
+                    all_candidates.append({
+                        "source": source_id,
+                        "target": target_id,
+                        "relation": classification["relation"],
+                        "confidence": classification.get("confidence", 0.0),
+                        "reason": classification.get("reason", ""),
+                        "similarity_score": score,
+                    })
+            except Exception as e:
+                # H194: one malformed fact/hit/classification must not abort the
+                # whole discovery run — record it and continue with the next fact.
+                _logger.warning("Discovery classify failed for %s: %s", fact_id, e)
+                errors.append(f"{fact_id}: {e}")
                 continue
 
-            for hit in hits:
-                hit_id = hit["id"]
-                hit_payload = hit.get("payload", {})
-                score = hit["score"]
-
-                # Skip self-match
-                if hit_id == fact_id:
-                    continue
-
-                # H195: the category filter was applied to the scanned SOURCE
-                # facts only — hits from other categories still flowed in and
-                # produced candidates whose target lives in a filtered-out
-                # category. Apply the same filter to the hit side.
-                if categories and _extract_category(hit_payload) not in categories:
-                    continue
-
-                # Directional dedup: only process A↔B once
-                pair_key = tuple(sorted([fact_id, hit_id]))
-                if pair_key in seen_pairs:
-                    continue
-                seen_pairs.add(pair_key)
-
-                if score < MIN_DISCOVERY_THRESHOLD:
-                    continue
-
-                # 3. Stable direction: source < target alphabetically.
-                #    Must be decided BEFORE classification — otherwise the
-                #    relation is classified fact→hit but stored target→source
-                #    whenever hit_id < fact_id, inverting the direction.
-                source_id, target_id = sorted([fact_id, hit_id])
-                if source_id == fact_id:
-                    source_payload, target_payload = payload, hit_payload
-                else:
-                    source_payload, target_payload = hit_payload, payload
-
-                classification = classify_relation(
-                    source_content=_extract_content(source_payload),
-                    target_content=_extract_content(target_payload),
-                    source_category=_extract_category(source_payload),
-                    target_category=_extract_category(target_payload),
-                    source_id=source_id,
-                    target_id=target_id,
-                    similarity_score=score,
-                )
-
-                if classification is None:
-                    continue
-
-                all_candidates.append({
-                    "source": source_id,
-                    "target": target_id,
-                    "relation": classification["relation"],
-                    "confidence": classification.get("confidence", 0.0),
-                    "reason": classification.get("reason", ""),
-                    "similarity_score": score,
-                })
-
-        # 4. Dedup against existing SQLite edges
+        # 4. Dedup against existing edges in the EdgeStore
+        #    (Qdrant-payload backed since v2.2.0)
         unique_candidates = filter_new_edges(all_candidates, self._store)
 
         # 5. Insert into store

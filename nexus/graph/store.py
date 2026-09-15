@@ -110,6 +110,11 @@ class EdgeStore:
             self._client = QdrantClient(url=self._qdrant_url)
         return self._client
 
+    @property
+    def collection(self) -> str:
+        """Name of the Qdrant collection backing this store."""
+        return self._collection
+
     @client.setter
     def client(self, value: QdrantClient) -> None:
         self._client = value
@@ -200,6 +205,14 @@ class EdgeStore:
             payload={EDGES_PAYLOAD_KEY: edges},
             points=[point_id],
         )
+
+    def scroll_point(self, point_id: str) -> dict | None:
+        """Public accessor for :meth:`_scroll_point`.
+
+        Delegation wrapper so external callers (e.g. ``SkillGraph.get_point``)
+        can fetch a point payload without touching the private API.
+        """
+        return self._scroll_point(point_id)
 
     def _scroll_point(
         self,

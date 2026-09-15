@@ -16,11 +16,11 @@ Non-goals for v2.0.0 (unchanged):
 
 import logging
 from collections import deque
-from typing import Any, Optional
+from typing import Any
 
 import networkx as nx
 
-from nexus.graph.schema import Edge, EdgeRelation, EdgeStatus
+from nexus.graph.schema import Edge, EdgeRelation
 from nexus.graph.store import EdgeStore
 
 _logger = logging.getLogger(__name__)
@@ -123,12 +123,12 @@ class SkillGraph:
         return self._graph.has_node(fact_id)
 
     def get_point(self, point_id: str) -> dict | None:
-        """Retrieve a single point by ID. Delegates to EdgeStore._scroll_point.
+        """Retrieve a single point by ID. Delegates to EdgeStore.scroll_point.
 
         Public API for graph-boost and other consumers that need to fetch
         a point's payload without going through the EdgeStore private API.
         """
-        return self._store._scroll_point(point_id)
+        return self._store.scroll_point(point_id)
 
     def get_neighbors(self, fact_id: str, relation: str | None = None) -> list[dict]:
         """List adjacent facts and edge attributes.
@@ -302,7 +302,7 @@ class SkillGraph:
             "nodes": self._graph.order(),
             "edges": self._graph.size(),
             "stored_edges": self._store.count_edges(status="active"),
-            "collection": self._store._collection,
+            "collection": self._store.collection,
         }
 
     # ── Chain Queries ───────────────────────────────────────────────────

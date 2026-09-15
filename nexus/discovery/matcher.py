@@ -9,6 +9,7 @@ The AutoDiscovery class combines matcher + classifier + dedup into a pipeline.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
 from nexus.config import get_collection
@@ -159,6 +160,14 @@ def match_facts_against_each_other(
                 "source_payload": dict,
                 "target_payload": dict,
             }
+
+    The per-fact searches run concurrently (thread pool, max 4 workers), but
+    results are consumed in the original fact order (``executor.map``), so the
+    output is deterministic and identical to a sequential run.
+
+    Unordered pair dedup: candidates are keyed by ``frozenset({source, target})``.
+    If both A→B and B→A are discovered, only the FIRST one (in fact order)
+    survives — the reverse direction is dropped as a duplicate pair.
     """
     collection = get_collection(collection)
     candidates: list[dict] = []
@@ -168,20 +177,29 @@ def match_facts_against_each_other(
     # every candidate was silently discarded.
     fact_ids = {str(f.get("id", "")) for f in facts}
 
-    for fact in facts:
-        fact_id = str(fact.get("id", ""))
-        vector = fact.get("vector")
-        payload = fact.get("payload", {})
+    # Only facts carrying both an id and a vector can be queried at all.
+    queryable = [f for f in facts if f.get("vector") and str(f.get("id", ""))]
+    if not queryable:
+        return candidates
 
-        if not vector or not fact_id:
-            continue
-
-        hits = search_similar_facts(
-            query_vector=vector,
+    def _search(fact: dict) -> list[dict]:
+        return search_similar_facts(
+            query_vector=fact["vector"],
             qdrant_url=qdrant_url,
             collection=collection,
             top_k=top_k + 1,  # +1 because the fact itself will be #1
         )
+
+    # Parallelise the per-fact Qdrant round trips (was one blocking request
+    # per fact). executor.map preserves input order, so the hit lists line up
+    # with `queryable` and the result stays deterministic.
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        hit_lists = list(executor.map(_search, queryable))
+
+    seen_pairs: set[frozenset] = set()
+    for fact, hits in zip(queryable, hit_lists):
+        fact_id = str(fact.get("id", ""))
+        payload = fact.get("payload", {})
 
         for hit in hits:
             hit_id = hit["id"]
@@ -193,6 +211,12 @@ def match_facts_against_each_other(
 
             if score < threshold:
                 continue
+
+            # Unordered pair dedup — the first direction wins.
+            pair_key = frozenset({fact_id, hit_id})
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
 
             candidates.append({
                 "source": fact_id,

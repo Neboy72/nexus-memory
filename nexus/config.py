@@ -32,7 +32,10 @@ def get_collection(override: Optional[str] = None) -> str:
     3. DEFAULT_COLLECTION (config value, currently "nexus")
     4. -> ValueError
     """
-    if override:
+    if override == "":
+        raise ValueError("override must be a non-empty string")
+
+    if override is not None:
         return override
 
     env_collection = os.environ.get("NEXUS_COLLECTION")

@@ -62,7 +62,7 @@ def ensure_collection() -> bool:
     }
     r = requests.put(f"{QDRANT_URL}/collections/{COLLECTION}", json=payload, timeout=10)
     if not is_success(r.status_code):
-        log.error(f"❌ Collection-Anlage fehlgeschlagen: {r.status_code} {r.text[:200]}")
+        log.error("❌ Collection-Anlage fehlgeschlagen: %s %s", r.status_code, r.text[:200])
         return False
 
     # Indizes separat anlegen
@@ -88,9 +88,9 @@ def ensure_collection() -> bool:
             timeout=10,
         )
         if resp.status_code not in (200, 201):
-            log.warning(f"⚠️ Index '{field}' not created: {resp.status_code}")
+            log.warning("⚠️ Index '%s' not created: %s", field, resp.status_code)
 
-    log.info(f"✅ Collection '{COLLECTION}' angelegt (1024d Cosine, {len(indices)} Indizes)")
+    log.info("✅ Collection '%s' angelegt (1024d Cosine, %d Indizes)", COLLECTION, len(indices))
     return True
 
 
@@ -150,7 +150,7 @@ def create_event(
     )
     if is_success(r.status_code):
         return event_id
-    log.error(f"❌ Event-Speicherung fehlgeschlagen: {r.status_code} {r.text[:200]}")
+    log.error("❌ Event-Speicherung fehlgeschlagen: %s %s", r.status_code, r.text[:200])
     return None
 
 
@@ -163,7 +163,7 @@ def _parse_event(p: dict) -> dict:
         try:
             delta = json.loads(raw)
         except json.JSONDecodeError:
-            log.warning(f"⚠️ Korruptes delta-JSON in Event {pl.get('event_id','')[:8]}")
+            log.warning("⚠️ Korruptes delta-JSON in Event %s", pl.get('event_id', '')[:8])
             delta = {}
     elif isinstance(raw, dict):
         delta = raw
@@ -209,7 +209,7 @@ def get_events(
             timeout=10,
         )
         if not is_success(r.status_code):
-            log.error(f"❌ Event query failed: {r.status_code}")
+            log.error("❌ Event query failed: %s", r.status_code)
             break
 
         data = r.json()["result"]
@@ -265,7 +265,7 @@ def get_events_since(
             timeout=10,
         )
         if not is_success(r.status_code):
-            log.error(f"❌ Event query failed: {r.status_code}")
+            log.error("❌ Event query failed: %s", r.status_code)
             break
 
         data = r.json()["result"]
