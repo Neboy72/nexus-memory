@@ -28,6 +28,7 @@ const searches = [];
 const mockApi = {
   on(event, handler) { handlers[event] = handler; },
   registerTool() {}, registerProvider() {}, registerService() {},
+  registerMemoryCapability() {}, // Nr 364: register() fail-loud wenn nichts registriert wird
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
   // register(api) liest die Plugin-Config von api.pluginConfig — nicht als 2. Argument
   pluginConfig: {
@@ -50,6 +51,9 @@ globalThis.fetch = async (url, opts) => {
   if (u.includes("voyageai.com")) {
     return {
       ok: true, status: 200,
+      // Nr 379: parseEmbeddingResponse liest resp.text() zuerst — der Mock
+      // muss das Response-Contract erfuellen, sonst TypeError statt Embedding.
+      text: async () => JSON.stringify({ data: [{ embedding: new Array(1024).fill(0.1) }] }),
       json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }),
     };
   }

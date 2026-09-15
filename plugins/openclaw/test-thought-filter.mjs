@@ -35,6 +35,7 @@ const mockApi = {
   registerTool() {},
   registerProvider() {},
   registerService() {},
+  registerMemoryCapability() {}, // Nr 364
   logger: { info: () => {}, warn: () => {}, error: () => {} },
 };
 
