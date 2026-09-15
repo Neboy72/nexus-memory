@@ -447,8 +447,14 @@ class EdgeStore:
             status=status,
         )
 
-        # Merge (outgoing first, then incoming; no dedup needed)
-        return outgoing_edges + incoming_edges
+        # Merge outgoing first, then incoming — de-duplicated by edge_id.
+        # Nr 439: a SELF-EDGE (source == target) matches BOTH queries, so the
+        # old "no dedup needed" claim returned it twice. dict.setdefault keeps
+        # the first occurrence (outgoing) and preserves order.
+        merged: dict[str, Edge] = {}
+        for edge in outgoing_edges + incoming_edges:
+            merged.setdefault(edge.edge_id, edge)
+        return list(merged.values())
 
     def _list_all_edges(
         self,

@@ -115,4 +115,7 @@ async def test():
 
     print("\n🎉 ALL TESTS PASSED")
 
-asyncio.run(test())
+if __name__ == "__main__":
+    # Nr 445: the asyncio.run() at import time made this module un-importable
+    # (any import would launch the MCP server session as a side effect).
+    asyncio.run(test())

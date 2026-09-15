@@ -9,7 +9,6 @@ win: same vectors, zero API cost, no behavior change.
 from __future__ import annotations
 
 import hashlib
-import threading
 from collections import OrderedDict
 from threading import Lock
 from typing import List

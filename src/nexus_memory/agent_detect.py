@@ -208,8 +208,10 @@ def _check_kilo_code() -> dict:
     else:
         info["nexus_installed"] = False
 
-    # Extension-style install inside ~/.kilo (e.g. mcp.json or other config)
-    kilo_cfg = kilo_dir.exists() and any(kilo_dir.iterdir())
+    # Config-dir install: presence of ~/.kilo counts. Nr 450: an EMPTY dir used
+    # to report not-installed while config_dir was still set — inconsistent with
+    # the cleanup predicate and with the other detectors (which test is_dir).
+    kilo_cfg = kilo_dir.is_dir()
 
     info["config_dir"] = str(kilo_dir) if kilo_dir.exists() else None
     info["detected"] = bool(cli or kilo_cfg)
@@ -606,8 +608,50 @@ def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
     return agent
 
 
+# Nr 451: update_agent_stats runs on EVERY MCP call, and the old code paid a
+# flush + os.fsync() of the whole registry file each time — durability cost on
+# the hot path for pure telemetry. The atomic temp-file replace (the actual
+# corruption guard) stays; only the fsync is skipped for stats updates. The
+# durability we lose is limited: a hard crash right at write time can leave
+# the previously persisted registry (stats are telemetry, not memory). A
+# buffered/coalesced variant was reviewed and REJECTED: the delta buffer is
+# per-process, so stats from short-lived subprocesses would be lost on exit
+# (no atexit guarantee), and a corrupt registry file would only surface at
+# flush time instead of immediately — breaking the fail-closed contract
+# (tests/test_agent_registry_concurrency.py).
+
+
+def _write_registry_unlocked_nofsync(registry: dict) -> None:
+    """Atomically replace the registry file WITHOUT fsync (stats hot path).
+
+    Same temp-file + os.replace() scheme as ``_save_registry_unlocked`` —
+    readers still never see a partial file — but skips the fsync that made
+    every stats update pay a disk flush (Nr 451). Caller MUST hold the lock.
+    """
+    path = _get_agents_registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(registry, indent=2) + "\n"
+    tmp_path = path.with_name(
+        f"{path.name}.tmp-{os.getpid()}-{threading.get_ident()}"
+    )
+    try:
+        with open(tmp_path, "w") as tmp_file:
+            tmp_file.write(payload)
+            tmp_file.flush()
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
 def update_agent_stats(agent_id: str, read: bool = False, write: bool = False) -> None:
-    """Update last_seen, reads, writes for an agent."""
+    """Update last_seen, reads, writes for an agent.
+
+    Nr 451: writes via ``_write_registry_unlocked_nofsync`` — atomic replace
+    without fsync (the fsync was the per-MCP-call durability cost the fund
+    names). Fail-closed semantics are unchanged: a corrupt registry file
+    still raises at the read, immediately, on every call.
+    """
     with _registry_lock():
         registry = _load_registry_unlocked()
         for a in registry.get("agents", []):
@@ -617,7 +661,7 @@ def update_agent_stats(agent_id: str, read: bool = False, write: bool = False) -
                     a["reads"] = a.get("reads", 0) + 1
                 if write:
                     a["writes"] = a.get("writes", 0) + 1
-                _save_registry_unlocked(registry)
+                _write_registry_unlocked_nofsync(registry)
                 return
         # Unknown agent id: nothing to update, don't rewrite the file.
 

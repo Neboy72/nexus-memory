@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 # Defaults für alte Memories ohne Felder
 DEFAULT_USE_COUNT = 0
@@ -103,8 +103,14 @@ def access_update_payload(payload: Dict[str, Any],
     # v0.15 (Review-Fix, CRITICAL): access_count parallel mitpflegen —
     # SICA/Trust-Konsumenten lesen diesen Zähler; MCP- und Plugin-Pfad
     # schreiben jetzt beide Felder konsistent.
+    # Nr 464: fehlt access_count (alte Payloads), fällt der Zähler auf
+    # use_count zurück statt auf 0 — sonst wurde ein Memory mit use_count=7
+    # beim ersten access_count-Update auf 1 zurückgesetzt.
+    raw_acc = payload.get("access_count")
+    if raw_acc is None:
+        raw_acc = payload.get("use_count", DEFAULT_USE_COUNT)
     try:
-        acc = max(0, int(payload.get("access_count", DEFAULT_USE_COUNT))) + 1
+        acc = max(0, int(raw_acc)) + 1
     except (TypeError, ValueError):
         acc = DEFAULT_USE_COUNT + 1
     return {"use_count": use, "access_count": acc, "last_accessed": now.isoformat()}
@@ -125,7 +131,9 @@ def default_salience(category: str = "fact") -> float:
     """Kategorie-Default-Salience: Regeln/Prozeduren hoch (decay-immun),
     temp/session niedrig, alles andere mittel."""
     if category in SALIENT_CATEGORIES:
-        return 0.8
+        # Nr 465: reuse the immunity constant so the threshold and the default
+        # can never drift apart.
+        return SALIENCE_IMMUNE
     if category in EPHEMERAL_CATEGORIES:
         return 0.1
     return DEFAULT_SALIENCE

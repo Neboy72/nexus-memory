@@ -98,8 +98,10 @@ def rerank_points(
     """Re-rank Qdrant ScoredPoints by true query<->document relevance.
 
     Takes the top ``pool_k`` points by vector score, re-scores them with
-    the chosen reranker and returns the re-ordered list (same point
-    objects, possibly re-ordered and capped to ``pool_k``).
+    the chosen reranker and returns the re-ordered list (same point objects,
+    re-ordered; only the re-ranked prefix is limited to pool_k — dropped pool
+    candidates are re-appended and out-of-pool points are preserved, so
+    ``len(result) == len(points)``).
 
     The pool comes pre-sorted by vector score (Qdrant guarantees this),
     so "top pool_k" is just ``points[:pool_k]``.
@@ -131,7 +133,7 @@ def rerank_points(
 
     if not ranked:
         return points
-    order = [r["_idx"] for i, r in enumerate(ranked)]
+    order = [r["_idx"] for r in ranked]
     ordered = [pool[i] for i in order]
     # Pool candidates that the reranker dropped (empty content etc.) are
     # re-appended at the end in their original order - a rerank failure

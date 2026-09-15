@@ -66,6 +66,14 @@ class EdgeStatus(str, Enum):
     REJECTED = "rejected"
 
 
+# Nr 438: the deserializers must not accept an unknown status/relation. A
+# corrupted payload ("Active" instead of "active") was previously persisted
+# verbatim and then became invisible to every ``== EdgeStatus.ACTIVE.value``
+# filter. Derived from the enums so the sets can never drift.
+_VALID_RELATIONS = frozenset(r.value for r in EdgeRelation)
+_VALID_STATUSES = frozenset(s.value for s in EdgeStatus)
+
+
 class EdgeSchemaError(ValueError):
     """Raised when a stored edge entry is malformed or from an older schema.
 
@@ -90,6 +98,29 @@ def _require_edge_key(
             f"source_fact_id={source_fact_id!r})"
         )
     return entry[key]
+
+
+def _validate_enum_value(
+    key: str,
+    value: Any,
+    valid: frozenset[str],
+    entry: dict[str, Any],
+    source_fact_id: str = "",
+) -> str:
+    """Return ``value`` if it is one of ``valid`` or raise :class:`EdgeSchemaError`.
+
+    Same context style as :func:`_require_edge_key` — a corrupted payload
+    (unknown ``status``/``relation``) must fail loudly at load time instead of
+    being handed back as an ``Edge`` that no filter will ever match (Nr 438).
+    """
+    if value not in valid:
+        raise EdgeSchemaError(
+            f"Malformed edge entry: invalid {key} {value!r} "
+            f"(edge_id={entry.get('edge_id', '<none>')!r}, "
+            f"source_fact_id={source_fact_id!r}); "
+            f"must be one of: {', '.join(sorted(valid))}"
+        )
+    return value
 
 
 # ── Edge Dataclass ─────────────────────────────────────────────────────────
@@ -158,12 +189,26 @@ class Edge:
         source_fact_id: str,
     ) -> "Edge":
         """Deserialize from a Qdrant-Payload entry."""
+        # Nr 438: validate relation/status against the enum sets. A missing
+        # "status" still defaults to ACTIVE (backward compat for old payloads
+        # written before the field existed); a PRESENT but unknown value is a
+        # corrupted payload and must not round-trip.
+        relation = _validate_enum_value(
+            "relation",
+            _require_edge_key(entry, "relation", source_fact_id=source_fact_id),
+            _VALID_RELATIONS, entry, source_fact_id,
+        )
+        status = _validate_enum_value(
+            "status",
+            entry.get("status", EdgeStatus.ACTIVE.value),
+            _VALID_STATUSES, entry, source_fact_id,
+        )
         return cls(
             edge_id=_require_edge_key(entry, "edge_id", source_fact_id=source_fact_id),
             source_fact_id=source_fact_id,
             target_fact_id=_require_edge_key(entry, "target_fact_id", source_fact_id=source_fact_id),
-            relation=_require_edge_key(entry, "relation", source_fact_id=source_fact_id),
-            status=entry.get("status", EdgeStatus.ACTIVE.value),
+            relation=relation,
+            status=status,
             created_at=entry.get("created_at", ""),
             updated_at=entry.get("updated_at", ""),
             deprecated_at=entry.get("deprecated_at"),
@@ -182,12 +227,24 @@ class Edge:
     @classmethod
     def from_dict(cls, d: dict) -> "Edge":
         """Legacy: reconstruct from dict (for migration / tests)."""
+        source_fact_id = d.get("source_fact_id", "")
+        # Same validation as from_payload_entry (Nr 438).
+        relation = _validate_enum_value(
+            "relation",
+            _require_edge_key(d, "relation", source_fact_id=source_fact_id),
+            _VALID_RELATIONS, d, source_fact_id,
+        )
+        status = _validate_enum_value(
+            "status",
+            d.get("status", EdgeStatus.ACTIVE.value),
+            _VALID_STATUSES, d, source_fact_id,
+        )
         return cls(
-            edge_id=_require_edge_key(d, "edge_id", source_fact_id=d.get("source_fact_id", "")),
-            source_fact_id=d.get("source_fact_id", ""),
-            target_fact_id=_require_edge_key(d, "target_fact_id", source_fact_id=d.get("source_fact_id", "")),
-            relation=_require_edge_key(d, "relation", source_fact_id=d.get("source_fact_id", "")),
-            status=d.get("status", EdgeStatus.ACTIVE.value),
+            edge_id=_require_edge_key(d, "edge_id", source_fact_id=source_fact_id),
+            source_fact_id=source_fact_id,
+            target_fact_id=_require_edge_key(d, "target_fact_id", source_fact_id=source_fact_id),
+            relation=relation,
+            status=status,
             created_at=d.get("created_at", ""),
             updated_at=d.get("updated_at", ""),
             deprecated_at=d.get("deprecated_at"),

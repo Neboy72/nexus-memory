@@ -2,7 +2,7 @@
 """Roadmap 3.3: p95 retrieval-latency benchmark against the live collection.
 
 Measures the full plugin recall path (embed -> qdrant -> lifecycle filter ->
-optional rerank -> graph boost) over 30 queries. Output: p50/p95/p99 + mean.
+optional rerank -> graph boost) over 15 queries. Output: p50/p95/p99 + mean.
 """
 import importlib.util
 import math
@@ -69,5 +69,6 @@ lat.sort()
 p50 = statistics.median(lat)
 p95 = lat[min(len(lat) - 1, max(0, math.ceil(0.95 * len(lat)) - 1))]
 p99 = lat[-1]
-print(f"\nn={len(lat)}  p50={p50:.1f}ms  p95={p95:.1f}ms  p99={p99:.1f}ms")
+print(f"\nn={len(lat)}  p50={p50:.1f}ms  p95={p95:.1f}ms  p99={p99:.1f}ms  "
+      f"mean={statistics.mean(lat):.1f}ms")
 print("target p95 < 100ms:", "MET" if p95 < 100 else "NOT MET")
