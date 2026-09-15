@@ -3,6 +3,7 @@ import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
+import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
 import { enqueueCapture, drainQueue } from "./capture-retry-queue.ts"
@@ -30,13 +31,6 @@ async function inferCaptureScope(
 }
 
 const SKIPPED_PROVIDERS = ["exec-event", "cron-event", "heartbeat"]
-
-/** Remove injected context tags from captured text. */
-function cleanContextTags(text: string): string {
-  return text
-    .replace(/<nexus-context>[\s\S]*?<\/nexus-context>\s*/g, "")
-    .trim()
-}
 
 function getLastTurn(messages: unknown[]): unknown[] {
   let lastUserIdx = -1
@@ -71,11 +65,20 @@ export function buildCaptureHandler(
 
     // Group-context privacy gate (Astra-R2 critical finding, 08.09.2026):
     // group/channel turns MUST NOT flow into the private memory store.
-    // groupId is set for group chats, null for DMs (resolveGroupSessionKey).
-    // Fail-closed: if group membership is ambiguous (non-empty groupId string),
-    // skip capture — no group conversation ever becomes a private memory.
-    if (ctx.groupId) {
-      log.info("nexus: capture skipped — group context (privacy gate)")
+    // groupId is set for group chats, null/undefined for DMs.
+    // Fail-closed: ANY present groupId — including "" and whitespace-only —
+    // skips capture entirely. Only a truly ABSENT group (null/undefined)
+    // leaves private capture allowed; a blank groupId is a group turn whose
+    // id failed to resolve, never a DM.
+    const rawGroupId = ctx.groupId
+    if (rawGroupId !== null && rawGroupId !== undefined) {
+      if (String(rawGroupId).trim() === "") {
+        log.warn(
+          "nexus: capture skipped — group context with empty groupId (fail-closed)",
+        )
+      } else {
+        log.info("nexus: capture skipped — group context (privacy gate)")
+      }
       return
     }
 
@@ -122,7 +125,9 @@ export function buildCaptureHandler(
 
       if (parts.length > 0) {
         const joined = parts.join("\n")
-        const cleaned = cleanContextTags(joined)
+        // Strip any injected wrapper, then neutralize stray closing tags so
+        // the STORED text can never break a future <nexus-context> block.
+        const cleaned = neutralizeContextClose(stripNexusContextBlock(joined))
         if (cleaned.length > 0) {
           texts.push(`[role: ${role}]\n${cleaned}\n[${role}:end]`)
         }

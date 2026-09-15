@@ -7,9 +7,17 @@
  * Fire-and-forget-Flush: kein Timer, keine Extra-Cron — der nächste Capture-Versuch
  * zieht die Warteschlange nach (Drain).
  */
-import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs"
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { log } from "../logger.ts"
 
 const QUEUE_FILE = join(
@@ -31,7 +39,13 @@ export interface QueuedCapture {
  */
 export function enqueueCapture(entry: QueuedCapture): void {
   try {
-    appendFileSync(QUEUE_FILE, JSON.stringify(entry) + "\n", "utf8")
+    // Queue-Dir bei Neuanlage mit restriktiven Rechten (0o700).
+    mkdirSync(dirname(QUEUE_FILE), { recursive: true, mode: 0o700 })
+    // mode wirkt nur bei Neuanlage — bestehende Dateien bleiben unangetastet.
+    appendFileSync(QUEUE_FILE, JSON.stringify(entry) + "\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    })
     // Kein read-modify-write hier: Trim läuft single-writer in drainQueue.
     log.warn(`capture-retry: queued (id=${entry.id})`)
   } catch (err) {
@@ -80,9 +94,30 @@ export function trimQueue(): void {
 }
 
 export function writeQueue(entries: QueuedCapture[]): void {
+  // Guard: the queue dir may not exist yet (fresh install) — create it with
+  // restrictive perms before the temp file is written.
+  mkdirSync(dirname(QUEUE_FILE), { recursive: true, mode: 0o700 })
   const tmp = QUEUE_FILE + ".tmp"
-  writeFileSync(tmp, entries.map((e) => JSON.stringify(e)).join("\n") + (entries.length ? "\n" : ""), "utf8")
-  renameSync(tmp, QUEUE_FILE)
+  try {
+    writeFileSync(
+      tmp,
+      entries.map((e) => JSON.stringify(e)).join("\n") + (entries.length ? "\n" : ""),
+      { encoding: "utf8", mode: 0o600 },
+    )
+    renameSync(tmp, QUEUE_FILE)
+  } catch (err) {
+    log.warn("capture-retry: writeQueue fehlgeschlagen", err)
+    throw err
+  } finally {
+    // Rename removes the temp file on success; a crash/failure can leave it.
+    if (existsSync(tmp)) {
+      try {
+        unlinkSync(tmp)
+      } catch {
+        // best effort — never mask the original error
+      }
+    }
+  }
 }
 
 export function queueSize(): number {
@@ -114,8 +149,16 @@ export async function drainQueue(
     }
   }
   const kept = entries.filter((e) => !restoredIds.has(e.id))
-  writeQueue(kept)
+  // Count BEFORE the persist attempt: even if the queue rewrite fails, the
+  // restored entries WERE restored — report them truthfully.
+  const restored = entries.length - kept.length
+  try {
+    writeQueue(kept)
+  } catch (err) {
+    log.warn("capture-retry: drain konnte Queue nicht zurückschreiben", err)
+    return restored
+  }
   // Single-writer: NUR drainQueue trimmt die Queue (Append-Only-enqueue).
   trimQueue()
-  return entries.length - kept.length
+  return restored
 }

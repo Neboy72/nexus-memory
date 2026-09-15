@@ -87,8 +87,6 @@ export function isPureReasoningBlock(text: string, prevWasLeak = false): boolean
   return REASONING_MARKERS.some((re) => re.test(trimmed))
 }
 
-type MessageSendingCtx = { message?: string; content?: string; text?: string } & Record<string, unknown>
-
 /**
  * message_sending-Handler: modifiziert den Outbound-Text.
  * Merge-Regel (Doku): "message_sending uses the last returned content".

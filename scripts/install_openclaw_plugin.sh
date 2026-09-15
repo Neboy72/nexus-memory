@@ -108,10 +108,10 @@ detect_embedding() {
         EMBEDDING_APIKEY=""
         echo -e "${GREEN}✓${NC} Embedding: Ollama (nomic-embed-text, 768d) — local, no API key needed"
     else
-        EMBEDDING_PROVIDER="voyage"
-        EMBEDDING_MODEL="voyage-4"
-        EMBEDDING_APIKEY='${VOYAGE_API_KEY}'
-        echo -e "${YELLOW}⚠${NC} No embedding provider detected. Defaulting to Voyage."
+        EMBEDDING_PROVIDER=""
+        EMBEDDING_MODEL=""
+        EMBEDDING_APIKEY=""
+        echo -e "${YELLOW}⚠${NC} No embedding provider detected. plugin will not load until an embedding provider API key is set"
         echo "  Set one of: VOYAGE_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, JINA_API_KEY"
         echo "  Or install Ollama with an embed model for local zero-setup."
     fi
@@ -119,6 +119,13 @@ detect_embedding() {
 
 detect_embedding
 echo ""
+
+# --- Dependency checks ---
+
+if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}✗${NC} python3 is required for config patching but was not found." >&2
+    exit 1
+fi
 
 # --- Create or patch openclaw.json ---
 
@@ -128,6 +135,7 @@ patch_config() {
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -186,13 +194,18 @@ cfg = entry.setdefault("config", {})
 cfg.setdefault("qdrantUrl", "http://localhost:6333")
 cfg.setdefault("collection", "nexus")
 
-# Embedding: only set if not already configured
-embedding = cfg.setdefault("embedding", {})
-if "provider" not in embedding:
-    embedding["provider"] = provider
-    embedding["model"] = model
-    if api_key:
-        embedding["apiKey"] = api_key
+# Embedding: only set if not already configured AND a provider was detected.
+# With no provider, leave the embedding block out entirely so the plugin
+# fails closed instead of pointing at a provider without credentials.
+if provider:
+    embedding = cfg.setdefault("embedding", {})
+    if "provider" not in embedding:
+        embedding["provider"] = provider
+        embedding["model"] = model
+        if api_key:
+            embedding["apiKey"] = api_key
+else:
+    print("  ⚠ No embedding provider detected — embedding block omitted (plugin will not load until an embedding provider API key is set)")
 
 cfg.setdefault("autoRecall", True)
 cfg.setdefault("autoCapture", True)
@@ -215,11 +228,25 @@ elif isinstance(allow, list):
     else:
         print('  ✓ "nexus-memory" already in plugins.allow')
 
-# Write back
+# Write back atomically: temp file in the same directory, then os.replace so a
+# crash mid-write can never leave a truncated config behind.
 config_path.parent.mkdir(parents=True, exist_ok=True)
-with open(config_path, "w") as f:
-    json.dump(config, f, indent=2, ensure_ascii=False)
-    f.write("\n")
+tmp_path = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=str(config_path.parent), delete=False, encoding="utf-8"
+    ) as f:
+        tmp_path = Path(f.name)
+        json.dump(config, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+        f.flush()
+        f.close()
+    os.replace(tmp_path, config_path)
+    tmp_path = None
+except Exception as e:
+    if tmp_path is not None and tmp_path.exists():
+        os.unlink(tmp_path)
+    sys.exit(f"error: {e}")
 
 print(f"  ✓ Config written to {config_path}")
 PYEOF

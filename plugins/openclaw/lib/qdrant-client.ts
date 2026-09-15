@@ -1,4 +1,5 @@
 import { log } from "../logger.ts"
+import { fetchWithTimeout } from "./embedder.ts"
 
 export type SearchResult = {
   id: string
@@ -202,7 +203,7 @@ export class QdrantClient {
 
     log.debugRequest("search", { collection: this.collection, limit, accessLevel, levels })
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points/search`,
       {
         method: "POST",
@@ -248,7 +249,7 @@ export class QdrantClient {
   async upsert(id: string, vector: number[], payload: Record<string, unknown>): Promise<void> {
     log.debugRequest("upsert", { id, payloadKeys: Object.keys(payload), vectorDim: vector.length })
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points`,
       {
         method: "PUT",
@@ -309,7 +310,7 @@ export class QdrantClient {
    */
   async scrollPoint(id: string): Promise<{ id: string; payload?: Record<string, unknown> } | null> {
     try {
-      const resp = await fetch(
+      const resp = await fetchWithTimeout(
         `${this.qdrantUrl}/collections/${this.collection}/points/${encodeURIComponent(id)}?with_payload=true`,
         { method: "GET" },
       )
@@ -352,7 +353,7 @@ export class QdrantClient {
         }
         if (offset !== undefined && offset !== null) body.offset = offset
 
-        const resp = await fetch(
+        const resp = await fetchWithTimeout(
           `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
           {
             method: "POST",
@@ -447,7 +448,7 @@ export class QdrantClient {
     }
     if (filter) body.filter = filter
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points/search`,
       {
         method: "POST",

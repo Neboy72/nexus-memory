@@ -140,7 +140,10 @@ function needsPlan(toolName: string, params: Record<string, unknown>): boolean {
 }
 
 function isProtectedPath(path: string): boolean {
-  return PROTECTED_PATHS.some(p => path.includes(p))
+  // PROTECTED_PATHS mixes case (/Users/miosha/...) — compare lowercased on
+  // both sides so the match does not depend on the caller's case.
+  const p = path.toLowerCase()
+  return PROTECTED_PATHS.some(pp => p.includes(pp.toLowerCase()))
 }
 
 // ── Guardrail Checks ─────────────────────────────────────────────
@@ -157,16 +160,10 @@ function checkGuardrails(toolName: string, params: Record<string, unknown>): Gua
     // or `KILL ollama` must be lowercased here too — otherwise uppercase
     // commands bypass the guardrail entirely.
     const command = String(params.command ?? "").toLowerCase()
-    if (command.includes("rm") && command.includes("-rf")) {
-      for (const p of PROTECTED_PATHS) {
-        // PROTECTED_PATHS mixes case (/Users/miosha/...) — compare lowercased
-        // on both sides so the match does not depend on the command's case.
-        if (command.includes(p.toLowerCase())) {
-          return {
-            block: true,
-            reason: `BLOCKED: rm -rf auf ${p} ist verboten. Nie kritische Pfade löschen.`,
-          }
-        }
+    if (command.includes("rm") && command.includes("-rf") && isProtectedPath(command)) {
+      return {
+        block: true,
+        reason: "BLOCKED: rm -rf auf einen geschützten Pfad ist verboten. Nie kritische Pfade löschen.",
       }
     }
 
@@ -223,9 +220,9 @@ async function preActionRecall(
     if (results.length === 0) return null
 
     const lines = results.map(r => {
-      const pct = r.score != null ? `[${Math.round(r.score * 100)}%]` : ""
+      const pct = typeof r.score === "number" ? `[${Math.round(r.score * 100)}%]` : ""
       const category = r.category ? `[${r.category}]` : ""
-      return `- ${category} ${r.text.slice(0, 400)} ${pct}`.trim()
+      return `- ${category} ${(r.text ?? "").slice(0, 400)} ${pct}`.trim()
     })
 
     return `🧠 VORBEREITUNG-GATE (pre-action recall):\nDu planst: ${query}\nRelevante Memories:\n${lines.join("\n")}\nNUTZE diesen Kontext fuer deine Aktion.`
