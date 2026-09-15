@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
@@ -148,9 +149,11 @@ interface ProtectionRule {
  * rules unavailable" and fail closed for destructive actions — a confirmed
  * empty list is the only state that may pass.
  */
-async function loadProtectionRules(qdrantClient: QdrantClient, _collection: string): Promise<ProtectionRule[] | null> {
+async function loadProtectionRules(qdrantClient: QdrantClient, _collection?: string): Promise<ProtectionRule[] | null> {
   try {
-    // QdrantClient is already bound to the configured collection.
+    // The QdrantClient is already bound to the configured collection, so the
+    // `_collection` parameter is NOT used and callers must not pass one — it
+    // was misleading (it looked like the query target without being one).
     const points = await qdrantClient.scrollFiltered(
       { must: [{ key: "category", match: { value: "rule" } }] },
       200,
@@ -227,7 +230,8 @@ async function evaluateGuardrail(
     return { verdict: "allow", reason: `Destructive action (${action}) but no protected target` }
   }
 
-  const rules = await loadProtectionRules(qdrantClient, cfg.collection || "nexus")
+  // No collection argument: the bound QdrantClient already targets cfg.collection.
+  const rules = await loadProtectionRules(qdrantClient)
   if (rules === null) {
     // Rules could not be loaded — we cannot prove the target is
     // unprotected, so block the destructive action (fail-closed).
@@ -411,7 +415,7 @@ export function registerGuardrailOverrideTool(
           )
         }
 
-        const overrideId = crypto.randomUUID()
+        const overrideId = randomUUID()
         const auditText = `GUARDRAIL OVERRIDE: ${command} | Reasoning: ${trimmedReasoning} | Agent: ${trimmedAgentId}`
         const vector = await embedder.embed(auditText)
 
