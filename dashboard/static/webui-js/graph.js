@@ -24,6 +24,9 @@ const MemoryGraph = {
   },
 
   load(memories, edges) {
+    // A previous simulation keeps ticking (and mutating detached nodes)
+    // unless it is stopped explicitly.
+    if (this.sim) this.sim.stop();
     const idSet = new Set(memories.map(m => m.id));
     const seen = new Set();
     const links = [];
@@ -87,6 +90,7 @@ const MemoryGraph = {
   },
 
   updateFilters(f) {
+    if (!f) return;
     const q = (f.search || '').toLowerCase();
     const visible = {};
     this.node.attr('opacity', d => {

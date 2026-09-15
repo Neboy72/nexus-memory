@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import logging
 import sqlite3
 import sys
@@ -47,21 +48,34 @@ def read_edges_from_sqlite(db_path: str) -> list[dict]:
     return rows
 
 
+def _edge_id(source_fact_id: str, target_fact_id: str, relation: str) -> str:
+    """Deterministic edge id for migrated edges (12 hex chars)."""
+    raw = f"{source_fact_id}:{target_fact_id}:{relation}".encode()
+    return hashlib.sha1(raw).hexdigest()[:12]
+
+
 def group_edges_by_source(edges: list[dict]) -> dict[str, list[dict]]:
-    """Group edges by source_fact_id for Qdrant payload injection."""
+    """Group edges by source_fact_id for Qdrant payload injection.
+
+    Payload keys must match what ``nexus.graph.store`` reads back:
+    ``edge_id``/``target_fact_id``/``relation``/``status``. Legacy
+    fields (target_name, confidence, context, source_doc_id) are kept
+    as extra keys — the store ignores unknown keys.
+    """
     grouped = {}
     for e in edges:
         source = e["source_fact_id"]
         if source not in grouped:
             grouped[source] = []
         grouped[source].append({
-            "target_id": e["target_fact_id"],
+            "edge_id": _edge_id(source, e["target_fact_id"], e["relation"]),
+            "target_fact_id": e["target_fact_id"],
+            "relation": e["relation"],
+            "status": e["status"],
             "target_name": "",
-            "relation_type": e["relation"],
             "confidence": 1,
             "context": e.get("reason", ""),
             "source_doc_id": source,
-            "status": e["status"],
             "created_at": e.get("created_at", ""),
         })
     return grouped
