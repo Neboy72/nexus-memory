@@ -606,6 +606,7 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
             return True
         else:
             _print(f"  {RED}✗{RESET} Failed to pull model. Is Ollama installed?")
+            _print(f"  {RED}  Details: {(err or out)[:200]}{RESET}")
             _print(f"  Download: {CYAN}{ps.provider['key_url']}{RESET}")
             return False
     elif _confirm("  Install bge-m3 instead? (1.2 GB, also good, multilingual)"):
@@ -616,6 +617,7 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
             return True
         else:
             _print(f"  {RED}✗{RESET} Failed to pull model. Is Ollama installed?")
+            _print(f"  {RED}  Details: {(err or out)[:200]}{RESET}")
             _print(f"  Download: {CYAN}{ps.provider['key_url']}{RESET}")
             return False
     elif _confirm("  Install nomic-embed-text instead? (small, fast, 274 MB)"):
@@ -626,6 +628,7 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
             return True
         else:
             _print(f"  {RED}✗{RESET} Failed to pull model. Is Ollama installed?")
+            _print(f"  {RED}  Details: {(err or out)[:200]}{RESET}")
             return False
     else:
         # Service-Flow: no Ollama? Offer direct HuggingFace route instead of giving up.

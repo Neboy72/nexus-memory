@@ -96,6 +96,10 @@ echo "Least-privilege defaults are used below (prompt injection and conversation
 echo "access disabled, accessLevel \"default\"). Raise them only for an isolated/"
 echo "trusted backend."
 echo ""
+echo "NOTE: embedding config below is a Voyage EXAMPLE - adjust provider/"
+echo "model/apiKey if you use OpenAI/Google/Jina/Ollama (see prerequisites)."
+echo "OpenClaw interpolates \${VOYAGE_API_KEY} from the process env."
+echo ""
 echo '{'
 echo '  "plugins": {'
 echo '    "slots": {'

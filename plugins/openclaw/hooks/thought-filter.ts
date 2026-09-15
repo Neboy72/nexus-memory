@@ -18,6 +18,13 @@
 
 import { log } from "../logger.ts"
 
+// Below MIN_LEN_PROCESS chars a message cannot carry a reasoning leak (pure
+// noise) → skip the scan entirely. Fail-open policy stays: only blocks matched
+// as leaks are ever dropped.
+const MIN_LEN_PROCESS = 24
+// all-Leak remainder below this is noise, not send
+const MIN_LEN_SEND = 12
+
 // Muster, die eindeutig internes Reasoning markieren (verifizierte Leaks).
 const REASONING_MARKERS: RegExp[] = [
   // Reflex-/Übergangs-Adverbien am Blockanfang (Miosha-leak-typisch)
@@ -67,7 +74,6 @@ const REASONING_MARKERS: RegExp[] = [
   // Cron-/Heartbeat-Selbstplanung (Release Tracker, Memory-Cron — 08.09.-Leak-Welle)
   /^let me (parse this heartbeat|work through this task|analyze what i got|start by fetching)\b/i,
   /^(steps?|my steps)\s*:\s*$/im,
-  /^(daily memory file exists|memory file exists)\b/i,
   /^(\d+\.\s*)?(daily memory file exists|memory file exists)\b/i,
 ]
 
@@ -99,7 +105,7 @@ export function buildThoughtFilterHandler() {
     let raw: string | undefined
     try {
       raw = ctx?.message ?? ctx?.content ?? ctx?.text
-      if (typeof raw !== "string" || raw.trim().length < 24) return { message: raw }
+      if (typeof raw !== "string" || raw.trim().length < MIN_LEN_PROCESS) return { message: raw }
 
       const blocks = raw.split(/\n{2,}/)
       let prevWasLeak = false
@@ -119,7 +125,7 @@ export function buildThoughtFilterHandler() {
       log.warn(
         `thought-filter: reasoning-Leak entfernt (${blocks.length - kept.length} Block(s), ${raw.length} -> ${out.length} Zeichen)`
       )
-      if (out.length < 12) return { message: undefined } // alles war Leak → nicht senden
+      if (out.length < MIN_LEN_SEND) return { message: undefined } // alles war Leak → nicht senden
       return { message: out }
     } catch {
       return { message: raw } // Fail-open: Original unverändert durchlassen

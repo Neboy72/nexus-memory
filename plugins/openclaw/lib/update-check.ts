@@ -12,12 +12,13 @@
  */
 
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const REPO = "Neboy72/nexus-memory"
 const CACHE_FILE = path.join(
-  process.env.HOME || "/tmp",
+  process.env.HOME || os.homedir(),
   ".nexus-memory",
   "update-check-cache.json",
 )

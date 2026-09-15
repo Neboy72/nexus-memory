@@ -23,10 +23,8 @@ import json
 import logging
 import os
 import math
-import threading
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 log = logging.getLogger("nexus.selective_forgetting")
@@ -78,7 +76,7 @@ def get_ts(payload: Dict[str, Any]) -> Optional[float]:
     """Erster gültiger Zeitstempel nach Feld-Priorität."""
     for k in ("created_at", "updated_at", "modified", "timestamp", "created"):
         t = parse_ts(payload.get(k))
-        if t:
+        if t is not None:
             return t
     return None
 

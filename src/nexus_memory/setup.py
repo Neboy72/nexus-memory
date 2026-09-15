@@ -40,15 +40,12 @@ import subprocess
 import tempfile
 import tomllib  # stdlib since Python 3.11
 from pathlib import Path
-from typing import Optional
 
 from nexus_memory.chat_wizard import (
-    scan_providers, apply_choice, get_trust_levels, save_trust_level,
-    get_status, TRUST_LEVELS, _load_config, _save_config
+    scan_providers, apply_choice, get_status, TRUST_LEVELS
 )
 from nexus_memory.agent_detect import (
-    detect_all_agents, register_agent, load_agents_registry,
-    set_agent_trust_level, _get_agents_registry_path
+    detect_all_agents, register_agent, load_agents_registry
 )
 
 
@@ -91,6 +88,7 @@ for _agent, _file in (
         "format": "json",
         "config": {"nexus": dict(_NEXUS_MCP_SERVER)},
     }
+del _agent, _file  # avoid leaking loop vars as module globals
 
 # Codex wants TOML: ~/.codex/config.toml with [mcp_servers.nexus] tables.
 MCP_CONFIG_SNIPPETS["codex"] = {
@@ -188,6 +186,12 @@ def _atomic_write_text(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
+        if path.exists():
+            import stat as _stat
+            try:
+                os.chmod(tmp_path, _stat.S_IMODE(path.stat().st_mode))
+            except OSError:
+                pass  # keep 0600 if the original mode is unreadable
         os.replace(tmp_path, path)
     except Exception:
         tmp_path.unlink(missing_ok=True)

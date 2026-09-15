@@ -232,15 +232,19 @@ export function buildRecallHandler(
         allItems.push({
           id: "",
           text: gi,
-          score: 0,
+          // null (not 0): graph-boosted items have no relevance score, and
+          // formatMemories skips the "[0%]" badge for `r.score == null`.
+          score: null,
           category: "graph",
           source: "graph-boost",
           access_level: "public",
           created_at: "",
-        } as SearchResult)
+        } as unknown as SearchResult)
       }
 
-      const memoryContext = formatMemories(allItems, cfg.maxRecallResults + graphItems.length)
+      // Budget guard: the cap is cfg.maxRecallResults — NOT plus graphItems,
+      // which made the slice a no-op and let graph items exceed the budget.
+      const memoryContext = formatMemories(allItems, cfg.maxRecallResults)
 
       if (!memoryContext) {
         log.info("nexus: no memories to inject")

@@ -5,6 +5,7 @@ import type { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
+import { limitText } from "../lib/text-preview.ts"
 import { log } from "../logger.ts"
 
 const MEMORY_CATEGORIES = ["fact", "belief", "session", "rule", "preference", "temp"] as const
@@ -157,8 +158,7 @@ export function registerStoreTool(
 
           await qdrantClient.upsert(id, vector, payload)
 
-          const preview =
-            params.text.length > 80 ? `${params.text.slice(0, 80)}…` : params.text
+          const preview = limitText(params.text, 80)
 
           // H139: echo the effective values so the caller always sees where
           // the memory actually landed (no more silent default fallback).
