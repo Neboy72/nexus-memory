@@ -20,6 +20,52 @@ export function initLogger(backend: LoggerBackend, debug: boolean): void {
   _debug = debug
 }
 
+/** Key names whose VALUES are redacted in debug dumps (matched case-insensitively). */
+const SECRET_KEYS = new Set([
+  "apikey",
+  "api_key",
+  "token",
+  "authorization",
+  "password",
+  "key",
+])
+
+/**
+ * JSON.stringify that never throws and redacts obvious secrets.
+ *
+ * - Circular references → "[circular]" (tracked via a WeakSet).
+ * - BigInt → its decimal string form.
+ * - Secret-looking key names → "[redacted]".
+ * - Any remaining failure → "[unserializable: <typeof v>]".
+ *
+ * Limits (documented): the redactor matches key NAMES at every depth the
+ * replacer reaches, but it is best-effort — it does not scrub secrets that
+ * appear inside string VALUES (e.g. a bearer token embedded in a message
+ * body). The payloads logged here are shallow (≈depth 2). A value that is
+ * referenced twice without a cycle is also reported as "[circular]".
+ */
+export function safeStringify(v: unknown): string {
+  const seen = new WeakSet<object>()
+  try {
+    const out = JSON.stringify(
+      v,
+      (key, value) => {
+        if (key && SECRET_KEYS.has(key.toLowerCase())) return "[redacted]"
+        if (typeof value === "bigint") return value.toString()
+        if (typeof value === "object" && value !== null) {
+          if (seen.has(value as object)) return "[circular]"
+          seen.add(value as object)
+        }
+        return value
+      },
+      2,
+    )
+    return out ?? String(v)
+  } catch {
+    return `[unserializable: ${typeof v}]`
+  }
+}
+
 export const log = {
   info(msg: string, ...args: unknown[]): void {
     _backend.info(`nexus: ${msg}`, ...args)
@@ -43,12 +89,12 @@ export const log = {
   debugRequest(method: string, params: Record<string, unknown>): void {
     if (!_debug) return
     const fn = _backend.debug ?? _backend.info
-    fn(`nexus [debug] → ${method}`, JSON.stringify(params, null, 2))
+    fn(`nexus [debug] → ${method}`, safeStringify(params))
   },
 
   debugResponse(method: string, data: unknown): void {
     if (!_debug) return
     const fn = _backend.debug ?? _backend.info
-    fn(`nexus [debug] ← ${method}`, JSON.stringify(data, null, 2))
+    fn(`nexus [debug] ← ${method}`, safeStringify(data))
   },
 }

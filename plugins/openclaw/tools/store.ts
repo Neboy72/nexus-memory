@@ -47,6 +47,42 @@ export function registerStoreTool(
       ) {
         const category = params.category ?? "fact"
         const accessLevel = (params.access_level ?? cfg.accessLevel) as string
+
+        // Fail-closed: the JSON schema declares both as enums, but a host that
+        // bypasses the schema could smuggle arbitrary values through the
+        // runtime cast above. Validate explicitly BEFORE touching embedder or
+        // Qdrant. An absent param still falls back to cfg as before.
+        if (
+          params.category !== undefined &&
+          !(MEMORY_CATEGORIES as readonly string[]).includes(params.category)
+        ) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Memory store failed: invalid category "${params.category}". ` +
+                  `Allowed: ${MEMORY_CATEGORIES.join(", ")}`,
+              },
+            ],
+          }
+        }
+        if (
+          params.access_level !== undefined &&
+          !(ACCESS_LEVELS as readonly string[]).includes(params.access_level)
+        ) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Memory store failed: invalid access_level "${params.access_level}". ` +
+                  `Allowed: ${ACCESS_LEVELS.join(", ")}`,
+              },
+            ],
+          }
+        }
+
         // Scope normalization ([a-z0-9-], max 40) — fail-open to 'default' on
         // invalid input (same regex as lib/config.ts + server). Explicit
         // param.scope wins; else cfg.scope; else AUTO-infer from centroids

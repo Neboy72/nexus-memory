@@ -205,34 +205,16 @@ export class Embedder {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        // Google expects the key in this header. Without it the request could
+        // never succeed; the old code omitted it and then retried only on 400,
+        // which a missing/invalid key (401/403) never triggers — dead path.
+        "x-goog-api-key": this.apiKey ?? "",
       },
       body: JSON.stringify({
         content: { parts: [{ text }] },
         taskType: "RETRIEVAL_DOCUMENT",
       }),
-      // Google uses query param for key
     })
-
-    // If the key-as-header approach doesn't work, retry with key in URL
-    if (!resp.ok && resp.status === 400) {
-      const retryUrl = `${url}?key=${this.apiKey}`
-      const retryResp = await fetch(retryUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: { parts: [{ text }] },
-          taskType: "RETRIEVAL_DOCUMENT",
-        }),
-      })
-      if (retryResp.ok) {
-        const retryData = await retryResp.json() as { embedding?: { values?: number[] } }
-        const vector = retryData.embedding?.values
-        if (vector) {
-          log.debugResponse("embed.google", { dims: vector.length })
-          return vector
-        }
-      }
-    }
 
     if (!resp.ok) {
       const body = await resp.text()

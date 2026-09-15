@@ -81,8 +81,17 @@ interface CachedCheck {
 function readCache(): CachedCheck | null {
   try {
     const raw = fs.readFileSync(CACHE_FILE, "utf8")
-    const cached = JSON.parse(raw) as CachedCheck
-    if (Date.now() - cached.checkedAt < CACHE_TTL_MS) return cached
+    const cached = JSON.parse(raw) as Partial<CachedCheck>
+    // Shape check, not just TTL: a malformed cache (e.g. an object where a
+    // string is expected) must be ignored, not handed to isNewerVersion.
+    if (
+      typeof cached.checkedAt === "number" &&
+      typeof cached.latest === "string" &&
+      typeof cached.url === "string" &&
+      Date.now() - cached.checkedAt < CACHE_TTL_MS
+    ) {
+      return cached as CachedCheck
+    }
   } catch {
     /* no cache / expired */
   }
@@ -103,10 +112,17 @@ async function fetchLatest(): Promise<CachedCheck> {
     headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "openclaw-nexus-memory" },
     signal: AbortSignal.timeout(10_000),
   })
+  // A 403 (rate limit) or 404 must NOT be cached as "latest: ''". Throw so
+  // checkForUpdate reports "no update" without poisoning the 24h cache.
+  if (!res.ok) throw new Error(`GitHub API ${res.status}`)
   const data = (await res.json()) as { tag_name?: string; html_url?: string }
+  const rawTag = (data.tag_name ?? "").replace(/^v/, "")
+  // Only accept a semver-looking tag; anything else becomes "" so a garbage
+  // tag can never be compared/cached as a version.
+  const latest = /^[0-9]+\.[0-9]+\.[0-9]+/.test(rawTag) ? rawTag : ""
   return {
     checkedAt: Date.now(),
-    latest: (data.tag_name ?? "").replace(/^v/, ""),
+    latest,
     url: data.html_url ?? "",
   }
 }
@@ -130,8 +146,20 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
       return { available: false, latest: local, url: "" }
     }
   }
-  const available = isNewerVersion(entry.latest, local)
-  return { available, latest: entry.latest, url: entry.url ?? `https://github.com/${REPO}/releases` }
+  // Fail-open contract: ANY problem — including a malformed cached value —
+  // must yield "no update", never throw. (entry.latest is a validated string
+  // via readCache, but keep the guard local so the compare can never escape.)
+  let available = false
+  try {
+    available = isNewerVersion(entry.latest, local)
+  } catch {
+    available = false
+  }
+  return {
+    available,
+    latest: typeof entry.latest === "string" ? entry.latest : local,
+    url: entry.url ?? `https://github.com/${REPO}/releases`,
+  }
 }
 
 /** Prompt nudge lines (once per process lifetime, tracked by caller). */

@@ -12,6 +12,13 @@ export type SearchResult = {
   scope?: string
 }
 
+/**
+ * Hard cap on how many scroll pages a single query walks via
+ * `next_page_offset`. Bounds the worst case (latency/fan-out) on large
+ * collections while still returning far more than the first page.
+ */
+const MAX_SCROLL_PAGES = 5
+
 /** Access-level hierarchy: public=0, trusted=1, private=2. */
 const ACCESS_LEVEL_ORDER: Record<string, number> = {
   public: 0,
@@ -24,7 +31,13 @@ const ACCESS_LEVEL_ORDER: Record<string, number> = {
  * given access level. An agent can see memories at its own level or below.
  */
 function visibleAccessLevels(level: string): string[] {
-  const agentOrder = ACCESS_LEVEL_ORDER[level] ?? 0
+  // Fail-closed: an unknown level must NOT degrade to public (0), which made
+  // every memory visible. An unrecognized level sees nothing at all.
+  const agentOrder = ACCESS_LEVEL_ORDER[level]
+  if (agentOrder === undefined) {
+    log.debug(`visibleAccessLevels: unknown access level "${level}" — fail-closed (nothing visible)`)
+    return []
+  }
   const result: string[] = []
   for (const [key, value] of Object.entries(ACCESS_LEVEL_ORDER)) {
     if (value <= agentOrder) result.push(key)
@@ -289,30 +302,56 @@ export class QdrantClient {
 
   /**
    * Scroll points with a Qdrant filter — returns points with payload.
+   *
+   * PAGINATED: `limit` is the PER-PAGE limit. The call follows
+   * `next_page_offset` for up to MAX_SCROLL_PAGES pages, so the returned
+   * array can hold up to `limit * MAX_SCROLL_PAGES` points. This makes
+   * "top N / all matching" queries (protection rules, entity edges) complete
+   * over large collections instead of only ever seeing the first page.
+   * Returns whatever was collected so far if a later page fails (fail-open
+   * to partial data, same spirit as the previous empty-array fallback).
    */
   async scrollFiltered(
     filter: Record<string, unknown>,
     limit: number,
   ): Promise<Array<{ id: string; payload?: Record<string, unknown> }>> {
+    const collected: Array<{ id: string; payload?: Record<string, unknown> }> = []
+    let offset: unknown = undefined
     try {
-      const resp = await fetch(
-        `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filter,
-            limit,
-            with_payload: true,
-            with_vector: false,
-          }),
-        },
-      )
-      if (!resp.ok) return []
-      const data = await resp.json() as { result?: { points?: Array<{ id: string | number; payload?: Record<string, unknown> }> } }
-      return (data.result?.points ?? []).map((p) => ({ id: String(p.id), payload: p.payload }))
+      for (let page = 0; page < MAX_SCROLL_PAGES; page++) {
+        const body: Record<string, unknown> = {
+          filter,
+          limit,
+          with_payload: true,
+          with_vector: false,
+        }
+        if (offset !== undefined && offset !== null) body.offset = offset
+
+        const resp = await fetch(
+          `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        )
+        if (!resp.ok) return collected
+        const data = await resp.json() as {
+          result?: {
+            points?: Array<{ id: string | number; payload?: Record<string, unknown> }>
+            next_page_offset?: unknown
+          }
+        }
+        for (const p of data.result?.points ?? []) {
+          collected.push({ id: String(p.id), payload: p.payload })
+        }
+        const next = data.result?.next_page_offset
+        if (next === null || next === undefined) break
+        offset = next
+      }
+      return collected
     } catch {
-      return []
+      return collected
     }
   }
 
@@ -325,25 +364,14 @@ export class QdrantClient {
     relation?: string,
   ): Promise<Array<{ source_id: string; relation: string; edge_id: string }>> {
     try {
-      // Search for points that have an edge with target_fact_id == factId
-      // Qdrant doesn't support nested object filtering well, so we scroll entity-typed
-      // points and check their edges array in-memory
-      const resp = await fetch(
-        `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filter: { must: [{ key: "category", match: { value: "entity" } }] },
-            limit: 250,
-            with_payload: true,
-            with_vector: false,
-          }),
-        },
+      // Qdrant doesn't support nested object filtering well, so we scroll
+      // entity-typed points and check their edges array in-memory. Uses the
+      // paginated scrollFiltered (per-page limit 250, up to MAX_SCROLL_PAGES
+      // pages) so edges past the first page are no longer missed.
+      const points = await this.scrollFiltered(
+        { must: [{ key: "category", match: { value: "entity" } }] },
+        250,
       )
-      if (!resp.ok) return []
-      const data = await resp.json() as { result?: { points?: Array<{ id: string | number; payload?: Record<string, unknown> }> } }
-      const points = data.result?.points ?? []
       const incoming: Array<{ source_id: string; relation: string; edge_id: string }> = []
 
       for (const pt of points) {
@@ -369,16 +397,30 @@ export class QdrantClient {
   }
 
   /**
-   * Search by query text (convenience — embeds then searches).
-   * Used by forget-by-query: searches and returns the first result.
+   * Vector search used by forget-by-query.
+   *
+   * Applies the SAME access-level filter as search(): a memory an agent at
+   * `accessLevel` cannot see must never be matched (and then deleted) via
+   * forget-by-query. Unknown levels fail closed (match nothing).
    */
-  async searchByVector(queryVector: number[], limit: number): Promise<SearchResult[]> {
-    // For internal use (forget-by-query) — no access-level filtering
-    const body = {
+  async searchByVector(
+    queryVector: number[],
+    limit: number,
+    accessLevel: string,
+  ): Promise<SearchResult[]> {
+    const levels = visibleAccessLevels(accessLevel)
+
+    const filter =
+      levels.length < 3
+        ? { must: [{ key: "access_level", match: { any: levels } }] }
+        : undefined // private sees everything — no filter needed
+
+    const body: Record<string, unknown> = {
       vector: queryVector,
       limit,
       with_payload: true,
     }
+    if (filter) body.filter = filter
 
     const resp = await fetch(
       `${this.qdrantUrl}/collections/${this.collection}/points/search`,
