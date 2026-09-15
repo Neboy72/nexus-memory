@@ -61,6 +61,19 @@ try:
 except ImportError:
     pass
 
+# H223: numpy is optional and independent of sklearn — used to vectorize the
+# O(n²) pairwise similarity in detect_contradictions when present.
+try:
+    import numpy as _np
+except ImportError:
+    _np = None
+
+# H223: upper bound on the number of memories compared pairwise. The check is
+# O(n²) in both time and vector memory and runs synchronously inside run();
+# the comparison set is capped (newest first) so a large collection cannot
+# block a drift run unbounded.
+MAX_CONTRADICTION_CANDIDATES = 200
+
 
 # ── Usage tracking constants ────────────────────────────────────────────────
 
@@ -272,6 +285,35 @@ class DriftDetector:
                 break
         return points
 
+    @staticmethod
+    def _extract_text(payload: dict) -> str:
+        """Extract the embeddable text from a Qdrant payload.
+
+        Shared by ``run()`` and ``detect_contradictions()`` so both apply the
+        same v1.8.0 normalization: ``content`` may be a string (legacy) or a
+        dict ``{"content": "text", ...}``. Empty content falls back to the
+        user→assistant transcript.
+        """
+        content = payload.get("content", "")
+        if isinstance(content, dict):
+            content = content.get("content", "")
+        if not content:
+            content = f"{payload.get('user_content', '')} -> {payload.get('assistant_content', '')}"
+        return content
+
+    @staticmethod
+    def _contradiction_sort_key(mem: object) -> str:
+        """Newest-first sort key for contradiction candidates (H223).
+
+        Reads ``created_at`` (falling back to ``timestamp``); entries without
+        a usable timestamp sort last.
+        """
+        if isinstance(mem, dict):
+            payload = mem.get("payload", mem)
+            if isinstance(payload, dict):
+                return str(payload.get("created_at") or payload.get("timestamp") or "")
+        return ""
+
     def _check_stale(self, content_raw: str | dict) -> list[str]:
         """Check content against stale patterns.
 
@@ -420,14 +462,8 @@ class DriftDetector:
                 report.excluded_count += 1
                 continue
 
-            content = payload.get("content", "")
             # v1.8.0+: content may be a dict {content: "text", ...}
-            if isinstance(content, dict):
-                text_content = content.get("content", "")
-            else:
-                text_content = content
-            if not text_content:
-                text_content = f"{payload.get('user_content', '')} -> {payload.get('assistant_content', '')}"
+            text_content = self._extract_text(payload)
 
             # Stale pattern check
             stale = self._check_stale(text_content)
@@ -661,6 +697,14 @@ class DriftDetector:
         if len(memories) < 2:
             return []
 
+        # H223: cap the comparison set (newest first) — the pairwise check
+        # below is O(n²) in time and vector memory and blocks the caller for
+        # the whole computation.
+        if len(memories) > MAX_CONTRADICTION_CANDIDATES:
+            memories = sorted(
+                memories, key=self._contradiction_sort_key, reverse=True,
+            )[:MAX_CONTRADICTION_CANDIDATES]
+
         # Extract texts and IDs
         texts = []
         ids = []
@@ -670,9 +714,12 @@ class DriftDetector:
                 ids.append(str(len(ids)))
                 continue
             payload = m.get("payload", m) if isinstance(m, dict) else {"content": str(m)}
-            content = payload.get("content", "")
-            if not content:
-                content = f"{payload.get('user_content', '')} → {payload.get('assistant_content', '')}"
+            # H222: reuse the shared v1.8.0 normalization. A dict `content` used
+            # to be appended verbatim (it is truthy) → the embedder received
+            # dicts (raising, silently swallowed to []) and texts[i][:200]
+            # would raise TypeError, disabling contradiction detection for the
+            # current payload format.
+            content = self._extract_text(payload)
             if content:
                 texts.append(content)
                 if isinstance(m, dict) and "id" in m:
@@ -696,11 +743,49 @@ class DriftDetector:
 
         contradictions = []
 
+        # H223: vectorized pairwise similarity when numpy is available; the
+        # per-pair scalar path below is kept as a fallback so behaviour is
+        # unchanged without numpy. The comparison set is already capped.
+        sim_matrix = None
+        if _np is not None:
+            try:
+                mat = _np.asarray(embeddings, dtype=float)
+                norms = _np.linalg.norm(mat, axis=1, keepdims=True)
+                norms[norms == 0] = 1.0
+                unit = mat / norms
+                sim_matrix = unit @ unit.T
+            except Exception:
+                sim_matrix = None
+
         for i in range(len(texts)):
             for j in range(i + 1, len(texts)):
-                sim = self._compute_similarity(embeddings[i], embeddings[j])
+                if sim_matrix is not None:
+                    sim = float(sim_matrix[i][j])
+                else:
+                    sim = self._compute_similarity(embeddings[i], embeddings[j])
 
-                if sim >= near_dup_threshold:
+                sent_a = self._parse_sentiment(texts[i])
+                sent_b = self._parse_sentiment(texts[j])
+                sent_diff = abs(sent_a - sent_b)
+
+                # H224: sentiment-opposition is evaluated BEFORE the near-dup
+                # short-circuit. Genuine contradictions are typically
+                # near-identical text differing by one polarity word, so their
+                # cosine similarity sits above near_dup_threshold — those exact
+                # pairs were mislabeled near_duplicate (sentiment_diff 0.0) and
+                # never reported as contradictions.
+                if sim >= contradiction_threshold and sent_diff > 0.3:
+                    contradictions.append({
+                        "type": "contradiction",
+                        "id_a": ids[i],
+                        "id_b": ids[j],
+                        "content_a": texts[i][:200],
+                        "content_b": texts[j][:200],
+                        "similarity": round(sim, 4),
+                        "sentiment_diff": round(sent_diff, 4),
+                        "score": round(sim * sentiment_weight * sent_diff, 4),
+                    })
+                elif sim >= near_dup_threshold:
                     contradictions.append({
                         "type": "near_duplicate",
                         "id_a": ids[i],
@@ -708,27 +793,9 @@ class DriftDetector:
                         "content_a": texts[i][:200],
                         "content_b": texts[j][:200],
                         "similarity": round(sim, 4),
-                        "sentiment_diff": 0.0,
+                        "sentiment_diff": round(sent_diff, 4),
                         "score": round(sim, 4),
                     })
-                elif sim >= contradiction_threshold:
-                    # Check for opposing sentiment
-                    sent_a = self._parse_sentiment(texts[i])
-                    sent_b = self._parse_sentiment(texts[j])
-                    sent_diff = abs(sent_a - sent_b)
-
-                    # A real contradiction requires meaningful sentiment polarity
-                    if sent_diff > 0.3:
-                        contradictions.append({
-                            "type": "contradiction",
-                            "id_a": ids[i],
-                            "id_b": ids[j],
-                            "content_a": texts[i][:200],
-                            "content_b": texts[j][:200],
-                            "similarity": round(sim, 4),
-                            "sentiment_diff": round(sent_diff, 4),
-                            "score": round(sim * sentiment_weight * sent_diff, 4),
-                        })
 
         # Sort by score descending
         contradictions.sort(key=lambda x: x["score"], reverse=True)

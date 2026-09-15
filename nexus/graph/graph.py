@@ -358,12 +358,19 @@ class SkillGraph:
             return []
 
         results: list[dict] = []
+        # H220: shared `visited` set (seeded with fact_id), mirroring the
+        # contradicts traversal. The previous `{n for n in path}` check
+        # allocated a set per neighbor, only guarded the current path, and
+        # re-emitted / re-explored nodes reachable via several paths
+        # (exponential in a branching graph).
+        visited: set[str] = set()
 
         def _dfs(current: str, path: list[str], depth: int) -> None:
             if depth > max_depth:
                 return
             for _, neighbor, data in self._graph.edges(current, data=True):
-                if data.get("relation") == EdgeRelation.SUPPORTS.value and neighbor not in {n for n in path}:
+                if data.get("relation") == EdgeRelation.SUPPORTS.value and neighbor not in visited:
+                    visited.add(neighbor)
                     new_path = path + [neighbor]
                     results.append({
                         "fact_id": neighbor,
@@ -373,5 +380,6 @@ class SkillGraph:
                     })
                     _dfs(neighbor, new_path, depth + 1)
 
+        visited.add(fact_id)
         _dfs(fact_id, [fact_id], 1)
         return results

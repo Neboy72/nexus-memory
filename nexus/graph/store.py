@@ -41,6 +41,21 @@ DEFAULT_COLLECTION: str = get_collection()
 MAX_PAGE_SIZE = 1000
 
 
+def _default_vector_size() -> int:
+    """Resolve the canonical embedding dimension for this collection.
+
+    Mirrors ``nexus.staging._detect_vector_size()`` (the canonical-collection
+    bootstrap) so an edge collection created here can never disagree with the
+    size used for the real embeddings. Falls back to 1024 (Voyage) when the
+    provider cannot be detected, matching ``nexus/events.py``.
+    """
+    try:
+        from nexus.staging import _detect_vector_size
+        return int(_detect_vector_size())
+    except Exception:
+        return 1024
+
+
 class EdgeStoreError(Exception):
     """Base exception for EdgeStore operations."""
 
@@ -115,22 +130,52 @@ class EdgeStore:
 
     # ── Initialization ──────────────────────────────────────────────────────
 
-    def initialize(self) -> None:
-        """Verify Qdrant connection and collection existence."""
+    def initialize(self) -> bool:
+        """Verify the Qdrant connection and ensure the collection exists.
+
+        H225: this used to only *warn* that the collection "will be created on
+        first write" — while nothing in this module ever created it, so a
+        caller believed ``initialize()`` succeeded and the first
+        ``set_payload``/``scroll`` failed with a Qdrant "collection not
+        found". The collection is now created here (idempotent) with the same
+        vector config as the canonical bootstrap path.
+
+        Returns:
+            ``True`` if the collection exists / was created, ``False`` if it
+            could not be created.
+
+        Raises:
+            EdgeStoreError: If Qdrant is unreachable.
+        """
         try:
-            collections = self.client.get_collections().collections
-            collection_names = {c.name for c in collections}
-            if self._collection not in collection_names:
-                _logger.warning(
-                    "Collection '%s' not found — will be created on first write",
-                    self._collection,
-                )
-            _logger.info(
-                "EdgeStore initialized (Qdrant=%s, collection=%s)",
-                self._qdrant_url, self._collection,
-            )
+            exists = self.client.collection_exists(self._collection)
         except Exception as e:
             raise EdgeStoreError(f"Failed to connect to Qdrant: {e}") from e
+
+        if not exists:
+            size = _default_vector_size()
+            try:
+                self.client.create_collection(
+                    collection_name=self._collection,
+                    vectors_config=models.VectorParams(
+                        size=size, distance=models.Distance.COSINE,
+                    ),
+                )
+                _logger.info(
+                    "Created Qdrant collection '%s' (%dd Cosine)",
+                    self._collection, size,
+                )
+            except Exception as e:
+                _logger.error(
+                    "Failed to create collection '%s': %s", self._collection, e,
+                )
+                return False
+
+        _logger.info(
+            "EdgeStore initialized (Qdrant=%s, collection=%s)",
+            self._qdrant_url, self._collection,
+        )
+        return True
 
     # ── Payload helpers ─────────────────────────────────────────────────────
 

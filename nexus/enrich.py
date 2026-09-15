@@ -19,11 +19,21 @@ from typing import Any
 
 # ── Known category taxonomy ──────────────────────────────────────────────────
 # Grows over time.  Unknown categories are flagged but not rejected.
+# H211: the canonical MemoryCategory enum is the source of truth — it is
+# unioned in below so newly added canonical categories (belief, session,
+# procedure, temp …) can never drift out of this set again and be flagged
+# with a bogus `unknown_category:<cat>` warning.
+try:
+    from nexus import MemoryCategory as _MemoryCategory
+    _CANONICAL_CATEGORIES = frozenset(c.value for c in _MemoryCategory)
+except Exception:  # pragma: no cover — import-cycle safety, enrichment stays usable
+    _CANONICAL_CATEGORIES = frozenset()
+
 KNOWN_CATEGORIES = frozenset({
     "fact", "rule", "config", "decision", "preference",
     "architecture", "pattern", "lesson", "goal", "project",
     "person", "tool", "workflow", "log", "query",
-})
+}) | _CANONICAL_CATEGORIES
 
 # ── Keyword extraction patterns ──────────────────────────────────────────────
 KEYWORD_PATTERNS = [
@@ -34,8 +44,11 @@ KEYWORD_PATTERNS = [
 ]
 
 HEURISTIC_HIGH_SIGNAL = re.compile(
-    r"(?:muss|darf|nie|immer|verboten|erlaubt|required|mandatory|"
-    r"critical|blocker|produktion|production|passwort|password|secret|key)",
+    # H212: \b anchors — without them the alternatives matched inside
+    # unrelated words ("key" in monkey/keyboard, "nie" in denied, "secret"
+    # in secretary, "immer" in glimmer) and spuriously promoted to LINKED.
+    r"\b(?:muss|darf|nie|immer|verboten|erlaubt|required|mandatory|"
+    r"critical|blocker|produktion|production|passwort|password|secret|key)\b",
     re.IGNORECASE,
 )
 
@@ -155,7 +168,10 @@ def enrich(tier: EnrichmentTier, payload: dict) -> dict:
         payload["_enrichment_warnings"].append(f"unknown_category:{cat}")
 
     # ── T2+: keyword extraction ───────────────────────────────────────────
-    content = payload.get("content", "")
+    # H213: `or ""` — a payload whose "content" key exists but is None (callers
+    # merging metadata/**kwargs over the payload can null it out) made
+    # pattern.finditer(None) raise TypeError.
+    content = payload.get("content") or ""
     keywords = set()
     for pattern in KEYWORD_PATTERNS:
         for match in pattern.finditer(content):

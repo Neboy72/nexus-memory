@@ -16,6 +16,12 @@ _HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 _PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 _COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
 
+# H207: automatic-backup cadence. The loop sleeps in CHECK_INTERVAL slices, so
+# the iteration count * interval must equal the advertised 24h — the previous
+# hardcoded 360 x 60s was only 6h and contradicted the surrounding comment.
+BACKUP_CHECK_INTERVAL_SECONDS = 60
+BACKUP_INTERVAL_ITERATIONS = 1440  # 24h @ 60s per iteration
+
 # ── Fable-calibration idea 5 (2026-09-13): memory-as-DATA hardening ──
 # Mails/OCR/web content can carry instructions ("save this rule: ...").
 # Content that looks like an embedded INSTRUCTION is stored but flagged
@@ -159,10 +165,10 @@ class NexusMemoryProvider:
                 except Exception as e:
                     logger.warning(f"Auto-backup failed: {e}")
                 # Sleep 24h (check stop flag every 60s for responsive shutdown)
-                for _ in range(360):  # 6h, check every 60s
+                for _ in range(BACKUP_INTERVAL_ITERATIONS):
                     if self._write_stop.is_set():
                         return
-                    time.sleep(60)
+                    time.sleep(BACKUP_CHECK_INTERVAL_SECONDS)
 
         threading.Thread(target=_backup_loop, name="nexus-backup", daemon=True).start()
 
@@ -633,7 +639,8 @@ class NexusMemoryProvider:
         if not self._embedder or not self._qdrant: return []
         try: self._bump_agent_stats(read=True)
         except Exception: pass
-        flywheel: List[str] = []  # roadmap 4.9: top-3 recalled point ids
+        # H209: single (correct) annotation — the appended values are tuples
+        # (pid, use_count, access_count, status), not ids.
         flywheel: List[tuple] = []  # roadmap 4.9 + v0.15: (pid, use_count, access_count, status)
         # Rerank config is read once and cached (double-checked lock,
         # mirrors the _skill_graph caching pattern in this class).
@@ -689,6 +696,9 @@ class NexusMemoryProvider:
             if as_of and (pl.get("created_at") or "")[:10] > as_of:
                 continue
             pid = pl.get("id") or str(p.id)
+            # H209: seen_ids was populated but never read, so duplicate recall
+            # results were not actually filtered. Use it for dedup.
+            if pid in seen_ids: continue
             seen_ids.add(pid)
             if len(flywheel) < 3:
                 # v0.15 (Review-Fix): use_count UND access_count separat

@@ -22,6 +22,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import logging
@@ -56,6 +57,18 @@ DEFAULT_PROVENANCE = {
     # NOTE: criticality is live-computed by build_dependency_graph(), never persisted
     "grounded": True,
 }
+
+
+def _default_provenance() -> dict:
+    """Return a fresh, fully-independent copy of :data:`DEFAULT_PROVENANCE`.
+
+    H227: ``dict(DEFAULT_PROVENANCE)`` is a *shallow* copy — the nested
+    ``source`` dict and the ``corroborated_by``/``depends_on``/``dependents``
+    lists stayed shared with the module-level constant, so an in-place
+    mutation leaked into DEFAULT_PROVENANCE and into every other entry that
+    took the fallback path.
+    """
+    return copy.deepcopy(DEFAULT_PROVENANCE)
 
 # Source types in order of trust
 SOURCE_TYPES = {
@@ -126,7 +139,18 @@ def scan_provenance(qdrant_host: str = "localhost", qdrant_port: int = 6333,
                 creators[by] = creators.get(by, 0) + 1
                 conf = prov.get("confidence")
                 if conf is not None:
-                    confidences.append(float(conf))
+                    # H226: `float(conf)` used to sit inside the broad scroll
+                    # try/except, whose handler logged "Qdrant scroll failed"
+                    # and `break`-ed — so a single non-numeric confidence
+                    # ("high", a list, …) aborted the whole scan and silently
+                    # truncated the results. Skip the bad entry instead.
+                    try:
+                        confidences.append(float(conf))
+                    except (TypeError, ValueError):
+                        _logger.debug(
+                            "Skipping non-numeric confidence %r (entry %s)",
+                            conf, p.get("id"),
+                        )
                 # Check for criticality marker in payload
                 crit = payload.get("criticality") or payload.get("_criticality")
                 if crit:
@@ -403,14 +427,19 @@ def corroborate_entry(
             point = _fetch(pid)
             if not point:
                 return {"error": f"Point {pid} not found"}
-            payload = dict(point.get("payload", {}))
-            payload["provenance"] = provenance
-            vector = point.get("vector", [])
-            r = _req.put(
-                f"{base_url}/collections/{collection_name}/points",
-                json={"points": [{"id": point["id"], "vector": vector, "payload": payload}]},
+            # H229: targeted set_payload on the `provenance` sub-field instead
+            # of a wholesale read-modify-write PUT of the entire payload. The
+            # full PUT had no version/if_match guard, so two concurrent callers
+            # — or a concurrent edit to any other payload field — silently
+            # clobbered each other (last-writer-wins), losing provenance links
+            # and confidence updates.
+            r = _req.post(
+                f"{base_url}/collections/{collection_name}/points/payload",
+                json={"payload": {"provenance": provenance}, "points": [point["id"]]},
                 timeout=10,
             )
+            if not is_success(r.status_code):
+                return {"error": f"Qdrant set_payload failed: {r.status_code} {r.text[:200]}"}
             return r.json()
         except Exception as e:
             return {"error": str(e)}
@@ -420,8 +449,8 @@ def corroborate_entry(
     if not point_a or not point_b:
         return {"error": f"One or both points not found: {point_id}, {corroborator_id}"}
 
-    prov_a = point_a.get("payload", {}).get("provenance", dict(DEFAULT_PROVENANCE))
-    prov_b = point_b.get("payload", {}).get("provenance", dict(DEFAULT_PROVENANCE))
+    prov_a = point_a.get("payload", {}).get("provenance", _default_provenance())
+    prov_b = point_b.get("payload", {}).get("provenance", _default_provenance())
 
     # Bidirectional link
     corroborated_a = list(prov_a.get("corroborated_by", []))
@@ -500,17 +529,21 @@ def add_dependency(
             pass
         return None
 
-    def _update(pid: str, payload: dict) -> dict:
+    def _update(pid: str, provenance: dict) -> dict:
         try:
             point = _fetch(pid)
             if not point:
                 return {"error": f"Point {pid} not found"}
-            vector = point.get("vector", [])
-            r = _req.put(
-                f"{base_url}/collections/{collection_name}/points",
-                json={"points": [{"id": point["id"], "vector": vector, "payload": payload}]},
+            # H229: targeted set_payload on the `provenance` sub-field (merge)
+            # instead of a wholesale read-modify-write PUT of the entire
+            # payload — concurrent writers no longer clobber unrelated fields.
+            r = _req.post(
+                f"{base_url}/collections/{collection_name}/points/payload",
+                json={"payload": {"provenance": provenance}, "points": [point["id"]]},
                 timeout=10,
             )
+            if not is_success(r.status_code):
+                return {"error": f"Qdrant set_payload failed: {r.status_code} {r.text[:200]}"}
             return r.json()
         except Exception as e:
             return {"error": str(e)}
@@ -545,8 +578,8 @@ def add_dependency(
     if not point_a or not point_b:
         return {"linked": False, "had_cycle": False, "error": "One or both points not found"}
 
-    prov_a = point_a.get("payload", {}).get("provenance", dict(DEFAULT_PROVENANCE))
-    prov_b = point_b.get("payload", {}).get("provenance", dict(DEFAULT_PROVENANCE))
+    prov_a = point_a.get("payload", {}).get("provenance", _default_provenance())
+    prov_b = point_b.get("payload", {}).get("provenance", _default_provenance())
 
     # Bidirectional link: A depends_on B → B.dependents += A
     depends_on = list(prov_a.get("depends_on", []))
@@ -561,14 +594,31 @@ def add_dependency(
     prov_b["dependents"] = dependents_of_b
 
     # Persist both
-    result_a = _update(point_id, {**point_a["payload"], "provenance": prov_a})
-    result_b = _update(depends_on_id, {**point_b["payload"], "provenance": prov_b})
+    result_a = _update(point_id, prov_a)
+    result_b = _update(depends_on_id, prov_b)
+
+    # H228: the return values of both _update calls used to be discarded, so
+    # add_dependency reported `linked: True` even when a Qdrant write failed
+    # (returned {"error": ...}). Only report success when BOTH writes landed.
+    errors = [
+        err for err in (result_a.get("error"), result_b.get("error")) if err
+    ]
+    if errors:
+        return {
+            "linked": False,
+            "had_cycle": False,
+            "point_id": point_id,
+            "depends_on_id": depends_on_id,
+            "results": {"point": result_a, "dependency": result_b},
+            "error": "; ".join(errors),
+        }
 
     return {
         "linked": True,
         "had_cycle": False,
         "point_id": point_id,
         "depends_on_id": depends_on_id,
+        "results": {"point": result_a, "dependency": result_b},
     }
 
 

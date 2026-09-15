@@ -18,7 +18,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
@@ -115,6 +115,17 @@ def create_event(
     Returns:
         event_id (str) oder None bei Fehler
     """
+    # H214: enforce the EVENT_TYPES contract. Previously any string was stored
+    # verbatim, silently entering the audit trail and then being invisible to
+    # the `event_type` filters in get_events_since() — corrupting the audit
+    # guarantee from the module docstring.
+    if event_type not in EVENT_TYPES:
+        log.error(
+            "❌ Ungültiger Event-Typ '%s' (erlaubt: %s) — Event verworfen",
+            event_type, ", ".join(EVENT_TYPES),
+        )
+        return None
+
     event_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
 
@@ -174,17 +185,24 @@ def get_events(
 ) -> list[dict]:
     """Fetches all events for a belief (chronological order)."""
     all_events: list[dict] = []
-    offset: Optional[str] = None
-    
+    # H215: with order_by the scroll offset is an integer, otherwise a point id.
+    offset: Optional[Any] = None
+
     while True:
         params = {
             "limit": limit if not fetch_all else 200,
             "with_payload": True,
             "filter": {"must": [{"key": "belief_id", "match": {"value": belief_id}}]},
+            # H215: Qdrant scroll order is not chronological (events use random
+            # UUID point ids). Without a server-side order, the non-fetch_all
+            # path truncated the first `limit` raw-scroll points — an arbitrary
+            # slice of the belief's history, not the earliest `limit` events.
+            "order_by": {"key": "event_time", "direction": "asc"},
         }
-        if offset:
+        # `is not None`: with order_by the offset is an integer, and 0 is valid.
+        if offset is not None:
             params["offset"] = offset
-        
+
         r = requests.post(
             f"{QDRANT_URL}/collections/{COLLECTION}/points/scroll",
             json=params,
@@ -193,21 +211,26 @@ def get_events(
         if not is_success(r.status_code):
             log.error(f"❌ Event query failed: {r.status_code}")
             break
-        
+
         data = r.json()["result"]
         batch = [_parse_event(p) for p in data["points"]]
         all_events.extend(batch)
-        
+
         next_offset = data.get("next_page_offset")
-        if not next_offset or not data["points"]:
+        if next_offset is None or not data["points"]:
             break
-        offset = str(next_offset)
-        
+        # H215: keep the native type — with order_by Qdrant returns an integer
+        # offset (str() would send it back as a string and break pagination).
+        offset = next_offset
+
         if not fetch_all and len(all_events) >= limit:
             all_events = all_events[:limit]
             break
     
-    all_events.sort(key=lambda e: e.get("event_time", ""))
+    # H216: `or ""` — _parse_event uses pl.get("event_time"), so a payload
+    # holding the key with a null value yields None; sorting None against str
+    # raised TypeError. Missing keys already defaulted to "".
+    all_events.sort(key=lambda e: e.get("event_time") or "")
     return all_events
 
 
@@ -268,13 +291,19 @@ def get_recent_events(limit: int = 20) -> list[dict]:
         json={
             "limit": limit,
             "with_payload": True,
+            # H217: without order_by the scroll returns `limit` points in
+            # arbitrary id order and the result was merely that arbitrary
+            # subset sorted — not the `limit` most recent events. The
+            # ingested_at datetime index is created in ensure_collection().
+            "order_by": {"key": "ingested_at", "direction": "desc"},
         },
         timeout=10,
     )
     if not is_success(r.status_code):
         return []
     events = [_parse_event(p) for p in r.json()["result"]["points"]]
-    events.sort(key=lambda e: e.get("ingested_at", ""), reverse=True)
+    # H216: `or ""` guards a null ingested_at (payload key present, value None).
+    events.sort(key=lambda e: e.get("ingested_at") or "", reverse=True)
     return events
 
 

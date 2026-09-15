@@ -129,8 +129,13 @@ def _check_explicit_reference(
     wikilinks = WIKILINK_PATTERN.findall(source_content)
     for link in wikilinks:
         link_lower = link.lower()
-        # Match if wikilink contains a key term from target
-        if any(kw in link_lower for kw in target_keywords if len(kw) > 3):
+        # Match if wikilink contains a key term from target.
+        # H202: boundary-aware match — the previous bare substring test
+        # (`kw in link_lower`) made e.g. "open" match inside "[[OpenAir]]".
+        if any(
+            re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", link_lower)
+            for kw in target_keywords if len(kw) > 3
+        ):
             return {
                 "relation": "depends_on",
                 "confidence": 0.95,
@@ -148,7 +153,9 @@ def _check_explicit_reference(
     # 2. "siehe" / "vgl." / "see also" patterns
     if SEE_ALSO_PATTERN.search(source_content):
         # Check if a key target term appears nearby
-        for kw in list(target_keywords)[:5]:
+        # H203: sorted() — a set slice depends on PYTHONHASHSEED and made
+        # classification nondeterministic between runs.
+        for kw in sorted(target_keywords)[:5]:
             # Look for pattern like "siehe [keyword]" in source
             nearby_pattern = re.compile(
                 rf"\b(siehe|vgl\.?|see also)\b[^.]{{0,80}}{re.escape(kw)}",
@@ -163,7 +170,9 @@ def _check_explicit_reference(
 
     # 3. Dependency pattern (requires, depends on, based on)
     if DEPENDENCY_PATTERN.search(source_content):
-        for kw in list(target_keywords)[:5]:
+        # H203: sorted() — a set slice depends on PYTHONHASHSEED and made
+        # classification nondeterministic between runs.
+        for kw in sorted(target_keywords)[:5]:
             if re.search(r'\b' + re.escape(kw) + r'\b', source_lower) and len(kw) > 4:
                 return {
                     "relation": "depends_on",
@@ -182,32 +191,52 @@ def _check_contradiction(source_content: str, target_content: str) -> Optional[d
     source_lower = source_content.lower()
     target_lower = target_content.lower()
 
-    # Explicit contradiction keywords
-    # Note: German contradiction keywords are intentional — they enable
-    # German-language contradiction detection alongside English patterns.
-    # Extend with additional languages as needed.
-    contradicts_keywords = [
-        r"\b(but|however|contrary|instead|actually|contradicts)\b",
-        r"\b(widerspricht|aber|jedoch|stattdessen|tatsächlich)\b",
-    ]
-
-    has_contra_source = any(
-        re.search(p, source_lower) for p in contradicts_keywords
+    # H204: two signal classes. An *explicit* contradiction marker is strong
+    # evidence on its own; the soft, extremely common discourse words
+    # ("but"/"however"/"aber"/"jedoch") are not — they appear in ordinary
+    # prose of the same domain, so they only count behind a much higher
+    # shared-topic gate. That gate runs before the same-category/overlap
+    # branches below, so an over-permissive test mislabels plain prose.
+    explicit_marker = re.compile(
+        r"\b(contradicts?|widerspruch|widerspricht|kontra)\b",
+        re.IGNORECASE,
     )
-    has_contra_target = any(
-        re.search(p, target_lower) for p in contradicts_keywords
+    soft_marker = re.compile(
+        r"\b(but|however|contrary|instead|actually|aber|jedoch|stattdessen|tatsächlich)\b",
+        re.IGNORECASE,
     )
 
-    if has_contra_source or has_contra_target:
-        # Must share some topic to be a meaningful contradiction
-        shared = set(re.findall(r"\b[a-zA-ZäöüßÄÖÜ]{5,}\b", source_lower)) & \
-                 set(re.findall(r"\b[a-zA-ZäöüßÄÖÜ]{5,}\b", target_lower))
-        if len(shared) >= 2:
-            return {
-                "relation": "contradicts",
-                "confidence": 0.75,
-                "reason": f"Contradiction keywords + shared topics ({', '.join(list(shared)[:3])})",
-            }
+    has_explicit = bool(
+        explicit_marker.search(source_lower) or explicit_marker.search(target_lower)
+    )
+    has_soft = bool(
+        soft_marker.search(source_lower) or soft_marker.search(target_lower)
+    )
+
+    if not (has_explicit or has_soft):
+        return None
+
+    shared = set(re.findall(r"\b[a-zA-ZäöüßÄÖÜ]{5,}\b", source_lower)) & \
+             set(re.findall(r"\b[a-zA-ZäöüßÄÖÜ]{5,}\b", target_lower))
+
+    # Explicit marker: 0.75 with at least two shared topic tokens.
+    if has_explicit and len(shared) >= 2:
+        return {
+            "relation": "contradicts",
+            "confidence": 0.75,
+            "reason": f"Explicit contradiction marker + shared topics "
+                      f"({', '.join(sorted(shared)[:3])})",
+        }
+    # Soft marker alone: only with substantially stronger shared-topic
+    # evidence (>= 5 shared tokens) and a lower confidence — 0.75 requires
+    # the explicit marker.
+    if has_soft and len(shared) >= 5:
+        return {
+            "relation": "contradicts",
+            "confidence": 0.55,
+            "reason": f"Weak contradiction cue + strong topic overlap "
+                      f"({', '.join(sorted(shared)[:3])})",
+        }
 
     return None
 
@@ -258,19 +287,26 @@ def _check_supersedes(
     return None
 
 
+# H205: guard — with only 1–2 distinct keywords a single shared long word
+# trivially produced a score of 1.0 and cleared the 0.80 "references"
+# threshold. Both sides must carry a minimal keyword mass to be comparable.
+MIN_KEYWORDS_FOR_OVERLAP = 3
+
+
 def _keyword_overlap(text_a: str, text_b: str) -> float:
-    """Compute the Jaccard-like keyword overlap ratio.
+    """Compute the Jaccard similarity of the two keyword sets.
 
     Only considers words ≥ 4 chars (filters out stop words implicitly).
+    Jaccard = ``|A ∩ B| / |A ∪ B|``. The previous implementation divided by
+    ``min(len)`` — a *coverage* ratio, not Jaccard — which returned 1.0
+    whenever one set was a subset of the other (H205).
     """
     words_a = set(re.findall(r"\b[a-zA-ZäöüßÄÖÜ]{4,}\b", text_a.lower()))
     words_b = set(re.findall(r"\b[a-zA-ZäöüßÄÖÜ]{4,}\b", text_b.lower()))
 
-    if not words_a or not words_b:
+    if len(words_a) < MIN_KEYWORDS_FOR_OVERLAP or len(words_b) < MIN_KEYWORDS_FOR_OVERLAP:
         return 0.0
 
     intersection = words_a & words_b
-    # Weighted: ratio of intersection to the SMALLER set (avoids false low for same-size)
-    # If sets are very different sizes, use intersection/min(len) to find coverage
-    smaller = min(len(words_a), len(words_b))
-    return len(intersection) / smaller if smaller > 0 else 0.0
+    union = words_a | words_b
+    return len(intersection) / len(union) if union else 0.0

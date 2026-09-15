@@ -66,6 +66,32 @@ class EdgeStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class EdgeSchemaError(ValueError):
+    """Raised when a stored edge entry is malformed or from an older schema.
+
+    H221: the deserializers used direct indexing (``entry["edge_id"]``), so a
+    partially migrated / older-schema payload surfaced as an opaque KeyError
+    deep inside the store's scroll loop. This dedicated error carries the
+    offending key and the edge/source context instead.
+    """
+
+
+def _require_edge_key(
+    entry: dict[str, Any],
+    key: str,
+    *,
+    source_fact_id: str = "",
+) -> Any:
+    """Return ``entry[key]`` or raise :class:`EdgeSchemaError` with context."""
+    if key not in entry:
+        raise EdgeSchemaError(
+            f"Malformed edge entry: missing required key '{key}' "
+            f"(edge_id={entry.get('edge_id', '<none>')!r}, "
+            f"source_fact_id={source_fact_id!r})"
+        )
+    return entry[key]
+
+
 # ── Edge Dataclass ─────────────────────────────────────────────────────────
 
 
@@ -133,10 +159,10 @@ class Edge:
     ) -> "Edge":
         """Deserialize from a Qdrant-Payload entry."""
         return cls(
-            edge_id=entry["edge_id"],
+            edge_id=_require_edge_key(entry, "edge_id", source_fact_id=source_fact_id),
             source_fact_id=source_fact_id,
-            target_fact_id=entry["target_fact_id"],
-            relation=entry["relation"],
+            target_fact_id=_require_edge_key(entry, "target_fact_id", source_fact_id=source_fact_id),
+            relation=_require_edge_key(entry, "relation", source_fact_id=source_fact_id),
             status=entry.get("status", EdgeStatus.ACTIVE.value),
             created_at=entry.get("created_at", ""),
             updated_at=entry.get("updated_at", ""),
@@ -157,10 +183,10 @@ class Edge:
     def from_dict(cls, d: dict) -> "Edge":
         """Legacy: reconstruct from dict (for migration / tests)."""
         return cls(
-            edge_id=d["edge_id"],
+            edge_id=_require_edge_key(d, "edge_id", source_fact_id=d.get("source_fact_id", "")),
             source_fact_id=d.get("source_fact_id", ""),
-            target_fact_id=d["target_fact_id"],
-            relation=d["relation"],
+            target_fact_id=_require_edge_key(d, "target_fact_id", source_fact_id=d.get("source_fact_id", "")),
+            relation=_require_edge_key(d, "relation", source_fact_id=d.get("source_fact_id", "")),
             status=d.get("status", EdgeStatus.ACTIVE.value),
             created_at=d.get("created_at", ""),
             updated_at=d.get("updated_at", ""),
