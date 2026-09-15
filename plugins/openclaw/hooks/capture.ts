@@ -14,7 +14,6 @@ import { enqueueCapture, drainQueue } from "./capture-retry-queue.ts"
  * centroids on a CLEAR match; else 'default'. Fail-open everywhere.
  */
 async function inferCaptureScope(
-  embedder: Embedder,
   vector: number[],
   centroidCache: ScopeCentroidCache | undefined,
   manualScope: string,
@@ -169,7 +168,7 @@ export function buildCaptureHandler(
       // else 'default'. Fail-open, zero config, zero LLM cost.
       payload = {
         ...payload,
-        scope: await inferCaptureScope(embedder, vector, centroidCache, cfg.scope),
+        scope: await inferCaptureScope(vector, centroidCache, cfg.scope),
       }
 
       await qdrantClient.upsert(id, vector, payload)
@@ -190,11 +189,7 @@ export function buildCaptureHandler(
       log.error("capture failed", err)
       // Retry-Queue (Astra-R6 P1): nichts geht verloren — dieselbe ID + Payload
       // (mit inferiertem Scope) in die Warteschlange, Drain beim nächsten Versuch.
-      try {
-        enqueueCapture({ id, text: content, payload })
-      } catch {
-        // Queue selbst kaputt → alter Zustand (nur Log)
-      }
+      enqueueCapture({ id, text: content, payload })
     }
   }
 }

@@ -31,7 +31,11 @@ function dot(a: number[], b: number[]): number {
   return s;
 }
 
-/** In-place L2-normalize; returns null for zero/odd-dim vectors. */
+/**
+ * L2-normalize into a NEW array (the input is left untouched); returns null
+ * for a (near-)zero vector. Dimension mismatches are NOT handled here —
+ * callers skip those before calling.
+ */
 function normalize(v: number[]): number[] | null {
   let mag = 0;
   for (const x of v) mag += x * x;
@@ -161,6 +165,13 @@ export class ScopeCentroidCache {
   }
 }
 
+/**
+ * Closest centroid by cosine similarity.
+ *
+ * Centroids produced by `fetchCentroids` are ALREADY L2-normalized (each
+ * source vector and then the summed centroid are normalized there), so the
+ * dot product below IS the cosine similarity — no per-centroid re-normalization.
+ */
 function closestScope(
   vector: number[],
   cents: Centroids,
@@ -171,9 +182,7 @@ function closestScope(
   let bestSim = -Infinity
   let second = -Infinity
   for (const [scope, c] of Object.entries(cents)) {
-    const cn = normalize(c)
-    if (!cn) continue
-    const sim = dot(norm, cn)
+    const sim = dot(norm, c)
     if (sim > bestSim) {
       second = bestSim
       best = scope
@@ -222,7 +231,13 @@ export function prefetchFilterScopes(
   return null // ambiguous → no gating
 }
 
-/** Same normalization contract as the server: [a-z0-9-], max 40, fail-open. */
+/**
+ * Normalize a scope for the write path: trim, lowercase, then accept only
+ * `[a-z0-9][a-z0-9-]{0,39}` (starts alphanumeric, at most 40 chars). Any
+ * absent, empty or malformed input becomes "default" — fail-open, so an
+ * invalid scope never blocks a write. Returns a NEW string; the input is
+ * never modified.
+ */
 export function normalizeScope(scope: unknown): string {
   if (typeof scope === "string") {
     const s = scope.trim().toLowerCase()
