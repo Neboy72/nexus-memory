@@ -36,7 +36,7 @@ def _provider():
     prov._embed_cache_lock = threading.Lock()
     prov._hermes_home = ""
     prov._write_stop = threading.Event()
-    prov._embedder = SimpleNamespace(dim=1024, embed=lambda t: [0.0] * 1024)
+    prov._embedder = SimpleNamespace(dim=1024, embed=lambda t, is_query=True: [0.0] * 1024)
     client = MagicMock()
     client.query_points.return_value = SimpleNamespace(points=[])
     prov._qdrant = client

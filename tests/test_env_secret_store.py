@@ -110,7 +110,13 @@ class TestApiKeyValidation:
         # secret-writing path on every interpreter (with or without the
         # optional 'openai' package installed).
         monkeypatch.setattr(cw, "_check_pip_package", lambda package: True)
-        result = cw.apply_choice("openai", "sk-validkey123")
+        # apply_choice() writes the key DIRECTLY into os.environ (wizard
+        # semantics, review fix MEDIUM :21) — pre-registering it here makes
+        # monkeypatch the owner, so the value is removed again after this
+        # test and cannot leak into later tests (live-key reads made this
+        # leak visible: a later _Embedder() init picked the fake key up).
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-w19-placeholder")
+        result = cw.apply_choice("openai", "sk-w19-placeholder")
         assert result.get("provider") == "openai"
         assert (tmp_path / ".env").exists()
 

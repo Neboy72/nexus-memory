@@ -197,7 +197,8 @@ class TestRecallRerankIntegration:
         prov = _make_provider()
         prov._rerank_cfg = cfg
         prov._rerank_lock = threading.Lock()
-        prov._embedder = SimpleNamespace(embed=lambda q: [0.0], dim=2)
+        # embed() gained an is_query mode flag (query vs. document embedding)
+        prov._embedder = SimpleNamespace(embed=lambda q, is_query=True: [0.0], dim=2)
         client = MagicMock()
         client.query_points.side_effect = (
             lambda collection_name, query, limit: SimpleNamespace(

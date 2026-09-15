@@ -186,7 +186,13 @@ def _load_state_unlocked() -> Dict[str, Any]:
         log.warning("fuel: budget state has invalid spend %r — treating as damaged",
                     parsed.get("spent_usd"))
         return _damaged_state()
-    return {"year_month": parsed["year_month"], "spent_usd": spend}
+    result: Dict[str, Any] = {"year_month": parsed["year_month"], "spent_usd": spend}
+    # Carry the notification latch across reads: rebuilding the state dropped
+    # it, so budget_notification_pending() could never observe its own marker
+    # (and every writer silently erased it). Only this known field is kept.
+    if parsed.get("notified_month"):
+        result["notified_month"] = parsed["notified_month"]
+    return result
 
 
 def _persist_state_unlocked(state: Dict[str, Any]) -> bool:
@@ -258,6 +264,11 @@ def fuel_exhausted_info() -> dict:
         spent = float(state.get("spent_usd", 0.0))
     except Exception as exc:
         log.warning("fuel: exhausted-info read failed (%s) — reporting exhausted", exc)
+    # A corrupt ledger reads as inf; keep the reported value finite so the
+    # JSON serializer never breaks — reported as 0, while budget_exhausted()
+    # still flags the month as exhausted.
+    if not math.isfinite(spent):
+        spent = 0.0
     month = _current_month()
     return {
         "exhausted": budget_exhausted(),
@@ -268,15 +279,25 @@ def fuel_exhausted_info() -> dict:
     }
 
 
+def _mark_budget_notified_unlocked() -> None:
+    """Latch the notification marker assuming the caller HOLDS ``_budget_lock``.
+
+    Split out so a read-check-write can happen atomically inside one lock
+    acquisition (``_budget_lock`` opens a fresh fd and re-flocking it from the
+    same process would deadlock, so it must not be entered twice).
+    """
+    state = _load_state_unlocked()
+    if state.get("notified_month") != _current_month():
+        state["notified_month"] = _current_month()
+        _persist_state_unlocked(state)
+
+
 def _mark_budget_notified() -> None:
     """Latch the one-shot 'budget reached' notification per month (a marker
     field in the fuel state; cleared automatically by month turnover)."""
     try:
         with _budget_lock():
-            state = _load_state_unlocked()
-            if state.get("notified_month") != _current_month():
-                state["notified_month"] = _current_month()
-                _persist_state_unlocked(state)
+            _mark_budget_notified_unlocked()
     except Exception as exc:
         log.warning("fuel: budget-notify marker failed: %s", exc)
 
@@ -286,14 +307,18 @@ def budget_notification_pending() -> bool:
     (drives the chat notice; free stations keep running regardless)."""
     if not budget_exhausted():
         return False
+    already = True  # unreadable state → never spam
     try:
+        # Read-check-write inside ONE lock hold: otherwise two concurrent
+        # callers could both read "not yet notified" and both return True.
         with _budget_lock():
             state = _load_state_unlocked()
-        already = state.get("notified_month") == _current_month()
-    except Exception:
-        already = True  # unreadable state → never spam
-    if not already:
-        _mark_budget_notified()
+            already = state.get("notified_month") == _current_month()
+            if not already:
+                _mark_budget_notified_unlocked()
+    except Exception as exc:
+        log.warning("fuel: budget-notify marker failed: %s", exc)
+        return False
     return not already
 
 

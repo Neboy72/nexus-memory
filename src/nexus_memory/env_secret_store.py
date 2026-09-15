@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -91,11 +92,19 @@ def _parse_env_text(text: str) -> Dict[str, str]:
 
 
 def _fix_dir_permissions(config_dir: Path) -> None:
-    """Best-effort tightening of the config directory to 0700."""
+    """Tighten the config directory to 0700.
+
+    A failure is surfaced as a warning (never silent) — the restrictive mode
+    is a security guarantee, so an inability to enforce it must be observable.
+    """
     try:
         os.chmod(config_dir, DIR_MODE)
-    except OSError:
-        pass
+    except OSError as exc:
+        warnings.warn(
+            f"could not set {DIR_MODE:04o} on config dir {config_dir}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 def write_env_key(env_path: Path, key_env: str, api_key: str) -> None:
@@ -134,14 +143,28 @@ def write_env_key(env_path: Path, key_env: str, api_key: str) -> None:
         dir=str(config_dir), prefix=".env-tmp-", suffix=".tmp"
     )
     tmp_path = Path(tmp_name)
+    # Own the raw descriptor until os.fdopen() takes it over — otherwise a
+    # failure in fchmod/fdopen would leak the open fd (mkstemp does not
+    # register it for cleanup).
+    fd_owned = True
     try:
-        os.fchmod(fd, FILE_MODE)
+        # os.fchmod is unavailable on Windows (AttributeError) — only call it
+        # where the platform provides it.
+        fchmod = getattr(os, "fchmod", None)
+        if fchmod is not None and os.name != "nt":
+            fchmod(fd, FILE_MODE)
         with os.fdopen(fd, "w") as f:
+            fd_owned = False  # the file object now closes the fd
             f.write(body + "\n")
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, env_path)
     except Exception:
+        if fd_owned:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         tmp_path.unlink(missing_ok=True)
         raise
 
@@ -149,8 +172,12 @@ def write_env_key(env_path: Path, key_env: str, api_key: str) -> None:
     # with a wide umask, and enforce 0600 on the freshly replaced file.
     try:
         os.chmod(env_path, FILE_MODE)
-    except OSError:
-        pass
+    except OSError as exc:
+        warnings.warn(
+            f"could not enforce {FILE_MODE:04o} on {env_path}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 def read_env_key(env_path: Path, key_env: str) -> str:

@@ -137,7 +137,7 @@ class TestMcpServerIntegration:
         store._scope_centroids._cache = {"voice": _unit(0)}
         store._scope_centroids._cache_at = float("inf")  # never refresh
 
-        async def fake_embed(self, text):
+        async def fake_embed(self, text, is_query=True):
             return _unit(0)
         monkeypatch.setattr(mcp.MemoryStore, "_embed", fake_embed)
 
@@ -164,7 +164,7 @@ class TestMcpServerIntegration:
         store._scope_centroids._cache = {"voice": _unit(0)}
         store._scope_centroids._cache_at = float("inf")
 
-        async def fake_embed(self, text):
+        async def fake_embed(self, text, is_query=True):
             return _unit(0)
         monkeypatch.setattr(mcp.MemoryStore, "_embed", fake_embed)
 
@@ -192,7 +192,7 @@ class TestMcpServerIntegration:
         store._scope_centroids._cache = {}  # no scopes anywhere
         store._scope_centroids._cache_at = float("inf")
 
-        async def fake_embed(self, text):
+        async def fake_embed(self, text, is_query=True):
             return _unit(0)
         monkeypatch.setattr(mcp.MemoryStore, "_embed", fake_embed)
 

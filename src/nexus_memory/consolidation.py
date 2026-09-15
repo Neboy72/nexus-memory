@@ -289,7 +289,7 @@ def _parse_verdict(raw: str) -> str:
 def _embed_via_store(store, text: str) -> list:
     """Sync embedding via the store's EmbeddingProvider (daemon thread has no loop)."""
     import asyncio
-    coro = store._embedder.embed(text)
+    coro = store._embedder.embed(text, is_query=False)  # fact text = document
     return asyncio.run(coro)
 
 

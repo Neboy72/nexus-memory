@@ -159,16 +159,25 @@ class TestE3CloudFallbackWhitelist:
         """Integration: a whitelist that omits the preferred provider must not
         open the fallback door for that provider."""
         monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "")
+        # Keys are read live from the environment now (module constant is only
+        # a fallback), so an exported key must be cleared too.
+        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
         monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "openai")
         with pytest.raises(RuntimeError):
             EmbeddingProvider(preferred="voyage")
 
     def test_provider_in_whitelist_allows_fallback(self, monkeypatch):
         monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "")
+        # Keys are read live from the environment now (module constant is only
+        # a fallback), so an exported key must be cleared too — otherwise a
+        # key left in os.environ by another test is picked up here.
+        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
         monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "voyage")
         # Auto-detect runs; with everything blocked it lands on MiniLM.
         monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "")
         monkeypatch.setattr(embeddings_module, "GOOGLE_API_KEY", "")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("JINA_API_KEY", raising=False)
         monkeypatch.setattr(
             "requests.get",

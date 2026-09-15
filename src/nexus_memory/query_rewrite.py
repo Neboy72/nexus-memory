@@ -62,9 +62,13 @@ def _clean_output(txt: str) -> str:
     t = t.strip().strip('"').strip("'")
     if t:
         t = t.splitlines()[0].strip()
-    # Strip a trailing " - explanation" tail.
-    t = re.sub(r"\s*[-–]\s*[^\"']{12,}$", "", t)
-    if re.search(r"(antwort|here (is|'s)|hier ist|suchanfrage|reformuliert|suchbegriff)", t, re.IGNORECASE):
+    # Strip a trailing " - explanation" tail. Whitespace around the dash is
+    # REQUIRED so hyphens inside compounds ("rfid-rueckgabe") survive.
+    t = re.sub(r"\s+[-–]\s+[^\"']{12,}$", "", t)
+    # Meta-discard only when the meta word STARTS the output (optionally
+    # followed by a colon). A substring hit ("beantworten") must not discard
+    # an otherwise good rewrite.
+    if re.match(r"^(antwort|here (is|'s)|hier ist|suchanfrage|reformuliert|suchbegriff)\s*:?", t, re.IGNORECASE):
         colon = t.find(":")
         tail = t[colon + 1:].strip() if colon >= 0 else ""
         if tail and len(tail) >= 2 and not re.search(r"(antwort|hier ist)", tail, re.IGNORECASE):
@@ -103,8 +107,11 @@ def rewrite_query(query: str, generate_fn) -> str:
     # Too short to matter, too long to trust.
     if len(q) < _MIN_SAVE_LEN or len(q) > _MAX_ORIG:
         return q
-    # Short numeric queries (ports, IDs): never rewrite ("port 9220").
-    if re.search(r"\d", q) and len(q) < 60:
+    # Predominantly numeric queries (IDs, ports, hashes): never rewrite.
+    # Only a query made up ENTIRELY of digits and separators is exempt; a
+    # query that merely contains a number ("fehler 404 beim login") is still
+    # rewritten by the LLM.
+    if re.fullmatch(r"[\d\s:./#-]+", q.strip()):
         return q
     if generate_fn is None:
         return q

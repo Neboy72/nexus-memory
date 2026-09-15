@@ -164,9 +164,9 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
     """Read model config from Hermes config.yaml and .env."""
     config: Dict[str, str] = {"model": "", "base_url": "", "api_key": ""}
 
+    config_path = f"{hermes_home}/config.yaml"
     try:
         import yaml
-        config_path = f"{hermes_home}/config.yaml"
         with open(config_path) as f:
             cfg = yaml.safe_load(f) or {}
 
@@ -185,8 +185,8 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
                     config["base_url"] = p.get("base_url", "")
                 if not config["api_key"]:
                     config["api_key"] = p.get("api_key", "")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("EntityExtractor: config read failed (%s): %s", config_path, exc)
 
     env_path = f"{hermes_home}/.env"
     import os
@@ -203,8 +203,8 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
                             config["api_key"] = val
                         elif key == "OPENAI_API_KEY" and not config["api_key"]:
                             config["api_key"] = val
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("EntityExtractor: .env read failed (%s): %s", env_path, exc)
 
     if not config["base_url"]:
         config["base_url"] = "http://localhost:11434/v1"
@@ -336,6 +336,26 @@ def _llm_extract_entities(
                 confidence=conf,
             ))
 
+        # Same cap + pairwise endpoint consistency as the heuristic path:
+        # dedupe by name (case-insensitive), cap entities at 10, then keep at
+        # most 8 relationships whose BOTH endpoints survived the entity cap.
+        deduped: List[Entity] = []
+        seen_entity_names: set = set()
+        for e in entities:
+            key = e.name.lower()
+            if key in seen_entity_names:
+                continue
+            seen_entity_names.add(key)
+            deduped.append(e)
+            if len(deduped) >= 10:
+                break
+        kept_names = {e.name.lower() for e in deduped}
+        entities = deduped
+        relationships = [
+            r for r in relationships
+            if r.source.lower() in kept_names and r.target.lower() in kept_names
+        ][:8]
+
         logger.info(
             "EntityExtractor: LLM extracted %d entities, %d relationships",
             len(entities), len(relationships),
@@ -405,9 +425,6 @@ def _heuristic_extract_entities(text: str) -> ExtractionResult:
     entities: List[Entity] = []
     relationships: List[Relationship] = []
     seen_names: set = set()
-
-    # Extract IPs (as attributes, not standalone entities)
-    ips = _IP_PATTERN.findall(text)
 
     # Extract devices
     for m in _DEVICE_KEYWORDS.finditer(text):
