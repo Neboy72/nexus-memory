@@ -139,11 +139,26 @@ class AutoDiscovery:
             Summary dict with stats.
         """
         # 1. Scroll all canonical facts
-        facts = scroll_facts(
-            qdrant_url=self._qdrant_url,
-            collection=self._collection,
-            with_vectors=True,
-        )
+        try:
+            facts = scroll_facts(
+                qdrant_url=self._qdrant_url,
+                collection=self._collection,
+                with_vectors=True,
+            )
+        except RuntimeError as e:
+            # Review #46: matcher raises instead of returning partial/empty —
+            # surface it as a failed run instead of "no facts found".
+            _logger.error("Discovery scroll failed: %s", e)
+            return {
+                "total_facts_scanned": 0,
+                "similarity_queries_run": 0,
+                "candidates_found": 0,
+                "after_dedup": 0,
+                "inserted_active": 0,
+                "inserted_proposed": 0,
+                "errors": [str(e)],
+                "status": "scroll_failed",
+            }
 
         # Filter by category if specified
         if categories:
@@ -183,12 +198,18 @@ class AutoDiscovery:
 
             queries_run += 1
 
-            hits = search_similar_facts(
-                query_vector=vector,
-                qdrant_url=self._qdrant_url,
-                collection=self._collection,
-                top_k=self._top_k + 1,  # +1 because self-match is #1
-            )
+            try:
+                hits = search_similar_facts(
+                    query_vector=vector,
+                    qdrant_url=self._qdrant_url,
+                    collection=self._collection,
+                    top_k=self._top_k + 1,  # +1 because self-match is #1
+                )
+            except RuntimeError as e:
+                # Review #46: record the outage, keep going with other facts.
+                _logger.warning("Discovery search failed for %s: %s", fact_id, e)
+                errors.append(str(e))
+                continue
 
             for hit in hits:
                 hit_id = hit["id"]

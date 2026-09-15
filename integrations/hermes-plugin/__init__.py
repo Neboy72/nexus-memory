@@ -82,6 +82,9 @@ class NexusMemoryProvider:
         self._embed_cache_lock = threading.Lock()
         self._entity_extract_lock = threading.Lock()  # single-flight enrich (1.1)
         self._rerank_lock = threading.Lock()
+        # Review #43: restrictive default — session content must not leak as
+        # "public" unless config.json explicitly opts in.
+        self._default_access_level = "private"
 
     @property
     def name(self) -> str: return "nexus"
@@ -98,6 +101,7 @@ class NexusMemoryProvider:
         self._session_id = session_id; self._hermes_home = kwargs.get("hermes_home", "")
         self._agent_context = kwargs.get("agent_context", "primary")
         cfg = self._load_config(); self._collection = cfg.get("collection_name", _COLLECTION)
+        self._default_access_level = self._load_default_access_level()
         self._qdrant = QdrantClient(host=_HOST, port=_PORT)
         self._embedder = _Embedder()
         self._ensure_collection()
@@ -821,15 +825,17 @@ class NexusMemoryProvider:
             seen = self._extract_hashes = set()
         if h in seen:
             return
+        if not self._entity_extract_lock.acquire(blocking=False):
+            return  # one flight at a time; skipping is better than stacking
+        # Review #42: only mark as seen AFTER the lock is held — otherwise a
+        # skipped text (lock contention) would never be extracted again.
         seen.add(h)
         if len(seen) > 500:
             seen.clear(); seen.add(h)
-        if not self._entity_extract_lock.acquire(blocking=False):
-            return  # one flight at a time; skipping is better than stacking
 
         def _run():
             try:
-                self._extract_entities_from_text(text, source=source)
+                self._extract_entities_from_text(text, source=source, access_level=self._default_access_level)
             except Exception as exc:
                 logger.warning("Auto entity extraction failed: %s", exc)
             finally:
@@ -861,7 +867,7 @@ class NexusMemoryProvider:
         # Text auf 500 Zeichen begrenzen (Kosten + Signal-Rausch-Verhältnis)
         snippet = text[:500]
         try:
-            er = self._extract_entities_from_text(snippet, source="auto-hardware-detection")
+            er = self._extract_entities_from_text(snippet, source="auto-hardware-detection", access_level=self._default_access_level)
             if er.get("entities", 0) > 0:
                 logger.info("Auto-hardware extraction: %d entities aus User-Aussage gespeichert",
                             er.get("entities"))
@@ -869,7 +875,7 @@ class NexusMemoryProvider:
             logger.warning("Hardware-auto-extract failed: %s", exc)
 
     def _extract_entities_from_text(self, text: str, source: str = "nexus_remember",
-                                     access_level: str = "public") -> Dict[str, Any]:
+                                     access_level: Optional[str] = None) -> Dict[str, Any]:
         """Roadmap 1.1/4.1: extract entities + edges from text and store them.
 
         Shared by auto-enrich (nexus_remember) and session-end extraction.
@@ -879,6 +885,10 @@ class NexusMemoryProvider:
         """
         if not text or not text.strip() or not self._qdrant:
             return {"entities": 0, "edges": 0}
+        # Review #43 hardening: an omitted access_level falls back to the
+        # provider default (private) instead of leaking content as public.
+        if access_level is None:
+            access_level = getattr(self, "_default_access_level", "private")
         from nexus_memory.entity_extractor import extract_entities
         result = extract_entities(text[:4000], hermes_home=self._hermes_home)
         if result.is_empty():
@@ -967,7 +977,7 @@ class NexusMemoryProvider:
                         self._upsert(
                             text=fact["text"],
                             category=fact["category"],
-                            access_level="public",
+                            access_level=self._default_access_level,
                             source="hermes-plugin-session-end",
                             confidence=fact["confidence"],
                         )
@@ -993,7 +1003,8 @@ class NexusMemoryProvider:
                 conv_text = " ".join(conv_parts)[:4000]
                 if conv_text:
                     er = self._extract_entities_from_text(
-                        conv_text, source="session-end-entity-extraction"
+                        conv_text, source="session-end-entity-extraction",
+                        access_level=self._default_access_level,
                     )
                     if er.get("entities") or er.get("edges"):
                         logger.info(
@@ -1054,7 +1065,7 @@ class NexusMemoryProvider:
                         metadata: Optional[Dict[str, Any]] = None) -> None:
         if action in ("add", "replace") and content:
             try: self._upsert(text=content, category=(metadata or {}).get("category", "fact"),
-                              access_level="public", source="hermes-builtin")
+                              access_level=self._default_access_level, source="hermes-builtin")
             except Exception as exc: logger.warning("on_memory_write mirror failed: %s", exc)
 
     def _ensure_collection(self) -> None:
@@ -1099,6 +1110,14 @@ class NexusMemoryProvider:
         try:
             with open(os.path.join(self._hermes_home, "nexus", "config.json")) as f: return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError): return {}
+
+    def _load_default_access_level(self) -> str:
+        """Access level for auto-extracted session content (review #43).
+
+        Restrictive by default: only an explicit ``access_level`` in
+        ``~/.hermes/nexus/config.json`` can widen it (e.g. to "public").
+        """
+        return self._load_config().get("access_level", "private")
 
 
 def register(ctx: Any) -> None:

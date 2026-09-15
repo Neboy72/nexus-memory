@@ -261,6 +261,7 @@ class DriftDetector:
                 f"{self.qdrant_url}/collections/{self.collection}/points/scroll",
                 json=body, timeout=10,
             )
+            r.raise_for_status()
             data = r.json().get("result", {})
             batch = data.get("points", [])
             if not batch:
@@ -796,12 +797,16 @@ class DriftDetector:
         if not usage:
             return []
 
-        cutoff = datetime.now() - timedelta(days=days)
+        # Review #49: cutoff must be timezone-aware; a naive cutoff against an
+        # aware ``ts`` raised TypeError, which was swallowed as "unused".
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         unused = []
 
         for memory_id, ts_str in usage.items():
             try:
                 ts = datetime.fromisoformat(ts_str)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
                 if ts < cutoff:
                     unused.append(memory_id)
             except (ValueError, TypeError):
