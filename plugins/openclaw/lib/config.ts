@@ -62,11 +62,19 @@ function assertAllowedKeys(
   }
 }
 
-function resolveEnvVars(value: string): string {
+/**
+ * Expand ${ENV_VAR} references. Fail-closed: a missing — or intentionally
+ * empty — variable is NOT silently resolved to undefined/"" (an empty API
+ * key or a bogus Qdrant URL must break the load, not the first request).
+ * `purpose` names the field so the caller can report which one it was.
+ */
+function resolveEnvVars(value: string, purpose?: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar: string) => {
     const envValue = process.env[envVar]
     if (!envValue) {
-      throw new Error(`Environment variable ${envVar} is not set`)
+      throw new Error(
+        `env var ${envVar} is not set (required for ${purpose ?? "config value"})`,
+      )
     }
     return envValue
   })
@@ -142,11 +150,9 @@ export function parseConfig(raw: unknown): NexusConfig {
 
     let apiKey: string | undefined
     if (typeof emb.apiKey === "string" && emb.apiKey.length > 0) {
-      try {
-        apiKey = resolveEnvVars(emb.apiKey)
-      } catch {
-        apiKey = undefined
-      }
+      // Fail-closed: an unresolvable ${VAR} must surface, not become an
+      // undefined key that silently disables the embedder.
+      apiKey = resolveEnvVars(emb.apiKey, "embedding.apiKey")
     }
 
     embedding = {
@@ -175,14 +181,12 @@ export function parseConfig(raw: unknown): NexusConfig {
     accessLevel = cfg.accessLevel as AccessLevel
   }
 
-  // Parse qdrantUrl with env var resolution
+  // Parse qdrantUrl with env var resolution. Fail-closed: an unresolvable
+  // ${VAR} surfaces with the variable name instead of silently pointing at
+  // the default URL (which would query the wrong store).
   let qdrantUrl = DEFAULT_QDRANT_URL
   if (typeof cfg.qdrantUrl === "string" && cfg.qdrantUrl.trim()) {
-    try {
-      qdrantUrl = resolveEnvVars(cfg.qdrantUrl.trim())
-    } catch {
-      qdrantUrl = DEFAULT_QDRANT_URL
-    }
+    qdrantUrl = resolveEnvVars(cfg.qdrantUrl.trim(), "qdrantUrl")
   }
   // Also check NEXUS_QDRANT_URL env var
   if (qdrantUrl === DEFAULT_QDRANT_URL && process.env.NEXUS_QDRANT_URL) {

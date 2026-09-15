@@ -133,8 +133,21 @@ export interface UpdateCheckResult {
   url: string
 }
 
+// In-flight coalescing: while a check is running every caller shares the same
+// promise, so N concurrent calls still cause exactly ONE GitHub fetch (and
+// exactly one cache write).
+let pendingCheck: Promise<UpdateCheckResult> | null = null
+
 /** Fire-and-forget update check. Resolves once (fresh or from cache). */
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
+  if (pendingCheck) return pendingCheck
+  pendingCheck = checkForUpdateOnce().finally(() => {
+    pendingCheck = null
+  })
+  return pendingCheck
+}
+
+async function checkForUpdateOnce(): Promise<UpdateCheckResult> {
   const local = readInstalledVersion()
   let entry = readCache()
   if (!entry) {

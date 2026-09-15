@@ -55,7 +55,10 @@ export default {
       api.logger.error(
         `nexus: embedding init failed — ${err instanceof Error ? err.message : String(err)}`,
       )
-      return
+      // Re-throw: without an embedder this plugin cannot function, so the
+      // host must treat the registration as FAILED instead of loading a
+      // half-dead memory capability.
+      throw err
     }
 
     const dimensions = embedder.getDimensions()
@@ -93,16 +96,34 @@ export default {
       return buildPromptSection({ availableTools: params.availableTools, nudged: text === null })
     }
 
+    let memoryCapabilityRegistered = false
     if (typeof api.registerMemoryCapability === "function") {
       api.registerMemoryCapability({
         runtime: memoryRuntime,
         promptBuilder,
         flushPlanResolver: noopFlushPlan,
       })
+      memoryCapabilityRegistered = true
     } else {
-      api.registerMemoryRuntime?.(memoryRuntime)
-      api.registerMemoryPromptSection?.(promptBuilder)
-      api.registerMemoryFlushPlan?.(noopFlushPlan)
+      // Deprecated fallback API — register whatever the host still offers.
+      if (typeof api.registerMemoryRuntime === "function") {
+        api.registerMemoryRuntime(memoryRuntime)
+        memoryCapabilityRegistered = true
+      }
+      if (typeof api.registerMemoryPromptSection === "function") {
+        api.registerMemoryPromptSection(promptBuilder)
+        memoryCapabilityRegistered = true
+      }
+      if (typeof api.registerMemoryFlushPlan === "function") {
+        api.registerMemoryFlushPlan(noopFlushPlan)
+        memoryCapabilityRegistered = true
+      }
+    }
+    if (!memoryCapabilityRegistered) {
+      // Neither the native nor the fallback path registered anything: fail
+      // loudly instead of silently loading a memory-less plugin.
+      api.logger.error("nexus: memory capability could not be registered")
+      throw new Error("nexus: memory capability could not be registered")
     }
 
     // Self-organizing memory (Nebo law 07.09: full automation): one shared

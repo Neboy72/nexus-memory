@@ -32,6 +32,68 @@ export function detectProvider(): EmbeddingProvider | null {
   return null
 }
 
+/** Default time budget for a single HTTP call (provider or Qdrant). */
+export const DEFAULT_FETCH_TIMEOUT_MS = 30_000
+
+/** Combine two abort signals, using AbortSignal.any when available. */
+function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
+  const anyFn = (AbortSignal as unknown as {
+    any?: (signals: AbortSignal[]) => AbortSignal
+  }).any
+  return typeof anyFn === "function" ? anyFn([a, b]) : b
+}
+
+/**
+ * fetch() with a hard timeout.
+ *
+ * AbortSignal.timeout(ms) is merged into init.signal so a hung provider or
+ * Qdrant can never leave a request (or ScopeCentroidCache.inflight) pending
+ * forever. On abort the error names the timeout so the cause is obvious.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  ms: number = DEFAULT_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const timeout = AbortSignal.timeout(ms)
+  const signal = init.signal ? mergeSignals(init.signal, timeout) : timeout
+  try {
+    return await fetch(url, { ...init, signal })
+  } catch (err) {
+    if (timeout.aborted) {
+      throw new Error(`${url} timed out after ${ms}ms`)
+    }
+    throw err
+  }
+}
+
+/**
+ * Shared response guard for the provider blocks: fail on HTTP errors with a
+ * truncated body (never auth headers) and on non-JSON payloads.
+ */
+async function parseEmbeddingResponse(
+  resp: Response,
+  provider: string,
+): Promise<Record<string, unknown>> {
+  const text = await resp.text()
+  if (!resp.ok) {
+    throw new Error(
+      `${provider} embedding failed: ${resp.status} ${text.slice(0, 200)}`,
+    )
+  }
+  try {
+    return JSON.parse(text) as Record<string, unknown>
+  } catch {
+    // text() may be empty when the body arrived via a custom/stub Response —
+    // give the Response's own decoder a chance before declaring it non-JSON.
+    try {
+      return (await resp.json()) as Record<string, unknown>
+    } catch {
+      throw new Error(`${provider}: non-JSON response: ${text.slice(0, 200)}`)
+    }
+  }
+}
+
 /**
  * Embedding provider — thin HTTP client for Voyage/OpenAI/Ollama/Google/Jina.
  *
@@ -97,6 +159,17 @@ export class Embedder {
     return this.provider
   }
 
+  /** Guard: a provider must return exactly this.dimensions floats. */
+  private validateVector(vector: unknown, provider: string): number[] {
+    if (!Array.isArray(vector) || vector.length !== this.dimensions) {
+      const actual = Array.isArray(vector) ? vector.length : "none"
+      throw new Error(
+        `${provider} embedding dimension mismatch: expected ${this.dimensions}, got ${actual}`,
+      )
+    }
+    return vector as number[]
+  }
+
   async embed(text: string): Promise<number[]> {
     switch (this.provider) {
       case "voyage":
@@ -117,7 +190,7 @@ export class Embedder {
   private async embedVoyage(text: string): Promise<number[]> {
     log.debugRequest("embed.voyage", { model: this.model, textLen: text.length })
 
-    const resp = await fetch("https://api.voyageai.com/v1/embeddings", {
+    const resp = await fetchWithTimeout("https://api.voyageai.com/v1/embeddings", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -129,14 +202,10 @@ export class Embedder {
       }),
     })
 
-    if (!resp.ok) {
-      const body = await resp.text()
-      throw new Error(`Voyage embedding failed: ${resp.status} ${body}`)
+    const data = await parseEmbeddingResponse(resp, "Voyage") as {
+      data?: Array<{ embedding?: number[] }>
     }
-
-    const data = await resp.json() as { data?: Array<{ embedding?: number[] }> }
-    const vector = data.data?.[0]?.embedding
-    if (!vector) throw new Error("Voyage returned no embedding")
+    const vector = this.validateVector(data.data?.[0]?.embedding, "Voyage")
 
     log.debugResponse("embed.voyage", { dims: vector.length })
     return vector
@@ -145,7 +214,7 @@ export class Embedder {
   private async embedOpenAI(text: string): Promise<number[]> {
     log.debugRequest("embed.openai", { model: this.model, textLen: text.length })
 
-    const resp = await fetch("https://api.openai.com/v1/embeddings", {
+    const resp = await fetchWithTimeout("https://api.openai.com/v1/embeddings", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -157,14 +226,10 @@ export class Embedder {
       }),
     })
 
-    if (!resp.ok) {
-      const body = await resp.text()
-      throw new Error(`OpenAI embedding failed: ${resp.status} ${body}`)
+    const data = await parseEmbeddingResponse(resp, "OpenAI") as {
+      data?: Array<{ embedding?: number[] }>
     }
-
-    const data = await resp.json() as { data?: Array<{ embedding?: number[] }> }
-    const vector = data.data?.[0]?.embedding
-    if (!vector) throw new Error("OpenAI returned no embedding")
+    const vector = this.validateVector(data.data?.[0]?.embedding, "OpenAI")
 
     log.debugResponse("embed.openai", { dims: vector.length })
     return vector
@@ -174,7 +239,7 @@ export class Embedder {
     const base = this.baseUrl ?? "http://localhost:11434"
     log.debugRequest("embed.ollama", { model: this.model, textLen: text.length, baseUrl: base })
 
-    const resp = await fetch(`${base}/api/embed`, {
+    const resp = await fetchWithTimeout(`${base}/api/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -183,14 +248,10 @@ export class Embedder {
       }),
     })
 
-    if (!resp.ok) {
-      const body = await resp.text()
-      throw new Error(`Ollama embedding failed: ${resp.status} ${body}`)
+    const data = await parseEmbeddingResponse(resp, "Ollama") as {
+      embeddings?: number[][]
     }
-
-    const data = await resp.json() as { embeddings?: number[][] }
-    const vector = data.embeddings?.[0]
-    if (!vector) throw new Error("Ollama returned no embedding")
+    const vector = this.validateVector(data.embeddings?.[0], "Ollama")
 
     log.debugResponse("embed.ollama", { dims: vector.length })
     return vector
@@ -201,7 +262,7 @@ export class Embedder {
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent`
 
-    const resp = await fetch(url, {
+    const resp = await fetchWithTimeout(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -216,14 +277,10 @@ export class Embedder {
       }),
     })
 
-    if (!resp.ok) {
-      const body = await resp.text()
-      throw new Error(`Google embedding failed: ${resp.status} ${body}`)
+    const data = await parseEmbeddingResponse(resp, "Google") as {
+      embedding?: { values?: number[] }
     }
-
-    const data = await resp.json() as { embedding?: { values?: number[] } }
-    const vector = data.embedding?.values
-    if (!vector) throw new Error("Google returned no embedding")
+    const vector = this.validateVector(data.embedding?.values, "Google")
 
     log.debugResponse("embed.google", { dims: vector.length })
     return vector
@@ -232,7 +289,7 @@ export class Embedder {
   private async embedJina(text: string): Promise<number[]> {
     log.debugRequest("embed.jina", { model: this.model, textLen: text.length })
 
-    const resp = await fetch("https://api.jina.ai/v1/embeddings", {
+    const resp = await fetchWithTimeout("https://api.jina.ai/v1/embeddings", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -244,14 +301,10 @@ export class Embedder {
       }),
     })
 
-    if (!resp.ok) {
-      const body = await resp.text()
-      throw new Error(`Jina embedding failed: ${resp.status} ${body}`)
+    const data = await parseEmbeddingResponse(resp, "Jina") as {
+      data?: Array<{ embedding?: number[] }>
     }
-
-    const data = await resp.json() as { data?: Array<{ embedding?: number[] }> }
-    const vector = data.data?.[0]?.embedding
-    if (!vector) throw new Error("Jina returned no embedding")
+    const vector = this.validateVector(data.data?.[0]?.embedding, "Jina")
 
     log.debugResponse("embed.jina", { dims: vector.length })
     return vector

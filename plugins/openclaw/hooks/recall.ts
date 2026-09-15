@@ -2,12 +2,17 @@ import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, prefetchFilterScopes } from "../lib/scope-auto.ts"
+import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
 
 function formatRelativeTime(isoTimestamp: string): string {
   try {
     const dt = new Date(isoTimestamp)
+    // An unparseable timestamp yields an Invalid Date whose getTime() is NaN —
+    // every comparison below would be false and it would fall through to
+    // "NaN undefined, NaN". Signal "no time" instead.
+    if (isNaN(dt.getTime())) return ""
     const now = new Date()
     const seconds = (now.getTime() - dt.getTime()) / 1000
     const minutes = seconds / 60
@@ -39,7 +44,10 @@ function formatMemories(results: SearchResult[], maxResults: number): string | n
     const pct = r.score != null ? `[${Math.round(r.score * 100)}%]` : ""
     const prefix = timeStr ? `[${timeStr}]` : ""
     const category = r.category ? `[${r.category}]` : ""
-    return `- ${prefix}${category} ${r.text} ${pct}`.trim()
+    // Neutralize a stored closing tag before interpolation: a memory must
+    // never be able to terminate the wrapper and leak the rest as prompt text.
+    const text = neutralizeContextClose(r.text ?? "")
+    return `- ${prefix}${category} ${text} ${pct}`.trim()
   })
 
   const intro =
@@ -52,16 +60,8 @@ function formatMemories(results: SearchResult[], maxResults: number): string | n
   return `<nexus-context>\n${intro}\n\n${section}\n\n${disclaimer}\n</nexus-context>`
 }
 
-function stripInboundMetadata(text: string): string {
-  if (!text) return text
-
-  // Remove previously injected nexus context tags
-  const cleaned = text
-    .replace(/<nexus-context>[\s\S]*?<\/nexus-context>\s*/g, "")
-    .trim()
-
-  return cleaned
-}
+// stripInboundMetadata moved to lib/prompt-safety.ts (stripNexusContextBlock)
+// so recall.ts and capture.ts share one implementation.
 
 /**
  * Graph-Boost: Fetch 1-hop graph neighbors for the top vector search results.
@@ -82,44 +82,71 @@ async function graphBoost(
 ): Promise<string[]> {
   const boosted: string[] = []
   const seenIds = new Set<string>()
+  // Payload cache: the same target id is fetched at most once per call, so
+  // the graph_traverse-style double fetches share a single lookup.
+  const payloadById = new Map<string, Record<string, unknown> | null>()
+
+  const fetchPayload = async (
+    id: string,
+  ): Promise<Record<string, unknown> | null> => {
+    if (payloadById.has(id)) return payloadById.get(id) ?? null
+    const point = await qdrantClient.scrollPoint(id)
+    const payload = point
+      ? ((point.payload ?? {}) as Record<string, unknown>)
+      : null
+    payloadById.set(id, payload)
+    return payload
+  }
 
   try {
+    const roots: string[] = []
     for (const r of topResults.slice(0, maxBoost)) {
       const pid = r.id
       if (!pid || seenIds.has(pid)) continue
       seenIds.add(pid)
+      roots.push(pid)
+    }
 
-      const point = await qdrantClient.scrollPoint(pid)
-      if (!point) continue
+    // Root lookups run CONCURRENTLY; one failed lookup must not abort the
+    // phase — per-result status is handled below.
+    const rootResults = await Promise.allSettled(roots.map((id) => fetchPayload(id)))
 
-      const edges = (point.payload?.edges ?? []) as Array<Record<string, unknown>>
-      for (const edge of edges) {
+    const edges: Array<{ relation: string; targetId: string }> = []
+    for (const res of rootResults) {
+      if (res.status !== "fulfilled" || !res.value) continue
+      const rootEdges = (res.value.edges ?? []) as Array<Record<string, unknown>>
+      for (const edge of rootEdges) {
         const edgeStatus = edge.status as string
         if (edgeStatus && edgeStatus !== "active") continue
 
         const targetId = String(edge.target_fact_id ?? "")
         if (!targetId || seenIds.has(targetId)) continue
         seenIds.add(targetId)
+        edges.push({ relation: (edge.relation as string) || "related", targetId })
+      }
+    }
 
-        const targetPoint = await qdrantClient.scrollPoint(targetId)
-        if (!targetPoint) continue
+    const targetResults = await Promise.allSettled(
+      edges.map((e) => fetchPayload(e.targetId)),
+    )
 
-        const tpPayload = (targetPoint.payload ?? {}) as Record<string, unknown>
-        // Access-level check: skip memories the agent can't see.
-        // Fail-closed: an UNKNOWN (or missing) access_level yields indexOf -1
-        // and must be skipped, never treated as public — `-1 > agentIdx` was
-        // never true, so the old `|| "public"` made unknown levels visible.
-        const tpAccess = tpPayload.access_level as string
-        const levelOrder = ["public", "trusted", "private"]
-        const agentIdx = levelOrder.indexOf(accessLevel)
-        const memIdx = levelOrder.indexOf(tpAccess)
-        if (memIdx === -1 || memIdx > agentIdx) continue
+    const levelOrder = ["public", "trusted", "private"]
+    const agentIdx = levelOrder.indexOf(accessLevel)
+    for (let i = 0; i < edges.length; i++) {
+      const res = targetResults[i]
+      if (res.status !== "fulfilled" || !res.value) continue
+      const tpPayload = res.value
+      // Access-level check: skip memories the agent can't see.
+      // Fail-closed: an UNKNOWN (or missing) access_level yields indexOf -1
+      // and must be skipped, never treated as public — `-1 > agentIdx` was
+      // never true, so the old `|| "public"` made unknown levels visible.
+      const tpAccess = tpPayload.access_level as string
+      const memIdx = levelOrder.indexOf(tpAccess)
+      if (memIdx === -1 || memIdx > agentIdx) continue
 
-        const text = String(tpPayload.content ?? "")
-        if (text) {
-          const rel = (edge.relation as string) || "related"
-          boosted.push(`[graph:${rel}] ${text.slice(0, 400)}`)
-        }
+      const text = String(tpPayload.content ?? "")
+      if (text) {
+        boosted.push(`[graph:${edges[i].relation}] ${text.slice(0, 400)}`)
       }
     }
   } catch (err) {
@@ -157,7 +184,7 @@ export function buildRecallHandler(
     const rawPrompt = event.prompt as string | undefined
     if (!rawPrompt || rawPrompt.length < 5) return
 
-    const query = stripInboundMetadata(rawPrompt)
+    const query = stripNexusContextBlock(rawPrompt)
     if (query.length < 5) return
 
     log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${effectiveAccessLevel}${ctx?.groupId ? ", GROUP-CAP active" : ""})`)

@@ -175,10 +175,11 @@ export function registerStoreTool(
         } catch (err) {
           log.error("store tool failed", err)
           return {
+            isError: true,
             content: [
               {
                 type: "text" as const,
-                text: `Memory store failed: ${err instanceof Error ? err.message : String(err)}`,
+                text: "Operation failed. Details are in the server log.",
               },
             ],
           }

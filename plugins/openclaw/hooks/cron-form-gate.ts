@@ -42,8 +42,10 @@ export function isCompliantForm(text: string): boolean {
   if (trimmed.length < 12 || trimmed.length > MAX_CHARS) return false
   const lines = trimmed.split("\n")
   if (lines.length > MAX_LINES) return false
-  const title = lines[0]
-  if (!ALLOWED_TITLES.some((t) => title.startsWith(t))) return false
+  // EXACT match (after trim): a startsWith check let titles like
+  // "Weekly Skill CheckXYZ" through as a "fixed form".
+  const firstLine = trimmed.split("\n")[0].trim()
+  if (!ALLOWED_TITLES.includes(firstLine)) return false
   // Kein Reasoning-Leak irgendwo im Text (reuse der bewährten Marker)
   for (const line of lines) {
     if (isPureReasoningBlock(line, false)) return false

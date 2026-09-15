@@ -66,6 +66,21 @@ export function safeStringify(v: unknown): string {
   }
 }
 
+/**
+ * Emit a debug line. Bound to the backend (an unbound method call loses
+ * `this`). When the backend has no debug sink, the promoted info line is
+ * TRUNCATED: the level distinction stays visible and info receives a
+ * summary, never the full debug payload.
+ */
+function emitDebug(msg: string, ...args: unknown[]): void {
+  const dbg = _backend.debug
+  if (dbg) {
+    dbg.bind(_backend)(msg, ...args)
+  } else {
+    _backend.info.bind(_backend)(`[debug-suppressed] ${String(msg).slice(0, 120)}`)
+  }
+}
+
 export const log = {
   info(msg: string, ...args: unknown[]): void {
     _backend.info(`nexus: ${msg}`, ...args)
@@ -75,26 +90,26 @@ export const log = {
     _backend.warn(`nexus: ${msg}`, ...args)
   },
 
-  error(msg: string, err?: unknown): void {
-    const detail = err instanceof Error ? err.message : err ? String(err) : ""
-    _backend.error(`nexus: ${msg}${detail ? ` — ${detail}` : ""}`)
+  error(msg: string, err?: unknown, ...args: unknown[]): void {
+    // Pass the WHOLE error through (stack included) — `err.message` alone
+    // threw away the stack. Only absent errors are synthesized; other falsy
+    // values (0, "", false) are forwarded as-is.
+    if (err === undefined || err === null) err = new Error("unknown error")
+    _backend.error(`nexus: ${msg}`, err, ...args)
   },
 
   debug(msg: string, ...args: unknown[]): void {
     if (!_debug) return
-    const fn = _backend.debug ?? _backend.info
-    fn(`nexus [debug]: ${msg}`, ...args)
+    emitDebug(`nexus [debug]: ${msg}`, ...args)
   },
 
   debugRequest(method: string, params: Record<string, unknown>): void {
     if (!_debug) return
-    const fn = _backend.debug ?? _backend.info
-    fn(`nexus [debug] → ${method}`, safeStringify(params))
+    emitDebug(`nexus [debug] → ${method}`, safeStringify(params))
   },
 
   debugResponse(method: string, data: unknown): void {
     if (!_debug) return
-    const fn = _backend.debug ?? _backend.info
-    fn(`nexus [debug] ← ${method}`, safeStringify(data))
+    emitDebug(`nexus [debug] ← ${method}`, safeStringify(data))
   },
 }

@@ -10,6 +10,7 @@ dependencies = [
     "qdrant-client>=1.12.0",
     "sentence-transformers>=3.0.0",
     "networkx>=3.0",
+    "pyyaml>=6.0",
     "bm25s>=0.1.0",
     "requests>=2.31.0",
     "httpx>=0.27.0",
@@ -19,9 +20,8 @@ dependencies = [
 voyage = ["voyageai>=0.3.0"]
 openai = ["openai>=1.0.0"]
 google = ["google-generativeai>=0.7.0"]
-jina = []
 all = ["voyageai>=0.3.0", "openai>=1.0.0", "google-generativeai>=0.7.0", "fastapi>=0.100.0", "uvicorn>=0.20.0"]
-test = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "mcp>=1.0.0"]
+test = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]
 
 [project.scripts]
 nexus-memory = "nexus_memory.mcp_server:cli"
@@ -51,5 +51,9 @@ include = ["nexus_memory*", "nexus*", "plugins*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = [
-    "ignore::DeprecationWarning",
+    'ignore:Deprecated API:DeprecationWarning:qdrant_client.*',
+    'ignore::DeprecationWarning:sentence_transformers.*',
+    'ignore::DeprecationWarning:transformers.*',
+    'ignore::DeprecationWarning:torch.*',
+    'ignore::DeprecationWarning:mcp.*',
 ]

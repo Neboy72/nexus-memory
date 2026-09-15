@@ -11,6 +11,8 @@
  * any error or empty state = no areas = old behavior.
  */
 
+import { fetchWithTimeout } from "./embedder.ts";
+
 const CENTROID_TTL_MS = 60_000;
 const MARGIN = 0.05;          // must beat runner-up by this cosine margin
 const MIN_SIMILARITY = 0.72;  // absolute floor for the closest centroid
@@ -23,6 +25,7 @@ const MAX_SCROLL_PAGES = 5;
 export type Centroids = Record<string, number[]>;
 
 function dot(a: number[], b: number[]): number {
+  if (a.length !== b.length) throw new Error("vector length mismatch");
   let s = 0;
   for (let i = 0; i < a.length; i++) s += a[i] * b[i];
   return s;
@@ -61,7 +64,7 @@ export async function fetchCentroids(
       limit: 1000,
     }
     if (offset !== undefined && offset !== null) body.offset = offset
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${qdrantUrl}/collections/${collection}/points/scroll`,
       {
         method: "POST",
@@ -116,6 +119,9 @@ export class ScopeCentroidCache {
   private cache: Centroids = {}
   private at = 0
   private inflight: Promise<Centroids> | null = null
+  // Generation counter: invalidate() bumps it so an already-running fetch
+  // discards its (now stale) result instead of resurrecting the old cache.
+  private gen = 0
 
   private qdrantUrl: string
   private collection: string
@@ -129,25 +135,29 @@ export class ScopeCentroidCache {
     const now = Date.now()
     if (now - this.at < CENTROID_TTL_MS) return this.cache
     if (this.inflight) return this.inflight
+    const gen = this.gen
     this.inflight = fetchCentroids(this.qdrantUrl, this.collection)
       .then((c) => {
+        if (gen !== this.gen) return this.cache // invalidated mid-flight
         this.cache = c
         this.at = Date.now()
         return c
       })
       .catch((err) => {
         console.warn("scope_auto: centroid fetch failed — fail-open", err)
-        this.at = Date.now() // don't hammer a down Qdrant every call
+        if (gen === this.gen) this.at = Date.now() // don't hammer a down Qdrant
         return this.cache
       })
       .finally(() => {
-        this.inflight = null
+        if (gen === this.gen) this.inflight = null
       })
     return this.inflight
   }
 
   invalidate(): void {
     this.at = 0
+    this.gen++
+    this.inflight = null
   }
 }
 

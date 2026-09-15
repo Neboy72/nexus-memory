@@ -234,7 +234,7 @@ info "🔷 Claude Code (project-level) — .mcp.json in your project:"
 echo '  {'
 echo '    "mcpServers": {'
 echo '      "nexus": {'
-echo '        "command": "python3",'
+echo '        "command": "'${PYTHON}'",'
 echo '        "args": ["-m", "nexus_memory.mcp_server"]'
 echo '      }'
 echo '    }'
@@ -311,7 +311,7 @@ echo '  }'
 echo ""
 
 info "🔷 Other MCP-compatible agents — Standard MCP stdio:"
-echo '  Command: python3 -m nexus_memory.mcp_server'
+echo "  Command: ${PYTHON} -m nexus_memory.mcp_server"
 echo '  Protocol: stdio (JSON-RPC 2.0)'
 echo ""
 
