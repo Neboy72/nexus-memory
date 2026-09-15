@@ -27,11 +27,8 @@ NEW_MODEL = "voyage-4"
 BATCH_SIZE = 50  # Voyage API supports up to 128, use 50 for safety
 SCROLL_SIZE = 100  # Qdrant scroll batch size
 
-if not VOYAGE_API_KEY:
-    logger.error("VOYAGE_API_KEY not set in environment")
-    sys.exit(1)
-
-# Also load from .env if not in env
+# Load from .env first (module constants are resolved before any exit guard,
+# so the .env fallback is actually reachable when the env var is unset).
 if not VOYAGE_API_KEY:
     env_file = os.path.expanduser("~/.hermes/.env")
     if os.path.exists(env_file):
@@ -67,9 +64,10 @@ def voyage_embed_batch(texts: List[str]) -> List[List[float]]:
 
 def scroll_points(collection: str, offset=None) -> Dict[str, Any]:
     """Scroll through all points in a collection.
-    
-    Qdrant scroll API returns next_offset=None even when more points exist.
-    We manually paginate by using the last point ID as the next offset.
+
+    Qdrant returns ``next_page_offset`` as long as more points exist.
+    We use that directly and only fall back to the last point ID when the
+    API does not provide an offset.
     """
     payload = {
         "limit": SCROLL_SIZE,
@@ -142,7 +140,9 @@ def reembed_collection(collection: str, dry_run: bool = False):
     while True:
         result = scroll_points(collection, offset)
         points = result.get("points", [])
-        next_offset = result.get("next_offset")
+        # Qdrant uses "next_page_offset"; some proxies/older versions expose
+        # "next_offset". Prefer whichever the API returns.
+        next_offset = result.get("next_page_offset") or result.get("next_offset")
 
         if not points:
             break
@@ -202,12 +202,14 @@ def reembed_collection(collection: str, dry_run: bool = False):
                         logger.info(f"  Progress: {reembedded}/{total} re-embedded ({skipped} skipped, {errors} errors)")
 
         processed += len(points)
-        # Qdrant scroll returns next_offset=None even when more points exist.
-        # Use the last point ID as the next offset for manual pagination.
-        if len(points) < SCROLL_SIZE:
-            # Fewer points than requested = we're at the end
+        # API-provided offset wins; the last point ID is the fallback. Break
+        # only when neither is available (end of collection).
+        if next_offset:
+            offset = next_offset
+        elif len(points) < SCROLL_SIZE:
             break
-        offset = points[-1]["id"]
+        else:
+            offset = points[-1]["id"]
 
     logger.info(f"  DONE: {collection}")
     logger.info(f"  Re-embedded: {reembedded}, Skipped: {skipped}, Errors: {errors}")

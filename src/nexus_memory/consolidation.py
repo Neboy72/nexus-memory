@@ -368,6 +368,10 @@ class Consolidator:
                         log.warning("consolidation: marking skipped point %s failed: %s",
                                     p.id, mark_exc)
                 continue
+            # Initialized OUTSIDE the try so a failure anywhere below (LLM call,
+            # parse, store) still leaves a defined value for the except block's
+            # partial-failure mark.
+            created_here = 0
             try:
                 text = payload.get("content", "")
                 conv = text[:_MAX_CONV_CHARS]
@@ -386,7 +390,6 @@ class Consolidator:
                         "(left unmarked for retry)", p.id)
                     continue
                 src_access = _normalize_access_level(payload)
-                created_here = 0
                 batch_new_facts: List[str] = []
                 batch_assigned_scopes: set = set()
                 for fact in facts:
@@ -432,6 +435,17 @@ class Consolidator:
             except Exception as exc:
                 failed += 1
                 log.warning("consolidation: point %s failed (skipped): %s", p.id, exc)
+                # Partial failure AFTER some facts were stored: without a
+                # consolidated-mark those facts would be re-distilled on the
+                # next tick and duplicated. Mark the source point as handled
+                # (best-effort — the mark itself must never mask the failure).
+                if created_here > 0 and not dry_run:
+                    try:
+                        self._mark_consolidated(p.id, created_here)
+                    except Exception as mark_exc:
+                        log.warning(
+                            "consolidation: partial-failure mark of %s failed: %s",
+                            p.id, mark_exc)
         retried, done_ids = self._retry_pending_supersedes(pending_supersedes)
         superseded += retried
         failed += max(0, len(pending_supersedes) - len(done_ids))

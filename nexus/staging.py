@@ -42,6 +42,7 @@ _EMBED_DIM_CACHE: Optional[int] = None
 _EMBED_PROVIDER: Optional[str] = None
 _VOYAGE_CLIENT: Any = None
 _ST_MODEL: Any = None
+_OLLAMA_MODEL: Optional[str] = None
 
 
 def _detect_vector_size() -> int:
@@ -74,17 +75,34 @@ def _detect_vector_size() -> int:
         "sentence_transformers": 384,
     }
 
+    def _dim_for(provider: str) -> int:
+        """Resolve the vector dimension for a successfully-init'ed provider.
+
+        Ollama models vary (bge-m3/qwen3-embedding = 1024d, nomic = 768d), so
+        the map value is only a fallback — the real dimension is measured with
+        a probe embedding. Mirrors src/nexus_memory/embeddings.py:_try_ollama.
+        """
+        if provider == "ollama":
+            probed = _probe_ollama_dim()
+            if probed:
+                return probed
+            _logger.warning(
+                "Staging: Ollama dim probe failed — falling back to map value %dd",
+                PROVIDER_DIMS[provider],
+            )
+        return PROVIDER_DIMS[provider]
+
     if preferred and preferred in PROVIDER_DIMS:
         # Try to init the preferred provider
         if _try_init_provider(preferred):
-            _EMBED_DIM_CACHE = PROVIDER_DIMS[preferred]
+            _EMBED_DIM_CACHE = _dim_for(preferred)
             _logger.info("Staging embeddings: %s (%dd) [user-selected]", preferred, _EMBED_DIM_CACHE)
             return _EMBED_DIM_CACHE
 
     # Auto-detect fallback (same priority as EmbeddingProvider)
     for provider in ["voyage", "openai", "google", "jina", "ollama", "sentence-transformers"]:
         if _try_init_provider(provider):
-            _EMBED_DIM_CACHE = PROVIDER_DIMS[provider]
+            _EMBED_DIM_CACHE = _dim_for(provider)
             _logger.info("Staging embeddings: %s (%dd) [auto-detected]", provider, _EMBED_DIM_CACHE)
             return _EMBED_DIM_CACHE
 
@@ -126,7 +144,7 @@ def _read_preferred_provider() -> str:
 
 def _try_init_provider(provider: str) -> bool:
     """Try to initialize a specific embedding provider. Returns True on success."""
-    global _EMBED_PROVIDER, _VOYAGE_CLIENT, _ST_MODEL
+    global _EMBED_PROVIDER, _VOYAGE_CLIENT, _ST_MODEL, _OLLAMA_MODEL
 
     if provider == "voyage":
         voyage_key = os.environ.get("VOYAGE_API_KEY", "")
@@ -176,6 +194,7 @@ def _try_init_provider(provider: str) -> bool:
                 emb_model = next((m for m in models if "embed" in m.lower()), None)
                 if emb_model:
                     _EMBED_PROVIDER = "ollama"
+                    _OLLAMA_MODEL = emb_model
                     return True
         except Exception:
             pass
@@ -190,6 +209,37 @@ def _try_init_provider(provider: str) -> bool:
             pass
 
     return False
+
+
+def _probe_ollama_dim() -> Optional[int]:
+    """Measure the Ollama embedding dimension with a tiny probe call.
+
+    Mirrors src/nexus_memory/embeddings.py:_probe_ollama_dim (but uses this
+    module's own HTTP calls instead of importing that class). Returns None
+    when the probe fails so the caller falls back to the map value.
+    """
+    model = _OLLAMA_MODEL
+    if not model:
+        return None
+    try:
+        r = requests.post(
+            "http://localhost:11434/api/embed",
+            json={"model": model, "input": "dim probe"},
+            timeout=30,
+        )
+        vec = r.json().get("embeddings", [[None]])[0]
+        if vec and isinstance(vec[0], (int, float)):
+            return len(vec)
+        # Legacy fallback: older /api/embeddings endpoint with prompt=
+        r2 = requests.post(
+            "http://localhost:11434/api/embeddings",
+            json={"model": model, "prompt": "dim probe"},
+            timeout=30,
+        )
+        vec2 = r2.json().get("embedding")
+        return len(vec2) if vec2 else None
+    except Exception:
+        return None
 
 
 def _embed_content(text: str) -> list[float]:
@@ -753,9 +803,17 @@ def _get_canonical_supersedes_set(
 
     superseded: set[str] = set()
     for p in results:
-        supersedes = p.get("payload", {}).get("supersedes")
+        pl = p.get("payload", {})
+        # NEW-promotions record the staging draft in ``supersedes``;
+        # UPDATE-promotions point ``supersedes`` at the previous canonical
+        # and record the draft in ``promoted_from``. Union both so
+        # list_pending() drops already-promoted drafts in either case.
+        supersedes = pl.get("supersedes")
         if supersedes:
             superseded.add(supersedes)
+        promoted_from = pl.get("promoted_from")
+        if promoted_from:
+            superseded.add(promoted_from)
     return superseded
 
 

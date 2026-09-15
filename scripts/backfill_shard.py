@@ -31,8 +31,9 @@ def main() -> int:
     from nexus_memory.mcp_server import MemoryStore
     from nexus_memory import consolidation as cons
 
+    coll = os.environ.get("NEXUS_COLLECTION", "nexus")
     store = MemoryStore()
-    c = cons.Consolidator(store, os.environ.get("NEXUS_COLLECTION", "nexus"))
+    c = cons.Consolidator(store, coll)
 
     # Collect MY ids: hash(point_id) % num_shards == shard, open only
     client = store.client
@@ -43,7 +44,7 @@ def main() -> int:
     ])
     my_points, offset = [], None
     while True:
-        batch, offset = client.scroll("nexus", scroll_filter=flt, limit=64,
+        batch, offset = client.scroll(coll, scroll_filter=flt, limit=64,
                                       offset=offset, with_payload=False, with_vectors=False)
         for p in batch:
             if hash(str(p.id)) % args.num_shards == args.shard:
@@ -57,7 +58,7 @@ def main() -> int:
     client = store.client
     offset = None
     while True:
-        batch, offset = client.scroll("nexus", scroll_filter=flt, limit=64,
+        batch, offset = client.scroll(coll, scroll_filter=flt, limit=64,
                                       offset=offset, with_payload=True, with_vectors=False)
         for p in batch:
             pid = str(p.id)
@@ -82,7 +83,7 @@ def main() -> int:
                 if decision == "duplicate":
                     dups += 1
                     continue
-                new_id = c._store_fact(fact, pid)
+                new_id, _fact_scope = c._store_fact(fact, pid)
                 for old_id in sup_ids:
                     c._supersede_old(old_id, new_id)
                 superseded += len(sup_ids)
