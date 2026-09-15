@@ -149,7 +149,11 @@ class TestClusterFacts:
             {"content": "Always validate input before processing. This text starts identically for the first many characters. But this one continues.", "category": "pattern", "rrf_score": 0.8},
         ]
         clusters = cluster_facts(facts)
-        assert len(clusters["steps"]) == 1  # deduplicated
+        # H198: "pattern" now runs through the content heuristic — both facts
+        # ("validate") land in verification. The point of THIS test is dedup,
+        # so assert exactly one deduped item overall, not a fixed section.
+        assert sum(len(v) for v in clusters.values()) == 1
+        assert len(clusters["verification"]) == 1
 
     def test_empty_facts(self):
         """Empty fact list produces empty clusters."""

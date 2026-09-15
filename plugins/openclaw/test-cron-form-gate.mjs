@@ -6,13 +6,17 @@
  * 3. Cron-Session, freier Text ohne Titel → BLOCKED
  * 4. DM-Session (interaktiv) → unangetastet, auch ohne Formular
  * 5. Heartbeat-Session + gültiges Formular → durchgelassen
- * 6. isUnattendedSession: Key-Erkennung korrekt
+ * 6. isUnattendedSession: Key-Erkennung korrekt (Cron/Heartbeat ja, DM/leer nein)
+ *
+ * Dazu die H6/H7-Härtungen weiter unten: Kurz-Token-Whitelist, Payload-Kette
+ * (content/message/text) und die 23-Zeichen-Lücke.
  */
 import assert from "node:assert"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-// H6/H7: Direkt-Import der lokalen Quelle (Node type-stripping, kein Build nötig).
-import { buildCronFormGateHandler } from "./hooks/cron-form-gate.ts"
+// H6/H7: Direkt-Import der lokalen Quelle (Node type-stripping, kein Build nötig);
+// der E2E-Teil unten prüft zusätzlich das echte dist-Bundle.
+import { buildCronFormGateHandler, isUnattendedSession } from "./hooks/cron-form-gate.ts"
 
 // T1: Pfad relativ zum Test-File (nicht machine-specific hardcoded) → portabel.
 const DIST_ENTRY = fileURLToPath(new URL("./dist/index.js", import.meta.url))
@@ -22,13 +26,12 @@ if (!existsSync(DIST_ENTRY)) {
 }
 
 const mod = await import(DIST_ENTRY)
-// Einzeldatei nicht gebundelt (esbuild bundled nur index.ts) — Gate-Funktionen via internem Export prüfen:
-// dist/index.js ist ein Bundle; die Gate-Helfer sind dort eingekapselt. Für Unit-Tests verwenden wir
-// tsx-freie Variante: wir importieren das TS direkt via node --experimental-strip-types NICHT — stattdessen
-// prüfen wir die Verhaltensweise über den registrierten Handler (E2E, echtes Bundle).
+// Strategie: register(api) aus dem echten Bundle liefert den E2E-Handler;
+// die Gate-Helfer (isUnattendedSession) kommen direkt aus der .ts-Quelle
+// (Node type-stripping) — kein tsx/Build nötig.
 
 let failed = 0
-const t = (name, fn) => fn().then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e.message) })
+const t = (name, fn) => fn().then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e.stack || e.message) })
 
 // Session-Erkennung wird über Handler-Verhalten bewiesen (DM-Test vs Cron-Tests)
 
@@ -154,6 +157,16 @@ try {
   await t("H7: interactiv (DM) bleibt unangetastet, auch via message", async () => {
     const res = await gate({ to: "telegram:5763330319", message: shortSpam }, { sessionKey: DM_KEY })
     assert.ok(!res || !res.cancel, "interaktive DM darf NIE geblockt werden")
+  })
+
+  // H165: 6. Check — Session-Key-Erkennung direkt am echten Export.
+  await t("6. isUnattendedSession: Key-Erkennung korrekt", async () => {
+    assert.strictEqual(isUnattendedSession(CRON_KEY), true, "Cron-Key muss unbeaufsichtigt sein")
+    assert.strictEqual(isUnattendedSession("agent:main:main:heartbeat"), true, "Heartbeat-Key muss unbeaufsichtigt sein")
+    assert.strictEqual(isUnattendedSession(DM_KEY), false, "DM-Key darf NICHT unbeaufsichtigt sein")
+    assert.strictEqual(isUnattendedSession(undefined), false, "undefined darf NICHT unbeaufsichtigt sein")
+    assert.strictEqual(isUnattendedSession(null), false, "null darf NICHT unbeaufsichtigt sein")
+    assert.strictEqual(isUnattendedSession(""), false, "leerer Key darf NICHT unbeaufsichtigt sein")
   })
 } catch (e) {
   // Fehler außerhalb von t() (z.B. Register- oder Fixture-Fehler) → zählt als FAIL.

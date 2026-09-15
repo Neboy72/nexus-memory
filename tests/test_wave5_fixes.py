@@ -101,14 +101,15 @@ class TestF1KnowledgeGapThreshold:
 class TestF2EntityWordBoundaries:
     def test_substring_rag_in_storage_is_not_an_entity(self):
         # "rag" would be found by the old raw `in` check → 0.0; correct is
-        # "no technical entity at all" → neutral 1.0.
-        assert GroundingScorer._signal_factual("storage layer", ["unrelated text"]) == 1.0
+        # "no technical entity at all" → neutral 0.5 (was 1.0, see H181: a
+        # term-less answer must not score as fully factual).
+        assert GroundingScorer._signal_factual("storage layer", ["unrelated text"]) == 0.5
 
     def test_substring_ppo_in_support_is_not_an_entity(self):
-        assert GroundingScorer._signal_factual("support ticket", ["unrelated text"]) == 1.0
+        assert GroundingScorer._signal_factual("support ticket", ["unrelated text"]) == 0.5
 
     def test_substring_sft_in_sftp_is_not_an_entity(self):
-        assert GroundingScorer._signal_factual("sftp upload", ["unrelated text"]) == 1.0
+        assert GroundingScorer._signal_factual("sftp upload", ["unrelated text"]) == 0.5
 
     def test_standalone_entity_present_in_chunk_matches(self):
         assert GroundingScorer._signal_factual(

@@ -43,7 +43,7 @@ def classify_relation(
     source_id: str,
     target_id: str,
     similarity_score: float,
-) -> dict:
+) -> Optional[dict]:
     """Classify the semantic relation between two facts.
 
     Args:
@@ -59,6 +59,8 @@ def classify_relation(
         ``{"relation": str, "confidence": float, "reason": str}``
         where ``relation`` is one of: ``references``, ``depends_on``, ``supersedes``,
         ``contradicts``, ``supports``, ``alternative_to``.
+        Returns ``None`` if no relation is found and the similarity score is
+        below 0.90 (fallback threshold).
     """
     # 1. Check for explicit references / dependencies (highest priority)
     explicit = _check_explicit_reference(source_content, target_content, source_id, target_id)

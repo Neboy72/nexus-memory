@@ -47,7 +47,9 @@ def get_embedding(text: str) -> list:
         req_data = json.dumps({
             "input": [text],
             "model": EMBEDDING_MODEL,
-            "input_type": "document"
+            # Voyage is asymmetric: this embeds the session QUERY, so it must
+            # use input_type="query" (H182), not "document".
+            "input_type": "query"
         }).encode()
         req = urllib.request.Request(
             "https://api.voyageai.com/v1/embeddings",

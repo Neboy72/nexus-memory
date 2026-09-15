@@ -114,27 +114,29 @@ class GraphAnalytics:
 
         lines = ["📊 **SkillGraph Analytics Report**\n"]
 
-        # Stats
-        s = report["graph_stats"]
+        # Stats — partial reports must not KeyError (signature implies part-reports)
+        s = report.get("graph_stats", {}) or {}
         lines.append(f"**Graph**: {s.get('nodes', 0)} nodes, {s.get('edges', 0)} edges")
         lines.append("")
 
         # Top hubs
-        if report["top_hubs"]:
+        top_hubs = report.get("top_hubs", []) or []
+        if top_hubs:
             lines.append("**🔥 Top Hubs (most connected):**")
-            for h in report["top_hubs"]:
+            for h in top_hubs:
                 lines.append(f"  • `{h['fact_id'][:24]}...` — {h['degree']} edges")
             lines.append("")
 
         # Relation distribution
-        if report["relation_distribution"]:
+        relations = report.get("relation_distribution", {}) or {}
+        if relations:
             lines.append("**🔗 Relation Distribution:**")
-            for rel, count in report["relation_distribution"].items():
+            for rel, count in relations.items():
                 lines.append(f"  • **{rel}**: {count}")
             lines.append("")
 
         # Clusters
-        c = report["clusters"]
+        c = report.get("clusters", {}) or {}
         lines.append(
             f"**🧩 Clusters**: {c.get('num_clusters', 0)} clusters, "
             f"{c.get('singletons', 0)} singletons"
@@ -146,9 +148,12 @@ class GraphAnalytics:
         gaps = report.get("knowledge_gaps", 0)
         if gaps > 0:
             lines.append(f"\n**⚠️ Knowledge Gaps**: {gaps} isolated facts")
-            for g in report.get("gap_examples", []):
+            gap_examples = report.get("gap_examples", []) or []
+            for g in gap_examples:
                 lines.append(f"  • `{g[:24]}...`")
-            if gaps > 5:
-                lines.append(f"  • ... and {gaps - 5} more")
+            # H173: remainder from the ACTUALLY rendered examples, not a hard-coded 5.
+            remainder = gaps - len(gap_examples)
+            if remainder > 0:
+                lines.append(f"  • ... and {remainder} more")
 
         return "\n".join(lines)

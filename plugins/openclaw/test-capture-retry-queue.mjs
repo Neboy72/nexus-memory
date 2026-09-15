@@ -65,6 +65,22 @@ assert.ok(captureHandler, "agent_end (capture) muss registriert sein")
 let failed = 0
 const t = (name, fn) => fn().then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e.message) })
 
+// H166: statt festem 500ms-Sleep (unter Last zu kurz = false FAIL) pollen wir
+// die Queue-Datei bis sie leer ist — Timeout 3s, dann beschreibender FAIL.
+async function waitForQueueEmpty(timeoutMs = 3000, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    let q = ""
+    try { q = readFileSync(QUEUE, "utf8").trim() } catch { q = "" } // ENOENT = leer
+    if (q === "") return
+    if (Date.now() >= deadline) {
+      const shortened = q.length > 200 ? q.slice(0, 200) + "…" : q
+      throw new Error(`Queue nach ${timeoutMs}ms nicht leer: ${shortened}`)
+    }
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
+}
+
 try {
   await t("Storage down → capture landet in Queue, kein Verlust", async () => {
     await captureHandler(
@@ -81,8 +97,8 @@ try {
       { success: true, messages: [{ role: "user", content: "Frischer Capture nach Wiederherstellung Drain-B" }] },
       { trigger: "user", messageProvider: "telegram", groupId: null },
     )
-    // Kurz warten (drain läuft im Capture)
-    await new Promise((r) => setTimeout(r, 500))
+    // Drain läuft im Capture — auf leere Queue warten (H166: Poll statt fester Sleep)
+    await waitForQueueEmpty()
     const q = readFileSync(QUEUE, "utf8").trim()
     assert.strictEqual(q, "", "Queue muss nach Drain leer sein")
   })

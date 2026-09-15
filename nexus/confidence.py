@@ -17,8 +17,8 @@ Signals:
 4. **coverage**   — Chunk diversity / query breadth covered?
 
 Usage:
-    from nexus.confidence import ConfidenceScorer
-    scorer = ConfidenceScorer()
+    from nexus.confidence import GroundingScorer
+    scorer = GroundingScorer()
     report = scorer.evaluate(query="What is Nexus?", answer="Nexus is...")
     print(report.json())
 """
@@ -111,12 +111,19 @@ def _cosine_sim(a: list[float], b: list[float]) -> float:
 # ── Embedding ──────────────────────────────────────────────────────
 
 
-def _embed(texts: list[str], provider: str = "voyage") -> Optional[list[list[float]]]:
+def _embed(
+    texts: list[str],
+    provider: str = "voyage",
+    input_type: str = "document",
+) -> Optional[list[list[float]]]:
     """Embed a list of texts via Voyage, sentence-transformers, or Ollama.
 
     Args:
         texts: List of texts to embed.
         provider: "voyage" (512d), "sentence-transformers" (384d) or "ollama" (768d).
+        input_type: Voyage's asymmetric embedding type — ``"query"`` for a
+            search query, ``"document"`` (default) for corpus/chunk texts.
+            Ignored by the non-Voyage providers.
 
     Returns:
         List of embedding vectors or None on error.
@@ -127,7 +134,7 @@ def _embed(texts: list[str], provider: str = "voyage") -> Optional[list[list[flo
             return None
         try:
             client = voyageai.Client()
-            result = client.embed(texts, model="voyage-3-lite", input_type="document")
+            result = client.embed(texts, model="voyage-3-lite", input_type=input_type)
             return result.embeddings
         except Exception as e:
             _logger.warning(f"Voyage embedding failed: {e}")
@@ -256,7 +263,7 @@ class GroundingScorer:
         query: str,
         answer: str,
         chunks: Optional[list[dict]] = None,
-    ) -> ConfidenceReport:
+    ) -> GroundingReport:
         """Full grounding evaluation.
 
         Args:
@@ -270,8 +277,9 @@ class GroundingScorer:
         """
         report = GroundingReport(query=query, answer=answer)
 
-        # Step 1: Embed query
-        q_emb = _embed([query], provider=self.embed_provider)
+        # Step 1: Embed query — Voyage is asymmetric: a search query must use
+        # input_type="query" (chunks below stay "document"). (H182)
+        q_emb = _embed([query], provider=self.embed_provider, input_type="query")
         if q_emb is None:
             report.error = "Embedding failed"
             return report
@@ -294,8 +302,19 @@ class GroundingScorer:
         report.num_chunks = len(chunks)
         report.top_chunk_score = chunks[0].get("score", 0.0) if chunks else 0.0
 
-        # Step 3: Embed chunk texts
-        chunk_texts = [c.get("text", "") for c in chunks if c.get("text")]
+        # Step 3: Embed chunk texts.
+        # H180: build texts and scores in ONE pass so they stay index-aligned.
+        # Previously scores came from the UNFILTERED chunks while texts were
+        # filtered on non-empty content, shifting chunk_scores[0] onto the
+        # wrong chunk as soon as any chunk had empty text.
+        chunk_texts: list[str] = []
+        chunk_scores: list[float] = []
+        for c in chunks:
+            text = c.get("text", "")
+            if not text:
+                continue
+            chunk_texts.append(text)
+            chunk_scores.append(c.get("score", 0.0))
         if not chunk_texts:
             report.error = "Chunks have no text"
             return report
@@ -304,8 +323,6 @@ class GroundingScorer:
         if chunk_embs is None:
             report.error = "Chunk embedding failed"
             return report
-
-        chunk_scores = [c.get("score", 0.0) for c in chunks]
 
         # Step 4: Compute five signals
         signals = SignalScores()
@@ -427,7 +444,7 @@ class GroundingScorer:
                 ans_entities.add(entity)
 
         if not ans_entities:
-            return 1.0  # Keine technischen Begriffe → neutral
+            return 0.5  # Keine technischen Begriffe → neutral (mittel, nicht best)
 
         # Check which entities also appear in chunks.
         # Match per chunk — a \b against the joined string could anchor

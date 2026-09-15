@@ -22,15 +22,9 @@ const handlers = {};
 const capturedUpserts = [];
 const searches = [];
 
-const fakeQdrant = {
-  async upsert(id, vector, payload) { capturedUpserts.push({ id, payload }); },
-  async search(vec, limit, accessLevel) {
-    searches.push({ accessLevel });
-    return [{ id: "x", text: "pub", score: 1, access_level: "public", created_at: "" }];
-  },
-  async scrollPoint() { return null; },
-};
-const fakeEmbedder = { async embed() { return [0.1, 0.2]; } };
+// H164: hier standen zuvor fakeQdrant/fakeEmbedder — sie wurden nie in mockApi
+// gewired. register(api) baut QdrantClient/Embedder intern aus cfg und geht über
+// fetch, der fetch-Mock unten ist die echte Quelle. Tote Scaffolds entfernt.
 const mockApi = {
   on(event, handler) { handlers[event] = handler; },
   registerTool() {}, registerProvider() {}, registerService() {},
@@ -62,13 +56,19 @@ globalThis.fetch = async (url, opts) => {
   if (u.includes("localhost:6333")) {
     if (u.includes("/points/search") || u.includes("/points/query")) {
       // Filter-Format: { must: [{ key: "access_level", match: { any: [levels] } }] }
-      // private sieht ALLES → kein filter-Feld → "private" implizit
-      let lvl = "private-no-filter";
+      // private sieht ALLES → kein filter-Feld → "no-filter" (legitim, kein Fehler).
+      // H163: Ein Parse-Fehler wird als eigener Sentinel "parse-error" markiert,
+      // damit er NICHT stillschweigend als legitimes "no-filter" durchläuft.
+      let lvl = "no-filter";
       try {
         const body = JSON.parse((opts && opts.body) || "{}");
-        const any = body.filter.must[0].match.any;
-        lvl = Array.isArray(any) ? any.join("|") : String(any);
-      } catch {}
+        if (body.filter) {
+          const any = body.filter.must[0].match.any;
+          lvl = Array.isArray(any) ? any.join("|") : String(any);
+        }
+      } catch {
+        lvl = "parse-error";
+      }
       searches.push({ accessLevel: lvl });
       return {
         ok: true, status: 200,
@@ -148,9 +148,13 @@ try {
       { trigger: "user", groupId: null },
     );
     assert.ok(searches.length > 0, "Suche muss stattfinden");
-    // private sieht ALLES → Qdrant-Client schickt bewusst KEINEN Filter → implizit "private"
-    assert.ok(
-      searches[0].accessLevel.startsWith("private"),
+    // private sieht ALLES → Qdrant-Client schickt bewusst KEINEN Filter.
+    // H163: exakter Sentinel statt startsWith("private"): ein Parse-Fehler
+    // erscheint als "parse-error" und fällt hier durch; "private-no-filter"
+    // (der alte, zu lockere Treffer) existiert nicht mehr.
+    assert.strictEqual(
+      searches[0].accessLevel,
+      "no-filter",
       "DM-Recall nutzt cfg.accessLevel (private = kein Filter, sieht alles) — got: " + searches[0].accessLevel,
     );
   });
