@@ -312,7 +312,7 @@ class HealthAuditor:
             by_key.setdefault(ckey, []).append(p)
 
         # Phase 2: build the full deletion plan with lossless proofs.
-        plan: List[Tuple[Any, Dict[str, Any], Dict[str, Any], list]] = []
+        plan: List[Tuple[Any, Dict[str, Any], Dict[str, Any], list, str, str]] = []
         backup_rows = []
         keeper_rows = []
         delete_point_ids: list = []
@@ -373,11 +373,15 @@ class HealthAuditor:
                         "keeper_id": str(keeper.id),
                     })
                     delete_point_ids.append(cand.id)
-                # collect deletions for this subgroup
+                # collect deletions for this subgroup; the subgroup's proof
+                # (security context + full-content hash) travels with the plan
+                # so it can be re-checked against fresh data before deleting.
                 to_delete = [cand.id for cand in group_sorted[1:]]
-                plan.append((keeper, keeper_attrs, orig_attrs, to_delete))
+                plan.append((keeper, keeper_attrs, orig_attrs, to_delete, _ctx, _chash))
 
         merged = 0
+        skipped_stale = 0
+        already_gone = 0
         backup_path = None
         if plan:
             # Fetch vectors ONLY for the ids that will really be deleted (the
@@ -402,7 +406,41 @@ class HealthAuditor:
             if len(verified.get("deleted") or []) != len(backup_rows):
                 raise RuntimeError(
                     "dedup backup verification failed; no point was deleted")
-            for keeper, keeper_attrs, orig_attrs, to_delete in plan:
+            # TOCTOU guard: re-read every planned deletion id fresh and
+            # recompute the SAME proof the scan used (full-content hash +
+            # security context). Points that vanished, changed or moved
+            # context since the scan are dropped from the plan — the stale
+            # backup row is harmless, deleting on a stale proof is not.
+            verified_plan = []
+            for keeper, keeper_attrs, orig_attrs, to_delete, exp_ctx, exp_chash in plan:
+                fresh = self._store.client.retrieve(
+                    collection_name=self._collection,
+                    ids=to_delete,
+                    with_payload=True,
+                )
+                by_id = {str(r.id): r for r in fresh}
+                verified_ids = []
+                for pid in to_delete:
+                    rec = by_id.get(str(pid))
+                    if rec is None:
+                        already_gone += 1
+                        continue
+                    rp = rec.payload or {}
+                    full_text = str(
+                        rp.get("text") or rp.get("content") or "").strip()
+                    if (len(_candidate_key(full_text)) < 12
+                            or _content_hash(full_text) != exp_chash
+                            or _security_context(rp) != exp_ctx):
+                        log.warning(
+                            "Dedup sweep: point %s changed since scan "
+                            "(stale content/context) — skipping deletion", pid)
+                        skipped_stale += 1
+                        continue
+                    verified_ids.append(pid)
+                if verified_ids:
+                    verified_plan.append(
+                        (keeper, keeper_attrs, orig_attrs, verified_ids))
+            for keeper, keeper_attrs, orig_attrs, to_delete in verified_plan:
                 if keeper_attrs and keeper_attrs != orig_attrs:
                     self._store.client.set_payload(
                         collection_name=self._collection,
@@ -421,10 +459,13 @@ class HealthAuditor:
             "rescued_attributes": rescued_attrs,
             "backup_file": backup_path,
             "skipped_protected": skipped_protected,
+            "skipped_stale": skipped_stale,
+            "already_gone": already_gone,
             "policy": (
                 "full-content-hash duplicates within one security context only; "
                 "keeper = oldest created_at; rules + audit entries excluded; "
                 "single atomic backup before first deletion; "
+                "deletion re-verified against fresh payloads (TOCTOU guard); "
                 "destructive sweep requires NEXUS_DEDUP_SWEEP=1"
             ),
         }
