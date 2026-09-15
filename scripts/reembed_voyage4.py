@@ -123,7 +123,16 @@ def reembed_collection(collection: str, dry_run: bool = False):
     resp.raise_for_status()
     info = resp.json()["result"]
     total = info["points_count"]
-    dim = info["config"]["params"]["vectors"]["size"]
+    vectors_cfg = info["config"]["params"]["vectors"]
+    if isinstance(vectors_cfg, dict) and vectors_cfg.get("size"):
+        dim = vectors_cfg["size"]
+    elif isinstance(vectors_cfg, dict) and (vectors_cfg.get("params") or {}).get("map"):
+        # Nr 262: named vectors — this script only handles the single-vector layout
+        logger.error(f"  Collection {collection} uses named vectors — not supported here, skipping")
+        return {"reembedded": 0, "skipped": 0, "errors": 0, "tokens": 0}
+    else:
+        logger.error(f"  Cannot determine vector size for {collection} — skipping")
+        return {"reembedded": 0, "skipped": 0, "errors": 0, "tokens": 0}
     logger.info(f"  Points: {total}, Dimensions: {dim}d")
 
     if dry_run:
@@ -180,6 +189,12 @@ def reembed_collection(collection: str, dry_run: bool = False):
                             logger.error(f"  Embedding failed for batch: {e}")
                             vectors = None
                             errors += len(batch_texts)
+
+                if vectors is not None and len(vectors) != len(batch_points):
+                    # Nr 263: zip would silently truncate — abort the batch instead
+                    logger.error(f"  Voyage returned {len(vectors)} embeddings for {len(batch_points)} inputs — aborting batch")
+                    errors += len(batch_texts)
+                    vectors = None
 
                 if vectors:
                     # Build upsert points
@@ -244,8 +259,15 @@ def main():
     logger.info("")
 
     results = {}
+    failed_cols = []
     for col in collections:
-        result = reembed_collection(col, dry_run=args.dry_run)
+        try:
+            result = reembed_collection(col, dry_run=args.dry_run)
+        except Exception as e:
+            # Nr 264: one broken collection must not abort the rest
+            logger.error(f"  Collection {col} failed: {e}")
+            failed_cols.append(col)
+            result = None
         if result:
             results[col] = result
         logger.info("")
@@ -254,6 +276,8 @@ def main():
     logger.info("=== SUMMARY ===")
     for col, r in results.items():
         logger.info(f"  {col}: {r['reembedded']} re-embedded, {r['skipped']} skipped, {r['errors']} errors, ~{r['tokens']:,} tokens")
+    if failed_cols:
+        logger.info(f"  FAILED collections: {', '.join(failed_cols)}")
 
 
 if __name__ == "__main__":

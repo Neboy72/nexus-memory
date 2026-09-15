@@ -179,6 +179,12 @@ class TestH3PromotedFrom:
         monkeypatch.setattr(st, "requests",
                             SimpleNamespace(post=lambda *a, **k: _Resp()))
 
+        # Nr 270 (W18): the scroll response is now checked via raise_for_status
+        # and paged; the mock response must speak that API.
+        def _raise(self):
+            pass
+        _Resp.raise_for_status = _raise
+
         assert st._get_canonical_supersedes_set() == {"S1", "P1", "S2", "P2"}
 
 
@@ -303,22 +309,27 @@ class TestH7CollectionFromEnv:
         exec(line, {"os": __import__("os")}, ns)
         assert ns["coll"] == "nexus"
 
-    def test_both_scroll_calls_use_coll(self):
+    def test_scroll_call_uses_coll(self):
         src = _read("backfill_shard.py")
         assert 'client.scroll("nexus"' not in src
-        assert src.count("client.scroll(coll,") == 2
+        # Nr 277 (W18): the dead first scroll loop is gone — exactly ONE pass
+        assert src.count("client.scroll(coll,") == 1
 
 
-# ── H8: _store_fact tuple is unpacked ────────────────────────────────────────
+# ── H8: store-fact tuple unpacking (moved to Consolidator.consolidate_point) ─
 
 
 class TestH8StoreFactTuple:
     def test_tuple_assignment(self):
+        # Nr 279 (W18): backfill_shard no longer reaches into underscored
+        # internals — the tuple-unpacking contract moved into the public
+        # consolidate_point() entry point on Consolidator.
         src = _read("backfill_shard.py")
-        assert "new_id, _fact_scope = c._store_fact(fact, pid)" in src
-        # the single-name assignment (would bind a tuple) must be gone
-        assert "new_id = c._store_fact(fact, pid)" not in src.replace(
-            "new_id, _fact_scope = c._store_fact(fact, pid)", "")
+        assert "c._store_fact" not in src
+        assert "c.consolidate_point(" in src
+
+        cons_src = (REPO_ROOT / "src" / "nexus_memory" / "consolidation.py").read_text()
+        assert "new_id, _fact_scope = self._store_fact(" in cons_src
 
 
 # ── H9: consolidation marks partial failures ─────────────────────────────────

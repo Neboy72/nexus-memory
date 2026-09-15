@@ -19,11 +19,21 @@ def build_query(session_id: str, role_filter: str | None = None) -> tuple[str, t
 
 
 def main() -> None:
-    berlin = timezone(timedelta(hours=2))
+    if len(sys.argv) < 2:
+        # Nr 273: bare invocation crashed with IndexError
+        print("usage: session_dump.py <session_id> [role_filter] [limit] [maxlen]", file=sys.stderr)
+        sys.exit(2)
     sid = sys.argv[1]
     role_filter = sys.argv[2] if len(sys.argv) > 2 else None
-    limit = int(sys.argv[3]) if len(sys.argv) > 3 else 400
-    maxlen = int(sys.argv[4]) if len(sys.argv) > 4 else 500
+    try:
+        limit = int(sys.argv[3]) if len(sys.argv) > 3 else 400
+        maxlen = int(sys.argv[4]) if len(sys.argv) > 4 else 500
+    except ValueError:
+        # Nr 273: int() failures crashed with an ugly traceback
+        print("limit and maxlen must be integers", file=sys.stderr)
+        sys.exit(2)
+
+    berlin = timezone(timedelta(hours=2))
 
     con = sqlite3.connect('/Users/miosha/.hermes/state.db')
     con.row_factory = sqlite3.Row

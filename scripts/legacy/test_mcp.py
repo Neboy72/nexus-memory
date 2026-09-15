@@ -84,33 +84,34 @@ async def test():
             r = json.loads(_text(result))
             mem_id = r["id"]
             print(f"✅ Stored memory: {mem_id} [{r['access_level']}]")
+            # Nr 261: forget must ALWAYS run, even if an assert below fails
+            try:
+                # Recall (public → should NOT find the trusted memory)
+                result = await session.call_tool("recall", {
+                    "query": "test user city",
+                    "filter_level": "public",
+                    "limit": 5,
+                })
+                r = json.loads(_text(result))
+                print(f"✅ Public recall: {r['count']} results (expected: 0)")
+                assert r["count"] == 0, f"public recall leaked: {r}"
 
-            # Recall (public → should NOT find the trusted memory)
-            result = await session.call_tool("recall", {
-                "query": "test user city",
-                "filter_level": "public",
-                "limit": 5,
-            })
-            r = json.loads(_text(result))
-            print(f"✅ Public recall: {r['count']} results (expected: 0)")
-            assert r["count"] == 0, f"public recall leaked: {r}"
-
-            # Recall (trusted → should find it)
-            result = await session.call_tool("recall", {
-                "query": "test user city",
-                "filter_level": "trusted",
-                "limit": 5,
-            })
-            r = json.loads(_text(result))
-            print(f"✅ Trusted recall: {r['count']} result(s)")
-            assert r["count"] >= 1, f"trusted recall found nothing: {r}"
-            for mem in r["results"]:
-                print(f"   → {mem['text'][:60]}... [score: {mem['score']:.3f}]")
-
-            # Forget
-            result = await session.call_tool("forget", {"memory_id": mem_id})
-            r = json.loads(_text(result))
-            print(f"✅ Delete: {r['status']}")
+                # Recall (trusted → should find it)
+                result = await session.call_tool("recall", {
+                    "query": "test user city",
+                    "filter_level": "trusted",
+                    "limit": 5,
+                })
+                r = json.loads(_text(result))
+                print(f"✅ Trusted recall: {r['count']} result(s)")
+                assert r["count"] >= 1, f"trusted recall found nothing: {r}"
+                for mem in r["results"]:
+                    print(f"   → {mem['text'][:60]}... [score: {mem['score']:.3f}]")
+            finally:
+                # Forget
+                result = await session.call_tool("forget", {"memory_id": mem_id})
+                r = json.loads(_text(result))
+                print(f"✅ Delete: {r['status']}")
 
     print("\n🎉 ALL TESTS PASSED")
 

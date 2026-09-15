@@ -32,7 +32,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger("nexus.consolidation")
 
-CONSOLIDATION_INTERVAL_SECONDS = int(os.environ.get("NEXUS_CONSOLIDATION_INTERVAL", 3600))
+# Nr 285: floor at 60s — 0/negative would tight-loop the daemon
+CONSOLIDATION_INTERVAL_SECONDS = max(60, int(os.environ.get("NEXUS_CONSOLIDATION_INTERVAL", 3600)))
 CONSOLIDATION_START_DELAY_SECONDS = int(os.environ.get("NEXUS_CONSOLIDATION_START_DELAY", 120))
 CONSOLIDATION_BATCH = int(os.environ.get("NEXUS_CONSOLIDATION_BATCH", 10))
 CONSOLIDATION_ENABLED = os.environ.get("NEXUS_CONSOLIDATION", "1") == "1"
@@ -418,8 +419,9 @@ class Consolidator:
                                 log.warning(
                                     "consolidation: supersede of %s -> %s failed "
                                     "(pending retry): %s", old_id, new_id, sup_exc)
-                    created_here += 1
-                    facts_created += 1
+                        # Nr 284: dry_run must not report facts it never wrote
+                        created_here += 1
+                        facts_created += 1
                 if not dry_run:
                     self._mark_consolidated(p.id, created_here)
                     # Folder founding (Startlücken-Fix): a coherent batch of
@@ -602,6 +604,45 @@ class Consolidator:
                      "consolidated_facts": facts_created},
             points=[point_id],
         )
+
+    def consolidate_point(self, point_id: str, content: str, *,
+                          source_date: Optional[str] = None) -> dict:
+        """Public per-point entry for backfill/worker scripts (Nr 279).
+
+        Distills one conversation into facts, stores them and supersedes
+        conflicts — WITHOUT reaching into underscored internals. Returns
+        {"created": n, "duplicates": n, "superseded": n, "failed_supersedes": n}.
+
+        Raises ValueError on an unparseable LLM response (Nr 280: the caller
+        must NOT mark the point consolidated in that case) and propagates
+        LLM/store errors.
+        """
+        conv = content[:_MAX_CONV_CHARS]
+        date = source_date or time.strftime("%Y-%m-%d")
+        facts = _parse_facts(self._llm(DISTILL_PROMPT.format(date=date, conv=conv)))
+        if facts is None:
+            raise ValueError("unparseable LLM response (point left unmarked for retry)")
+        created = duplicates = superseded = failed_supersedes = 0
+        for fact in facts:
+            decision, sup_ids = self._resolve_conflicts(fact)
+            if decision == "duplicate":
+                duplicates += 1
+                continue
+            new_id, _fact_scope = self._store_fact(fact, point_id)
+            for old_id in sup_ids:
+                try:
+                    self._supersede_old(old_id, new_id)
+                    superseded += 1
+                except Exception as sup_exc:
+                    # Nr 282: one failed supersede must NOT abort the point —
+                    # the new fact is already stored; mark it consolidated.
+                    log.warning("consolidate_point: supersede of %s -> %s failed: %s",
+                                old_id, new_id, sup_exc)
+                    failed_supersedes += 1
+            created += 1
+        self._mark_consolidated(point_id, created)
+        return {"created": created, "duplicates": duplicates,
+                "superseded": superseded, "failed_supersedes": failed_supersedes}
 
     # ── pending supersede retry store (review-fix: partial failures must
     #    complete on a later tick instead of being lost) ────────────────

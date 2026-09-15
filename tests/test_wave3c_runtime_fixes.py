@@ -264,7 +264,9 @@ class TestM3UpsertFailures:
             "hermes-memory": [{"id": "p1", "payload": {"text": "a"}, "vector": []}],
             "openclaw-memory": [{"id": "p2", "payload": {"text": "b"}, "vector": []}],
         }
-        monkeypatch.setattr(mod, "scroll_all_points", lambda col: list(by_collection[col]))
+        # Nr 267 renamed the scroll helper to a batch generator; the seam is
+        # preserved (one batch per collection) so the assertion is unchanged.
+        monkeypatch.setattr(mod, "iter_scroll_batches", lambda col: [list(by_collection[col])])
         monkeypatch.setattr(mod, "upsert_points", lambda pts, dry_run=False: 1)
         monkeypatch.setattr(mod.time, "sleep", lambda s: None)
         monkeypatch.setattr(sys, "argv", ["migrate-collections.py"])

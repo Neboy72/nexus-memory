@@ -27,25 +27,19 @@ for _env in [Path.home() / ".hermes" / ".env", _repo / ".env"]:
                 if k and k not in os.environ:
                     os.environ[k] = v
 
-spec = importlib.util.spec_from_file_location("nhp", "plugins/memory/nexus/__init__.py")
+spec = importlib.util.spec_from_file_location(
+    "nhp", str(_repo / "plugins" / "memory" / "nexus" / "__init__.py"))
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
-prov = m.NexusMemoryProvider.__new__(m.NexusMemoryProvider)
-prov._collection = "nexus"
+_qdrant_host = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
+_qdrant_port = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
+prov = m.NexusMemoryProvider()  # Nr 276: real __init__ instead of a layout-coupled __new__
+prov._collection = os.environ.get("NEXUS_COLLECTION", "nexus")  # Nr 275: same env resolution as the plugin
 prov._rerank_cfg = {"enabled": True, "reranker": "auto", "pool_k": 20}
-prov._rerank_lock = T.Lock()
-prov._skill_graph = None
-prov._skill_graph_lock = T.Lock()
-prov._prefetch_result = ""
-prov._prefetch_lock = T.Lock()
-prov._entity_extract_lock = T.Lock()
-prov._hermes_home = ""
-prov._write_stop = T.Event()
 prov._embedder = m._Embedder()
 from qdrant_client import QdrantClient
-
-prov._qdrant = QdrantClient(host="localhost", port=6333)
+prov._qdrant = QdrantClient(host=_qdrant_host, port=_qdrant_port)
 
 # Benchmark must not contaminate SICA trust counters / flywheel state: the
 # recall path bumps agent stats and spawns the flywheel thread. Neutralize
