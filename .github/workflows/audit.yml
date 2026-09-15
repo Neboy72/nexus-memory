@@ -57,11 +57,13 @@ jobs:
         run: |
           echo "=== Running tests ==="
           # Capture pytest's exit code explicitly so a failing suite can never
-          # be masked by `head`/`tail` exiting 0. faulthandler guarantees a
-          # traceback in the output file even on a hard interpreter crash
-          # (observed 2026-09-15: exit 1 with a completely empty output file
-          # on the hosted runner while Mac + Ubuntu replicas were green).
-          python -X faulthandler -m pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
+          # be masked by `head`/`tail` exiting 0. -u disables stdout block
+          # buffering (a SIGKILL mid-run would otherwise void the whole file —
+          # observed 2026-09-15: exit 1 with a completely empty output file on
+          # the hosted runner while Mac + Ubuntu replicas were green).
+          # faulthandler guarantees a traceback on hard interpreter crashes.
+          # -x stops at the first failure to bound runner memory usage.
+          python -u -X faulthandler -m pytest tests/ -q --tb=short -x > /tmp/pytest-out.txt 2>&1
           EXIT=$?
           if [ ! -s /tmp/pytest-out.txt ]; then
             echo "⚠️ pytest produced NO output (exit=$EXIT) — process likely killed (OOM?) before any output."
