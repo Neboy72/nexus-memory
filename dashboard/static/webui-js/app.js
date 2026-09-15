@@ -52,7 +52,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // ─── Header Scroll Effect ───
   const header = document.querySelector('.header');
-  let lastScroll = 0;
 
   window.addEventListener('scroll', () => {
     const scrollY = window.scrollY;
@@ -61,7 +60,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       header.classList.remove('header--scrolled');
     }
-    lastScroll = scrollY;
   }, { passive: true });
 
   // ─── Mobile Menu ───
@@ -171,12 +169,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     return `${days}d ago`;
   }
 
+  // Confidence is a 0..1 ratio; a missing/NaN value must not render as "NaN%".
+  function formatConfidence(v) {
+    return Number.isFinite(v * 100) ? (v * 100).toFixed(0) + '%' : '-';
+  }
+
   function renderStats(stats) {
     // Legacy stats grid (marketing page)
     const el = (id) => document.getElementById(id);
     if (el('statTotal')) el('statTotal').textContent = stats.total_memories;
     if (el('statEdges')) el('statEdges').textContent = stats.total_edges;
-    if (el('statConfidence')) el('statConfidence').textContent = (stats.avg_confidence * 100).toFixed(0) + '%';
+    if (el('statConfidence')) el('statConfidence').textContent = formatConfidence(stats.avg_confidence);
     if (el('statSources')) el('statSources').textContent = stats.total_unique_sources;
     if (el('statCategories')) el('statCategories').textContent = Object.keys(stats.by_category).length;
 
@@ -185,7 +188,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Newbie-truth metrics instead of formula numbers (Connections/AvgConfidence
     // were "points minus categories" and a 0.7-default average — meaningless
     // to a fresh user; growth + freshness tell if the memory is ALIVE).
-    if (el('statGrownWeek')) el('statGrownWeek').textContent = (stats.grown_this_week ?? '-') + (stats.grown_this_week ? '' : '');
+    if (el('statGrownWeek')) el('statGrownWeek').textContent = stats.grown_this_week ?? '-';
     if (el('statLastMemory')) {
       el('statLastMemory').textContent = stats.last_memory_at ? timeAgo(stats.last_memory_at) : '—';
     }
@@ -203,8 +206,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (statDrift) {
       const drift = stats.by_drift_status || {};
       const ampel = [];
-      const colors = {'fresh':'#22c55e','drifting':'#eab308','drifted':'#ef4444','not_tracked':'#6b7280'};
-      for (const [key, color] of Object.entries(colors)) {
+      for (const [key, color] of Object.entries(NEXUS_DRIFT_COLORS)) {
         if (drift[key] && drift[key] > 0) {
           const labels = {'fresh':'Fresh','drifting':'Drifting','drifted':'Drifted','not_tracked':'Not Tracked'};
           ampel.push(`<div style="display:flex;align-items:center;gap:12px;padding:3px 8px">
@@ -227,19 +229,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     MemoryGraph.updateFilters(state.filters);
   }
 
+  // Fire-and-forget refresh from the event handlers: applyFilters() is async,
+  // so an unawaited rejection (e.g. loadData's fetch failing) would surface as
+  // an unhandled promise rejection. Log it instead of crashing the handler.
+  function queueApplyFilters() {
+    void applyFilters().catch((err) => { console.error('filter failed', err); });
+  }
+
   document.getElementById('filterCategory').addEventListener('change', (e) => {
     state.filters.category = e.target.value;
-    applyFilters();
+    queueApplyFilters();
   });
 
   document.getElementById('filterAccess').addEventListener('change', (e) => {
     state.filters.access_level = e.target.value;
-    applyFilters();
+    queueApplyFilters();
   });
 
   document.getElementById('filterDrift').addEventListener('change', (e) => {
     state.filters.drift = e.target.value;
-    applyFilters();
+    queueApplyFilters();
   });
 
   let searchTimeout;
@@ -247,7 +256,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
       state.filters.search = e.target.value.trim();
-      applyFilters();
+      queueApplyFilters();
     }, 200);
   });
 
@@ -262,12 +271,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function showDetail(d) {
-    const catColors = {
-      fact: '#3b82f6', belief: '#8b5cf6', session: '#f59e0b',
-      rule: '#10b981', preference: '#ec4899', temp: '#6b7280',
-    };
     const driftIcons = { fresh: '🟢', drifting: '🟡', drifted: '🔴' };
-    const color = catColors[d.category] || '#888';
+    const color = NEXUS_CATEGORY_COLORS[d.category] || '#888';
 
     const created = d.created_at ? new Date(d.created_at).toLocaleDateString('en-US', {
       year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
@@ -275,6 +280,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Paperless-Kategorie aus Titel parsen: "Datum – Kategorie – Beschreibung"
     const paperCat = d.title ? (d.title.split(' – ')[1] || '') : '';
+
+    // Bar width needs a real percentage; a missing confidence must not emit
+    // `width:NaN%` (invalid CSS, silently dropped by the browser).
+    const confWidth = Number.isFinite(d.confidence * 100) ? (d.confidence * 100) + '%' : '0%';
 
     detailBody.innerHTML = `
       <div class="detail-node">
@@ -288,8 +297,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         <div class="detail-node__meta">
           <div class="detail-node__meta-item">
             <span class="detail-node__meta-label">Confidence</span>
-            <span>${(d.confidence * 100).toFixed(0)}%</span>
-            <div class="detail-node__confidence-bar" style="width:${d.confidence * 100}%"></div>
+            <span>${formatConfidence(d.confidence)}</span>
+            <div class="detail-node__confidence-bar" style="width:${confWidth}"></div>
           </div>
           <div class="detail-node__meta-item">
             <span class="detail-node__meta-label">Source</span>
@@ -326,9 +335,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     anchor.addEventListener('click', (e) => {
       e.preventDefault();
-      const target = document.querySelector(anchor.getAttribute('href'));
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // href="#" (and bare "#") is not a valid selector — querySelector('#')
+      // throws a SyntaxError. Only resolve/scroll when there is a real target.
+      const href = anchor.getAttribute('href');
+      if (href && href.length > 1) {
+        const target = document.querySelector(href);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
       }
     });
   });
