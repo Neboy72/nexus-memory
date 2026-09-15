@@ -56,6 +56,7 @@ async def test():
             })
             r = json.loads(result.content[0].text)
             print(f"✅ Public recall: {r['count']} results (expected: 0)")
+            assert r["count"] == 0, f"public recall leaked: {r}"
 
             # Recall (trusted → should find it)
             result = await session.call_tool("recall", {
@@ -65,6 +66,7 @@ async def test():
             })
             r = json.loads(result.content[0].text)
             print(f"✅ Trusted recall: {r['count']} result(s)")
+            assert r["count"] >= 1, f"trusted recall found nothing: {r}"
             for mem in r["results"]:
                 print(f"   → {mem['text'][:60]}... [score: {mem['score']:.3f}]")
 

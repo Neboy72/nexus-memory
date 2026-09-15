@@ -46,10 +46,18 @@ def main() -> int:
         remaining = args.max - total_done if args.max else 0
         bs = min(args.batch, remaining) if remaining else args.batch
         report = c.run(batch_size=bs)
-        done = report.get("scanned", 0)
+        # Termination on real progress, not on "scanned": failed points are
+        # left unmarked and get re-scanned every batch, so `scanned` never
+        # reaches 0 (infinite loop). Facts created + duplicates dropped +
+        # skipped audit points are the durable, non-repeating outcomes.
+        done = (report.get("facts_created", 0)
+                + report.get("duplicates", 0)
+                + report.get("skipped", 0))
         total_done += done
-        print(f"[{time.strftime('%H:%M:%S')}] +{done} scanned (facts={report.get('facts_created',0)}, "
+        print(f"[{time.strftime('%H:%M:%S')}] +{done} done (scanned={report.get('scanned',0)}, "
+              f"facts={report.get('facts_created',0)}, "
               f"superseded={report.get('superseded',0)}, dup={report.get('duplicates',0)}, "
+              f"skipped={report.get('skipped',0)}, "
               f"failed={report.get('failed',0)}) | total={total_done} | "
               f"{(time.time()-t0)/60:.1f}min")
         if done == 0:
