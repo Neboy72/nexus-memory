@@ -3,7 +3,11 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# Secrets: ignore every env-file variant; only the example is committed.
 .env
+.env.*
+!.env.example
+*.env
 plugins/openclaw/node_modules/
 plugins/openclaw/dist/
 plugins/openclaw/package-lock.json
@@ -21,11 +25,13 @@ backups/
 # Logo drafts
 docs/logo/
 
-# Nexus snapshots / local backups (never in git)
-2026*_*
-2026*_*.md
-*-bak-*
-*.bak-*
+# Nexus snapshots / local backups (never in git) — ANCHORED to the repo root:
+# unanchored `2026*_*` / `*-bak-*` also untracked any source/docs/fixture path
+# that merely contained "-bak-" or started with "2026" anywhere in the tree.
+/2026*_*
+/2026*_*.md
+/*-bak-*
+/*.bak-*
 __pycache__/
 *.egg-info/
 

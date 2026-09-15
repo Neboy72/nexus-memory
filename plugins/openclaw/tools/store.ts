@@ -10,6 +10,10 @@ import { log } from "../logger.ts"
 const MEMORY_CATEGORIES = ["fact", "belief", "session", "rule", "preference", "temp"] as const
 const ACCESS_LEVELS = ["public", "trusted", "private"] as const
 
+/** Scope pattern shared with lib/config.ts, lib/scope-auto.ts and the server. */
+const SCOPE_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/
+const SCOPE_PATTERN_TEXT = "[a-z0-9][a-z0-9-]{0,39}"
+
 export function registerStoreTool(
   api: OpenClawPluginApi,
   embedder: Embedder,
@@ -83,12 +87,43 @@ export function registerStoreTool(
           }
         }
 
-        // Scope normalization ([a-z0-9-], max 40) — fail-open to 'default' on
-        // invalid input (same regex as lib/config.ts + server). Explicit
-        // param.scope wins; else cfg.scope; else AUTO-infer from centroids
-        // (self-organizing memory, Nebo law 07.09) inside the try below.
-        const explicit = (params.scope ?? cfg.scope ?? "").trim().toLowerCase()
-        let scope = /^[a-z0-9][a-z0-9-]{0,39}$/.test(explicit) ? explicit : ""
+        // Scope normalization ([a-z0-9-], max 40; same regex as lib/config.ts,
+        // lib/scope-auto.ts and the server).
+        //
+        // H139: an EXPLICITLY passed scope must be valid — a silently dropped
+        // "My Project" / "team_a" / >40-char scope used to land in default (or
+        // the auto-inferred area) with the caller still seeing "Stored: …".
+        // A scope that merely comes from cfg stays fail-open (as before): one
+        // bad global setting must not brick every store call. Either way the
+        // success text now echoes the EFFECTIVE values.
+        // A blank explicit scope ("" / whitespace) is treated as "omitted", not
+        // as an invalid value: callers use "" to mean "no scope given", and the
+        // schema documents omitted as "let the area be inferred".
+        const trimmedExplicit =
+          params.scope === undefined ? null : String(params.scope).trim().toLowerCase()
+        const explicitScope = trimmedExplicit ? trimmedExplicit : null
+        if (explicitScope !== null && !SCOPE_PATTERN.test(explicitScope)) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Memory store failed: invalid scope "${params.scope}". ` +
+                  `Allowed pattern: ${SCOPE_PATTERN_TEXT} (lowercase letters, ` +
+                  `digits and dashes, max 40 chars). Omit scope to let the ` +
+                  `area be inferred automatically.`,
+              },
+            ],
+          }
+        }
+
+        const cfgScope = (cfg.scope ?? "").trim().toLowerCase()
+        let scope =
+          explicitScope !== null
+            ? explicitScope
+            : SCOPE_PATTERN.test(cfgScope)
+              ? cfgScope
+              : ""
 
         log.debug(
           `store tool: category="${category}" accessLevel="${accessLevel}" textLen=${params.text.length}`,
@@ -125,8 +160,17 @@ export function registerStoreTool(
           const preview =
             params.text.length > 80 ? `${params.text.slice(0, 80)}…` : params.text
 
+          // H139: echo the effective values so the caller always sees where
+          // the memory actually landed (no more silent default fallback).
           return {
-            content: [{ type: "text" as const, text: `Stored: "${preview}"` }],
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Stored: "${preview}" ` +
+                  `(scope: ${scope}, category: ${category}, access_level: ${accessLevel})`,
+              },
+            ],
           }
         } catch (err) {
           log.error("store tool failed", err)

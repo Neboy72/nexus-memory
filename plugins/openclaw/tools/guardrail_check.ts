@@ -15,7 +15,21 @@ const DESTRUCTIVE_PATTERNS: Array<{ action: string; patterns: RegExp[] }> = [
 const PROTECTION_KEYWORDS = ["never delete", "never remove", "do not delete", "do not remove",
   "protected", "niemals", "verboten", "forbidden", "tabu", "sacred"]
 
-const PATH_PATTERNS = [/~[\w./-]+/g, /\/[\w./-]+/g, /\w:[\\/][\w\\./-]+/g]
+/**
+ * Path-ish tokens inside a command or rule text.
+ *
+ * H124: the bare classic targets `~`, `/` and `.` are matched explicitly.
+ * They are exactly the catastrophic ones (`rm -rf /`, `rm -rf ~`) and the
+ * previous caller-side `length > 2` guard silently dropped them, so those
+ * commands produced zero targets and were allowed.
+ */
+const PATH_PATTERNS = [
+  /\w:[\\/][\w\\./-]+/g, // C:\path or C:/path
+  /~(?:\/[\w./-]+)?/g, // ~ or ~/foo/bar
+  /(?:^|\s)\/(?=\s|$)/g, // bare / (filesystem root)
+  /\/[\w./-]+/g, // /abs/path
+  /(?:^|\s)\.(?=\s|$)/g, // bare . (current directory)
+]
 
 function classifyAction(command: string): string | null {
   for (const { action, patterns } of DESTRUCTIVE_PATTERNS) {
@@ -26,37 +40,97 @@ function classifyAction(command: string): string | null {
   return null
 }
 
+/** Expand a leading `~` (bare or `~/...`) to the home directory. */
+function expandHome(path: string): string {
+  if (path === "~" || path.startsWith("~/")) {
+    return path.replace(/^~/, process.env.HOME || "~")
+  }
+  return path
+}
+
+/**
+ * Extract candidate destructive targets from a command string.
+ *
+ * H124: NO length/classic-path guard any more — `~`, `/`, `.` and one-char
+ * paths are kept. If a caller ends up with an empty list it still treats the
+ * action as allowed (the "no protected target" branch), but these classic
+ * targets are now always present in the list.
+ *
+ * Case is preserved (file systems are case-sensitive); `~` is expanded here so
+ * the comparison against rule paths happens on concrete paths.
+ */
 function extractTargets(command: string): string[] {
   const targets: string[] = []
   for (const pattern of PATH_PATTERNS) {
     const globalPattern = new RegExp(pattern.source, pattern.flags)
     let match: RegExpExecArray | null
     while ((match = globalPattern.exec(command)) !== null) {
+      // The bare `/` and `.` patterns capture a leading space via `(?:^|\s)`.
       const target = match[0].trim().replace(/^['"]|['"]$/g, "")
-      if (target && target.length > 2 && target !== "~" && target !== "/" && target !== ".") {
-        // Expand ~ to home directory
-        const expanded = target.startsWith("~/") ? target.replace(/^~/, process.env.HOME || "~") : target
-        targets.push(expanded)
-      }
+      if (!target) continue
+      targets.push(expandHome(target))
     }
   }
   return targets
 }
 
+/**
+ * Normalize a path for comparison.
+ *
+ * H124: (a) NO lowercasing — macOS/Linux file systems are case-sensitive, so
+ * `rm -rf /Data` must not be treated as `rm -rf /data`; (b) `.` and `..`
+ * segments are resolved textually (no fs access), so `~/a/../b` and `~/./b`
+ * compare equal to `~/b`; (c) the filesystem root `/` is preserved.
+ */
 function normalizePath(path: string): string {
-  const p = path.replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase()
-  return p
+  const raw = path.replace(/\\/g, "/")
+  const isAbsolute = raw.startsWith("/")
+  const segments: string[] = []
+  for (const segment of raw.split("/")) {
+    if (segment === "" || segment === ".") continue
+    if (segment === "..") {
+      segments.pop()
+      continue
+    }
+    segments.push(segment)
+  }
+  const joined = segments.join("/")
+  if (isAbsolute) return `/${joined}` // "/" + "" === "/" (root survives)
+  return joined === "" ? "." : joined
 }
 
+/** True when `child` lies strictly below `parent` at a path-segment boundary. */
+function isPathInside(child: string, parent: string): boolean {
+  if (parent === "/") return child !== "/" // everything else is inside root
+  return child.startsWith(`${parent}/`)
+}
+
+/**
+ * Does a destructive `target` touch the `protectedPath`?
+ *
+ * H124 — four documented rules:
+ *  1. same path;
+ *  2. the protected path is INSIDE the target → parent deletion (`rm -rf
+ *     ~/proj` against a protected `~/proj/secret`, or `rm -rf /`);
+ *  3. the target is inside the protected path → child deletion, SEGMENT
+ *     BOUNDARY only, so `~/projekt-alt` does NOT match a protected `~/proj`;
+ *  4. an explicit `*` suffix on the protected path is a wildcard: any target
+ *     sharing the prefix matches. `*` is deliberate, so prefix matching is the
+ *     documented intent here (unlike rule 3, which stays boundary-exact).
+ */
 function pathMatches(target: string, protectedPath: string): boolean {
   const t = normalizePath(target)
   const p = normalizePath(protectedPath)
-  if (t === p) return true
+
+  if (t === p) return true // rule 1
+  if (isPathInside(p, t)) return true // rule 2 (parent deletion)
+  if (isPathInside(t, p)) return true // rule 3 (child deletion, segment-exact)
+
   if (p.endsWith("*")) {
-    const prefix = p.slice(0, -1)
-    if (t.startsWith(prefix)) return true
+    // rule 4
+    const prefix = normalizePath(p.slice(0, -1))
+    if (t === prefix || t.startsWith(prefix)) return true
   }
-  if (t.startsWith(p + "/")) return true
   return false
 }
 
@@ -116,6 +190,81 @@ async function loadProtectionRules(qdrantClient: QdrantClient, _collection: stri
   }
 }
 
+/**
+ * Core guardrail evaluation, shared by `nexus_guardrail_check` and the
+ * override re-check (H140). Returns the JSON-shaped result object; never
+ * throws (the rule store failing yields the fail-closed block).
+ */
+async function evaluateGuardrail(
+  qdrantClient: QdrantClient,
+  cfg: NexusConfig,
+  checkedToolName: string,
+  command: string,
+  toolInput: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!command) {
+    return { verdict: "allow", reason: "Empty command" }
+  }
+
+  const fullInput = `${checkedToolName} ${command} ${JSON.stringify(toolInput)}`
+  const action = classifyAction(fullInput)
+
+  if (!action) {
+    return { verdict: "allow", reason: "Non-destructive action" }
+  }
+
+  let targets = extractTargets(fullInput)
+  // Also check tool_input values for paths
+  if (toolInput && typeof toolInput === "object") {
+    for (const v of Object.values(toolInput)) {
+      if (typeof v === "string" && (v.includes("/") || v.includes("~"))) {
+        targets = targets.concat(extractTargets(v))
+      }
+    }
+  }
+
+  if (targets.length === 0) {
+    return { verdict: "allow", reason: `Destructive action (${action}) but no protected target` }
+  }
+
+  const rules = await loadProtectionRules(qdrantClient, cfg.collection || "nexus")
+  if (rules === null) {
+    // Rules could not be loaded — we cannot prove the target is
+    // unprotected, so block the destructive action (fail-closed).
+    return {
+      verdict: "block",
+      reason: `Destructive action (${action}) but protection rules unavailable — fail-closed`,
+    }
+  }
+  if (rules.length === 0) {
+    return { verdict: "allow", reason: `Destructive action (${action}) but no protection rules` }
+  }
+
+  const matched: Array<Record<string, unknown>> = []
+  for (const target of targets) {
+    for (const rule of rules) {
+      if (pathMatches(target, rule.path)) {
+        matched.push({
+          target,
+          protected_path: rule.path,
+          rule_text: rule.ruleText,
+          source_memory_id: rule.sourceId,
+          action,
+        })
+      }
+    }
+  }
+
+  if (matched.length > 0) {
+    return {
+      verdict: "block",
+      reason: `Destructive action (${action}) on protected target`,
+      matched_rules: matched,
+    }
+  }
+  return { verdict: "allow", reason: `Destructive action (${action}) on unprotected target` }
+}
+
 export function registerGuardrailCheckTool(
   api: OpenClawPluginApi,
   qdrantClient: QdrantClient,
@@ -138,73 +287,24 @@ export function registerGuardrailCheckTool(
     ) {
       const { command, tool_name: checkedToolName = "", tool_input: toolInput = {} } = params
 
-      let result: Record<string, unknown>
-
-      if (!command) {
-        result = { verdict: "allow", reason: "Empty command" }
-      } else {
-        const fullInput = `${checkedToolName} ${command} ${JSON.stringify(toolInput)}`
-        const action = classifyAction(fullInput)
-
-        if (!action) {
-          result = { verdict: "allow", reason: "Non-destructive action" }
-        } else {
-          let targets = extractTargets(fullInput)
-          // Also check tool_input values for paths
-          if (toolInput && typeof toolInput === "object") {
-            for (const v of Object.values(toolInput)) {
-              if (typeof v === "string" && (v.includes("/") || v.includes("~"))) {
-                targets = targets.concat(extractTargets(v))
-              }
-            }
-          }
-
-          if (targets.length === 0) {
-            result = { verdict: "allow", reason: `Destructive action (${action}) but no protected target` }
-          } else {
-            const rules = await loadProtectionRules(qdrantClient, cfg.collection || "nexus")
-            if (rules === null) {
-              // Rules could not be loaded — we cannot prove the target is
-              // unprotected, so block the destructive action (fail-closed).
-              result = {
-                verdict: "block",
-                reason: `Destructive action (${action}) but protection rules unavailable — fail-closed`,
-              }
-            } else if (rules.length === 0) {
-              result = { verdict: "allow", reason: `Destructive action (${action}) but no protection rules` }
-            } else {
-              const matched: Array<Record<string, unknown>> = []
-              for (const target of targets) {
-                for (const rule of rules) {
-                  if (pathMatches(target, rule.path)) {
-                    matched.push({
-                      target,
-                      protected_path: rule.path,
-                      rule_text: rule.ruleText,
-                      source_memory_id: rule.sourceId,
-                      action,
-                    })
-                  }
-                }
-              }
-
-              if (matched.length > 0) {
-                result = {
-                  verdict: "block",
-                  reason: `Destructive action (${action}) on protected target`,
-                  matched_rules: matched,
-                }
-              } else {
-                result = { verdict: "allow", reason: `Destructive action (${action}) on unprotected target` }
-              }
-            }
-          }
-        }
-      }
+      const result = await evaluateGuardrail(
+        qdrantClient,
+        cfg,
+        checkedToolName,
+        command,
+        toolInput,
+      )
 
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }
     },
   })
+}
+
+/** Shape an override must cite from a real guardrail_check block. */
+type CitedRule = {
+  protected_path: string
+  rule_text: string
+  source_memory_id: string
 }
 
 export function registerGuardrailOverrideTool(
@@ -218,12 +318,22 @@ export function registerGuardrailOverrideTool(
     name: toolName,
     label: "Nexus Guardrail Override",
     description:
-      "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.",
+      "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized. The command is re-checked against the current protection rules; only a still-blocking command with matching rules is recorded.",
     parameters: Type.Object({
       command: Type.String({ description: "The command that was blocked" }),
-      reasoning: Type.String({ description: "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters." }),
-      matched_rules: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()))),
-      agent_id: Type.Optional(Type.String({ default: "unknown" })),
+      reasoning: Type.String({ description: "Explicit reasoning why this action is safe despite the guardrail block. Minimum 30 characters." }),
+      matched_rules: Type.Optional(
+        Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+          description:
+            "The matched_rules array from the guardrail_check block result. At least one entry, each with string protected_path, rule_text and source_memory_id.",
+        }),
+      ),
+      agent_id: Type.Optional(
+        Type.String({
+          description:
+            "The real agent id taking responsibility. Must be a non-empty id — \"unknown\" is rejected.",
+        }),
+      ),
     }),
     async execute(
       _toolCallId: string,
@@ -231,17 +341,78 @@ export function registerGuardrailOverrideTool(
     ) {
       const { command, reasoning, matched_rules: matchedRules = [], agent_id: agentId = "unknown" } = params
 
+      const fail = (error: string) => ({
+        isError: true,
+        content: [{ type: "text" as const, text: JSON.stringify({ status: "error", error }) }],
+      })
+
+      // H140 (1): a longer, non-gameable reasoning bar (no word list — that
+      // would only invite keyword stuffing). Raised 10 → 30 chars.
       const trimmedReasoning = reasoning.trim()
-      if (!trimmedReasoning || trimmedReasoning.length < 10) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: JSON.stringify({ status: "error", error: "Override requires explicit reasoning (min 10 chars)." }) }],
+      if (!trimmedReasoning || trimmedReasoning.length < 30) {
+        return fail("Override requires explicit reasoning (min 30 chars).")
+      }
+
+      // H140 (2): the override must cite a real block. `matched_rules` was
+      // optional and stored verbatim, so an override could be "proven" with
+      // an empty or fabricated list — the audit chain did not hold.
+      if (!Array.isArray(matchedRules) || matchedRules.length === 0) {
+        return fail(
+          "override rejected: matched_rules must list at least one rule from a guardrail_check block.",
+        )
+      }
+      const cited: CitedRule[] = []
+      for (const entry of matchedRules) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return fail(
+            "override rejected: every matched_rules entry must be an object with string protected_path, rule_text and source_memory_id.",
+          )
         }
+        const o = entry as Record<string, unknown>
+        if (
+          typeof o.protected_path !== "string" ||
+          typeof o.rule_text !== "string" ||
+          typeof o.source_memory_id !== "string"
+        ) {
+          return fail(
+            "override rejected: every matched_rules entry must have string protected_path, rule_text and source_memory_id.",
+          )
+        }
+        cited.push({
+          protected_path: o.protected_path,
+          rule_text: o.rule_text,
+          source_memory_id: o.source_memory_id,
+        })
+      }
+
+      // H140 (3): an anonymous override is not auditable.
+      const trimmedAgentId = typeof agentId === "string" ? agentId.trim() : ""
+      if (trimmedAgentId === "" || trimmedAgentId.toLowerCase() === "unknown") {
+        return fail(
+          'override rejected: agent_id must be a real, non-empty agent id (not "unknown").',
+        )
       }
 
       try {
+        // H140 (4): re-check the command against the CURRENT protection rules
+        // with the same matching logic the check tool uses. An override is only
+        // meaningful if the command would still be blocked right now.
+        const recheck = await evaluateGuardrail(qdrantClient, cfg, "", command, {})
+        const recheckMatches = (recheck.matched_rules as Array<Record<string, unknown>> | undefined) ?? []
+        const recheckPaths = new Set(
+          recheckMatches.map((m) => normalizePath(String(m.protected_path ?? ""))),
+        )
+        const confirmed = cited.filter((c) => recheckPaths.has(normalizePath(c.protected_path)))
+
+        if (recheck.verdict !== "block" || confirmed.length === 0) {
+          return fail(
+            "override rejected: command does not match a current guardrail block " +
+              `(re-check produced ${String(recheck.verdict)} / different rules).`,
+          )
+        }
+
         const overrideId = crypto.randomUUID()
-        const auditText = `GUARDRAIL OVERRIDE: ${command} | Reasoning: ${trimmedReasoning} | Agent: ${agentId}`
+        const auditText = `GUARDRAIL OVERRIDE: ${command} | Reasoning: ${trimmedReasoning} | Agent: ${trimmedAgentId}`
         const vector = await embedder.embed(auditText)
 
         await qdrantClient.upsert(overrideId, vector, {
@@ -251,8 +422,11 @@ export function registerGuardrailOverrideTool(
           guardrail_override: true,
           overridden_command: command,
           reasoning: trimmedReasoning,
-          agent_id: agentId,
-          matched_rules: matchedRules,
+          agent_id: trimmedAgentId,
+          // Only rules whose protected_path the re-check confirmed right now.
+          matched_rules: confirmed,
+          recheck_verdict: recheck.verdict,
+          verified_at: new Date().toISOString(),
           timestamp: new Date().toISOString(),
         })
 
@@ -261,10 +435,7 @@ export function registerGuardrailOverrideTool(
         }
       } catch (exc) {
         log.warn(`Guardrail override failed: ${exc}`)
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: JSON.stringify({ status: "error", error: String(exc) }) }],
-        }
+        return fail(String(exc))
       }
     },
   })
