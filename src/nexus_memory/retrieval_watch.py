@@ -37,6 +37,12 @@ DEFAULT_QUERIES: List[Tuple[str, str]] = [
 ]
 
 
+def _hit_text(r: Any) -> str:
+    """Lowercased text/content of a search hit (empty string when absent)."""
+    pl = getattr(r, "payload", None) or {}
+    return str(pl.get("text") or pl.get("content") or "").lower()
+
+
 def _load_queries() -> List[Tuple[str, str]]:
     raw = os.environ.get("NEXUS_WATCH_QUERIES", "").strip()
     if raw:
@@ -95,25 +101,34 @@ class RetrievalWatch:
                 if not embed_ok:
                     failed_embeddings += 1
                 checked += 1
-                text = " ".join(
-                    str((r.payload or {}).get("text") or (r.payload or {}).get("content") or "")
-                    for r in results
-                ).lower()
+                kw = expected.lower()
+                # Only hits that actually carry the expected keyword count —
+                # and the score gate looks at those hits alone (a strong
+                # unrelated hit must not mask a weak keyword hit).
+                kw_hits = [r for r in results if kw in _hit_text(r)]
                 top_score = max(
-                    (getattr(r, "score", 0.0) or 0.0 for r in results), default=0.0
+                    (getattr(r, "score", 0.0) or 0.0 for r in kw_hits), default=0.0
                 )
                 # Minimum-score check: even when the keyword is present, a
-                # result with a similarity below MIN_SCORE is a quality
-                # failure (the hit is too weak to count as retrieval).
-                if not results or expected.lower() not in text or (
-                        results and top_score < MIN_SCORE):
+                # vector hit below MIN_SCORE is a quality failure. The scroll
+                # fallback (embed_ok=False) carries no meaningful similarity,
+                # so a keyword hit there counts as found — a missing score is
+                # an embedding problem, not a retrieval failure.
+                if not kw_hits:
                     failures.append({
                         "query": query,
                         "expected": expected,
                         "results": len(results),
                         "top_score": round(top_score, 3),
-                        "reason": "score_below_min" if results and
-                                  expected.lower() in text else "not_found",
+                        "reason": "not_found",
+                    })
+                elif embed_ok and top_score < MIN_SCORE:
+                    failures.append({
+                        "query": query,
+                        "expected": expected,
+                        "results": len(results),
+                        "top_score": round(top_score, 3),
+                        "reason": "score_below_min",
                     })
             except Exception as exc:
                 log.warning("Retrieval-watch query failed: %s", exc)

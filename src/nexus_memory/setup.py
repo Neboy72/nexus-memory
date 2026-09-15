@@ -252,6 +252,15 @@ def install_agent(agent_id: str, trust_level: str = "public") -> dict:
     agent is registered only after at least one part installed successfully,
     and install_type contains only the parts that actually succeeded.
     """
+    # Validate the trust level BEFORE installing anything: register_agent
+    # refuses unknown levels anyway, so installing first would leave a
+    # half-configured, unregistered agent behind.
+    _valid_trust = ("public", "trusted", "private")
+    if trust_level not in _valid_trust:
+        return {"error": (
+            f"Invalid trust level: {trust_level}. Must be one of: {list(_valid_trust)}"
+        )}
+
     # Get agent info from detection
     detection = detect_all_agents()
     agent_info = None
@@ -293,7 +302,7 @@ def install_agent(agent_id: str, trust_level: str = "public") -> dict:
     install_type = "+".join(installed)
 
     # Register agent in registry (only after a successful install)
-    register_agent(
+    register_result = register_agent(
         agent_id=agent_id,
         name=agent_info["name"],
         icon=agent_info.get("icon", "❓"),
@@ -301,6 +310,15 @@ def install_agent(agent_id: str, trust_level: str = "public") -> dict:
         install_type=install_type,
         config_dir=agent_info.get("config_dir"),
     )
+    # register_agent returns {"error": ...} on refusal (invalid trust level,
+    # remote-host collision). Surface that instead of reporting "installed".
+    if isinstance(register_result, dict) and "error" in register_result:
+        return {
+            "agent_id": agent_id,
+            "error": register_result["error"],
+            "status": "register_failed",
+            "steps": steps,
+        }
 
     return {
         "agent_id": agent_id,
