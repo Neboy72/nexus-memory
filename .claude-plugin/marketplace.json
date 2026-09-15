@@ -14,7 +14,7 @@
         "name": "Neboy72"
       },
       "homepage": "https://github.com/Neboy72/nexus-memory",
-      "license": "Apache-2.0",
+      "license": "MIT",
       "keywords": [
         "memory",
         "qdrant",
@@ -25,5 +25,7 @@
       "category": "memory"
     }
   ],
-  "description": "Nexus Memory - self-hosted memory for Claude Code, OpenClaw and MCP agents. One Qdrant store, hybrid retrieval, memory dynamics."
+  "metadata": {
+    "description": "Nexus Memory - self-hosted memory for Claude Code, OpenClaw and MCP agents. One Qdrant store, hybrid retrieval, memory dynamics."
+  }
 }
