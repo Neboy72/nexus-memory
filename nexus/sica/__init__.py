@@ -312,7 +312,12 @@ def _detect_low_confidence(points: List[Dict], low_confidence_threshold: float =
             if "access_count" not in payload:
                 never_used = False
             else:
-                never_used = int(payload.get("access_count", 0) or 0) == 0
+                # Guard the cast: a non-numeric access_count ("abc") must not
+                # kill the whole SICA round (mirrors the confidence cast above).
+                try:
+                    never_used = int(payload.get("access_count", 0) or 0) == 0
+                except (TypeError, ValueError):
+                    continue
             age = _age_days(payload.get("created_at"))
             purgeable = never_used and confidence < 0.2 and age > 30
             issues.append({

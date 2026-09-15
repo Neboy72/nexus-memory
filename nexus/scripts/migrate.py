@@ -29,23 +29,27 @@ _logger = logging.getLogger(__name__)
 def read_edges_from_sqlite(db_path: str) -> list[dict]:
     """Lies alle aktiven Edges aus der SQLite-Datenbank."""
     conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    
-    # Check if edges table exists
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='edges'"
-    )
-    if not cursor.fetchone():
-        print(f"⚠️  Table 'edges' not found in {db_path}")
-        return []
-    
-    cursor.execute(
-        "SELECT * FROM edges WHERE status = 'active' ORDER BY created_at"
-    )
-    rows = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return rows
+    # try/finally: close on every exit path (early return, exception, success).
+    # NB: ``with sqlite3.connect(...)`` only manages the transaction, it does
+    # NOT close the connection — hence the explicit close here.
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Check if edges table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='edges'"
+        )
+        if not cursor.fetchone():
+            print(f"⚠️  Table 'edges' not found in {db_path}")
+            return []
+
+        cursor.execute(
+            "SELECT * FROM edges WHERE status = 'active' ORDER BY created_at"
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
 
 def _edge_id(source_fact_id: str, target_fact_id: str, relation: str) -> str:
@@ -121,12 +125,16 @@ def migrate(
     
     print(f"   Collection '{collection}' found")
     
-    # Inject per point
+    # Inject per point — MERGE into any edges already present on the point.
+    # set_payload replaces the whole ``edges`` array, so writing the migrated
+    # batch blindly would drop live/earlier-migrated edges.
     updated = 0
     errors = 0
+    merged_total = 0  # newly appended migrated edges
+    kept_total = 0    # pre-existing edges preserved on the points
     for source_id, payload_edges in grouped.items():
         try:
-            # Check if the point exists
+            # Fetch the point WITH payload so we can merge instead of replace.
             scroll_result = client.scroll(
                 collection_name=collection,
                 limit=1,
@@ -136,13 +144,36 @@ def migrate(
                         match=models.MatchValue(value=source_id),
                     )]
                 ),
-                with_payload=False,
+                with_payload=True,
             )
-            
+
             if scroll_result[0]:
+                existing_payload = scroll_result[0][0].payload or {}
+                existing_edges = existing_payload.get("edges")
+                if not isinstance(existing_edges, list):
+                    existing_edges = []
+
+                # Merge: keep existing entries, append only unseen edge_ids.
+                merged_edges = list(existing_edges)
+                known_ids = {
+                    e.get("edge_id")
+                    for e in existing_edges
+                    if isinstance(e, dict)
+                }
+                appended = 0
+                for e in payload_edges:
+                    if e.get("edge_id") in known_ids:
+                        continue
+                    known_ids.add(e.get("edge_id"))
+                    merged_edges.append(e)
+                    appended += 1
+
+                merged_total += appended
+                kept_total += len(existing_edges)
+
                 client.set_payload(
                     collection_name=collection,
-                    payload={"edges": payload_edges},
+                    payload={"edges": merged_edges},
                     points=[source_id],
                 )
                 updated += 1
@@ -154,15 +185,18 @@ def migrate(
         except Exception as e:
             _logger.error(f"Error on point {source_id}: {e}")
             errors += 1
-    
+
     print(f"\n✅ Migration complete:")
     print(f"   {len(edges)} Edges read")
     print(f"   {updated} Qdrant points updated")
+    print(f"   {merged_total} edges merged, {kept_total} existing edges kept")
     print(f"   {errors} errors")
-    
+
     return {
         "total_edges": len(edges),
         "points_updated": updated,
+        "edges_merged": merged_total,
+        "edges_kept": kept_total,
         "errors": errors,
     }
 

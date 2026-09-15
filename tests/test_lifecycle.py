@@ -131,7 +131,7 @@ class TestPromote:
         try:
             FactVersion.promote(c)
             assert False, "Should reject promote of canonical"
-        except AssertionError:
+        except RuntimeError:
             pass
 
     def test_promote_rejects_content_drift(self):
@@ -140,7 +140,7 @@ class TestPromote:
         try:
             FactVersion.promote(p)
             assert False, "Should reject promote with drifted content"
-        except AssertionError:
+        except RuntimeError:
             pass
 
     def test_promote_rejects_content_drift_when_explicit(self):
@@ -149,7 +149,7 @@ class TestPromote:
         try:
             FactVersion.promote(p)
             assert False, "Should reject promote with mutated content"
-        except AssertionError:
+        except RuntimeError:
             pass
 
 
@@ -200,7 +200,7 @@ class TestDeprecate:
         try:
             FactVersion.deprecate(d)
             assert False, "Should reject deprecate of already deprecated"
-        except AssertionError:
+        except RuntimeError:
             pass
 
     def test_deprecate_rejects_rolled_back(self):
@@ -210,7 +210,7 @@ class TestDeprecate:
         try:
             FactVersion.deprecate(rb)
             assert False, "Should reject deprecate of rolled_back"
-        except AssertionError:
+        except RuntimeError:
             pass
 
 

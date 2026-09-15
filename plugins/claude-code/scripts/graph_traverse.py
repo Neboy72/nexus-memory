@@ -29,16 +29,18 @@ def traverse(fact_id: str, max_depth: int = 3, relation: str = "", target_type: 
     from nexus.graph.traversal import GraphTraversal
 
     sg = SkillGraph(qdrant_url=QDRANT_URL, collection=COLLECTION)
-    sg.initialize()
-    gt = GraphTraversal(sg)
-    results = gt.traverse(
-        fact_id,
-        max_depth=max_depth,
-        relation=relation or None,
-        target_type=target_type or None,
-    )
-    sg.store.close()
-    return {"results": results}
+    try:
+        sg.initialize()
+        gt = GraphTraversal(sg)
+        results = gt.traverse(
+            fact_id,
+            max_depth=max_depth,
+            relation=relation or None,
+            target_type=target_type or None,
+        )
+        return {"results": results}
+    finally:
+        sg.store.close()
 
 
 def find_entities(entity_type: str = "", limit: int = 50) -> dict:
@@ -47,14 +49,16 @@ def find_entities(entity_type: str = "", limit: int = 50) -> dict:
     from nexus.graph.traversal import GraphTraversal
 
     sg = SkillGraph(qdrant_url=QDRANT_URL, collection=COLLECTION)
-    sg.initialize()
-    gt = GraphTraversal(sg)
-    results = gt.find_entities(
-        entity_type=entity_type or None,
-        limit=limit,
-    )
-    sg.store.close()
-    return {"entities": results}
+    try:
+        sg.initialize()
+        gt = GraphTraversal(sg)
+        results = gt.find_entities(
+            entity_type=entity_type or None,
+            limit=limit,
+        )
+        return {"entities": results}
+    finally:
+        sg.store.close()
 
 
 def get_subgraph(fact_id: str, max_depth: int = 2) -> dict:
@@ -63,11 +67,13 @@ def get_subgraph(fact_id: str, max_depth: int = 2) -> dict:
     from nexus.graph.traversal import GraphTraversal
 
     sg = SkillGraph(qdrant_url=QDRANT_URL, collection=COLLECTION)
-    sg.initialize()
-    gt = GraphTraversal(sg)
-    result = gt.get_subgraph(fact_id, max_depth=max_depth)
-    sg.store.close()
-    return result
+    try:
+        sg.initialize()
+        gt = GraphTraversal(sg)
+        result = gt.get_subgraph(fact_id, max_depth=max_depth)
+        return result
+    finally:
+        sg.store.close()
 
 
 def get_related(fact_id: str, relation: str = "") -> dict:
@@ -76,11 +82,13 @@ def get_related(fact_id: str, relation: str = "") -> dict:
     from nexus.graph.traversal import GraphTraversal
 
     sg = SkillGraph(qdrant_url=QDRANT_URL, collection=COLLECTION)
-    sg.initialize()
-    gt = GraphTraversal(sg)
-    results = gt.get_related(fact_id, relation=relation or None)
-    sg.store.close()
-    return {"results": results}
+    try:
+        sg.initialize()
+        gt = GraphTraversal(sg)
+        results = gt.get_related(fact_id, relation=relation or None)
+        return {"results": results}
+    finally:
+        sg.store.close()
 
 
 def main():
