@@ -63,8 +63,13 @@ jobs:
           # the hosted runner while Mac + Ubuntu replicas were green).
           # faulthandler guarantees a traceback on hard interpreter crashes.
           # -x stops at the first failure to bound runner memory usage.
+          # set +e around the run: with `bash -e` a failing pytest aborted the
+          # step BEFORE the tail/warning could print anything (bf35150/89df634
+          # showed exit 1 with zero visible diagnostics).
+          set +e
           python -u -X faulthandler -m pytest tests/ -q --tb=short -x > /tmp/pytest-out.txt 2>&1
           EXIT=$?
+          set -e
           if [ ! -s /tmp/pytest-out.txt ]; then
             echo "⚠️ pytest produced NO output (exit=$EXIT) — process likely killed (OOM?) before any output."
           fi
