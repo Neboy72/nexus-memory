@@ -35,8 +35,14 @@ if ! printf '%s' "$LOCAL_VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     exit 1
 fi
 
-# --- Remote tag. No tags at all is NOT the same as "release missing". ---
-REMOTE_TAG=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name' 2>/dev/null | sort -V | tail -1 || true)
+# --- Remote tag. No tags at all is NOT the same as "release missing", and a
+# failed gh call (missing CLI, unauthenticated on CI) is NOT "no tags". ---
+TAGS_LIST=""
+if ! TAGS_LIST=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name' 2>/dev/null); then
+    echo "GATE-ERROR: 'gh api' failed (gh missing, unauthenticated, or network error) — cannot verify tags for $REPO"
+    exit 1
+fi
+REMOTE_TAG=$(printf '%s\n' "$TAGS_LIST" | sort -V | tail -1)
 if [ -z "$REMOTE_TAG" ]; then
     echo "GATE-ROT: keine Tags in $REPO gefunden (Repository hat noch kein Release)"
     exit 1
