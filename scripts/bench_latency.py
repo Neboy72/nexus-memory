@@ -5,6 +5,7 @@ Measures the full plugin recall path (embed -> qdrant -> lifecycle filter ->
 optional rerank -> graph boost) over 30 queries. Output: p50/p95/p99 + mean.
 """
 import importlib.util
+import math
 import statistics
 import sys
 import threading as T
@@ -46,6 +47,12 @@ from qdrant_client import QdrantClient
 
 prov._qdrant = QdrantClient(host="localhost", port=6333)
 
+# Benchmark must not contaminate SICA trust counters / flywheel state: the
+# recall path bumps agent stats and spawns the flywheel thread. Neutralize
+# both on this instance so a benchmark run leaves no trace in live state.
+prov._bump_agent_stats = lambda *a, **k: None
+prov._flywheel_bump = lambda *a, **k: None
+
 queries = [
     "wallbox ocpp", "tailscale routing fix", "gateway restart", "voyage embedding",
     "paperless backup", "odessa kasse", "serbien bankkonto", "design refero",
@@ -66,7 +73,7 @@ for q in queries:
 
 lat.sort()
 p50 = statistics.median(lat)
-p95 = lat[int(len(lat) * 0.95) - 1]
+p95 = lat[min(len(lat) - 1, max(0, math.ceil(0.95 * len(lat)) - 1))]
 p99 = lat[-1]
 print(f"\nn={len(lat)}  p50={p50:.1f}ms  p95={p95:.1f}ms  p99={p99:.1f}ms")
 print("target p95 < 100ms:", "MET" if p95 < 100 else "NOT MET")

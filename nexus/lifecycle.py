@@ -116,6 +116,10 @@ class FactVersion:
     ttl: Optional[int] = None                 # days; only for canonical/pending
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # version_id of the PENDING version this canonical was promoted from.
+    # Distinct from ``supersedes`` for UPDATE-promotions (where supersedes
+    # points at the previous canonical, not at the staging draft).
+    promoted_from: Optional[str] = None
 
     # ── Factories ──────────────────────────────────────────────────────────
 
@@ -191,6 +195,7 @@ class FactVersion:
             ttl=pending_version.ttl,
             created_at=pending_version.created_at,
             updated_at=now,
+            promoted_from=pending_version.version_id,
         )
 
     @classmethod
@@ -308,6 +313,7 @@ class FactVersion:
             "ttl": self.ttl,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "promoted_from": self.promoted_from,
         }
 
     @classmethod
@@ -323,6 +329,7 @@ class FactVersion:
             ttl=d.get("ttl"),
             created_at=d.get("created_at", ""),
             updated_at=d.get("updated_at", ""),
+            promoted_from=d.get("promoted_from"),
         )
 
     # ── Helpers ────────────────────────────────────────────────────────────

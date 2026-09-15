@@ -285,14 +285,19 @@ def apply_choice(provider_id: str, api_key: str = None) -> dict:
     # just wrote to .env, even in a NEW process that hasn't loaded .env.
     # Consolidate the two key-state sources: if the env var is unset, load
     # the value from the .env file the wizard writes (same source of truth).
-    elif not os.environ.get(provider.get("key_env") or ""):
-        try:
-            from nexus_memory.env_secret_store import read_env_key
-            stored = read_env_key(_get_env_path(), provider.get("key_env") or "")
-            if stored:
-                os.environ[provider["key_env"]] = stored
-        except Exception:
-            pass
+    # Only providers that actually have a key_env participate — for local
+    # providers (key_env=None) there is no key to backfill and a None key
+    # would make read_env_key() match "=foo"-style lines and os.environ[None]
+    # raise TypeError.
+    elif provider.get("key_env"):
+        if not os.environ.get(provider["key_env"]):
+            try:
+                from nexus_memory.env_secret_store import read_env_key
+                stored = read_env_key(_get_env_path(), provider["key_env"])
+                if stored:
+                    os.environ[provider["key_env"]] = stored
+            except Exception:
+                pass
 
     # Save config
     config = _load_config()
