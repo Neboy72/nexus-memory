@@ -87,21 +87,41 @@ export class QdrantClient {
     // Check if collection exists
     let exists = false
     let currentDim: number | undefined
+    let resp: Response
     try {
-      const resp = await fetch(url, { method: "GET" })
-      if (resp.ok) {
-        const data = await resp.json() as {
-          result?: {
-            config?: { params?: { vectors?: { size?: number } } }
-            vectors?: { size?: number }
-          }
+      resp = await fetch(url, { method: "GET" })
+    } catch (err) {
+      // Network-level failure (DNS, refused, timeout) is NOT proof that the
+      // collection is missing — surface it instead of silently creating.
+      throw new Error(
+        `Qdrant connection failed while checking collection "${this.collection}" ` +
+        `(url=${this.qdrantUrl}): ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+
+    if (resp.ok) {
+      const data = await resp.json() as {
+        result?: {
+          config?: { params?: { vectors?: { size?: number } } }
+          vectors?: { size?: number }
         }
-        exists = true
-        // Qdrant returns dimensions at result.config.params.vectors.size
-        currentDim = data.result?.config?.params?.vectors?.size ?? data.result?.vectors?.size
       }
-    } catch {
-      // Collection doesn't exist or Qdrant is down — try to create
+      exists = true
+      // Qdrant returns dimensions at result.config.params.vectors.size
+      currentDim = data.result?.config?.params?.vectors?.size ?? data.result?.vectors?.size
+    } else if (resp.status === 404) {
+      // The ONLY status that legitimately means "collection absent".
+      exists = false
+      currentDim = undefined
+    } else {
+      // Any other error status (401/403/500/…) is NOT an absent collection.
+      // Falling through to "create" here would either fail confusingly or
+      // mask a misconfigured connection/permission as a missing collection.
+      throw new Error(
+        `Qdrant collection check failed: ${resp.status} ` +
+        `(collection="${this.collection}", url=${this.qdrantUrl}). ` +
+        `Check the Qdrant connection and API permissions.`,
+      )
     }
 
     if (exists && currentDim === dimensions) {
@@ -132,11 +152,16 @@ export class QdrantClient {
       }
     }
 
-    // If collection exists with unknown dimensions, assume it's fine
-    if (exists) {
-      log.debug(`collection ${this.collection} exists (dimensions unknown, assuming correct)`)
-      this.collectionReady = true
-      return
+    // Collection exists but its dimensions could not be read: accepting it
+    // silently would let every later upsert/search fail deep inside Qdrant.
+    // Refuse instead and ask for a manual check.
+    if (exists && currentDim === undefined) {
+      const msg =
+        `Qdrant collection "${this.collection}" exists but its dimensions are not readable. ` +
+        `Manual inspection is required (expected=${dimensions}); ` +
+        `refusing to assume the collection is correct.`
+      log.error(msg)
+      throw new Error(msg)
     }
 
     // Create collection — Qdrant uses PUT /collections/{name}
@@ -314,14 +339,23 @@ export class QdrantClient {
         `${this.qdrantUrl}/collections/${this.collection}/points/${encodeURIComponent(id)}?with_payload=true`,
         { method: "GET" },
       )
-      if (!resp.ok) return null
+      if (!resp.ok) {
+        // Fail-open (null) stays, but the reason must be visible in the log:
+        // a 404 (absent point) and a 500/403 (Qdrant problem) both used to
+        // look identical to callers.
+        log.error(
+          `scrollPoint: Qdrant returned ${resp.status} for collection="${this.collection}" id="${id}"`,
+        )
+        return null
+      }
       const data = await resp.json() as {
         result?: { id?: string | number; payload?: Record<string, unknown> } | null
       }
       const point = data.result
       if (!point || point.id === undefined || point.id === null) return null
       return { id: String(point.id), payload: point.payload }
-    } catch {
+    } catch (err) {
+      log.error(`scrollPoint: request failed for collection="${this.collection}" id="${id}"`, err)
       return null
     }
   }
@@ -361,7 +395,12 @@ export class QdrantClient {
             body: JSON.stringify(body),
           },
         )
-        if (!resp.ok) return collected
+        if (!resp.ok) {
+          log.error(
+            `scrollFiltered: Qdrant returned ${resp.status} for collection="${this.collection}" (returning ${collected.length} points collected so far)`,
+          )
+          return collected
+        }
         const data = await resp.json() as {
           result?: {
             points?: Array<{ id: string | number; payload?: Record<string, unknown> }>
@@ -376,7 +415,11 @@ export class QdrantClient {
         offset = next
       }
       return collected
-    } catch {
+    } catch (err) {
+      log.error(
+        `scrollFiltered: request failed for collection="${this.collection}" (returning ${collected.length} points collected so far)`,
+        err,
+      )
       return collected
     }
   }
@@ -417,7 +460,11 @@ export class QdrantClient {
         }
       }
       return incoming
-    } catch {
+    } catch (err) {
+      log.error(
+        `findIncomingEdges: request failed for collection="${this.collection}" factId="${factId}"`,
+        err,
+      )
       return []
     }
   }

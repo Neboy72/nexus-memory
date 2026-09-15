@@ -39,7 +39,9 @@ export function registerSearchTool(
         // H123: never hand a raw host value to Qdrant — clamp to [1, 50].
         const limit = clampInt(params.limit, SEARCH_LIMIT_DEFAULT, 1, SEARCH_LIMIT_MAX)
 
-        log.debug(`search tool: query="${params.query}" limit=${limit}`)
+        // Never log the query text itself — it is user content and can hold
+        // secrets. Length is enough for diagnostics.
+        log.debug(`search tool: queryLen=${params.query.length} limit=${limit}`)
 
         try {
           const queryVector = await embedder.embed(params.query)
@@ -55,7 +57,12 @@ export function registerSearchTool(
 
           const text = results
             .map((r, i) => {
-              const score = r.score ? ` (${(r.score * 100).toFixed(0)}%)` : ""
+              // Finiteness, not truthiness: a score of 0 is a real value and
+              // must render (the old truthiness check dropped it).
+              const score =
+                typeof r.score === "number" && Number.isFinite(r.score)
+                  ? ` (${(r.score * 100).toFixed(0)}%)`
+                  : ""
               const category = r.category ? ` [${r.category}]` : ""
               return `${i + 1}. ${r.text}${category}${score}`
             })

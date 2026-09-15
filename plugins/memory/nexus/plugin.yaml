@@ -1,10 +1,14 @@
 name: nexus
-version: 0.8.0
+version: 0.19.1
 description: "Nexus Memory — universal memory layer for AI agents. Qdrant + auto-detect embeddings (Voyage/OpenAI/Google/Jina/Ollama/sentence-transformers). Self-hosted, MCP-compatible."
 pip_dependencies:
   - "qdrant-client>=1.12.0"
   - "sentence-transformers>=3.0.0"
 requires_env: []
+# Optional env vars (provider-dependent): VOYAGE_API_KEY | OPENAI_API_KEY |
+# GOOGLE_API_KEY | JINA_API_KEY | NEXUS_QDRANT_HOST | NEXUS_QDRANT_PORT |
+# NEXUS_COLLECTION. Cloud provider SDKs (voyageai, openai, google-generativeai)
+# are optional extras — pip install nexus-memory[voyage|openai|google].
 hooks:
   - on_session_end
   - on_memory_write

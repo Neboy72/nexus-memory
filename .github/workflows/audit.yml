@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# A newer run for the same ref makes an in-flight older run obsolete —
+# cancel it instead of paying for a stale result.
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -41,7 +47,17 @@ jobs:
           # nexus_beliefs/nexus_events as deliberate backward-compat names,
           # and mcp_server still writes live events there), so those three
           # hits are intentional, not stale.
-          FOUND=$(grep -rnE "$BAD_PATTERNS" src/ dashboard/ plugins/ --include="*.py" --include="*.ts" --exclude="__pycache__" --exclude-dir=node_modules --exclude-dir=dist || true)
+          # grep exit 1 = "no match" (the good case here); exit 2 = a REAL
+          # error (bad pattern, unreadable path). `|| true` collapsed both
+          # into "no match" and could hide a broken scan.
+          set +e
+          FOUND=$(grep -rnE "$BAD_PATTERNS" src/ dashboard/ plugins/ --include="*.py" --include="*.ts" --exclude="__pycache__" --exclude-dir=node_modules --exclude-dir=dist)
+          GREP_EXIT=$?
+          set -e
+          if [ $GREP_EXIT -eq 2 ]; then
+            echo "❌ grep failed (exit 2) while scanning for stale collection names"
+            exit 2
+          fi
           if [ -n "$FOUND" ]; then
             echo "❌ Stale collection names found:"
             echo "$FOUND"
@@ -53,7 +69,15 @@ jobs:
         run: |
           echo "=== Checking for hardcoded status_code == 200 / != 200 ==="
           # Allow only is_success() calls, not raw == 200 / != 200
-          FOUND=$(grep -rnE '\.status_code == 200|\.status_code != 200' nexus/ src/ --include="*.py" --exclude="__pycache__" || true)
+          # grep exit 1 = no match (fine), exit 2 = real error (must fail).
+          set +e
+          FOUND=$(grep -rnE '\.status_code == 200|\.status_code != 200' nexus/ src/ --include="*.py" --exclude="__pycache__")
+          GREP_EXIT=$?
+          set -e
+          if [ $GREP_EXIT -eq 2 ]; then
+            echo "❌ grep failed (exit 2) while scanning for raw status_code checks"
+            exit 2
+          fi
           if [ -n "$FOUND" ]; then
             echo "❌ Raw status_code checks found (use is_success() instead):"
             echo "$FOUND"
