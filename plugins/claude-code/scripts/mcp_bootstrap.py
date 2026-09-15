@@ -49,7 +49,12 @@ def main():
         if not py or not (shutil.which(py) or os.path.isfile(py)):
             continue
         if interpreter_has_nexus(py):
-            os.execv(py, [py, "-m", "nexus_memory.mcp_server"])
+            # execv does not resolve PATH, so a bare name (e.g. "python3")
+            # would fail. Resolve via which(), falling back to an explicit path.
+            resolved = shutil.which(py) or (py if os.path.isfile(py) else None)
+            if not resolved:
+                continue
+            os.execv(resolved, [resolved, "-m", "nexus_memory.mcp_server"])
 
     # Nothing found: print a clear, actionable error and exit.
     msg = (

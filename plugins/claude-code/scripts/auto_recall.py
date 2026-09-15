@@ -249,7 +249,7 @@ def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "publ
                             continue
                         tp_payload = tpoints[0].get("payload") or {}
                         # Access-level check
-                        tp_access = tp_payload.get("access_level", "public")
+                        tp_access = tp_payload.get("access_level", "private")
                         mem_idx = level_order.index(tp_access) if tp_access in level_order else 2
                         if mem_idx > agent_idx:
                             continue

@@ -16,6 +16,7 @@ async def test():
             await session.initialize()
 
             # Remember something public
+            remember_id = None
             r = await session.call_tool("remember", {
                 "text": "Test-Eintrag: Berlin ist Hauptstadt von Deutschland.",
                 "access_level": "public",
@@ -28,6 +29,7 @@ async def test():
                 print("content[0] type:", type(c))
                 print("content[0] text:", repr(getattr(c, 'text', 'NO TEXT ATTR')))
                 data = json.loads(c.text)
+                remember_id = data.get("id")
                 print("✅ Remember OK:", data)
 
             # Recall
@@ -49,6 +51,11 @@ async def test():
                         print(f"   → {m['text'][:50]}...")
 
             print("\n🎉 Done")
-            await session.call_tool("forget", {"memory_id": data.get("id", "")})
+            # Delete the point created by remember — NOT the recall payload
+            # (whose shape has no id and would delete the wrong/no point).
+            if remember_id:
+                await session.call_tool("forget", {"memory_id": remember_id})
+            else:
+                print("⚠️ remember returned no id — skipping forget")
 
 asyncio.run(test())

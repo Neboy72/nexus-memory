@@ -107,27 +107,28 @@ def main():
         if args.action == "traverse":
             if not args.fact_id:
                 print(json.dumps({"error": "fact-id required for traverse"}))
-                return
+                sys.exit(1)
             result = traverse(args.fact_id, args.max_depth, args.relation, args.entity_type)
         elif args.action == "find_entities":
             result = find_entities(args.entity_type, args.limit)
         elif args.action == "subgraph":
             if not args.fact_id:
                 print(json.dumps({"error": "fact-id required for subgraph"}))
-                return
+                sys.exit(1)
             result = get_subgraph(args.fact_id, args.max_depth)
         elif args.action == "related":
             if not args.fact_id:
                 print(json.dumps({"error": "fact-id required for related"}))
-                return
+                sys.exit(1)
             result = get_related(args.fact_id, args.relation)
         else:
             print(json.dumps({"error": f"Unknown action: {args.action}"}))
-            return
+            sys.exit(1)
 
         print(json.dumps(result, indent=2))
     except Exception as e:
         print(json.dumps({"status": "error", "error": str(e)}))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

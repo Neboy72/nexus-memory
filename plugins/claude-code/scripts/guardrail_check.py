@@ -41,6 +41,16 @@ PATH_PATTERNS = [
 ]
 
 
+def fail_closed_enabled() -> bool:
+    """Whether errors should block (fail-closed) instead of allow (fail-open).
+
+    Default is fail-open for availability: a guardrail outage must never wedge
+    the agent. Set NEXUS_GUARDRAIL_FAIL_CLOSED=1 to invert this — on an internal
+    error or an unavailable rule store, destructive actions are blocked instead.
+    """
+    return os.getenv("NEXUS_GUARDRAIL_FAIL_CLOSED", "").strip() in ("1", "true", "yes")
+
+
 def classify_action(command: str) -> str | None:
     """Return the action type if destructive, None otherwise."""
     cmd_lower = command.lower()
@@ -88,8 +98,14 @@ def path_matches(target: str, protected: str) -> bool:
     return False
 
 
-def load_protection_rules() -> list[dict]:
-    """Load protection rules from Qdrant."""
+def load_protection_rules() -> list[dict] | None:
+    """Load protection rules from Qdrant.
+
+    Returns the list of matched rules on success (possibly empty — genuinely
+    no protection rules exist, callers treat that as allow-fast). On a store
+    outage returns [] in fail-open mode (default) and None in fail-closed mode
+    (NEXUS_GUARDRAIL_FAIL_CLOSED=1) so callers can fail closed.
+    """
     try:
         url = f"{QDRANT_URL}/collections/{COLLECTION}/points/scroll"
         payload = json.dumps({
@@ -125,6 +141,9 @@ def load_protection_rules() -> list[dict]:
                         })
         return rules
     except Exception as exc:
+        if fail_closed_enabled():
+            print(f"Guardrail: Failed to load rules (fail-closed): {exc}", file=sys.stderr)
+            return None
         # Fail-open: no rules = allow everything
         print(f"Guardrail: Failed to load rules (fail-open): {exc}", file=sys.stderr)
         return []
@@ -152,7 +171,15 @@ def check_action(command: str, tool_name: str = "", tool_input: dict = None) -> 
         return {"verdict": "allow", "reason": f"Destructive action ({action}) but no protected target"}
 
     rules = load_protection_rules()
+    if rules is None:
+        # Fail-closed: rule store unavailable, cannot prove this is safe.
+        return {
+            "verdict": "block",
+            "reason": f"Destructive action ({action}) but protection rules are unavailable (fail-closed)",
+            "matched_rules": [],
+        }
     if not rules:
+        # Genuinely no rules configured — fast allow (not an outage).
         return {"verdict": "allow", "reason": f"Destructive action ({action}) but no protection rules"}
 
     matched = []
@@ -215,8 +242,12 @@ def main():
             print(json.dumps({"allow": True}))
 
     except Exception as exc:
-        # Fail-open on any error
-        print(json.dumps({"allow": True}))
+        print(f"guardrail_check: inner error (fail-open): {exc}", file=sys.stderr)
+        if fail_closed_enabled():
+            print(json.dumps({"allow": False, "message": f"🛡️ Nexus Guardrail: internal error (fail-closed): {exc}"}))
+        else:
+            # Fail-open on any error (availability default)
+            print(json.dumps({"allow": True}))
 
 
 if __name__ == "__main__":

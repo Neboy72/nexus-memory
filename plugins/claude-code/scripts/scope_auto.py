@@ -44,62 +44,99 @@ def _cosine(a, b):
         return 0.0
 
 
+# Scroll pagination guard: hooks are short-lived, so cap the work hard.
+_PAGE_LIMIT = 1000
+_MAX_PAGES = 3
+
+
 def fetch_centroids(qdrant_url: str = QDRANT_URL, collection: str = COLLECTION,
                     timeout: float = 3.0) -> dict:
     """Read scope centroids from Qdrant. Returns {scope: centroid_vector}.
 
     Fail-open: any error → {} (no areas → no filtering anywhere).
-    Reads canonical scoped points only (client-side filter after scroll).
+    Reads canonical scoped points only.
+
+    Scope clause: `match: {"except": ["default"]}` is a POSITIVE match on
+    existing non-default scope values (mirrors the server's _probe_scopes
+    predicate). Without it, the ~8k default-only canonical points crowd the
+    scoped points out of the scroll window → empty centroids → dead scope
+    inference. Pagination follows next_page_offset for up to _MAX_PAGES.
     """
     import json
     import urllib.request
 
     try:
-        body = json.dumps({
-            "limit": 1000,
-            "with_payload": True,
-            "with_vector": True,
-            "filter": {"must": [
-                {"key": "lifecycle_status", "match": {"value": "canonical"}},
-            ]},
-        }).encode()
-        req = urllib.request.Request(
-            f"{qdrant_url}/collections/{collection}/points/scroll",
-            data=body, headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-        points = data.get("result", {}).get("points", [])
+        scroll_filter = {"must": [
+            {"key": "lifecycle_status", "match": {"value": "canonical"}},
+            {"key": "scope", "match": {"except": ["default"]}},
+        ]}
+        points = []
+        offset = None
+        for _ in range(_MAX_PAGES):
+            body = {
+                "limit": _PAGE_LIMIT,
+                "with_payload": True,
+                "with_vector": True,
+                "filter": scroll_filter,
+            }
+            if offset is not None:
+                body["offset"] = offset
+            req = urllib.request.Request(
+                f"{qdrant_url}/collections/{collection}/points/scroll",
+                data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+            result = data.get("result") or {}
+            points.extend(result.get("points") or [])
+            offset = result.get("next_page_offset")
+            if not offset:
+                break
     except Exception as exc:
         logging.info("scope_auto: centroid fetch failed (%s) — fail-open", exc)
         return {}
 
-    sums = {}
-    counts = {}
-    for p in points:
-        payload = p.get("payload") or {}
-        scope = (payload.get("scope") or "default").strip().lower() or "default"
-        if scope == "default":
-            continue
-        vec = p.get("vector")
-        if not vec:
-            continue
-        if scope in sums:
-            if len(vec) != len(sums[scope]):
-                continue  # dimension mismatch — skip safely
-            sums[scope] = [x + y for x, y in zip(sums[scope], vec)]
-            counts[scope] += 1
-        else:
-            sums[scope] = list(vec)
-            counts[scope] = 1
+    # Parsing/aggregation stays INSIDE a guard: a malformed point (non-dict
+    # payload, non-string scope, non-list/non-numeric vector) must degrade to
+    # {} — never raise out of the short-lived hook.
+    try:
+        sums = {}
+        counts = {}
+        for p in points:
+            if not isinstance(p, dict):
+                continue
+            payload = p.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            raw_scope = payload.get("scope")
+            scope = (raw_scope.strip().lower() if isinstance(raw_scope, str) else "") or "default"
+            if scope == "default":
+                continue
+            vec = p.get("vector")
+            if not isinstance(vec, list) or not vec:
+                continue
+            if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in vec):
+                continue
+            if scope in sums:
+                if len(vec) != len(sums[scope]):
+                    continue  # dimension mismatch — skip safely
+                sums[scope] = [x + y for x, y in zip(sums[scope], vec)]
+                counts[scope] += 1
+            else:
+                sums[scope] = list(vec)
+                counts[scope] = 1
 
-    cents = {}
-    for scope, total in sums.items():
-        n = counts[scope]
-        norm = sum(x * x for x in total) ** 0.5
-        if n > 0 and norm > 0:
-            cents[scope] = [x / norm for x in total]  # normalized centroid
-    return cents
+        cents = {}
+        for scope, total in sums.items():
+            n = counts[scope]
+            norm = sum(x * x for x in total) ** 0.5
+            if n > 0 and norm > 0:
+                cents[scope] = [x / norm for x in total]  # normalized centroid
+        return cents
+    except Exception as exc:
+        logging.info("scope_auto: centroid parse failed (%s) — fail-open", exc)
+        return {}
 
 
 def infer_scope(vector, centroids: dict) -> str:
