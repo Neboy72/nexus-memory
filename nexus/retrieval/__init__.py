@@ -204,6 +204,7 @@ class HybridRetriever:
                 f"{self.qdrant_url}/collections/{self.collection}/points/scroll",
                 json=body, timeout=10,
             )
+            r.raise_for_status()
             data = r.json().get("result", {})
             batch = data.get("points", [])
             if not batch:
@@ -489,10 +490,12 @@ class HybridRetriever:
         # HTTP error — which callers then swallow into empty results. Fail
         # loudly instead so the mismatch is diagnosable.
         try:
-            r_dim = requests.get(
+            r_dim_resp = requests.get(
                 f"{self.qdrant_url}/collections/{self.collection}",
                 timeout=5,
-            ).json()["result"]["config"]["params"]["vectors"]["size"]
+            )
+            r_dim_resp.raise_for_status()
+            r_dim = r_dim_resp.json()["result"]["config"]["params"]["vectors"]["size"]
         except Exception:
             r_dim = None  # Qdrant unreachable — let the search attempt decide
         if r_dim is not None and query_vector and len(query_vector) != r_dim:
@@ -514,6 +517,7 @@ class HybridRetriever:
             },
             timeout=10,
         )
+        r.raise_for_status()
         hits = []
         for rank, point in enumerate(r.json().get("result", [])):
             payload = point.get("payload", {})

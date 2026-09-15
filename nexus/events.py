@@ -71,6 +71,10 @@ def ensure_collection() -> bool:
         ("event_type", "keyword"),
         ("belief_id", "keyword"),
         ("status", "keyword"),
+        # get_events_since() range-filters on ingested_at — without this index
+        # the query degrades to a full collection scan (review #45).
+        ("ingested_at", "datetime"),
+        ("event_time", "datetime"),
     ]
     for field, idx_type in indices:
         idx_payload = {

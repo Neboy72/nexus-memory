@@ -223,25 +223,35 @@ def _check_supersedes(
     source_lower = source_content.lower()
     target_lower = target_content.lower()
 
-    if source_category != target_category:
+    # No category on either side → cannot judge "same topic, newer approach".
+    # Guards both the empty-string case ("" == "") and a missing category.
+    if not source_category or source_category != target_category:
         return None
 
-    # Version markers
-    version_markers = [
-        r"\b(v?\d+\.\d+\.?\d*)\b",
-        r"\b(newer|older|deprecated|legacy|current|latest)\b",
-        r"\b(neu|alt|veraltet|aktuell|neueste)\b",
-    ]
+    # Real version strings only — "v2.0.1" / "1.2.3". A bare decimal ("2.5")
+    # is not a version and must not trigger supersedes on its own (review #41).
+    version_pattern = r"\bv?\d+\.\d+\.\d+\b"
+    # Explicit newer/older language (review #41: still a valid signal).
+    word_pattern = r"\b(newer|older|deprecated|legacy|current|latest|neu|alt|veraltet|aktuell|neueste)\b"
 
-    has_version_source = any(re.search(p, source_lower) for p in version_markers)
-    has_version_target = any(re.search(p, target_lower) for p in version_markers)
+    has_version_source = re.search(version_pattern, source_lower) is not None
+    has_version_target = re.search(version_pattern, target_lower) is not None
+    has_word_source = re.search(word_pattern, source_lower) is not None
+    has_word_target = re.search(word_pattern, target_lower) is not None
 
-    if has_version_source or has_version_target:
+    # A real 3-component version string or explicit newer/older language
+    # (review #41: the bug was bare decimals like "2.5" matching the old
+    # pattern — those no longer match the tightened regex).
+    has_version = has_version_source or has_version_target
+    has_word = has_word_source or has_word_target
+    if has_version or has_word:
         return {
             "relation": "supersedes",
             "confidence": 0.70,  # Lower confidence — manual verification advised
-            "reason": "Version/language detected in same-category facts → supersedes",
+            "reason": "Version string + newer/older language in same-category facts → supersedes",
         }
+
+    return None
 
     return None
 
