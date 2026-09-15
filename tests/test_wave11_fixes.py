@@ -497,10 +497,20 @@ class TestH10ReleaseGate:
     def test_no_tags_reports_no_tags(self, tmp_path):
         repo = _pyproject(tmp_path, "1.2.3")
         bin_dir = tmp_path / "bin"
-        _stub_gh(bin_dir, output=None)
+        _stub_gh(bin_dir, output=None, exit_code=0)
         r = _run_gate(repo, bin_dir)
         assert r.returncode == 1
         assert "keine Tags" in r.stdout
+
+    def test_gh_api_failure_is_a_clear_error(self, tmp_path):
+        # gh present but the API call fails (e.g. unauthenticated on CI):
+        # that is an infrastructure error, never "no tags".
+        repo = _pyproject(tmp_path, "1.2.3")
+        bin_dir = tmp_path / "bin"
+        _stub_gh(bin_dir, output=None, exit_code=1)
+        r = _run_gate(repo, bin_dir)
+        assert r.returncode == 1
+        assert "GATE-ERROR" in r.stdout and "gh api" in r.stdout
         assert "Release fehlt" not in r.stdout
 
     def test_matching_tag_is_green(self, tmp_path):
