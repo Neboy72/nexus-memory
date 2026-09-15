@@ -22,9 +22,16 @@ info "Checking Python..."
 PYTHON=""
 for cmd in python3.12 python3.11 python3; do
     if command -v "$cmd" &>/dev/null; then
-        ver=$("$cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        # `|| true`: under `set -o pipefail` (line 6) a grep without a match
+        # would make this assignment non-zero and abort the whole script.
+        ver=$("$cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
         major="${ver%.*}"; minor="${ver#*.}"
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ] 2>/dev/null; then
+        # Correct semantics: major > 3 OR (major == 3 AND minor >= 11).
+        # The old check compared major and minor independently with -ge
+        # (rejecting 4.0 and testing minor for any major); the `-n "$ver"`
+        # guard rejects an empty/unparseable version before any numeric
+        # comparison runs.
+        if [ -n "$ver" ] && { [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 11 ]; }; }; then
             PYTHON="$cmd"
             ok "Python $("$PYTHON" --version 2>&1)"
             break
@@ -73,15 +80,26 @@ cd "$INSTALL_DIR"
 
 # ── Step 4: Install Dependencies ──────────────────────────────────────
 info "Installing Python dependencies..."
+# Dedicated venv (PEP 668): distro-managed interpreters refuse `pip install`
+# with `externally-managed-environment`. We always install into a project
+# venv and use its interpreter directly (no `activate` — a plain path is
+# idempotent and works in non-interactive shells).
+VENV_DIR="$INSTALL_DIR/.venv"
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+    info "Creating virtual environment at $VENV_DIR..."
+    "$PYTHON" -m venv "$VENV_DIR"
+fi
+PYTHON="$VENV_DIR/bin/python"
+info "Using interpreter: $PYTHON"
+
 if command -v uv &>/dev/null; then
-    if [ -n "${VIRTUAL_ENV:-}" ]; then
-        uv pip install -e . 2>/dev/null || $PYTHON -m pip install -e . --quiet
-    else
-        $PYTHON -m pip install --upgrade pip -q 2>/dev/null || true
-        $PYTHON -m pip install -e . --quiet
-    fi
+    # uv is faster, but must target the venv we just ensured exists; fall
+    # back to the venv's pip when uv is present but fails.
+    uv pip install -e . --python "$PYTHON" || "$PYTHON" -m pip install -e . --quiet
 else
-    $PYTHON -m pip install -e . --quiet
+    # pip self-upgrade is best-effort; a failure must not kill the install.
+    "$PYTHON" -m pip install --upgrade pip -q || info "pip self-upgrade skipped"
+    "$PYTHON" -m pip install -e . --quiet
 fi
 ok "Nexus Memory installed: v$($PYTHON -c "from nexus import __version__; print(__version__)" 2>/dev/null || echo "?")"
 

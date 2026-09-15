@@ -69,7 +69,7 @@ export function registerForgetTool(
 
           try {
             const queryVector = await embedder.embed(params.query)
-            const results = await qdrantClient.searchByVector(queryVector, 5)
+            const results = await qdrantClient.searchByVector(queryVector, 5, _cfg.accessLevel)
 
             if (results.length === 0) {
               return {
