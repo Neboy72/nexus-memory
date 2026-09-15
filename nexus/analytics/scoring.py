@@ -13,13 +13,9 @@ Usage::
 
 from __future__ import annotations
 
-import logging
-
 import networkx as nx
 
 from nexus.graph.graph import SkillGraph
-
-_logger = logging.getLogger(__name__)
 
 
 def _graph(sg: SkillGraph) -> nx.DiGraph:
@@ -107,7 +103,9 @@ def knowledge_gaps(sg: SkillGraph, isolation_threshold: float = 0.5) -> list[dic
     gaps = []
     for node in graph.nodes():
         deg = graph.degree(node)
-        score = 1.0 / (1.0 + deg) if deg >= 0 else 1.0
+        # deg is always >= 0 in NetworkX, so the denominator (1.0 + deg) is
+        # always > 0 — no guard branch needed (H179).
+        score = 1.0 / (1.0 + deg)
         if score >= isolation_threshold:
             gaps.append({
                 "fact_id": node,

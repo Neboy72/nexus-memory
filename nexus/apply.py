@@ -17,7 +17,7 @@ from typing import Any, Optional
 import requests
 
 from nexus.config import is_success
-from nexus.events import create_event, ensure_collection as ensure_events_collection
+from nexus.events import create_event
 
 log = logging.getLogger("nexus.apply")
 
@@ -32,8 +32,6 @@ STATUS_CONTESTED = "CONTESTED"
 STATUS_RETRACTED = "RETRACTED"
 STATUS_SUPERSEDED = "SUPERSEDED"
 STATUS_HISTORICAL = "HISTORICAL"
-
-VALID_STATUSES = {STATUS_ACTIVE, STATUS_CONTESTED, STATUS_RETRACTED, STATUS_SUPERSEDED, STATUS_HISTORICAL}
 
 # Single source of truth for trust-recompute comparison epsilon.
 # Skip writes when |new - old| < this threshold — avoids noisy re-writes

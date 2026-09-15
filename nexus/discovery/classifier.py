@@ -3,20 +3,24 @@
 v2.1.0: Determines the semantic relation between two facts using
 only regex heuristics and content analysis. No LLM calls = zero token cost.
 
-Strategies (in priority order):
-  1. **Category match** → same category tag = ``references``
-  2. **Explicit reference** → [[Wikilink]], "siehe X", "vgl. Y", "see also" = ``depends_on``
-  3. **Keyword overlap** → high overlap (≥80%) but not category match = ``references``
-  4. **Time-aware** → older fact referenced by newer = directed ``references``
+Strategies (in priority order) — mirrors the branch order in
+``classify_relation``:
+  1. **Explicit reference** → [[Wikilink]], "siehe X", "vgl. Y", "see also",
+     dependency patterns = ``depends_on``
+  2. **Contradiction** → explicit marker (+ shared topics) or weak discourse
+     cue (+ strong overlap) = ``contradicts``
+  3. **Supersedes** → same category + version/newer language = ``supersedes``
+  4. **Category match** → same category tag = ``references``
+  5. **Keyword overlap** → high overlap (≥80%) = ``references``
+
+There is deliberately no "time-aware" strategy — it was documented in an
+earlier revision but never implemented.
 """
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Optional
-
-_logger = logging.getLogger(__name__)
 
 # ── Patterns for explicit reference detection ──────────────────────────────
 
@@ -57,13 +61,13 @@ def classify_relation(
 
     Returns:
         ``{"relation": str, "confidence": float, "reason": str}``
-        where ``relation`` is one of: ``references``, ``depends_on``, ``supersedes``,
-        ``contradicts``, ``supports``, ``alternative_to``.
+        where ``relation`` is one of: ``references``, ``depends_on``,
+        ``supersedes``, ``contradicts``.
         Returns ``None`` if no relation is found and the similarity score is
         below 0.90 (fallback threshold).
     """
     # 1. Check for explicit references / dependencies (highest priority)
-    explicit = _check_explicit_reference(source_content, target_content, source_id, target_id)
+    explicit = _check_explicit_reference(source_content, target_content)
     if explicit:
         return explicit
 
@@ -111,8 +115,6 @@ def classify_relation(
 def _check_explicit_reference(
     source_content: str,
     target_content: str,
-    source_id: str,
-    target_id: str,
 ) -> Optional[dict]:
     """Check if source explicitly references or depends on target.
 

@@ -31,7 +31,8 @@ function mockFetch(handler) {
   return calls
 }
 
-const okBody = { embedding: { values: [0.1, 0.2, 0.3] } }
+// Google-Default-Dimension 768: validateVector (Nr 365, W21) wirft sonst.
+const okBody = { embedding: { values: new Array(768).fill(0.1) } }
 
 await t("primärer Request trägt x-goog-api-key und keine key-Query", async () => {
   const calls = mockFetch(() => ({
@@ -42,7 +43,8 @@ await t("primärer Request trägt x-goog-api-key und keine key-Query", async () 
   }))
   const emb = new Embedder("google", undefined, API_KEY, undefined, undefined)
   const vec = await emb.embed("hallo")
-  assert.deepStrictEqual(vec, [0.1, 0.2, 0.3])
+  assert.strictEqual(vec.length, 768)
+  assert.strictEqual(vec[0], 0.1)
   assert.strictEqual(calls.length, 1)
   assert.strictEqual(calls[0].opts.headers["x-goog-api-key"], API_KEY)
   assert.ok(!calls[0].url.includes("key="), "Key darf nicht in der URL stehen")

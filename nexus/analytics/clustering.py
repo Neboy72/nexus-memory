@@ -10,13 +10,9 @@ Usage:
 
 from __future__ import annotations
 
-import logging
-
 import networkx as nx
 
 from nexus.graph.graph import SkillGraph
-
-_logger = logging.getLogger(__name__)
 
 MIN_CLUSTER_SIZE = 2  # Clusters smaller than this are "singletons"
 
