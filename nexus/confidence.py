@@ -29,6 +29,7 @@ import json
 import logging
 import math
 import os
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -204,6 +205,23 @@ def _fetch_chunks(
 
 
 # ── Grounding Scorer ──────────────────────────────────────────────
+
+
+_ENTITY_PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def _entity_pattern(entity: str) -> re.Pattern[str]:
+    """Compiled word-boundary pattern for one technical entity.
+
+    Plain substring matching (``entity in text``) produced false positives:
+    "rag" in "storage", "ppo" in "support", "sft" in "sftp". ``\\b`` anchors
+    the term to word boundaries so only the standalone token matches.
+    """
+    pattern = _ENTITY_PATTERN_CACHE.get(entity)
+    if pattern is None:
+        pattern = re.compile(r"\b" + re.escape(entity) + r"\b")
+        _ENTITY_PATTERN_CACHE[entity] = pattern
+    return pattern
 
 
 class GroundingScorer:
@@ -401,19 +419,24 @@ class GroundingScorer:
             return 0.0
 
         ans_lower = answer.lower()
-        chunk_all_lower = " ".join(ct.lower() for ct in chunk_texts)
 
-        # Entities in der Antwort finden
+        # Entities in der Antwort finden (word-boundary, see _entity_pattern)
         ans_entities = set()
         for entity in GroundingScorer._TECH_ENTITIES:
-            if entity in ans_lower:
+            if _entity_pattern(entity).search(ans_lower):
                 ans_entities.add(entity)
 
         if not ans_entities:
             return 1.0  # Keine technischen Begriffe → neutral
 
-        # Check which entities also appear in chunks
-        matched = sum(1 for e in ans_entities if e in chunk_all_lower)
+        # Check which entities also appear in chunks.
+        # Match per chunk — a \b against the joined string could anchor
+        # across a join boundary and invent matches that exist in no chunk.
+        chunk_texts_lower = [ct.lower() for ct in chunk_texts]
+        matched = sum(
+            1 for e in ans_entities
+            if any(_entity_pattern(e).search(ct) for ct in chunk_texts_lower)
+        )
         score = matched / len(ans_entities)
 
         # Bonus: Wenn alle Entities matched → 1.0

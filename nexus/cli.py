@@ -16,8 +16,6 @@ import json
 import sys
 import os
 
-from nexus.config import is_success
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -188,6 +186,7 @@ def cmd_override(args):
 
 
 def cmd_verify():
+    from nexus.config import is_success
     from nexus.events import verify_collection as verify_events
     from nexus.apply import ensure_beliefs_collection
 

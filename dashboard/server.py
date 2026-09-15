@@ -13,6 +13,7 @@ Run: python3 dashboard.py --port 9120
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -344,7 +345,8 @@ async def update_trust_level(agent_id: str, level: str):
 @app.get("/api/memories/stats")
 async def get_memory_stats():
     """Get memory statistics from Qdrant - scrolls ALL points for accurate counts."""
-    points = _scroll_all_memories(max_points=500_000)
+    # Sync urllib scroll (up to 500 requests) — off the event loop.
+    points = await asyncio.to_thread(_scroll_all_memories, 500_000)
     
     categories = {}
     access_levels = {}
@@ -438,7 +440,7 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
     """
     has_filter = any(v not in ("all", "") for v in (category, access_level, drift, source))
     scan_cap = 50_000 if has_filter else min(limit * 2, 5000)
-    all_points = _scroll_all_memories(max_points=scan_cap)
+    all_points = await asyncio.to_thread(_scroll_all_memories, scan_cap)
 
     memories = []
     by_cat = {}
@@ -503,7 +505,8 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
 @app.get("/api/stats")
 async def get_full_stats():
     """Full stats for the D3 graph page - scans ALL memories."""
-    all_points = _scroll_all_memories(max_points=500_000)
+    # Sync urllib scroll (up to 500 requests) — off the event loop.
+    all_points = await asyncio.to_thread(_scroll_all_memories, 500_000)
 
     total_resp = _qdrant_request(f"/collections/{COLLECTION}")
     total = total_resp.get("result", {}).get("points_count", 0)
@@ -970,7 +973,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Nexus Memory Dashboard")
     parser.add_argument("--port", type=int, default=9121)
-    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--host", type=str, default="127.0.0.1")
     args = parser.parse_args()
     url = f"http://127.0.0.1:{args.port}"
 
