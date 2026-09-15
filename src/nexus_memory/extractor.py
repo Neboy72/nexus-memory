@@ -63,9 +63,9 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
     config: Dict[str, str] = {"model": "", "base_url": "", "api_key": ""}
 
     # Read config.yaml
+    config_path = os.path.join(hermes_home, "config.yaml")
     try:
         import yaml
-        config_path = os.path.join(hermes_home, "config.yaml")
         with open(config_path) as f:
             cfg = yaml.safe_load(f) or {}
 
@@ -85,8 +85,8 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
                     config["base_url"] = p.get("base_url", "")
                 if not config["api_key"]:
                     config["api_key"] = p.get("api_key", "")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("SessionExtractor: config read failed (%s): %s", config_path, exc)
 
     # Read .env for API keys
     env_path = os.path.join(hermes_home, ".env")
@@ -103,8 +103,8 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
                             config["api_key"] = val
                         elif key == "OPENAI_API_KEY" and not config["api_key"]:
                             config["api_key"] = val
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("SessionExtractor: .env read failed (%s): %s", env_path, exc)
 
     # Fallback: local Ollama
     if not config["base_url"]:
@@ -182,12 +182,8 @@ def _llm_extract(
     unparseable response) so the caller can fall back to the heuristic.
     """
     config = _load_llm_config(hermes_home)
-    if not config["model"]:
-        # No LLM available at all — that is a failure (None), not a valid
-        # "no facts found" verdict. Returning [] here would suppress the
-        # caller's heuristic fallback.
-        logger.debug("SessionExtractor: no model configured, skipping LLM")
-        return None
+    # _load_llm_config always falls back to a default model ("gemma3:4b"),
+    # so config["model"] is never empty here (the old guard was dead code).
 
     # Quick health check — 1s TCP probe. If unreachable, skip to heuristic
     # immediately instead of waiting 30s for the API timeout.

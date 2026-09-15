@@ -41,7 +41,7 @@ def _provider():
     prov._entity_extract_lock = threading.Lock()
     prov._hermes_home = ""
     prov._write_stop = threading.Event()
-    prov._embedder = SimpleNamespace(dim=1024, embed=lambda t: [0.0] * 1024)
+    prov._embedder = SimpleNamespace(dim=1024, embed=lambda t, is_query=True: [0.0] * 1024)
     client = MagicMock()
     client.query_points.return_value = SimpleNamespace(points=[])
     prov._qdrant = client
@@ -186,7 +186,7 @@ def test_second_recall_uses_cache():
     calls = {"n": 0}
     class _E:
         dim = 1024
-        def embed(self, t):
+        def embed(self, t, is_query=True):
             calls["n"] += 1
             return [0.1] * 1024
     prov._embedder = _E()

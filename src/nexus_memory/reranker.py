@@ -75,10 +75,12 @@ def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     except Exception as exc:  # fail-open: defaults stand
         logger.debug("rerank config read skipped: %s", exc)
 
-    # Env overrides win over config file.
+    # Env overrides win over config file. Accepted falsy tokens match the
+    # shared boolean-env vocabulary (case-insensitive): 0/false/no/off/n/"".
     env_enabled = os.environ.get("NEXUS_RERANK")
     if env_enabled is not None:
-        cfg["enabled"] = env_enabled not in ("0", "false", "False", "")
+        cfg["enabled"] = env_enabled.strip().lower() not in (
+            "0", "false", "no", "off", "n", "")
     env_reranker = os.environ.get("NEXUS_RERANKER")
     if env_reranker:
         cfg["reranker"] = env_reranker

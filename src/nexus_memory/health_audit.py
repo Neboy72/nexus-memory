@@ -34,6 +34,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -289,7 +290,9 @@ class HealthAuditor:
 
         Destructive: requires NEXUS_DEDUP_SWEEP=1 (checked by run_audit).
         """
-        points = self._collect_points(with_vectors=True)
+        # Payload-only first pass: candidate detection needs no vectors, so
+        # holding every vector in memory is avoided (see _retrieve_vectors).
+        points = self._collect_points(with_vectors=False)
         by_key: Dict[str, list] = {}
         skipped_protected = 0
         for p in points:
@@ -311,6 +314,8 @@ class HealthAuditor:
         # Phase 2: build the full deletion plan with lossless proofs.
         plan: List[Tuple[Any, Dict[str, Any], Dict[str, Any], list]] = []
         backup_rows = []
+        keeper_rows = []
+        delete_point_ids: list = []
         rescued_attrs = 0
         for ckey, cands in by_key.items():
             if len(cands) < 2:
@@ -327,14 +332,29 @@ class HealthAuditor:
                     continue
 
                 def _created(p):
-                    return (p.payload or {}).get("created_at") or "9999"
+                    # created_at is heterogeneous (epoch int/float or an ISO
+                    # string, "9999" when missing) — comparing mixed types
+                    # raises TypeError, so normalize to a typed sort tuple.
+                    value = (p.payload or {}).get("created_at") or "9999"
+                    if isinstance(value, (int, float)):
+                        return (0, float(value))
+                    return (1, str(value))
 
                 group_sorted = sorted(grp, key=_created)
                 keeper = group_sorted[0]
                 kp = keeper.payload or {}
                 orig_attrs = dict(kp.get("entity_attributes") or {})
                 keeper_attrs = dict(orig_attrs)
-                del_ids = []
+                # Record the keeper's ORIGINAL payload/attrs in the backup so
+                # the attribute merge is fully reversible.
+                kb_id, kb_type = _backup_id(keeper.id)
+                keeper_rows.append({
+                    "id": kb_id,
+                    "id_type": kb_type,
+                    "collection": self._collection,
+                    "payload": kp,
+                    "entity_attributes": orig_attrs,
+                })
                 # Metadata merge only within this same security context.
                 for cand in group_sorted[1:]:
                     cp = cand.payload or {}
@@ -350,9 +370,9 @@ class HealthAuditor:
                         "id_type": btype,
                         "collection": self._collection,
                         "payload": cp,
-                        "vector": _json_vector(getattr(cand, "vector", None)),
                         "keeper_id": str(keeper.id),
                     })
+                    delete_point_ids.append(cand.id)
                 # collect deletions for this subgroup
                 to_delete = [cand.id for cand in group_sorted[1:]]
                 plan.append((keeper, keeper_attrs, orig_attrs, to_delete))
@@ -360,12 +380,20 @@ class HealthAuditor:
         merged = 0
         backup_path = None
         if plan:
+            # Fetch vectors ONLY for the ids that will really be deleted (the
+            # candidate scan itself is payload-only) so the backup stays
+            # complete and reversible without holding the whole collection in
+            # memory.
+            vectors = self._retrieve_vectors(delete_point_ids)
+            for row, pid in zip(backup_rows, delete_point_ids):
+                row["vector"] = _json_vector(vectors.get(pid))
             # Backup ALL candidates in ONE atomically written file BEFORE the
             # first deletion — never a partial backup.
-            backup_path = str(self._data_dir / f"dedup-sweep-backup-{time.strftime('%Y%m%d-%H%M%S')}.json")
+            backup_path = self._unique_backup_path()
             self._atomic_write_json(backup_path, {
                 "keeper_strategy": "oldest_created_at",
                 "collection": self._collection,
+                "keepers": keeper_rows,
                 "deleted": backup_rows,
             })
             # Verify the backup is complete and readable BEFORE deleting.
@@ -403,6 +431,34 @@ class HealthAuditor:
         log.info("Dedup sweep: %d merged, %d attrs rescued, backup=%s",
                  merged, rescued_attrs, backup_path)
         return result
+
+    def _retrieve_vectors(self, ids: list) -> Dict[Any, Any]:
+        """Fetch vectors for the given point ids (backup only).
+
+        The dedup scan is payload-only; vectors are pulled on demand for the
+        ids that are actually about to be deleted, keyed by the point id.
+        """
+        if not ids:
+            return {}
+        records = self._store.client.retrieve(
+            collection_name=self._collection, ids=ids, with_vectors=True,
+        )
+        return {r.id: getattr(r, "vector", None) for r in records}
+
+    def _unique_backup_path(self) -> str:
+        """Timestamp + random suffix; never an existing path (no clobber).
+
+        The second-resolution timestamp alone let two sweeps in the same
+        second overwrite each other's backup.
+        """
+        for _ in range(5):
+            candidate = self._data_dir / (
+                f"dedup-sweep-backup-{time.strftime('%Y%m%d-%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}.json"
+            )
+            if not candidate.exists():
+                return str(candidate)
+        raise RuntimeError("could not allocate a unique dedup backup path")
 
     def _atomic_write_json(self, path: str, data: Dict[str, Any]) -> None:
         """Write JSON atomically: temp file + fsync + os.replace."""

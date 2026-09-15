@@ -70,7 +70,7 @@ class TestRememberStoresScope:
         store.client = FakeClient()  # type: ignore[assignment]
         store._skill_graph = None  # scope tests don't exercise the graph
 
-        async def fake_embed(self, text):
+        async def fake_embed(self, text, is_query=True):
             return [0.0] * 8
         monkeypatch.setattr(mcp.MemoryStore, "_embed", fake_embed)
 
@@ -94,7 +94,7 @@ class TestRememberStoresScope:
         store.client = FakeClient()  # type: ignore[assignment]
         store._skill_graph = None  # scope tests don't exercise the graph
 
-        async def fake_embed(self, text):
+        async def fake_embed(self, text, is_query=True):
             return [0.0] * 8
         monkeypatch.setattr(mcp.MemoryStore, "_embed", fake_embed)
 
@@ -118,7 +118,7 @@ class TestRememberStoresScope:
         store.client = FakeClient()  # type: ignore[assignment]
         store._skill_graph = None  # scope tests don't exercise the graph
 
-        async def fake_embed(self, text):
+        async def fake_embed(self, text, is_query=True):
             return [0.0] * 8
         monkeypatch.setattr(mcp.MemoryStore, "_embed", fake_embed)
 
@@ -167,7 +167,7 @@ def _make_plugin(monkeypatch, points, my_scope):
         def embed_cached(self, text):
             return [0.0] * 8
 
-        def embed(self, text):
+        def embed(self, text, is_query=True):
             return [0.0] * 8
     prov._embedder = FakeEmbedder()
     prov._qdrant = _FakeQdrant(points)

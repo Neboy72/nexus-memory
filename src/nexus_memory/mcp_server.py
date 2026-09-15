@@ -786,8 +786,8 @@ class MemoryStore:
             )
             logging.info(f"Created collection '{COLLECTION_NAME}' ({self._embedder.dim}d)")
 
-    async def _embed(self, text: str) -> list[float]:
-        return await self._embedder.embed(text)
+    async def _embed(self, text: str, is_query: bool = True) -> list[float]:
+        return await self._embedder.embed(text, is_query)
 
     def _init_hybrid(self):
         """Initialize hybrid retriever (BM25 + Vector + RRF) if available."""
@@ -893,7 +893,7 @@ class MemoryStore:
 
         entry_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
-        vector = await self._embed(text)
+        vector = await self._embed(text, is_query=False)  # stored doc, not a query
 
         # ── Auto-scoping (self-organizing memory, Nebo law 07.09: full
         # automation or useless): when the caller leaves scope at 'default',
@@ -2815,7 +2815,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 if reembed or not vec:
                     text = payload.get("content", "")
                     if text:
-                        vec = await store._embed(text)
+                        vec = await store._embed(text, is_query=False)  # re-embed stored doc
                     else:
                         skipped += 1
                         continue

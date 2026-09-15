@@ -43,7 +43,7 @@ def _provider():
     prov._skill_graph_lock = threading.Lock()
     prov._prefetch_result = ""
     prov._prefetch_lock = threading.Lock()
-    prov._embedder = SimpleNamespace(dim=1024, embed=lambda t: [0.0] * 2)
+    prov._embedder = SimpleNamespace(dim=1024, embed=lambda t, is_query=True: [0.0] * 2)
     return prov
 
 

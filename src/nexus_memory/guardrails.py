@@ -453,7 +453,10 @@ class GuardrailEngine:
             target_norm = self._normalize_path(target)
             for rule in protected_rules:
                 if rule.get("collection"):
-                    # Collection rule: match the target against the name
+                    # Collection rule: match the target against the name.
+                    # Collection rules never carry a path (path-less rules are
+                    # built with path=""), so there is no path case to handle
+                    # here — the path branch below covers path-only rules.
                     if target_norm == self._normalize_path(rule["collection"]):
                         matched.append({
                             "target": target,
@@ -462,18 +465,6 @@ class GuardrailEngine:
                             "source_memory_id": rule["source_memory_id"],
                             "action": action.value,
                         })
-                        continue
-                    if rule.get("path"):
-                        # Both path and collection in one rule
-                        rule_path_norm = self._normalize_path(rule["path"])
-                        if self._path_matches(target_norm, rule_path_norm, recursive):
-                            matched.append({
-                                "target": target,
-                                "protected_path": rule["path"],
-                                "rule_text": rule["rule_text"],
-                                "source_memory_id": rule["source_memory_id"],
-                                "action": action.value,
-                            })
                     continue
                 if rule.get("path"):
                     rule_path_norm = self._normalize_path(rule["path"])

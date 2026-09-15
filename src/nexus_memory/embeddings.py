@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,28 @@ JINA_KEY_URL = "https://jina.ai/platform/embeddings"
 QUALITY_EXCELLENT = "excellent"
 QUALITY_GOOD = "good"
 QUALITY_BASIC = "basic"
+
+# Unified boolean-env vocabulary (review fix MEDIUM :305): one consistent
+# parser instead of per-variable ad-hoc checks. Case-insensitive; unknown
+# values fall back to the caller's default.
+_ENV_FALSY = frozenset({"0", "false", "no", "off", "n", ""})
+_ENV_TRUTHY = frozenset({"1", "true", "yes", "y", "on"})
+
+
+def _env_bool(value: str) -> Optional[bool]:
+    """Map an env value through the shared boolean vocabulary.
+
+    Returns True for "1"/"true"/"yes"/"y"/"on", False for
+    "0"/"false"/"no"/"off"/"n"/"" (case-insensitive) and None for anything
+    else (e.g. a model name).
+    """
+    token = (value or "").strip().lower()
+    if token in _ENV_TRUTHY:
+        return True
+    if token in _ENV_FALSY:
+        return False
+    return None
+
 
 # Preferred provider config sources
 def _read_preferred_provider() -> str:
@@ -319,12 +341,18 @@ class EmbeddingProvider:
         self._try_sentence_transformers()
 
     def _try_voyage(self) -> bool:
-        """Try Voyage AI. Returns True on success."""
-        if not VOYAGE_API_KEY or not (VOYAGE_API_KEY.startswith("vo-") or VOYAGE_API_KEY.startswith("pa-")):
+        """Try Voyage AI. Returns True on success.
+
+        The key is read live from the environment (a key exported after this
+        module was imported must still work); the module constant is only a
+        fallback for importers that set it directly.
+        """
+        key = os.environ.get("VOYAGE_API_KEY") or VOYAGE_API_KEY
+        if not key or not (key.startswith("vo-") or key.startswith("pa-")):
             return False
         try:
             import voyageai
-            self._client = voyageai.Client(api_key=VOYAGE_API_KEY)
+            self._client = voyageai.Client(api_key=key)
             self._name = "voyage-4"
             self._dim = 1024
             self._backend = "voyage"
@@ -334,12 +362,16 @@ class EmbeddingProvider:
             return False
 
     def _try_openai(self) -> bool:
-        """Try OpenAI. Returns True on success."""
-        if not OPENAI_API_KEY or not OPENAI_API_KEY.startswith("sk-"):
+        """Try OpenAI. Returns True on success.
+
+        Key read live from the environment; the module constant is a fallback.
+        """
+        key = os.environ.get("OPENAI_API_KEY") or OPENAI_API_KEY
+        if not key or not key.startswith("sk-"):
             return False
         try:
             from openai import OpenAI
-            self._client = OpenAI(api_key=OPENAI_API_KEY)
+            self._client = OpenAI(api_key=key)
             self._name = "text-embedding-3-small"
             self._dim = 1536
             self._backend = "openai"
@@ -349,12 +381,16 @@ class EmbeddingProvider:
             return False
 
     def _try_google(self) -> bool:
-        """Try Google / Vertex AI. Returns True on success."""
-        if not GOOGLE_API_KEY or not GOOGLE_API_KEY.startswith("AIza"):
+        """Try Google / Vertex AI. Returns True on success.
+
+        Key read live from the environment; the module constant is a fallback.
+        """
+        key = os.environ.get("GOOGLE_API_KEY") or GOOGLE_API_KEY
+        if not key or not key.startswith("AIza"):
             return False
         try:
             import google.generativeai as genai
-            genai.configure(api_key=GOOGLE_API_KEY)
+            genai.configure(api_key=key)
             self._client = genai
             self._name = "text-embedding-004"
             self._dim = 768
@@ -479,10 +515,13 @@ class EmbeddingProvider:
 
         bge-m3 via HF downloads ~2.3 GB on first use (cached afterwards) so it
         is opt-in per environment; the wizard offers it after Ollama fails."""
-        hf_candidate = os.environ.get("NEXUS_HF_BGE3") or ""
-        if hf_candidate:
-            # explicit opt-in (or explicit 0/1 with default model name)
-            model_name = hf_candidate if hf_candidate not in ("1", "true", "yes") else "BAAI/bge-m3"
+        hf_raw = os.environ.get("NEXUS_HF_BGE3") or ""
+        hf_flag = _env_bool(hf_raw)
+        # Shared boolean parser: a falsy token ("0"/"false"/"no"/"off"/"n")
+        # DISABLES the HF route, a truthy token selects the default model name
+        # and any other value is used as an explicit model name.
+        if hf_flag is not False and hf_raw.strip():
+            model_name = "BAAI/bge-m3" if hf_flag is True else hf_raw.strip()
             try:
                 from sentence_transformers import SentenceTransformer
                 self._model = SentenceTransformer(model_name)
@@ -509,8 +548,23 @@ class EmbeddingProvider:
                 "Or set VOYAGE_API_KEY or OPENAI_API_KEY"
             )
             return False
+        except Exception as exc:
+            # Any non-ImportError failure (e.g. OSError while downloading the
+            # model offline) must not escape __init__: report it and stay
+            # unavailable instead of crashing provider detection.
+            logging.warning(
+                "sentence-transformers init failed (%s); no local fallback available.",
+                exc,
+            )
+            return False
 
-    async def embed(self, text: str) -> list[float]:
+    async def embed(self, text: str, is_query: bool = True) -> list[float]:
+        """Embed one text. ``is_query`` selects the query/document mode.
+
+        Instruction-aware models (qwen3-embedding) prefix only QUERY text —
+        document embeddings must be produced plain, so the document call
+        sites pass ``is_query=False``. For every other backend the flag is
+        accepted and ignored (behavior unchanged)."""
         # Dispatch on the stored backend type, never on the model name.
         # Security review fix: the model-name heuristics sent Google's
         # 'text-embedding-004' into the OpenAI branch (the google.generativeai
@@ -555,9 +609,10 @@ class EmbeddingProvider:
             # endpoint + legacy fallback) moved to a worker thread.
             # qwen3-embedding is instruction-aware: queries get the Instruct
             # prefix, documents are embedded plain (official usage guidance,
-            # benchmark protocol that measured +4 R@5 vs bge-m3).
+            # benchmark protocol that measured +4 R@5 vs bge-m3). The prefix
+            # is applied for QUERY embeddings only (is_query=True).
             payload_text = text
-            if "qwen3-embedding" in (self._name or "").lower():
+            if is_query and "qwen3-embedding" in (self._name or "").lower():
                 payload_text = f"Instruct: retrieve the relevant memory for the user query. Query: {text}"
 
             def _ollama_post() -> list:
