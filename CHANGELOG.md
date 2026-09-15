@@ -1,3 +1,40 @@
+## [0.20.0] - 2026-09-16
+
+### Fixed
+
+- **Full OCR review campaign completed: all 513 findings closed.** A second
+  reviewer pass over the entire codebase produced 513 findings (15
+  critical/high dashboard XSS + injection-class, 258 medium, 240 low).
+  Every finding is now closed: fixed, or a documented skip/false-alarm
+  with evidence in the tracker. 26 waves, each committed separately with
+  a proof-carrying test file (tests/test_waveN_fixes.py).
+- **Highlights across the campaign:** dashboard XSS hardening (escapeHtml,
+  delegated listeners, no inline handlers), graph store RMW races guarded
+  (threading.Lock on 4 read-modify-write paths), SSRF guard on webhook
+  subscribe (loopback/link-local/private/metadata IPs rejected),
+  single-writer capture-retry queue (append-only enqueue, no lost entries),
+  fail-closed guardrails on error paths, scope validation to one source
+  (validateConfigScope), no-fsync agent-stats hot path, pathlike redirect
+  pattern in guardrail_check ('a > b' no longer classified destructive).
+
+### Changed
+
+- pyproject.toml: readme metadata declared; asyncio test mode scoped.
+- audit.yml: pip cache, permissions, concurrency, ERE-anchored checks.
+- .gitignore: anchored snapshot globs, duplicates removed, lockfile now
+  tracked (Nr 400).
+- plugin.yaml / pyproject: dependency upper bounds (major caps).
+
+### Tests
+
+- 1818 passed / 2 skipped on macOS; 1758 passed / 7 skipped in the
+  Ubuntu replica (known environment gaps: machine paths, Voyage key,
+  Node strip-types); OpenClaw plugin suite 26/26; leak-check 0.
+
+[0.20.0]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.20.0
+
+---
+
 ## [0.19.1] - 2026-09-13
 
 ### New
