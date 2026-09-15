@@ -18,6 +18,7 @@ import argparse
 import os
 import sys
 import time
+import traceback
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -42,31 +43,48 @@ def main() -> int:
     total_done = 0
     t0 = time.time()
     print(f"[backfill] start — batch={args.batch} sleep={args.sleep}s")
-    while True:
-        remaining = args.max - total_done if args.max else 0
-        bs = min(args.batch, remaining) if remaining else args.batch
-        report = c.run(batch_size=bs)
-        # Termination on real progress, not on "scanned": failed points are
-        # left unmarked and get re-scanned every batch, so `scanned` never
-        # reaches 0 (infinite loop). Facts created + duplicates dropped +
-        # skipped audit points are the durable, non-repeating outcomes.
-        done = (report.get("facts_created", 0)
-                + report.get("duplicates", 0)
-                + report.get("skipped", 0))
-        total_done += done
-        print(f"[{time.strftime('%H:%M:%S')}] +{done} done (scanned={report.get('scanned',0)}, "
-              f"facts={report.get('facts_created',0)}, "
-              f"superseded={report.get('superseded',0)}, dup={report.get('duplicates',0)}, "
-              f"skipped={report.get('skipped',0)}, "
-              f"failed={report.get('failed',0)}) | total={total_done} | "
-              f"{(time.time()-t0)/60:.1f}min")
-        if done == 0:
-            print("[backfill] backlog empty — done.")
-            break
-        if args.max and total_done >= args.max:
-            print(f"[backfill] reached max={args.max}")
-            break
-        time.sleep(args.sleep)
+    try:
+        while True:
+            remaining = args.max - total_done if args.max else 0
+            bs = min(args.batch, remaining) if remaining else args.batch
+            report: dict = {}
+            done = 0
+            try:
+                report = c.run(batch_size=bs)
+                # Termination on real progress, not on "scanned": failed points
+                # are left unmarked and get re-scanned every batch, so
+                # `scanned` never reaches 0 (infinite loop). Facts created +
+                # duplicates dropped + skipped audit points are the durable,
+                # non-repeating outcomes.
+                done = (report.get("facts_created", 0)
+                        + report.get("duplicates", 0)
+                        + report.get("skipped", 0))
+                total_done += done
+            finally:
+                # Printed in a finally so an abort inside c.run() (Ctrl+C or a
+                # crash) can never swallow the progress line (H251).
+                print(f"[{time.strftime('%H:%M:%S')}] +{done} done (scanned={report.get('scanned',0)}, "
+                      f"facts={report.get('facts_created',0)}, "
+                      f"superseded={report.get('superseded',0)}, dup={report.get('duplicates',0)}, "
+                      f"skipped={report.get('skipped',0)}, "
+                      f"failed={report.get('failed',0)}) | total={total_done} | "
+                      f"{(time.time()-t0)/60:.1f}min")
+            if done == 0:
+                print("[backfill] backlog empty — done.")
+                break
+            if args.max and total_done >= args.max:
+                print(f"[backfill] reached max={args.max}")
+                break
+            time.sleep(args.sleep)
+    except KeyboardInterrupt:
+        print(f"\n[backfill] interrupted (Ctrl+C) — total processed: "
+              f"{total_done} in {(time.time()-t0)/60:.1f} min")
+        return 130
+    except Exception:
+        traceback.print_exc()
+        print(f"[backfill] aborted after error — total processed: "
+              f"{total_done} in {(time.time()-t0)/60:.1f} min")
+        return 1
     print(f"[backfill] total processed: {total_done} in {(time.time()-t0)/60:.1f} min")
     return 0
 
