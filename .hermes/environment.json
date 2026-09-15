@@ -8,9 +8,9 @@
     "test": ["pytest tests/"],
     "start": null,
     "port": null,
-    "readinessPath": "/",
+    "readinessPath": null,
     "evidence": [
-      "Manifest override (2026-08-30): Detection erkannte fastapi durch webui extras.",
+      "Manifest override (2026-08-30): Detection erkannte fastapi (installiert in der Test-Umgebung) durch den Dashboard-Import.",
       "Nexus Memory ist keine standalone-App - dashboard/server.py laeuft getrennt auf Port 9121.",
       "Library-Verify = bootstrap + pytest, kein Start/Readiness."
     ]

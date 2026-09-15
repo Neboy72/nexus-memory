@@ -61,6 +61,10 @@
       "label": "Auto-Capture",
       "help": "Automatically store conversation turns to Qdrant"
     },
+    "thoughtFilter": {
+      "label": "Thought Filter",
+      "help": "Strip GLM chain-of-thought reasoning blocks from outgoing messages. Enabled by default; set to false to disable."
+    },
     "maxRecallResults": {
       "label": "Max Recall Results",
       "placeholder": "10",
@@ -70,6 +74,11 @@
     "accessLevel": {
       "label": "Access Level",
       "help": "Agent access level: public, trusted, or private. Controls which memories are visible.",
+      "advanced": true
+    },
+    "scope": {
+      "label": "Scope",
+      "help": "Area label (a-z, 0-9, '-', max 40 chars). Auto-recall then surfaces only 'default'-scoped memories plus this agent's own scope; explicit search is never filtered. Empty = no gating.",
       "advanced": true
     },
     "debug": {
@@ -111,7 +120,8 @@
             "type": "string"
           },
           "dimensions": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           }
         }
       },

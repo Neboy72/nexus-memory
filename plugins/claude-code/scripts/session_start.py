@@ -19,7 +19,12 @@ EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
 def _resolve_trust_level() -> str:
-    """Gatekeeper: resolve this agent's trust level from agents.json."""
+    """Gatekeeper: resolve this agent's trust level from agents.json.
+
+    NEXUS_AGENT_ID comes from the shell (hooks honor an override); the MCP
+    server path is pinned to "claude-code" by plugin.json. Set it shell-wide
+    for consistent attribution across both paths.
+    """
     agent_id = os.getenv("NEXUS_AGENT_ID", "claude-code")
     if not agent_id:
         return "public"

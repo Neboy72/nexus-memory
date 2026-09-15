@@ -1,5 +1,6 @@
 /* nexus-memory — D3.js v7 Force Graph (SVG, Mike Bostock Vorlage) */
-const CC = { fact:'#3b82f6', belief:'#8b5cf6', session:'#f59e0b', rule:'#10b981', preference:'#ec4899', temp:'#6b7280' };
+/* Category colors live in colors.js (shared with app.js). */
+const CC = NEXUS_CATEGORY_COLORS;
 
 const MemoryGraph = {
   svg: null, sim: null, g: null, link: null, node: null, _container: null,
@@ -17,9 +18,12 @@ const MemoryGraph = {
       .attr('width', '100%').attr('height', '100%')
       .attr('fill', 'none').attr('pointer-events', 'all');
     this.g = this.svg.append('g');
-    this.svg.call(d3.zoom().scaleExtent([0.1,8]).on('zoom', (e) => {
+    // Keep the bound zoom behaviour so resetZoom() can reuse it instead of
+    // building a throwaway d3.zoom() each call (which loses the bound extent).
+    this._zoom = d3.zoom().scaleExtent([0.1,8]).on('zoom', (e) => {
       this.g.attr('transform', e.transform);
-    }));
+    });
+    this.svg.call(this._zoom);
     this.svg.on('dblclick.zoom', null);
   },
 
@@ -42,9 +46,10 @@ const MemoryGraph = {
         id: m.id, text: (m.text || '').slice(0, 80),
         fullText: fullText,
         title: m.title || '',
-        category: m.category || 'fact',
-        access_level: m.access_level || 'unknown',
-        confidence: m.confidence || 0.7, drift: m.drift || 'not_tracked',
+        category: m.category ?? 'fact',
+        access_level: m.access_level ?? 'unknown',
+        // `??` not `||`: a real confidence of 0 must stay 0, not become 0.7.
+        confidence: m.confidence ?? 0.7, drift: m.drift ?? 'not_tracked',
         source: m.source || '', created_at: m.created_at || null,
       };
     });
@@ -65,7 +70,7 @@ const MemoryGraph = {
       .attr('font-size', '7px').attr('fill', '#ffffffaa')
       .attr('font-family', 'sans-serif')
       .text(d => {
-        let t = d.text.replace(/\b(logo|logos)\b/gi, '').replace(/\s+/g, ' ').trim();
+        let t = d.text.replace(/\s+/g, ' ').trim();
         t = t.split(' ').slice(0,4).join(' ');
         return `[${d.category}] ${t}`;
       });
@@ -108,7 +113,7 @@ const MemoryGraph = {
 
   resetZoom() {
     this.svg.transition().duration(500).call(
-      d3.zoom().transform, d3.zoomIdentity
+      this._zoom.transform, d3.zoomIdentity
     );
   },
 };

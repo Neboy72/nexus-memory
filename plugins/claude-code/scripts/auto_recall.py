@@ -32,7 +32,10 @@ AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 def _resolve_trust_level() -> str:
     """Gatekeeper: resolve this agent's trust level from agents.json.
 
-    Uses NEXUS_AGENT_ID env var to identify the caller.
+    Uses NEXUS_AGENT_ID env var to identify the caller. This hook inherits the
+    shell's value (a deliberate override), unlike the MCP server which
+    plugin.json pins to "claude-code". Set NEXUS_AGENT_ID shell-wide for
+    consistent attribution across both paths.
     Falls back to 'public' for unknown agents (safest default).
     """
     agent_id = os.getenv("NEXUS_AGENT_ID", "claude-code")

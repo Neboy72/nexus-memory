@@ -4,6 +4,11 @@
 const Inspector = {
   items: [], filter: '', cat: 'all', view: 'list', current: null,
 
+  // Monotonic request token: every load()/why() start bumps it, and a
+  // response may only render if it is still the latest request. Without it a
+  // slow earlier request would overwrite the newer view (out-of-order writes).
+  _reqSeq: 0,
+
   async _get(url) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -25,17 +30,20 @@ const Inspector = {
 
   async load() {
     const body = document.getElementById('inspectorBody');
+    const token = ++this._reqSeq;
     try {
       body.innerHTML = this._toolbarHTML() + '<div class="insp-error" style="display:none"></div><div id="inspList"></div>';
       const res = await fetch('/api/memories?limit=2000');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
+      if (token !== this._reqSeq) return;
       this.items = (data.memories || []).map(m => ({ id: m.id, text: (m.text || m.title || ''), category: m.category, access_level: m.access_level, created_at: m.created_at }));
       this._renderList();
       this.view = 'list';
       document.getElementById('inspSearch').addEventListener('input', (e) => { this.filter = e.target.value.trim(); this._renderList(); });
       document.getElementById('inspCat').addEventListener('change', (e) => { this.cat = e.target.value; this._renderList(); });
     } catch (err) {
+      if (token !== this._reqSeq) return;
       body.innerHTML = `<div class="insp-error">Inspector load failed: ${this._esc(err.message || String(err))}</div>`;
     }
   },
@@ -73,10 +81,12 @@ const Inspector = {
 
   async why(id) {
     const el = document.getElementById('inspList');
+    const token = ++this._reqSeq;
     try {
       const res = await fetch(`/api/memories/${encodeURIComponent(id)}/why`);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const d = await res.json();
+      if (token !== this._reqSeq) return;
       el.innerHTML = `
         <button class="insp-back" data-insp-action="back">← Back to list</button>
         <div class="insp-why" style="margin-top:12px">
@@ -101,6 +111,7 @@ const Inspector = {
       this.current = id;
       this.view = 'why';
     } catch (err) {
+      if (token !== this._reqSeq) return;
       el.innerHTML = `<div class="insp-error">Load failed: ${this._esc(String(err))}</div>`;
     }
   },
