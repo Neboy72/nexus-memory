@@ -95,10 +95,15 @@ class TestScorePoint:
         s = self.aud.score_point({"category": "session", "created_at": OLD_ISO}, NOW)
         assert s is not None and s >= sf.CANDIDATE_THRESHOLD
 
-    def test_category_damping(self):
-        old_session = self.aud.score_point({"category": "session", "created_at": OLD_ISO}, NOW)
+    def test_default_category_reaches_threshold(self):
+        # H2: CATEGORY_DEFAULT_WEIGHT must exceed CANDIDATE_THRESHOLD,
+        # otherwise a default-category (e.g. "fact") point could never become
+        # a candidate — its score was capped below the threshold by the
+        # weight alone. Session/temp keep the same weight as the default.
         old_fact = self.aud.score_point({"category": "fact", "created_at": OLD_ISO}, NOW)
-        assert old_session > old_fact  # session darf eher weg als fact
+        old_session = self.aud.score_point({"category": "session", "created_at": OLD_ISO}, NOW)
+        assert old_fact is not None and old_fact >= sf.CANDIDATE_THRESHOLD
+        assert old_session >= old_fact
 
 
 # ---------- Integration: run() gegen TEMP-Collection ----------

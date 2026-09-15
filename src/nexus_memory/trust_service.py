@@ -26,6 +26,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from qdrant_client import models as qmodels
+
 log = logging.getLogger("nexus.trust")
 
 STATUS_ACTIVE = "ACTIVE"
@@ -34,6 +36,10 @@ STATUS_RETRACTED = "RETRACTED"
 
 TRUST_START_DELAY_SECONDS = int(os.environ.get("NEXUS_TRUST_START_DELAY", 90))
 TRUST_INTERVAL_SECONDS = int(os.environ.get("NEXUS_TRUST_INTERVAL_SEC", 24 * 3600))
+
+# Hard ceiling per belief: mis-tagged data must not turn one belief into an
+# unbounded scroll of the whole collection.
+_MAX_EVENTS = 20000
 
 
 def compute_trust(events: list[dict], belief: dict) -> tuple[float, str, str]:
@@ -195,18 +201,40 @@ class TrustService:
         return points
 
     def _events_for(self, belief_id: str) -> list[dict]:
-        """Alle Event-Punkte für einen Belief (payload.event_type == 'belief_event')."""
+        """Alle Event-Punkte für einen Belief (payload.event_type == 'belief_event').
+
+        Both predicates are pushed into the scroll filter (server-side) so a
+        belief only ever reads its own event points instead of scanning the
+        entire collection and filtering client-side. A hard ceiling bounds a
+        runaway fan-out (mis-tagged data) per belief.
+        """
         events, offset = [], None
         while True:
             batch, offset = self._store.client.scroll(
                 self._store.collection_name, limit=500, offset=offset,
+                scroll_filter=qmodels.Filter(must=[
+                    qmodels.FieldCondition(
+                        key="event_type",
+                        match=qmodels.MatchValue(value="belief_event"),
+                    ),
+                    qmodels.FieldCondition(
+                        key="belief_id",
+                        match=qmodels.MatchValue(value=belief_id),
+                    ),
+                ]),
                 with_payload=True, with_vectors=False,
             )
             events.extend(batch)
+            if len(events) >= _MAX_EVENTS:
+                log.warning(
+                    "Trust: event ceiling %d reached for belief %s — truncating",
+                    _MAX_EVENTS, belief_id,
+                )
+                break
             if offset is None:
                 break
         out = []
-        for p in events:
+        for p in events[:_MAX_EVENTS]:
             pl = p.payload or {}
             if pl.get("event_type") == "belief_event" and pl.get("belief_id") == belief_id:
                 out.append(pl)

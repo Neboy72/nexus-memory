@@ -145,6 +145,11 @@ class ScopeCentroids:
         now = time.monotonic()
         if self._cache is None or now - self._cache_at > CENTROID_TTL_SECONDS:
             self._cache = self._fetch()
+            # Refresh the discovered scope names together with the centroids:
+            # a scope created after startup must become visible to the
+            # centroid scroll filter instead of staying frozen for the
+            # process lifetime.
+            self._known_scopes = self._probe_scopes()
             self._cache_at = now
         return self._cache
 
