@@ -168,6 +168,27 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
     except Exception:
         return False
 
+def _iter_content_blocks(msg: dict):
+    """Yield content blocks from one transcript line.
+
+    Real Claude-Code transcripts nest content under message.content
+    (message.role = "user"/"assistant"); legacy/synthetic lines keep it at
+    the top level. Both are supported so extraction works either way.
+    """
+    if not isinstance(msg, dict):
+        return
+    message = msg.get("message") if isinstance(msg.get("message"), dict) else {}
+    content = message.get("content")
+    if content is None:
+        content = msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                yield block
+    elif isinstance(content, str) and content:
+        yield {"type": "text", "text": content}
+
+
 def extract_facts_from_transcript(transcript_path: str, session_id: str) -> list:
     """Extract notable facts from the conversation transcript.
 
@@ -188,36 +209,45 @@ def extract_facts_from_transcript(transcript_path: str, session_id: str) -> list
         for line in recent:
             try:
                 msg = json.loads(line)
+                if not isinstance(msg, dict):
+                    continue
                 msg_type = msg.get("type", "")
+                message = msg.get("message") if isinstance(msg.get("message"), dict) else {}
+                mtype = message.get("role") or msg_type
 
-                # Look for tool results with file operations
-                if msg_type == "tool_result":
-                    content = str(msg.get("content", ""))
-                    if "created" in content.lower() or "modified" in content.lower():
-                        # Extract file path
-                        path_match = re.search(r'["\']?(/[^"\']+\.\w+)["\']?', content)
-                        if path_match:
-                            facts.append({
-                                "text": f"File modified in Claude Code session {session_id}: {path_match.group(1)}",
-                                "category": "session"
-                            })
+                for block in _iter_content_blocks(msg):
+                    btype = block.get("type", "")
 
-                # Look for assistant messages with key phrases
-                elif msg_type == "assistant":
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                text = block.get("text", "")
-                                # Look for decisions
-                                if any(kw in text.lower() for kw in ["decided", "chose", "will use", "implemented", "fixed"]):
-                                    # Take first 200 chars as a fact
-                                    clean = text.strip()[:200]
-                                    if len(clean) > 20:
-                                        facts.append({
-                                            "text": f"Claude Code session {session_id}: {clean}",
-                                            "category": "session"
-                                        })
+                    # Tool results (user-side): look for file operations.
+                    if btype == "tool_result" or msg_type == "tool_result":
+                        raw = block.get("content", "")
+                        if not raw:
+                            raw = msg.get("content", "")  # legacy top-level
+                        # tool_result content may be a plain string or a
+                        # list of dicts with a "text" field — str() of either
+                        # is enough for the path scan.
+                        content_str = str(raw)
+                        if "created" in content_str.lower() or "modified" in content_str.lower():
+                            path_match = re.search(r'["\']?(/[^"\']+\.\w+)["\']?', content_str)
+                            if path_match:
+                                facts.append({
+                                    "text": f"File modified in Claude Code session {session_id}: {path_match.group(1)}",
+                                    "category": "session"
+                                })
+                        continue
+
+                    # Assistant text blocks: look for decisions.
+                    if btype == "text" and mtype == "assistant":
+                        text = block.get("text", "")
+                        if not isinstance(text, str):
+                            continue
+                        if any(kw in text.lower() for kw in ["decided", "chose", "will use", "implemented", "fixed"]):
+                            clean = text.strip()[:200]
+                            if len(clean) > 20:
+                                facts.append({
+                                    "text": f"Claude Code session {session_id}: {clean}",
+                                    "category": "session"
+                                })
             except (json.JSONDecodeError, KeyError):
                 continue
     except Exception:
