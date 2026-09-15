@@ -5,9 +5,9 @@ Self-organizing memory areas (Nebo law 07.09: full automation or useless).
 No user ever types a scope: centroids are read from existing scoped canonical
 points, and a memory/prompt is only tagged/filtered on a CLEAR match.
 
-Conservative rule (identical to the MCP server's scope_auto.py):
-  - cosine similarity must be >= 0.72 (absolute)
-  - AND >= 0.05 above the runner-up centroid
+Conservative rule (identical thresholds to the MCP server's scope_auto.py):
+  - cosine similarity must be >= SIM_THRESHOLD (default 0.65)
+  - AND >= MARGIN (default 0.05) above the runner-up centroid
 Otherwise: no area (default / no filtering). Fail-open everywhere.
 Zero LLM cost: pure vector math.
 
@@ -16,6 +16,7 @@ per call (no cache). The fetch is one scroll request; fine at hook cadence.
 """
 
 import logging
+import os
 import re
 import time
 
@@ -24,9 +25,12 @@ COLLECTION = "nexus"
 
 _SCOPE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
-# Inference thresholds — must stay in sync with src/nexus_memory/scope_auto.py
-SIM_THRESHOLD = 0.72
-MARGIN = 0.05
+# Inference thresholds — read from the SAME env vars with the SAME defaults as
+# src/nexus_memory/scope_auto.py (SCOPE_MATCH_THRESHOLD / SCOPE_MARGIN). H255:
+# the hook used to hardcode 0.72 while the MCP server defaulted to 0.65, so
+# the same memory could be tagged on one path and filtered out on the other.
+SIM_THRESHOLD = float(os.getenv("NEXUS_SCOPE_AUTO_THRESHOLD", "0.65"))
+MARGIN = float(os.getenv("NEXUS_SCOPE_AUTO_MARGIN", "0.05"))
 
 
 def _cosine(a, b):
@@ -163,23 +167,21 @@ def prefetch_allowed_scopes(vector, centroids: dict, manual_scope: str):
     Returns a set (e.g. {'default', 'voice'}) when the query clearly belongs
     to one area, or None when there is NO clear match (→ no filtering,
     old behavior). A manual scope override always wins.
+
+    H256: delegates to ``infer_scope`` instead of duplicating the scoring +
+    threshold block (drift risk). Equivalence: the old code returned None
+    exactly when no scope cleared BOTH the absolute threshold and the margin —
+    which is precisely the condition under which ``infer_scope`` returns
+    "default"; that is mapped back to None here.
     """
     try:
-        if not vector or not centroids:
+        inferred = infer_scope(vector, centroids)
+        if inferred == "default":
             return None
-        scored = sorted(
-            ((scope, _cosine(vector, c)) for scope, c in centroids.items()),
-            key=lambda kv: kv[1], reverse=True,
-        )
-        if not scored:
-            return None
-        top_scope, top = scored[0]
-        runner_up = scored[1][1] if len(scored) > 1 else 0.0
-        if top >= SIM_THRESHOLD and top - runner_up >= MARGIN:
-            allowed = {"default", top_scope}
-            if manual_scope:
-                allowed.add(manual_scope)
-            return allowed
+        allowed = {"default", inferred}
+        if manual_scope:
+            allowed.add(manual_scope)
+        return allowed
     except Exception as exc:
         logging.info("scope_auto: prefetch inference failed (%s) — fail-open", exc)
-    return None
+        return None

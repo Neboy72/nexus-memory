@@ -11,6 +11,7 @@ Output JSON with "allow: false" blocks the tool call.
 import sys
 import json
 import os
+import re
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -19,12 +20,44 @@ from pathlib import Path
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
 
-# Destructive command patterns
+# Destructive command patterns — (action, [compiled regex, ...]).
+#
+# H244: matched per FIELD with word-boundary anchors instead of raw substring
+# search over an interpolated ``tool_name + command + json.dumps(tool_input)``
+# blob. The old version was both over-inclusive ("> " or "truncate" tripped on
+# benign file *content*) and under-inclusive (a differently wrapped command
+# slipped through).
 DESTRUCTIVE_PATTERNS = [
-    ("delete", ["rm -r", "rm -f", "rmdir", "del /", "drop ", "truncate", "uninstall", "remove-item", "find -delete", "git clean", "dd of="]),
-    ("kill", ["kill -9", "pkill", "killall", "taskkill"]),
-    ("overwrite", ["write_file", "> "]),
-    ("recreate", ["recreate_collection", "drop collection"]),
+    ("delete", [
+        re.compile(r"\brm\s+-[a-z]*r"),          # rm -r / rm -rf / rm -fr
+        re.compile(r"\brm\s+-[a-z]*f"),          # rm -f / rm -rf
+        re.compile(r"\brmdir\b"),
+        re.compile(r"\bdel\s+/"),                # cmd.exe delete
+        re.compile(r"\bdrop\s+\w"),              # SQL/Qdrant drop
+        re.compile(r"\btruncate\b"),
+        re.compile(r"\buninstall\b"),
+        re.compile(r"\bremove-item\b"),
+        re.compile(r"\bfind\b[^|]*\s-delete\b"),
+        re.compile(r"\bgit\s+clean\b"),
+        re.compile(r"\bdd\b[^|]*\bof="),
+    ]),
+    ("kill", [
+        re.compile(r"\bkill\s+-9\b"),
+        re.compile(r"\bpkill\b"),
+        re.compile(r"\bkillall\b"),
+        re.compile(r"\btaskkill\b"),
+    ]),
+    ("overwrite", [
+        re.compile(r"\bwrite_file\b"),
+        # Shell redirect. Only ever evaluated against the command field, so a
+        # literal ">" inside file content (serialized in tool_input) is not a
+        # redirect (H244).
+        re.compile(r">\s*\S"),
+    ]),
+    ("recreate", [
+        re.compile(r"\brecreate_collection\b"),
+        re.compile(r"\bdrop\s+collection\b"),
+    ]),
 ]
 
 # Protection keywords (case-insensitive)
@@ -33,7 +66,6 @@ PROTECTION_KEYWORDS = ["never delete", "never remove", "do not delete", "do not 
                        "verboten", "forbidden", "tabu", "sacred"]
 
 # Path extraction patterns
-import re
 PATH_PATTERNS = [
     re.compile(r"~[\w./-]+"),
     re.compile(r"/[\w./-]+"),
@@ -52,11 +84,19 @@ def fail_closed_enabled() -> bool:
 
 
 def classify_action(command: str) -> str | None:
-    """Return the action type if destructive, None otherwise."""
-    cmd_lower = command.lower()
+    """Return the action type if the command is destructive, None otherwise.
+
+    H244: matches ONE field (the command) with word-boundary regexes — never
+    an interpolated ``tool_name + command + json.dumps(tool_input)`` blob. The
+    old substring scan was over-inclusive ("> " or "truncate" tripped on
+    benign file *content*) and under-inclusive for differently-wrapped
+    commands.
+    """
+    if not command:
+        return None
     for action, patterns in DESTRUCTIVE_PATTERNS:
         for pattern in patterns:
-            if pattern in cmd_lower:
+            if pattern.search(command):
                 return action
     return None
 
@@ -150,18 +190,22 @@ def load_protection_rules() -> list[dict] | None:
 
 
 def check_action(command: str, tool_name: str = "", tool_input: dict = None) -> dict:
-    """Check if an action is safe."""
+    """Check if an action is safe.
+
+    H244: only the COMMAND field is classified. Serialized ``tool_input`` (and
+    the tool name) are never scanned as shell text — a literal ">" or
+    "truncate" inside file content must not look like a destructive command.
+    ``tool_input`` is used solely to collect path-like targets.
+    """
     tool_input = tool_input or {}
 
-    # Build full command string
-    full_input = f"{tool_name} {command} {json.dumps(tool_input) if tool_input else ''}"
-
-    action = classify_action(full_input)
+    action = classify_action(command)
     if not action:
         return {"verdict": "allow", "reason": "Non-destructive action"}
 
-    targets = extract_targets(full_input)
-    # Also check tool_input paths
+    # Targets come from the command string and from path-like tool_input
+    # values (e.g. Write's file_path) — never from serialized JSON as a whole.
+    targets = extract_targets(command)
     if tool_input and isinstance(tool_input, dict):
         for v in tool_input.values():
             if isinstance(v, str) and ("/" in v or "~" in v):

@@ -634,6 +634,14 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
                 logger.info("SICA: batch-deleted %d expired memories", len(delete_ids))
             except Exception as exc:
                 logger.warning("SICA batch delete failed: %s", exc)
+                # H239: the batch failed, so nothing was deleted. Clear the
+                # list — otherwise the per-issue loop below matches
+                # ``issue["id"] in delete_ids`` and ``continue``s, so the
+                # issues are neither deleted nor reported: they vanish.
+                # Emptying it lets every delete-issue fall through to the
+                # normal per-issue handling (suggestion / auto-patch).
+                delete_ids.clear()
+                delete_types.clear()
         for issue in all_issues:
             if issue["auto_fixable"] and auto_patch:
                 # Deletion-type issues were handled by the batch above.
@@ -735,7 +743,16 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult,
                 # Sync embedder (e.g. Hermes plugin's _Embedder wrapper)
                 return _embedder.embed(summary)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        # H240: manage the pool MANUALLY instead of a ``with`` block. The
+        # context manager's ``__exit__`` calls ``shutdown(wait=True)``, which
+        # blocks until the job finishes — so a ``return`` on timeout would
+        # negate the 30s timeout entirely and stall the caller for the whole
+        # embedding duration. Note: ThreadPoolExecutor worker threads are
+        # non-daemon, so on timeout the worker keeps running until the
+        # embedding call returns; it no longer blocks THIS path, which is the
+        # best available compromise with a non-daemon pool.
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             future = pool.submit(_get_embedding)
             try:
                 vector = future.result(timeout=30)
@@ -744,6 +761,11 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult,
                 pool.shutdown(wait=False, cancel_futures=True)
                 logger.warning("SICA session embedding timed out")
                 return
+        except Exception:
+            # Error path: never wait on the worker either.
+            pool.shutdown(wait=False)
+            raise
+        pool.shutdown(wait=True)
 
         eid = str(uuid.uuid4())
         ts = datetime.now(timezone.utc).isoformat()

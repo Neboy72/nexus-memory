@@ -20,6 +20,7 @@ from typing import Optional
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from nexus.graph.schema import EdgeRelation, EdgeStatus
 
@@ -58,16 +59,43 @@ def _edge_id(source_fact_id: str, target_fact_id: str, relation: str) -> str:
     return hashlib.sha1(raw).hexdigest()[:12]
 
 
-def group_edges_by_source(edges: list[dict]) -> dict[str, list[dict]]:
+# Required columns on an ``edges`` row. Read via ``.get`` so schema drift in
+# a v2.0.x DB degrades to a per-row skip instead of a KeyError that aborts the
+# whole migration (H238).
+_REQUIRED_EDGE_FIELDS = ("source_fact_id", "target_fact_id", "relation", "status")
+
+
+def group_edges_by_source(
+    edges: list[dict],
+    skipped: Optional[list] = None,
+) -> dict[str, list[dict]]:
     """Group edges by source_fact_id for Qdrant payload injection.
 
     Payload keys must match what ``nexus.graph.store`` reads back:
     ``edge_id``/``target_fact_id``/``relation``/``status``. Legacy
     fields (target_name, confidence, context, source_doc_id) are kept
     as extra keys — the store ignores unknown keys.
+
+    Args:
+        edges: Rows read from SQLite (dicts).
+        skipped: Optional accumulator. Every row dropped for a missing
+            required column is appended here so the caller can report
+            ``skipped_schema_drift`` alongside the errors (H238).
+
+    Rows missing any of ``_REQUIRED_EDGE_FIELDS`` are logged and skipped —
+    the migration continues and names the offending edge (H238).
     """
     grouped = {}
     for e in edges:
+        missing = [f for f in _REQUIRED_EDGE_FIELDS if e.get(f) is None]
+        if missing:
+            _logger.warning(
+                "Skipping edge with schema drift (missing %s): %r",
+                ", ".join(missing), e,
+            )
+            if skipped is not None:
+                skipped.append({f: e.get(f) for f in _REQUIRED_EDGE_FIELDS})
+            continue
         source = e["source_fact_id"]
         if source not in grouped:
             grouped[source] = []
@@ -100,10 +128,17 @@ def migrate(
     print(f"   {len(edges)} aktive Edges gefunden")
     
     if not edges:
-        return {"total_edges": 0, "points_updated": 0, "dry_run": dry_run}
+        return {
+            "total_edges": 0, "points_updated": 0,
+            "skipped": 0, "skipped_schema_drift": 0, "errors": 0,
+            "dry_run": dry_run,
+        }
     
-    grouped = group_edges_by_source(edges)
+    schema_drift: list = []
+    grouped = group_edges_by_source(edges, skipped=schema_drift)
     print(f"   {len(grouped)} Quell-Facts mit Edges")
+    if schema_drift:
+        print(f"   {len(schema_drift)} Edges wegen Schema-Drift uebersprungen")
     
     if dry_run:
         print(f"\n✅ Dry-Run abgeschlossen. {len(edges)} Edges zu migrieren.")
@@ -130,6 +165,7 @@ def migrate(
     # batch blindly would drop live/earlier-migrated edges.
     updated = 0
     errors = 0
+    skipped = 0       # legitimately absent points — NOT write failures (H237)
     merged_total = 0  # newly appended migrated edges
     kept_total = 0    # pre-existing edges preserved on the points
     for source_id, payload_edges in grouped.items():
@@ -180,16 +216,26 @@ def migrate(
                 if updated % 10 == 0:
                     print(f"   Progress: {updated}/{len(grouped)} points updated")
             else:
+                # H237: a point that simply does not exist is a legitimate
+                # skip, not a write failure — counting it as an "error"
+                # mixed the statistics.
                 _logger.warning(f"Point {source_id} not found in collection — skipping")
-                errors += 1
+                skipped += 1
+        except (ConnectionError, TimeoutError, UnexpectedResponse) as e:
+            # Expected Qdrant/network failures: report without a traceback.
+            _logger.warning(f"Qdrant error on point {source_id}: {e}")
+            errors += 1
         except Exception as e:
-            _logger.error(f"Error on point {source_id}: {e}")
+            # Unexpected (programming) errors: keep the traceback so they are
+            # diagnosable instead of being flattened to a one-line message.
+            _logger.error(f"Error on point {source_id}: {e}", exc_info=True)
             errors += 1
 
     print(f"\n✅ Migration complete:")
     print(f"   {len(edges)} Edges read")
     print(f"   {updated} Qdrant points updated")
     print(f"   {merged_total} edges merged, {kept_total} existing edges kept")
+    print(f"   {skipped} points skipped (not found)")
     print(f"   {errors} errors")
 
     return {
@@ -197,6 +243,8 @@ def migrate(
         "points_updated": updated,
         "edges_merged": merged_total,
         "edges_kept": kept_total,
+        "skipped": skipped,
+        "skipped_schema_drift": len(schema_drift),
         "errors": errors,
     }
 

@@ -110,7 +110,10 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     # Client-side defense-in-depth filter
     filtered = []
     for hit in results:
-        payload = hit.get("payload", {})
+        # H250: Qdrant can store points without a payload — ``"payload": null``
+        # makes the default-arg form return None, then ``payload.get`` raises
+        # AttributeError outside any try/except and crashes the hook.
+        payload = hit.get("payload") or {}
         mem_level = payload.get("access_level", "private")
         mem_idx = level_order.index(mem_level) if mem_level in level_order else 2
         if mem_idx <= agent_idx:
@@ -140,7 +143,7 @@ def main():
 
     memories = []
     for hit in results:
-        payload = hit.get("payload", {})
+        payload = hit.get("payload") or {}  # H250: null payload → {} not None
         text = payload.get("text") or payload.get("content", "")
         category = payload.get("category", "fact")
         if text:

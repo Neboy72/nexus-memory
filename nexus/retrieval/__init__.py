@@ -137,6 +137,11 @@ class HybridRetriever:
         (r'\b(?:New York|Los Angeles|San Francisco|London|Paris|Berlin|Tokyo|Sydney|Chicago|Boston|Seattle|Austin)\b', 'LOCATION'),
     ]
 
+    # Entity types whose pattern relies on capitalization. Matching these with
+    # re.IGNORECASE neutralizes the constraint (e.g. "quick brown" becomes a
+    # PERSON) and floods _entity_index with spurious entities (H235).
+    _CASE_SENSITIVE_ENTITY_TYPES: set[str] = {"PERSON"}
+
     def __init__(
         self,
         qdrant_host: str = "localhost",
@@ -153,9 +158,17 @@ class HybridRetriever:
         self._skillgraph = skillgraph  # Optional for graph_boost
         self._ids = []
         self._texts = []
+        # Original-cased texts, parallel to ``_texts`` (which is lowercased for
+        # BM25). Entity extraction needs the real capitalization: PERSON
+        # matching is case-sensitive (H235).
+        self._texts_raw: list[str] = []
         self._chunk_graph: dict[str, set[str]] = {}  # chunk_id → set of session-neighbor ids
         self._chunk_text_lookup: dict[str, str] = {}  # chunk_id → text (for graph expansion)
         self._entity_index: dict[str, set[str]] = {}  # entity_key → set of chunk_ids
+        # Reverse lookup chunk_id → set[entity_key], built once in
+        # ``_rebuild_aux_indexes`` so ``_entity_boost`` is O(results) instead of
+        # O(results × entities) (H233).
+        self._entity_index_reverse: dict[str, set[str]] = {}
         self._bm25 = None
 
         # Try to load cached BM25 index
@@ -216,6 +229,11 @@ class HybridRetriever:
 
         self._ids = []
         self._texts = []
+        self._texts_raw = []
+        # Maps every corpus id (chunk:: id or raw point id) to its session.
+        # The session graph is built on THESE ids so graph expansion matches
+        # the ids that actually end up in results (H234).
+        id_session: dict[str, str] = {}
 
         if chunk_turns and window_size > 1:
             # Conversation-aware chunking: group consecutive turn-points
@@ -254,6 +272,8 @@ class HybridRetriever:
                     chunk_id = f"chunk::{sid}::0-{n-1}::turns"
                     self._ids.append(chunk_id)
                     self._texts.append(chunk_text.lower())
+                    self._texts_raw.append(chunk_text)
+                    id_session[chunk_id] = sid
                 else:
                     for start in range(0, n - window_size + 1):
                         window_texts = turn_texts[start:start + window_size]
@@ -262,6 +282,8 @@ class HybridRetriever:
                         chunk_id = f"chunk::{sid}::{start}-{start+window_size-1}::turns"
                         self._ids.append(chunk_id)
                         self._texts.append(chunk_text.lower())
+                        self._texts_raw.append(chunk_text)
+                        id_session[chunk_id] = sid
 
             # Memory points stay as-is
             for p in memory_points:
@@ -272,8 +294,13 @@ class HybridRetriever:
                     text = str(text) if text else ""
                 if not text:
                     text = f"{payload.get('user_content', '')} → {payload.get('assistant_content', '')}"
-                self._ids.append(str(pid))
+                pid_str = str(pid)
+                self._ids.append(pid_str)
                 self._texts.append(text.lower())
+                self._texts_raw.append(text)
+                id_session[pid_str] = str(
+                    payload.get("session_id", payload.get("type", "unknown"))
+                )
         else:
             # Original behavior: each point = one document
             for p in points:
@@ -284,12 +311,17 @@ class HybridRetriever:
                     text = str(text) if text else ""
                 if not text:
                     text = f"{payload.get('user_content', '')} → {payload.get('assistant_content', '')}"
-                self._ids.append(str(pid))
+                pid_str = str(pid)
+                self._ids.append(pid_str)
                 self._texts.append(text.lower())
+                self._texts_raw.append(text)
+                id_session[pid_str] = str(
+                    payload.get("session_id", payload.get("type", "unknown"))
+                )
 
         # Build auxiliary indexes (chunk text lookup, session chunk graph,
         # entity index) from the freshly built corpus.
-        self._rebuild_aux_indexes(points=points)
+        self._rebuild_aux_indexes(points=points, id_session=id_session)
 
         # Build BM25 index
         if self._texts:
@@ -304,12 +336,15 @@ class HybridRetriever:
             "collection": self.collection,
         }
 
-    def _rebuild_aux_indexes(self, points: list[dict[str, Any]] | None = None) -> None:
+    def _rebuild_aux_indexes(
+        self,
+        points: list[dict[str, Any]] | None = None,
+        id_session: dict[str, str] | None = None,
+    ) -> None:
         """Rebuild the auxiliary indexes from the current local corpus.
 
-        Rebuilds ``_chunk_text_lookup`` and ``_entity_index`` from
-        ``self._ids``/``self._texts`` and, when ``points`` (raw Qdrant points
-        with session metadata) is supplied, the session ``_chunk_graph``.
+        Rebuilds ``_chunk_text_lookup``, ``_entity_index`` and its reverse map
+        from ``self._ids``/``self._texts`` and the session ``_chunk_graph``.
 
         Args:
             points: Qdrant points including payloads. Only available in the
@@ -317,38 +352,62 @@ class HybridRetriever:
                 this is ``None`` — the session graph cannot be derived without
                 session metadata, so ``_chunk_graph`` is left empty (honest
                 state: ``graph_expand`` skips) rather than serving stale data.
+            id_session: Optional ``corpus_id → session`` map built alongside the
+                corpus in ``index_memories()``. Preferred over ``points``: it
+                keys the graph on the SAME ids that land in ``self._ids``
+                (chunk:: ids when conversation-aware chunking is on) instead of
+                raw Qdrant point ids, which results never match (H234).
         """
         # chunk_id → text (always derivable from the local corpus)
         self._chunk_text_lookup = {
             str(pid): txt for pid, txt in zip(self._ids, self._texts)
         }
 
-        # Session chunk graph — only derivable when session metadata is present.
+        # Session chunk graph — keyed on the corpus ids (H234).
         self._chunk_graph = {}
-        if points:
-            session_groups: dict[str, list[str]] = {}
+        session_groups: dict[str, list[str]] = {}
+        if id_session is not None:
+            for cid in self._ids:
+                sid = id_session.get(cid)
+                if sid is None:
+                    continue
+                session_groups.setdefault(sid, []).append(cid)
+        elif points:
+            # Legacy path: derive groups from raw point payloads. Only used by
+            # callers that supply points without an id_session map.
             for p in points:
                 payload = p.get("payload", {})
                 sid = str(payload.get("session_id", payload.get("type", "unknown")))
-                pid_str = str(p.get("id", ""))
-                if pid_str not in session_groups:
-                    session_groups[sid] = []
-                session_groups[sid].append(pid_str)
-            for sid, pids in session_groups.items():
-                if len(pids) < 2:
-                    continue
-                pset = set(pids)
-                for pid in pids:
-                    self._chunk_graph[pid] = pset - {pid}
+                session_groups.setdefault(sid, []).append(str(p.get("id", "")))
+        for sid, pids in session_groups.items():
+            if len(pids) < 2:
+                continue
+            pset = set(pids)
+            for pid in pids:
+                self._chunk_graph[pid] = pset - {pid}
 
         # entity_key → set of chunk_ids, extracted from the local corpus.
         # Uses the retriever's own pattern extractor so the keys match the
-        # query-side entities in ``_entity_boost``.
+        # query-side entities in ``_entity_boost``. Prefer the original-cased
+        # text so the case-sensitive PERSON pattern can fire (H235).
         self._entity_index = {}
+        raw_aligned = len(self._texts_raw) == len(self._ids)
         for i, cid in enumerate(self._ids):
-            if i < len(self._texts):
-                for e in self._extract_entities(self._texts[i]):
-                    self._entity_index.setdefault(e, set()).add(cid)
+            if raw_aligned:
+                text = self._texts_raw[i]
+            elif i < len(self._texts):
+                text = self._texts[i]
+            else:
+                continue
+            for e in self._extract_entities(text):
+                self._entity_index.setdefault(e, set()).add(cid)
+
+        # Reverse lookup so ``_entity_boost`` does not rebuild the
+        # entity → chunk map for every ranked result (H233).
+        self._entity_index_reverse = {}
+        for entity_key, cids in self._entity_index.items():
+            for cid in cids:
+                self._entity_index_reverse.setdefault(cid, set()).add(entity_key)
 
     def index_from_texts(self, texts: list[str], ids: list[str]) -> dict:
         """Build BM25 index from a list of texts (no Qdrant needed).
@@ -357,6 +416,7 @@ class HybridRetriever:
         """
         self._ids = ids
         self._texts = [t.lower() for t in texts]
+        self._texts_raw = list(texts)
 
         if self._texts:
             corpus_tokens = bm25s.tokenize(self._texts)
@@ -396,31 +456,46 @@ class HybridRetriever:
         to_remove = memories_to_remove or []
 
         # --- Handle removals: filter out removed IDs ---
+        raw_aligned = len(self._texts_raw) == len(self._ids)
         if to_remove and self._ids:
             remove_set = set(to_remove)
             surviving_ids = []
             surviving_texts = []
+            surviving_raw = []
             for i, pid in enumerate(self._ids):
                 if pid not in remove_set:
                     surviving_ids.append(pid)
                     surviving_texts.append(self._texts[i] if i < len(self._texts) else "")
+                    if raw_aligned:
+                        surviving_raw.append(self._texts_raw[i])
             removed = len(self._ids) - len(surviving_ids)
             self._ids = surviving_ids
             self._texts = surviving_texts
+            # If the sidecar had already drifted, drop it rather than keep a
+            # misaligned copy (entity extraction falls back to the lowercased
+            # corpus in that case).
+            self._texts_raw = surviving_raw if raw_aligned else []
 
         # --- Handle additions ---
         if to_add:
             new_ids = []
             new_texts = []
+            new_raw = []
             for pid, text in to_add:
                 if isinstance(pid, str) and isinstance(text, str):
                     new_ids.append(pid)
                     new_texts.append(text.lower())
+                    new_raw.append(text)
                     added += 1
 
             if new_ids:
+                raw_was_aligned = len(self._texts_raw) == len(self._ids)
                 self._ids.extend(new_ids)
                 self._texts.extend(new_texts)
+                if raw_was_aligned:
+                    self._texts_raw.extend(new_raw)
+                else:
+                    self._texts_raw = []
 
         # Keep the auxiliary indexes in sync with the mutated corpus —
         # otherwise graph_expand/entity_boost would serve stale or empty data
@@ -451,6 +526,7 @@ class HybridRetriever:
         idx_dir = self._index_dir / "bm25"
         ids_file = self._index_dir / "ids.json"
         texts_file = self._index_dir / "texts.json"
+        raw_texts_file = self._index_dir / "texts_raw.json"
 
         if not (idx_dir.is_dir() and ids_file.exists() and texts_file.exists()):
             return False
@@ -461,6 +537,15 @@ class HybridRetriever:
                 self._ids = json.load(f)
             with open(texts_file) as f:
                 self._texts = json.load(f)
+            # Original-cased texts (optional sidecar, H235). Absent in caches
+            # written by older versions → entity extraction falls back to the
+            # lowercased corpus.
+            self._texts_raw = []
+            if raw_texts_file.exists():
+                with open(raw_texts_file) as f:
+                    raw = json.load(f)
+                if isinstance(raw, list) and len(raw) == len(self._ids):
+                    self._texts_raw = raw
             # Restore the auxiliary indexes from the reloaded corpus —
             # they are not persisted, so without this they'd stay empty
             # after a restart and graph_expand/entity_boost would no-op.
@@ -470,6 +555,7 @@ class HybridRetriever:
             self._bm25 = None
             self._ids = []
             self._texts = []
+            self._texts_raw = []
             return False
 
     def _save_bm25_cache(self) -> bool:
@@ -484,6 +570,10 @@ class HybridRetriever:
                 json.dump(self._ids, f)
             with open(self._index_dir / "texts.json", "w") as f:
                 json.dump(self._texts, f)
+            # Original-cased corpus (H235), only when it is aligned with ids.
+            if len(self._texts_raw) == len(self._ids):
+                with open(self._index_dir / "texts_raw.json", "w") as f:
+                    json.dump(self._texts_raw, f)
             return True
         except Exception:
             return False
@@ -568,6 +658,11 @@ class HybridRetriever:
                 "rank": rank + 1,
                 "method": "vector",
                 "text": text[:500],
+                # Carry the payload through so _rrf can propagate source_tier
+                # (tier boost) and created_at/timestamp (time decay) — both
+                # were unreachable before because fused items dropped them
+                # (H236).
+                "payload": payload,
             })
         return hits
 
@@ -782,10 +877,16 @@ class HybridRetriever:
 
         Returns set of ``type:value`` strings, e.g. ``{"PERSON:john smith", "DATE:monday"}``.
         All values are lowercased for matching.
+
+        H235: PERSON patterns are matched CASE-SENSITIVELY (no IGNORECASE),
+        because they encode capitalization as the signal. The other types
+        (DATE/PRODUCT/LOCATION) stay case-insensitive. Callers must therefore
+        pass the *original-cased* text for PERSON to work.
         """
         entities: set[str] = set()
         for pattern, etype in self._ENTITY_PATTERNS:
-            for match in re.finditer(pattern, text, re.IGNORECASE):
+            flags = 0 if etype in self._CASE_SENSITIVE_ENTITY_TYPES else re.IGNORECASE
+            for match in re.finditer(pattern, text, flags):
                 value = match.group(0).strip().lower()
                 # Filter stopwords from PERSON matches
                 if etype == "PERSON":
@@ -810,12 +911,21 @@ class HybridRetriever:
         if not query_entities:
             return ranked
 
+        # O(1) reverse lookup (H233). Built once in _rebuild_aux_indexes; fall
+        # back to an on-demand build only if the index was populated directly
+        # (e.g. by an external caller) without a rebuild.
+        if not self._entity_index_reverse:
+            self._entity_index_reverse = {}
+            for entity_key, cids in self._entity_index.items():
+                for cid in cids:
+                    self._entity_index_reverse.setdefault(cid, set()).add(entity_key)
+
         for item in ranked:
             cid = item.get("id", "")
             if not cid:
                 continue
             # Check if any chunk entity matches any query entity
-            chunk_ents = {k for k, v in self._entity_index.items() if cid in v}
+            chunk_ents = self._entity_index_reverse.get(cid, set())
             matches = chunk_ents & query_entities
             if matches:
                 boost = 1.0 + min(len(matches), 3) * 0.1  # +0.1 per match, max +0.3
@@ -828,15 +938,28 @@ class HybridRetriever:
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _rrf(self, bm25_hits: list[dict], vector_hits: list[dict]) -> list[dict]:
-        """Reciprocal Rank Fusion."""
+        """Reciprocal Rank Fusion.
+
+        H236: the fused items also carry the ``metadata`` payload and a
+        ``timestamp`` when the underlying hit has one. Vector hits are built
+        from the full Qdrant payload; BM25 hits come from the local corpus and
+        carry no payload, so BM25-only results have neither — their tier is
+        resolved from keywords and they get no time decay (documented, not a
+        silent promise).
+        """
         scores = defaultdict(float)
         methods = defaultdict(set)
+        # doc_id → Qdrant payload (first hit that has one wins)
+        hit_payloads: dict[str, dict] = {}
 
         for hit in bm25_hits + vector_hits:
             doc_id = hit["id"]
             rank = hit["rank"]
             scores[doc_id] += 1.0 / (RRF_K + rank)
             methods[doc_id].add(hit["method"])
+            payload = hit.get("payload")
+            if isinstance(payload, dict) and doc_id not in hit_payloads:
+                hit_payloads[doc_id] = payload
 
         # Text lookup
         id_to_text = {}
@@ -846,15 +969,22 @@ class HybridRetriever:
                     id_to_text[did] = self._texts[i][:200]
 
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return [
-            {
+        items = []
+        for doc_id, score in ranked:
+            item = {
                 "id": doc_id,
                 "rrf_score": score,
                 "methods": sorted(methods[doc_id]),
                 "text": id_to_text.get(doc_id, ""),
             }
-            for doc_id, score in ranked
-        ]
+            payload = hit_payloads.get(doc_id)
+            if payload is not None:
+                item["metadata"] = payload
+                ts = payload.get("created_at") or payload.get("timestamp")
+                if ts:
+                    item["timestamp"] = ts
+            items.append(item)
+        return items
 
     def _tier_boost(self, ranked: list[dict]) -> list[dict]:
         """Apply source-tier boosting — uses metadata source_tier if available, else keywords."""

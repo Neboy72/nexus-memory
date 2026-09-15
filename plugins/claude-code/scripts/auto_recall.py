@@ -22,11 +22,40 @@ COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
 
 # Self-organizing memory (Nebo law 07.09: full automation): shared scope-auto
 # lib provides centroids + clear-match inference for recall gating.
-import scope_auto as _scope_auto  # noqa: E402 (same dir)
+# H241: import guard. A missing/broken scope_auto (partial install, syntax
+# error) must NOT kill the whole hook — fail-open means recall without a scope
+# filter. auto_capture does the same import inside try/except.
+try:
+    import scope_auto as _scope_auto  # noqa: E402 (same dir)
+except Exception as _scope_import_exc:  # pragma: no cover - defensive
+    _scope_auto = None
+    print(
+        f"[nexus auto-recall] scope_auto unavailable ({_scope_import_exc}) — "
+        "recalling without scope filter",
+        file=sys.stderr,
+    )
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
-MAX_RESULTS = int(os.getenv("NEXUS_MAX_RECALL", "5"))
+
+
+def _env_int(name: str, default: int, minimum: int | None = None) -> int:
+    """Read an integer env var defensively (H242).
+
+    An empty/malformed value (or a non-numeric typo) must not raise at import
+    time — that would kill the hook for every prompt. Falls back to ``default``
+    and clamps to ``minimum`` when given.
+    """
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
+
+
+MAX_RESULTS = _env_int("NEXUS_MAX_RECALL", 5, minimum=1)
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
 def _resolve_trust_level() -> str:
@@ -74,40 +103,48 @@ def _get_trust_filter() -> dict:
     }
 
 def get_embedding(text: str) -> list:
-    """Get embedding from configured provider."""
-    if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
-        req_data = json.dumps({
-            "input": [text],
-            "model": EMBEDDING_MODEL,
-            "input_type": "document"
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.voyageai.com/v1/embeddings",
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {VOYAGE_API_KEY}"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            return data["data"][0]["embedding"]
-    elif EMBEDDING_PROVIDER == "ollama":
-        req_data = json.dumps({
-            "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
-            "input": text
-        }).encode()
-        req = urllib.request.Request(
-            f"http://localhost:11434/api/embeddings",
-            data=req_data,
-            headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            return data["embedding"]
-    else:
-        # Fallback: no embedding, skip recall
+    """Get embedding from configured provider.
+
+    H243: every failure path (URL error, non-2xx, malformed body such as a
+    missing ``data[0].embedding``) degrades to ``None`` — the hook then skips
+    recall instead of aborting. Mirrors auto_capture.get_embedding's contract.
+    """
+    try:
+        if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
+            req_data = json.dumps({
+                "input": [text],
+                "model": EMBEDDING_MODEL,
+                "input_type": "document"
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.voyageai.com/v1/embeddings",
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {VOYAGE_API_KEY}"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                return data["data"][0]["embedding"]
+        elif EMBEDDING_PROVIDER == "ollama":
+            req_data = json.dumps({
+                "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+                "input": text
+            }).encode()
+            req = urllib.request.Request(
+                f"http://localhost:11434/api/embeddings",
+                data=req_data,
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                return data["embedding"]
+    except Exception as exc:
+        print(f"[nexus auto-recall] embedding failed: {exc}", file=sys.stderr)
         return None
+    # Fallback: no embedding, skip recall
+    return None
 
 def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     """Search Qdrant for relevant memories, filtered by trust level.
@@ -148,14 +185,15 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     # Fail-open: no centroids / ambiguous query → no filtering (old behavior).
     my_scope = os.getenv("NEXUS_SCOPE", "").strip().lower()
     allowed_scopes = None
-    try:
-        cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
-        allowed_scopes = _scope_auto.prefetch_allowed_scopes(query_embedding, cents, my_scope)
-    except Exception as exc:
-        logging.info("scope_auto: recall gating skipped (%s) — fail-open", exc)
+    if _scope_auto is not None:
+        try:
+            cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
+            allowed_scopes = _scope_auto.prefetch_allowed_scopes(query_embedding, cents, my_scope)
+        except Exception as exc:
+            logging.info("scope_auto: recall gating skipped (%s) — fail-open", exc)
     filtered = []
     for hit in results:
-        payload = hit.get("payload", {})
+        payload = hit.get("payload") or {}
         mem_level = payload.get("access_level", "private")
         mem_idx = level_order.index(mem_level) if mem_level in level_order else 2
         if mem_idx > agent_idx:
@@ -292,7 +330,7 @@ def main():
     # Build context block
     memories = []
     for hit in results:
-        payload = hit.get("payload", {})
+        payload = hit.get("payload") or {}
         text = payload.get("text") or payload.get("content", "")
         category = payload.get("category", "fact")
         score = hit.get("score", 0)
