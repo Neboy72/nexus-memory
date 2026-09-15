@@ -132,9 +132,15 @@ class TestIsolationScore:
 
 class TestKnowledgeGaps:
     def test_finds_isolated_facts(self, skillgraph):
+        # Wave-5 F1: default threshold is 0.5, so degree 0 AND 1 are gaps.
+        # F4/F5/F6 each carry a single edge (degree 1) → all three are gaps.
         gaps = knowledge_gaps(skillgraph)
         gap_ids = [g["fact_id"] for g in gaps]
-        assert F5 not in gap_ids
+        assert F4 in gap_ids
+        assert F5 in gap_ids
+        assert F6 in gap_ids
+        # A genuinely well-connected fact is still not a gap.
+        assert F1 not in gap_ids
 
     def test_connected_facts_not_in_gaps(self, skillgraph):
         gaps = knowledge_gaps(skillgraph, isolation_threshold=0.9)
