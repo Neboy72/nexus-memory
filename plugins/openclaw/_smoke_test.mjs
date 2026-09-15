@@ -73,7 +73,7 @@ function guardrailVerdict(out) {
     const text = out?.content?.[0]?.text;
     const parsed = text ? JSON.parse(text) : (out ?? {});
     const verdict = parsed.verdict ?? (parsed.blocked === true ? "block" : undefined);
-    return { verdict, blocked: parsed.blocked === true || verdict === "block" };
+    return { verdict, blocked: parsed.blocked === true || verdict === "block", reason: parsed.reason };
   } catch {
     return { verdict: undefined, blocked: false };
   }
@@ -84,10 +84,16 @@ const out2 = await gc.execute("t2", { command: "ls -la /tmp" });
 console.log("EXEC guarded:", JSON.stringify(out1).slice(0, 220));
 console.log("EXEC benign :", JSON.stringify(out2).slice(0, 150));
 
+// Design seit v0.5.0 (416d6fc): Block NUR bei passender Protection-Rule auf das Ziel,
+// sonst fail-open ("unprotected target"). Der Block-Pfad (geschützte Ziele, Store
+// nicht erreichbar -> fail-closed, Re-Check) ist in test-guardrail-*.mjs mit Mocks
+// abgedeckt und braucht hier nicht reproduziert zu werden. Wichtig: Diese Erwartung
+// ist Qdrant-abhängig — OHNE laufendes Qdrant fail-closed -> rm blockt -> Test
+// würde hier anders liegen; deshalb nur die fail-open-Form lokal beweisen.
 const res1 = guardrailVerdict(out1);
 const res2 = guardrailVerdict(out2);
-if (!res1.blocked) {
-  console.log(`SMOKE_RESULT: FAIL | destructive 'rm -rf' was not blocked (verdict=${res1.verdict})`);
+if (res1.verdict !== "allow" || !String(res1.reason ?? "").includes("unprotected target")) {
+  console.log(`SMOKE_RESULT: FAIL | ungeschütztes rm -rf muss fail-open allow mit 'unprotected target' sein (verdict=${res1.verdict}, reason=${res1.reason ?? "?"})`);
   process.exit(1);
 }
 if (res2.blocked) {
