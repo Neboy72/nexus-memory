@@ -130,5 +130,7 @@ def rewrite_query(query: str, generate_fn) -> str:
         log.debug("query-rewrite: unacceptable output — original query")
         return q
 
-    log.debug("query-rewrite: %.60r -> %.60r", q, rewritten)
+    # Nr 462: no query CONTENT in logs (policy: query content out of logs) —
+    # lengths only, no hashes (YAGNI).
+    log.debug("query-rewrite: len=%d -> len=%d", len(q), len(rewritten))
     return rewritten

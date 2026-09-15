@@ -213,7 +213,8 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     return filtered
 
 
-def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "public") -> list:
+def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "public",
+                query_embedding: list = None) -> list:
     """Fetch 1-hop graph neighbors for the top vector search results.
 
     For each of the top `max_boost` results, reads the point's payload edges
@@ -224,10 +225,29 @@ def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "publ
     Access-level filtering: only returns memories the agent is allowed
     to see based on the resolved trust level.
 
+    Scope gating (Nr 440): a graph hop is still an automatic recall, so it
+    obeys the SAME scope filter as a vector hit — `query_embedding` feeds the
+    identical `prefetch_allowed_scopes` check; the access level applies on top.
+
     Failures are silently skipped - vector results alone are always returned.
     """
     level_order = ["public", "trusted", "private"]
     agent_idx = level_order.index(access_level) if access_level in level_order else 0
+
+    # Mirror search_qdrant's scope resolution so a boosted hop cannot leak a
+    # scope that the vector path would have filtered out. If scope_auto is
+    # unavailable or the query is ambiguous, `allowed_scopes` stays None and
+    # only the explicit NEXUS_SCOPE fallback below applies (fail-open).
+    my_scope = os.getenv("NEXUS_SCOPE", "").strip().lower()
+    allowed_scopes = None
+    if _scope_auto is not None and query_embedding:
+        try:
+            cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
+            allowed_scopes = _scope_auto.prefetch_allowed_scopes(
+                query_embedding, cents, my_scope
+            )
+        except Exception as exc:
+            logging.info("scope_auto: graph-boost gating skipped (%s) — fail-open", exc)
 
     boosted = []
     seen_ids = set()
@@ -294,6 +314,16 @@ def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "publ
                         mem_idx = level_order.index(tp_access) if tp_access in level_order else 2
                         if mem_idx > agent_idx:
                             continue
+                        # Scope check (Nr 440) — identical to the vector path:
+                        # with an inferred allowed set, a non-allowed scope is
+                        # skipped; otherwise only an explicit NEXUS_SCOPE gates,
+                        # and "default" is always allowed.
+                        p_scope = (tp_payload.get("scope") or "default").strip().lower() or "default"
+                        if allowed_scopes is not None:
+                            if p_scope not in allowed_scopes:
+                                continue
+                        elif my_scope and p_scope != "default" and p_scope != my_scope:
+                            continue
                         text = tp_payload.get("content", "")
                         if text:
                             rel = edge.get("relation", "related")
@@ -338,11 +368,13 @@ def main():
             memories.append(f"[{category}] (score: {score:.2f}) {text[:200]}")
 
     # Graph-boost: add 1-hop neighbors from top 3 vector hits (max 5 to prevent context bloat)
-    # NOTE: graph_boost reads raw vector hits — scoped-out memories can surface
-    # as graph neighbors; acceptable (graph relations are explicit connections,
-    # not noise), kept consistent with Hermes/OpenClaw plugin behavior.
+    # NOTE (Nr 440): graph hops are now scope-filtered like vector hits (same
+    # prefetch_allowed_scopes check, query embedding passed through); access
+    # level remains an additional gate.
     trust_level = _resolve_trust_level()
-    graph_items = graph_boost(results, max_boost=3, access_level=trust_level)[:5]
+    graph_items = graph_boost(
+        results, max_boost=3, access_level=trust_level, query_embedding=embedding
+    )[:5]
     for gi in graph_items:
         memories.append(gi)
 

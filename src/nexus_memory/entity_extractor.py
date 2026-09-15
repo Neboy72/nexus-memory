@@ -470,6 +470,30 @@ def _heuristic_extract_entities(text: str) -> ExtractionResult:
     # Infer relationships from patterns
     entity_names = {e.name.lower(): e for e in entities}
 
+    # Wire URL / version attributes (Nr 456): _URL_PATTERN and _VERSION_PATTERN
+    # were compiled but never applied, so a fact like "Home Assistant laeuft auf
+    # http://ha.local:8123 (2024.6)" lost its URL/version. Each hit is attached
+    # to the nearest entity as an attribute — same before/after window and
+    # ``_find_nearest_entity`` helper the relationship inference below uses
+    # (before wins when both sides have one). A hit with no nearby entity is
+    # DROPPED: this heuristic returns entities, not standalone facts, so there
+    # is nowhere else to put it. Version matches inside an IP are skipped —
+    # "192.168.31" must not become the version of a device whose real address
+    # is "192.168.x.x" (the IP is captured separately as "ip").
+    ip_spans = [m.span() for m in _IP_PATTERN.finditer(text)]
+    for pattern, attr in ((_URL_PATTERN, "url"), (_VERSION_PATTERN, "version")):
+        for m in pattern.finditer(text):
+            if attr == "version" and any(
+                start <= m.start() and m.end() <= end for start, end in ip_spans
+            ):
+                continue
+            before = text[max(0, m.start() - 50):m.start()]
+            after = text[m.end():m.end() + 50]
+            owner = _find_nearest_entity(before, entity_names, reverse=True) \
+                or _find_nearest_entity(after, entity_names)
+            if owner:
+                entity_names[owner.lower()].attributes.setdefault(attr, m.group(1))
+
     # "X runs on Y" / "X laeuft auf Y"
     for m in _RUNS_ON_PATTERN.finditer(text):
         # Find entity before and after the pattern

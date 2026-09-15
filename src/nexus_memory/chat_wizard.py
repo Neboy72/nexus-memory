@@ -409,20 +409,31 @@ def get_qdrant_filter_for_trust_level(level_id: str) -> dict:
     """Return a Qdrant filter dict for the given trust level.
 
     Used by plugins (Claude Code, OpenClaw) to filter memories by access level.
+
+    Nr 449: an unknown ``level_id`` is still coerced to ``public`` (fail-safe,
+    unchanged), but the result now carries ``coerced: True`` and
+    ``coerced_from: <original>`` so a caller can tell a genuine public filter
+    from a silently rewritten one. The marker is added ONLY on coercion.
     """
     level_order = ["public", "trusted", "private"]
+    coerced_from = None
     if level_id not in level_order:
+        coerced_from = level_id
         level_id = "public"  # Safe default
 
     idx = level_order.index(level_id)
     allowed = level_order[:idx + 1]  # Include all levels up to and including chosen
 
-    return {
+    result = {
         "should": [
             {"key": "access_level", "match": {"value": lvl}}
             for lvl in allowed
         ]
     }
+    if coerced_from is not None:
+        result["coerced"] = True
+        result["coerced_from"] = coerced_from
+    return result
 
 
 # ── CLI Entry Point ──────────────────────────────────────────────────────

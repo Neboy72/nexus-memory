@@ -237,7 +237,7 @@ class EmbeddingProvider:
             allowed_fallback = preferred == "auto" or (
                 explicit_cloud and _allowed_cloud_fallback(preferred)
             )
-            logging.info(f"Embedding: trying preferred provider '{preferred}'")
+            logger.info("Embedding: trying preferred provider '%s'", preferred)
             if self._try_provider(preferred):
                 return
             if not allowed_fallback:
@@ -249,9 +249,9 @@ class EmbeddingProvider:
                     f"NEXUS_ALLOWED_CLOUD_FALLBACK=1 or change "
                     f"NEXUS_EMBEDDING_PROVIDER to 'auto' to allow fallbacks."
                 )
-            logging.warning(
-                f"Preferred embedding provider '{preferred}' is not available. "
-                f"Falling back to auto-detect."
+            logger.warning(
+                "Preferred embedding provider '%s' is not available. "
+                "Falling back to auto-detect.", preferred,
             )
 
         # Auto-detect: priority order
@@ -356,7 +356,7 @@ class EmbeddingProvider:
             self._name = "voyage-4"
             self._dim = 1024
             self._backend = "voyage"
-            logging.info(f"Embedding: {self._name} (1024d, cloud)")
+            logger.info("Embedding: %s (1024d, cloud)", self._name)
             return True
         except Exception:
             return False
@@ -375,7 +375,7 @@ class EmbeddingProvider:
             self._name = "text-embedding-3-small"
             self._dim = 1536
             self._backend = "openai"
-            logging.info(f"Embedding: {self._name} (1536d, cloud)")
+            logger.info("Embedding: %s (1536d, cloud)", self._name)
             return True
         except Exception:
             return False
@@ -395,25 +395,28 @@ class EmbeddingProvider:
             self._name = "text-embedding-004"
             self._dim = 768
             self._backend = "google"
-            logging.info(f"Embedding: Google/{self._name} (768d, cloud)")
+            logger.info("Embedding: Google/%s (768d, cloud)", self._name)
             return True
         except Exception:
             return False
 
     def _try_jina(self) -> bool:
-        """Try Jina. Returns True on success."""
+        """Try Jina. Returns True on success.
+
+        Nr 457: unlike voyage/openai/google, Jina has no SDK import to probe —
+        availability is intentionally key-presence only (``jina_valid``); the
+        first real embed validates the key. The previous try/except wrapped a
+        pure assignment and could never fail, so it was removed.
+        """
         jina_key = os.environ.get("JINA_API_KEY", "")
         if not jina_key:
             return False
-        try:
-            self._client = {"api_key": jina_key, "base_url": "https://api.jina.ai/v1"}
-            self._name = "jina-embeddings-v3"
-            self._dim = 1024
-            self._backend = "jina"
-            logging.info(f"Embedding: Jina/{self._name} (1024d, cloud)")
-            return True
-        except Exception:
-            return False
+        self._client = {"api_key": jina_key, "base_url": "https://api.jina.ai/v1"}
+        self._name = "jina-embeddings-v3"
+        self._dim = 1024
+        self._backend = "jina"
+        logger.info("Embedding: Jina/%s (1024d, cloud)", self._name)
+        return True
 
     def _try_ollama(self) -> bool:
         """Try Ollama. Returns True on success.
@@ -447,9 +450,10 @@ class EmbeddingProvider:
                     existing_model = _read_existing_collection_model()
                     if existing_model and not _same_local_model(existing_model, emb_model):
                         if _model_in_inventory(existing_model, models):
-                            logging.info(
-                                f"Embedding: keeping existing local model '{existing_model}' "
-                                f"(collection already uses it; '{emb_model}' also available)"
+                            logger.info(
+                                "Embedding: keeping existing local model '%s' "
+                                "(collection already uses it; '%s' also available)",
+                                existing_model, emb_model,
                             )
                             emb_model = existing_model
                         else:
@@ -468,7 +472,7 @@ class EmbeddingProvider:
                     if not dim:
                         return False
                     self._dim = dim
-                    logging.info(f"Embedding: Ollama/{emb_model} ({dim}d, local)")
+                    logger.info("Embedding: Ollama/%s (%dd, local)", emb_model, dim)
                     return True
         except CollectionModelUnavailable:
             # Security review fix: the stored collection model is not usable —
@@ -529,20 +533,23 @@ class EmbeddingProvider:
                 self._name = model_name
                 self._dim = int(len(probe))
                 self._backend = "sentence-transformers"
-                logging.info(f"Embedding: {self._name} ({self._dim}d, local HF)")
+                logger.info("Embedding: %s (%dd, local HF)", self._name, self._dim)
                 return True
             except Exception as exc:
-                logging.warning(f"HF model {model_name} unavailable ({exc}); falling back to MiniLM.")
+                logger.warning(
+                    "HF model %s unavailable (%s); falling back to MiniLM.",
+                    model_name, exc,
+                )
         try:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer("all-MiniLM-L6-v2")
             self._name = "all-MiniLM-L6-v2"
             self._dim = 384
             self._backend = "sentence-transformers"
-            logging.info(f"Embedding: {self._name} (384d, local)")
+            logger.info("Embedding: %s (384d, local)", self._name)
             return True
         except ImportError:
-            logging.warning(
+            logger.warning(
                 "No embedding provider found.\n"
                 "Install: pip install sentence-transformers  (local, free)\n"
                 "Or set VOYAGE_API_KEY or OPENAI_API_KEY"
@@ -552,7 +559,7 @@ class EmbeddingProvider:
             # Any non-ImportError failure (e.g. OSError while downloading the
             # model offline) must not escape __init__: report it and stay
             # unavailable instead of crashing provider detection.
-            logging.warning(
+            logger.warning(
                 "sentence-transformers init failed (%s); no local fallback available.",
                 exc,
             )

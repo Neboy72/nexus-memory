@@ -1,5 +1,7 @@
+import os
 import sqlite3, sys, re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 def build_query(session_id: str, role_filter: str | None = None) -> tuple[str, tuple]:
@@ -33,9 +35,11 @@ def main() -> None:
         print("limit and maxlen must be integers", file=sys.stderr)
         sys.exit(2)
 
-    berlin = timezone(timedelta(hours=2))
+    berlin = ZoneInfo("Europe/Berlin")  # Nr 447: DST-correct, not a fixed +2
 
-    con = sqlite3.connect('/Users/miosha/.hermes/state.db')
+    # Nr 446: no hard-coded home path — override via env, default to ~/.hermes.
+    db_path = os.environ.get("NEXUS_STATE_DB") or os.path.expanduser("~/.hermes/state.db")
+    con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     q, params = build_query(sid, role_filter)
     rows = con.execute(q, params).fetchall()

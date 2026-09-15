@@ -626,6 +626,11 @@ class HealthAuditor:
 
     # ── background loop ────────────────────────────────────────────────
     def start(self) -> None:
+        # Nr 461: idempotent — a second start() used to spawn a SECOND loop, so
+        # every audit (including the dedup sweep) ran twice.
+        if self._thread is not None and self._thread.is_alive():
+            return
+
         def _loop():
             time.sleep(AUDIT_START_DELAY_SECONDS)
             while True:
@@ -633,5 +638,6 @@ class HealthAuditor:
                 for _ in range(max(60, AUDIT_INTERVAL_SECONDS // 60)):
                     time.sleep(60)
         t = threading.Thread(target=_loop, name="nexus-health-audit", daemon=True)
+        self._thread = t
         t.start()
         log.info("Health audit daemon started (interval %.1f d)", AUDIT_INTERVAL_SECONDS / 86400)

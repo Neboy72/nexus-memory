@@ -44,9 +44,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger("nexus.fuel")
 
-FUEL_BASE = os.environ.get("NEXUS_FUEL_BASE", "")           # optional explicit endpoint
-FUEL_KEY = os.environ.get("NEXUS_FUEL_KEY", "")             # optional explicit key
-FUEL_MODEL = os.environ.get("NEXUS_FUEL_MODEL", "")         # optional explicit model
+# Nr 460: FUEL_BASE/FUEL_KEY/FUEL_MODEL module constants were dead — build_chain()
+# reads NEXUS_FUEL_BASE/KEY/MODEL from the environment at CALL time (import-time
+# binding would freeze whatever the process started with, so a .env loaded later
+# would be ignored). No constants here on purpose: single source of truth is the
+# live environment inside build_chain().
 
 DEFAULT_FUEL_BUDGET_USD = 5.00
 DEFAULT_MAX_PER_CALL_USD = 0.01  # conservative ceiling per paid call

@@ -165,19 +165,25 @@ def prefetch_allowed_scopes(vector, centroids: dict, manual_scope: str):
     """Allowed scope set for auto-prefetch filtering.
 
     Returns a set (e.g. {'default', 'voice'}) when the query clearly belongs
-    to one area, or None when there is NO clear match (→ no filtering,
-    old behavior). A manual scope override always wins.
+    to one area, or None when there is NEITHER a clear match NOR a manual
+    scope. A manual scope override is always included when provided.
 
     H256: delegates to ``infer_scope`` instead of duplicating the scoring +
     threshold block (drift risk). Equivalence: the old code returned None
     exactly when no scope cleared BOTH the absolute threshold and the margin —
     which is precisely the condition under which ``infer_scope`` returns
-    "default"; that is mapped back to None here.
+    "default".
+
+    Nr 444: the no-match path used to return None and DROP an explicit
+    ``manual_scope``, contradicting the "override always wins" docstring; the
+    caller had to compensate. The override is now genuinely always included —
+    a None return means neither a clear match NOR a manual scope exists.
     """
     try:
         inferred = infer_scope(vector, centroids)
         if inferred == "default":
-            return None
+            # No clear match: still honor an explicit override.
+            return {manual_scope} if manual_scope else None
         allowed = {"default", inferred}
         if manual_scope:
             allowed.add(manual_scope)
