@@ -9,7 +9,17 @@ import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
+import { clampInt } from "../lib/num.ts"
+import { isActiveEdge, normalizeEdge } from "../lib/edge.ts"
 import { log } from "../logger.ts"
+
+// H123: hard bounds for the graph tools, mirrored by their Typebox schemas.
+const TRAVERSE_DEPTH_DEFAULT = 3
+const TRAVERSE_DEPTH_MAX = 5
+const ENTITIES_LIMIT_DEFAULT = 50
+const ENTITIES_LIMIT_MAX = 500
+const SUBGRAPH_DEPTH_DEFAULT = 2
+const SUBGRAPH_DEPTH_MAX = 5
 
 /**
  * Multi-hop traversal from a starting fact.
@@ -32,7 +42,12 @@ export function registerGraphTraverseTool(
       parameters: Type.Object({
         fact_id: Type.String({ description: "The Qdrant point ID to start traversal from" }),
         max_depth: Type.Optional(
-          Type.Number({ description: "Maximum hops (default 3)", default: 3 }),
+          Type.Number({
+            description: "Maximum hops (default 3)",
+            default: 3,
+            minimum: 1,
+            maximum: TRAVERSE_DEPTH_MAX,
+          }),
         ),
         relation: Type.Optional(
           Type.String({
@@ -50,7 +65,8 @@ export function registerGraphTraverseTool(
         params: { fact_id: string; max_depth?: number; relation?: string; target_type?: string },
       ) {
         const { fact_id: factId } = params
-        const maxDepth = params.max_depth ?? 3
+        // H123: bound the BFS fan-out (raw host value never reaches the loop).
+        const maxDepth = clampInt(params.max_depth, TRAVERSE_DEPTH_DEFAULT, 1, TRAVERSE_DEPTH_MAX)
         const relation = params.relation || undefined
         const targetType = params.target_type || undefined
 
@@ -78,11 +94,17 @@ export function registerGraphTraverseTool(
 
             const edges = (pt.payload?.edges ?? []) as Array<Record<string, unknown>>
             for (const edge of edges) {
-              const edgeStatus = edge.status as string
-              if (edgeStatus && edgeStatus !== "active") continue
+              if (!isActiveEdge(edge)) continue
 
-              const targetId = edge.target_fact_id as string
-              const edgeRelation = edge.relation as string
+              // H125: validate before the id enters visited/queue/results — an
+              // unvalidated `as string` used to push `undefined` into the graph.
+              const normalized = normalizeEdge(edge)
+              if (!normalized) {
+                log.debug(`graph_traverse: skipping malformed edge on ${id}`)
+                continue
+              }
+              const targetId = normalized.targetId
+              const edgeRelation = normalized.relation
 
               if (relation && edgeRelation !== relation) continue
               if (visited.has(targetId)) continue
@@ -171,7 +193,12 @@ export function registerFindEntitiesTool(
           }),
         ),
         limit: Type.Optional(
-          Type.Number({ description: "Max results (default 50)", default: 50 }),
+          Type.Number({
+            description: "Max results (default 50)",
+            default: 50,
+            minimum: 1,
+            maximum: ENTITIES_LIMIT_MAX,
+          }),
         ),
       }),
       async execute(
@@ -179,7 +206,8 @@ export function registerFindEntitiesTool(
         params: { entity_type?: string; limit?: number },
       ) {
         const entityType = params.entity_type || undefined
-        const limit = params.limit ?? 50
+        // H123: bound the paginated scroll fan-out (per page).
+        const limit = clampInt(params.limit, ENTITIES_LIMIT_DEFAULT, 1, ENTITIES_LIMIT_MAX)
 
         try {
           const filter: Record<string, unknown> = {
@@ -262,12 +290,18 @@ export function registerGetSubgraphTool(
           description: "The Qdrant point ID to center the subgraph on",
         }),
         max_depth: Type.Optional(
-          Type.Number({ description: "Maximum hops (default 2)", default: 2 }),
+          Type.Number({
+            description: "Maximum hops (default 2)",
+            default: 2,
+            minimum: 1,
+            maximum: SUBGRAPH_DEPTH_MAX,
+          }),
         ),
       }),
       async execute(_toolCallId: string, params: { fact_id: string; max_depth?: number }) {
         const { fact_id: factId } = params
-        const maxDepth = params.max_depth ?? 2
+        // H123: bound the BFS fan-out (raw host value never reaches the loop).
+        const maxDepth = clampInt(params.max_depth, SUBGRAPH_DEPTH_DEFAULT, 1, SUBGRAPH_DEPTH_MAX)
 
         try {
           // Reuse BFS logic
@@ -288,11 +322,16 @@ export function registerGetSubgraphTool(
 
             const ptEdges = (pt.payload?.edges ?? []) as Array<Record<string, unknown>>
             for (const edge of ptEdges) {
-              const edgeStatus = edge.status as string
-              if (edgeStatus && edgeStatus !== "active") continue
-
-              const targetId = edge.target_fact_id as string
-              const edgeRelation = edge.relation as string
+              if (!isActiveEdge(edge)) continue
+              // H125: same validation gate as traverse/get_related — a
+              // malformed edge must not push undefined into nodes/edges.
+              const normalizedSub = normalizeEdge(edge)
+              if (!normalizedSub) {
+                log.debug(`get_subgraph: skipping malformed edge (missing target/relation)`)
+                continue
+              }
+              const targetId = normalizedSub.targetId
+              const edgeRelation = normalizedSub.relation
 
               if (visited.has(targetId)) {
                 // Still add the edge even if node already exists
@@ -390,16 +429,21 @@ export function registerGetRelatedTool(
 
           // Outgoing edges
           for (const edge of edges) {
-            const edgeStatus = edge.status as string
-            if (edgeStatus && edgeStatus !== "active") continue
+            if (!isActiveEdge(edge)) continue
 
-            const edgeRelation = edge.relation as string
-            if (relation && edgeRelation !== relation) continue
+            // H125: only validated values may enter the public contract —
+            // results used to carry `fact_id: undefined` / `edge_id: undefined`.
+            const normalized = normalizeEdge(edge)
+            if (!normalized) {
+              log.debug(`get_related: skipping malformed edge on ${factId}`)
+              continue
+            }
+            if (relation && normalized.relation !== relation) continue
 
             results.push({
-              fact_id: edge.target_fact_id,
-              relation: edgeRelation,
-              edge_id: edge.edge_id,
+              fact_id: normalized.targetId,
+              relation: normalized.relation,
+              edge_id: normalized.edgeId,
               direction: "outgoing",
             })
           }

@@ -3,7 +3,12 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
+import { clampInt } from "../lib/num.ts"
 import { log } from "../logger.ts"
+
+/** Hard bound on search fan-out; mirrored by the schema below. */
+const SEARCH_LIMIT_MAX = 50
+const SEARCH_LIMIT_DEFAULT = 5
 
 export function registerSearchTool(
   api: OpenClawPluginApi,
@@ -20,14 +25,19 @@ export function registerSearchTool(
       parameters: Type.Object({
         query: Type.String({ description: "Search query" }),
         limit: Type.Optional(
-          Type.Number({ description: "Max results (default: 5)" }),
+          Type.Number({
+            description: "Max results (default: 5)",
+            minimum: 1,
+            maximum: SEARCH_LIMIT_MAX,
+          }),
         ),
       }),
       async execute(
         _toolCallId: string,
         params: { query: string; limit?: number },
       ) {
-        const limit = params.limit ?? 5
+        // H123: never hand a raw host value to Qdrant — clamp to [1, 50].
+        const limit = clampInt(params.limit, SEARCH_LIMIT_DEFAULT, 1, SEARCH_LIMIT_MAX)
 
         log.debug(`search tool: query="${params.query}" limit=${limit}`)
 

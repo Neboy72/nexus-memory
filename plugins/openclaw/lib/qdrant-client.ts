@@ -158,6 +158,28 @@ export class QdrantClient {
   }
 
   /**
+   * Number of points currently stored in the collection, or null when it
+   * cannot be determined (Qdrant down, non-2xx, malformed body).
+   *
+   * GET /collections/{collection} → result.points_count
+   *
+   * Never throws — callers use it as a liveness/count probe.
+   */
+  async countPoints(): Promise<number | null> {
+    try {
+      const resp = await fetch(`${this.qdrantUrl}/collections/${this.collection}`, {
+        method: "GET",
+      })
+      if (!resp.ok) return null
+      const data = await resp.json() as { result?: { points_count?: number } }
+      const count = data.result?.points_count
+      return typeof count === "number" && Number.isFinite(count) ? count : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Search for similar vectors with access-level filtering.
    *
    * POST /collections/{collection}/points/search
@@ -272,29 +294,32 @@ export class QdrantClient {
   }
 
   /**
-   * Scroll a single point by ID — returns the point with payload, or null.
-   * Uses POST /collections/{collection}/points/scroll with positive IDs only.
+   * Fetch a single point by its native ID — returns the point with payload,
+   * or null when it does not exist / cannot be fetched.
+   *
+   * H137: this used to POST /points/scroll with a `must: [{ key: "id" }]`
+   * payload filter. Qdrant matches the filter against the PAYLOAD, but the
+   * point ID lives outside the payload, so the filter never matched and this
+   * method always returned null — every graph_traverse/get_related caller saw
+   * each fact as "not found". The correct primitive is the point-retrieve
+   * endpoint.
+   *
+   * GET /collections/{collection}/points/{id}?with_payload=true
+   * → { result: { id, payload } } on success, 404 when the point is absent.
    */
   async scrollPoint(id: string): Promise<{ id: string; payload?: Record<string, unknown> } | null> {
     try {
       const resp = await fetch(
-        `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filter: { must: [{ key: "id", match: { value: id } }] },
-            limit: 1,
-            with_payload: true,
-            with_vector: false,
-          }),
-        },
+        `${this.qdrantUrl}/collections/${this.collection}/points/${encodeURIComponent(id)}?with_payload=true`,
+        { method: "GET" },
       )
       if (!resp.ok) return null
-      const data = await resp.json() as { result?: { points?: Array<{ id: string | number; payload?: Record<string, unknown> }> } }
-      const points = data.result?.points ?? []
-      if (points.length === 0) return null
-      return { id: String(points[0].id), payload: points[0].payload }
+      const data = await resp.json() as {
+        result?: { id?: string | number; payload?: Record<string, unknown> } | null
+      }
+      const point = data.result
+      if (!point || point.id === undefined || point.id === null) return null
+      return { id: String(point.id), payload: point.payload }
     } catch {
       return null
     }

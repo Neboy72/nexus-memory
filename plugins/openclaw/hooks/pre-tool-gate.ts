@@ -4,7 +4,9 @@
  * Drei Ebenen, in dieser Reihenfolge:
  *
  * 1. GUARDRAILS — Config/Kill/Delete ohne GO = sofort BLOCK
- * 2. PRE-ACTION RECALL — Bei Keywords in Tool-Params → Nexus fragen → Kontext injizieren
+ * 2. PRE-ACTION RECALL — Bei Keywords in Tool-Params → Nexus fragen.
+ *    Der Kontext wird NUR in einen Block-Grund (blockReason) eingehängt;
+ *    before_tool_call kann keinen Kontext injizieren (siehe H135 unten).
  * 3. PLAN-ZWANG — System-Kommandos ohne Plan-Lock = BLOCK (mit Recall-Kontext als Info)
  *
  * Read-only Tools (read, web_search, web_fetch, image, pdf, etc.) brauchen keinen Plan.
@@ -295,16 +297,23 @@ export function buildPreToolGateHandler(
       }
     }
 
-    // ── 4. RECALL-OUTPUT (Aktion erlaubt, aber Kontext injizieren) ──
+    // ── 4. RECALL-OUTPUT ──
+    // H135: before_tool_call has exactly two valid return shapes — `{}` (allow)
+    // and `{ block, blockReason }` (deny). The previous branch returned
+    // `{ params, _nexusRecallContext }`: the framework does not inject either
+    // field, and echoing `params` back could corrupt the tool arguments.
+    //
+    // The recall context is still delivered where it can be: on the block
+    // paths above (embedded in blockReason) and, for the general case, by the
+    // before_prompt_build hook (buildRecallHandler). The context computed for
+    // THIS call — preActionRecall() has already paid the embed() round-trip —
+    // is therefore discarded on the allow path; we log it at warn level so the
+    // loss is visible instead of silent.
     if (recallContext) {
-      log.info(`nexus-gate: injecting recall context (${recallContext.length} chars)`)
-      // OpenClaw before_tool_call doesn't support prependContext like before_prompt_build,
-      // but we can modify params to include context in the tool result or return as metadata
-      // For now, we return it as part of the hook result for the framework to inject
-      return {
-        params,
-        _nexusRecallContext: recallContext,
-      }
+      log.warn(
+        `nexus-gate: recall context (${recallContext.length} chars) cannot be injected by ` +
+        `before_tool_call — delivered via before_prompt_build instead; dropping`,
+      )
     }
 
     // ── 5. ALLOW ──

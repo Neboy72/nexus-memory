@@ -9,7 +9,12 @@ import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
 import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts"
 import { buildCronFormGateHandler } from "./hooks/cron-form-gate.ts"
 import { initLogger, log } from "./logger.ts"
-import { buildMemoryRuntime, buildPromptSection, setUpdateCheckResult } from "./runtime.ts"
+import {
+  buildMemoryRuntime,
+  buildPromptSection,
+  consumeUpdateNudge,
+  setUpdateCheckResult,
+} from "./runtime.ts"
 import { checkForUpdate } from "./lib/update-check.ts"
 import { registerForgetTool } from "./tools/forget.ts"
 import { registerSearchTool } from "./tools/search.ts"
@@ -76,18 +81,27 @@ export default {
       .catch(() => setUpdateCheckResult({ available: false, latest: "", url: "" }))
 
     // Register memory capability
-    const memoryRuntime = buildMemoryRuntime(qdrantClient)
+    // H122: the runtime probes delegate to the real embedder/client, so both
+    // must be handed over (the probes used to be hardcoded stubs).
+    const memoryRuntime = buildMemoryRuntime(qdrantClient, embedder)
     const noopFlushPlan = () => null
+
+    // H138: buildPromptSection is pure. The caller owns the once-per-process
+    // update nudge here so prompt building is deterministic.
+    const promptBuilder = (params: { availableTools: Set<string> }) => {
+      const { text } = consumeUpdateNudge()
+      return buildPromptSection({ availableTools: params.availableTools, nudged: text === null })
+    }
 
     if (typeof api.registerMemoryCapability === "function") {
       api.registerMemoryCapability({
         runtime: memoryRuntime,
-        promptBuilder: buildPromptSection,
+        promptBuilder,
         flushPlanResolver: noopFlushPlan,
       })
     } else {
       api.registerMemoryRuntime?.(memoryRuntime)
-      api.registerMemoryPromptSection?.(buildPromptSection)
+      api.registerMemoryPromptSection?.(promptBuilder)
       api.registerMemoryFlushPlan?.(noopFlushPlan)
     }
 
@@ -124,11 +138,15 @@ export default {
     if (cfg.thoughtFilter !== false) {
       api.on("message_sending", buildThoughtFilterHandler())
       log.info("thought-filter: message_sending hook aktiv")
-      // Cron-Form-Gate (Astra-R6 P0, 08.09.2026): unbeaufsichtigte Sends
-      // nur als festes Formular, fail-closed.
-      api.on("message_sending", buildCronFormGateHandler())
-      log.info("cron-form-gate: message_sending hook aktiv")
     }
+
+    // Cron-Form-Gate (Astra-R6 P0, 08.09.2026): unbeaufsichtigte Sends
+    // nur als festes Formular, fail-closed.
+    // H136: eigener, unbedingter Block — hing früher am thoughtFilter-if und
+    // war damit über `thoughtFilter: false` abschaltbar. Ein Fail-closed-Gate
+    // für unbeaufsichtigte Sends darf nicht an einem Reasoning-Filter hängen.
+    api.on("message_sending", buildCronFormGateHandler())
+    log.info("cron-form-gate: message_sending hook aktiv")
 
     if (cfg.autoCapture) {
       api.on("agent_end", buildCaptureHandler(embedder, qdrantClient, cfg, centroidCache))
