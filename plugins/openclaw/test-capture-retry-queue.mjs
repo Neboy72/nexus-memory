@@ -34,7 +34,8 @@ const originalFetch = globalThis.fetch
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : String(url)
   if (u.includes("voyageai.com")) {
-    return { ok: true, status: 200, json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }) }
+    // Nr 379: parseEmbeddingResponse liest resp.text() zuerst — Mock erfuellt Contract
+    return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ embedding: new Array(1024).fill(0.1) }] }), json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }) }
   }
   if (u.includes("localhost:6333")) {
     if (!qdrantUp) return { ok: false, status: 503, text: async () => "simulated outage", json: async () => ({}) }
@@ -47,6 +48,7 @@ const handlers = {}
 const mockApi = {
   on(e, h) { if (!handlers[e]) handlers[e] = []; handlers[e].push(h) },
   registerTool() {}, registerProvider() {}, registerService() {},
+  registerMemoryCapability() {}, // Nr 364: register() fail-loud wenn nichts registriert wird
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
   pluginConfig: {
     qdrantUrl: "http://localhost:6333",

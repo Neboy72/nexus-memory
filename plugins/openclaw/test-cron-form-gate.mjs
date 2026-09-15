@@ -40,6 +40,7 @@ const handlers = {}
 const mockApi = {
   on(e, h) { handlers[e] = h },
   registerTool() {}, registerProvider() {}, registerService() {},
+  registerMemoryCapability() {}, // Nr 364: register() fail-loud wenn nichts registriert wird
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
   pluginConfig: {
     qdrantUrl: "http://localhost:6333",

@@ -19,6 +19,10 @@ const api = {
   registerCommand: noop,
   registerCli: noop,
   registerService: noop,
+  // Nr 364 (W21): register() wirft jetzt, wenn WEDER die native Memory-Capability
+  // NOCH eine Fallback-API etwas registriert. Der Fake-Host muss die Capability
+  // also annehmen, sonst bricht register() vor den Tool-Registrierungen ab.
+  registerMemoryCapability: noop,
 };
 const cfg = { collection: "nexus", embedding: { provider: "voyage", model: "voyage-4" }, accessLevel: "trusted" };
 
