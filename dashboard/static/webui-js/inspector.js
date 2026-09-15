@@ -11,13 +11,15 @@ const Inspector = {
   },
 
   async open() {
-    document.getElementById('inspectorOverlay').classList.add('insp-overlay--open');
+    const overlay = document.getElementById('inspectorOverlay');
+    if (overlay) overlay.classList.add('insp-overlay--open');
     document.body.style.overflow = 'hidden';
     await this.load();
   },
 
   close() {
-    document.getElementById('inspectorOverlay').classList.remove('insp-overlay--open');
+    const overlay = document.getElementById('inspectorOverlay');
+    if (overlay) overlay.classList.remove('insp-overlay--open');
     document.body.style.overflow = '';
   },
 

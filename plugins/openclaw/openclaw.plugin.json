@@ -121,6 +121,9 @@
       "autoCapture": {
         "type": "boolean"
       },
+      "thoughtFilter": {
+        "type": "boolean"
+      },
       "maxRecallResults": {
         "type": "number",
         "minimum": 1,
@@ -133,6 +136,9 @@
           "trusted",
           "private"
         ]
+      },
+      "scope": {
+        "type": "string"
       },
       "debug": {
         "type": "boolean"
