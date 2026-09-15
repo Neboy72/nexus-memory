@@ -108,6 +108,9 @@ class NexusMemoryProvider:
         self._prefetch_lock = threading.Lock(); self._write_queue: List[Dict[str, Any]] = []
         self._write_lock = threading.Lock(); self._write_stop = threading.Event()
         self._write_thread: Optional[threading.Thread] = None
+        # Nr 290: shutdown must join these too — they share self._qdrant
+        self._backup_thread: Optional[threading.Thread] = None
+        self._update_thread: Optional[threading.Thread] = None
         self._backup_nudged = False
         self._last_backup_time: float = 0
         self._last_backup_path: str = ""
@@ -157,8 +160,9 @@ class NexusMemoryProvider:
         from datetime import datetime
 
         def _backup_loop():
-            # Wait 60s after startup before first backup
-            time.sleep(60)
+            # Wait 60s after startup before first backup (interruptible: Nr 290)
+            if self._write_stop.wait(60):
+                return
             while not self._write_stop.is_set():
                 try:
                     self._do_backup()
@@ -170,7 +174,8 @@ class NexusMemoryProvider:
                         return
                     time.sleep(BACKUP_CHECK_INTERVAL_SECONDS)
 
-        threading.Thread(target=_backup_loop, name="nexus-backup", daemon=True).start()
+        self._backup_thread = threading.Thread(target=_backup_loop, name="nexus-backup", daemon=True)
+        self._backup_thread.start()
 
     def _do_backup(self) -> str:
         """Create a full backup of all memories as JSON. Returns backup file path."""
@@ -251,7 +256,8 @@ class NexusMemoryProvider:
                     self._update_available = None
             except Exception:
                 self._update_available = None
-        threading.Thread(target=_bg, daemon=True).start()
+        self._update_thread = threading.Thread(target=_bg, name="nexus-update-check", daemon=True)
+        self._update_thread.start()
 
     def system_prompt_block(self) -> str:
         base = "Nexus Memory active. Relevant memories are automatically injected. Use nexus_recall to search manually, nexus_remember to store."
@@ -308,6 +314,18 @@ class NexusMemoryProvider:
         self._write_stop.set()
         if self._write_thread and self._write_thread.is_alive():
             self._write_thread.join(timeout=5.0)
+        # Nr 290: backup/update threads share self._qdrant — give them a
+        # short, best-effort chance to finish before the client closes.
+        if self._backup_thread and self._backup_thread.is_alive():
+            self._backup_thread.join(timeout=2.0)
+        if self._update_thread and self._update_thread.is_alive():
+            self._update_thread.join(timeout=2.0)
+        # In-flight entity extraction holds this lock; a short acquire tells
+        # us whether one is running. Never block shutdown on an LLM call.
+        if self._entity_extract_lock.acquire(blocking=True, timeout=0.5):
+            self._entity_extract_lock.release()
+        else:
+            logger.warning("Entity extraction still running at shutdown — client closed underneath it (best effort)")
         with self._skill_graph_lock:
             if self._skill_graph is not None:
                 try: self._skill_graph.store.close()

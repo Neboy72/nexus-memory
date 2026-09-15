@@ -406,7 +406,7 @@ def detect_all_agents() -> dict:
 LOCAL_AGENT_IDS = frozenset({
     "hermes", "kilo-code", "openclaw", "claude-code", "pi", "cline",
     "codex", "openhands", "roo-code", "qwen-code", "cursor",
-    "antigravity-cli", "opencode", "windsurf", "crush", "gemini-cli",
+    "antigravity-cli", "opencode", "windsurf", "crush",
 })
 
 # Review fix (MEDIUM :587): ghost horizon for explicitly registered REMOTE

@@ -245,10 +245,9 @@ def _probe_ollama_dim() -> Optional[int]:
 def _embed_content(text: str) -> list[float]:
     """Generate a real embedding vector for the given text.
 
-    Uses the detected provider from ``_detect_vector_size()``.  Falls back
-    to a zero vector of the correct dimension if no provider is available
-    or embedding fails — this preserves backward compatibility while
-    logging a warning.
+    Uses the detected provider from ``_detect_vector_size()``.  Only a
+    deliberately provider-less config (``_EMBED_PROVIDER == 'none'``) still
+    returns zero vectors; any real provider failure raises.
     """
     dim = _detect_vector_size()
 
@@ -273,21 +272,24 @@ def _embed_content(text: str) -> list[float]:
                 headers={"Authorization": f"Bearer {jina_key}"},
                 timeout=30,
             )
+            r.raise_for_status()  # Nr 269: don't index error bodies as embeddings
             return r.json()["data"][0]["embedding"]
         elif _EMBED_PROVIDER == "ollama":
             r = requests.post(
                 "http://localhost:11434/api/embeddings",
-                json={"model": "nomic-embed-text", "prompt": text},
+                json={"model": _OLLAMA_MODEL or "nomic-embed-text", "prompt": text},
                 timeout=30,
             )
+            r.raise_for_status()  # Nr 269: don't index error bodies as embeddings
             return r.json()["embedding"]
         elif _EMBED_PROVIDER == "sentence-transformers":
             vector = _ST_MODEL.encode(text)
             return vector.tolist()
     except Exception as exc:
-        _logger.warning("Embedding failed (%s): %s — using zero vector", _EMBED_PROVIDER, exc)
-
-    return [0.0] * dim
+        # Nr 269: a zero vector is silent, permanent data corruption (unretrievable
+        # under Cosine but still "canonical"). Fail the write loudly instead.
+        _logger.error("Embedding failed (%s): %s — failing the write", _EMBED_PROVIDER, exc)
+        raise
 
 # ── Collection Layout (v1.8.0+) ────────────────────────────────────────────
 #
@@ -370,6 +372,19 @@ def ensure_collections(
         try:
             r = requests.get(url, timeout=10)
             if is_success(r.status_code):
+                # Nr 272: an existing collection must be dimension-compatible
+                try:
+                    cfg = r.json().get("result", {}).get("config", {}).get("params", {}).get("vectors", {})
+                    existing_size = cfg.get("size") if isinstance(cfg, dict) else None
+                except Exception:
+                    existing_size = None
+                if existing_size and existing_size != vector_size:
+                    _logger.error(
+                        "Collection %s exists with %dD vectors but embeddings are %dD — refusing",
+                        name, existing_size, vector_size,
+                    )
+                    results[name] = False
+                    continue
                 results[name] = True
                 continue
         except requests.RequestException:
@@ -727,14 +742,17 @@ def _get_current_canonical(
     url = f"{_qdrant_url(host, port, _collection_canonical())}/points/{fact_id}"
     try:
         r = requests.get(url, timeout=10)
-        if is_success(r.status_code):
-            result = r.json().get("result")
-            if result:
-                payload = result.get("payload", {})
-                if payload.get("status") == FactStatus.CANONICAL.value:
-                    return FactVersion.from_dict(payload)
-    except requests.RequestException:
-        pass
+    except requests.RequestException as exc:
+        # Nr 271: a transport error is NOT "no canonical exists" — fail loudly
+        raise RuntimeError(
+            f"Qdrant unreachable while reading canonical fact {fact_id}: {exc}"
+        ) from exc
+    if is_success(r.status_code):
+        result = r.json().get("result")
+        if result:
+            payload = result.get("payload", {})
+            if payload.get("status") == FactStatus.CANONICAL.value:
+                return FactVersion.from_dict(payload)
     return None
 
 
@@ -788,32 +806,42 @@ def _get_canonical_supersedes_set(
     promoted and should be excluded from pending-review queries.
     """
     url = f"{_qdrant_url(host, port, _collection_all())}/points/scroll"
-    payload = {
-        "limit": 5000,
-        "with_payload": True,
-        "filter": {
-            "must": [{"key": "status", "match": {"value": FactStatus.CANONICAL.value}}]
-        },
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=10)
-        results = r.json().get("result", {}).get("points", [])
-    except Exception:
-        return set()
-
     superseded: set[str] = set()
-    for p in results:
-        pl = p.get("payload", {})
-        # NEW-promotions record the staging draft in ``supersedes``;
-        # UPDATE-promotions point ``supersedes`` at the previous canonical
-        # and record the draft in ``promoted_from``. Union both so
-        # list_pending() drops already-promoted drafts in either case.
-        supersedes = pl.get("supersedes")
-        if supersedes:
-            superseded.add(supersedes)
-        promoted_from = pl.get("promoted_from")
-        if promoted_from:
-            superseded.add(promoted_from)
+    offset = None
+    try:
+        while True:
+            payload = {
+                "limit": 1000,
+                "with_payload": True,
+                "filter": {
+                    "must": [{"key": "status", "match": {"value": FactStatus.CANONICAL.value}}]
+                },
+            }
+            if offset:
+                payload["offset"] = offset
+            r = requests.post(url, json=payload, timeout=30)
+            r.raise_for_status()
+            result = r.json().get("result", {})
+            points = result.get("points", [])
+            for p in points:
+                pl = p.get("payload", {})
+                # NEW-promotions record the staging draft in ``supersedes``;
+                # UPDATE-promotions point ``supersedes`` at the previous canonical
+                # and record the draft in ``promoted_from``. Union both so
+                # list_pending() drops already-promoted drafts in either case.
+                supersedes = pl.get("supersedes")
+                if supersedes:
+                    superseded.add(supersedes)
+                promoted_from = pl.get("promoted_from")
+                if promoted_from:
+                    superseded.add(promoted_from)
+            offset = result.get("next_page_offset")
+            if offset is None:
+                break
+    except Exception as exc:
+        # Nr 270: fail closed — an empty set would resurface promoted drafts
+        _logger.error("Failed to build canonical supersedes set: %s", exc)
+        raise
     return superseded
 
 
