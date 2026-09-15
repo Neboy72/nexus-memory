@@ -14,6 +14,7 @@ Integrates all nexus v2.8.0 features:
 import asyncio
 import contextlib
 import fcntl
+import ipaddress
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 import mcp.server.stdio
 import mcp.types as types
@@ -37,8 +39,6 @@ from qdrant_client.http import models as qmodels
 # Integrate from the nexus package (v2.8.0+ features)
 import nexus
 from nexus import MemoryCategory, __version__ as nexus_version
-from nexus.provenance import attach_source
-from nexus.config import is_success
 
 # Repo-Root dynamisch ableiten (nexus/ liegt im Repo-Root)
 _NEXUS_REPO = os.path.dirname(os.path.dirname(nexus.__file__))
@@ -221,6 +221,29 @@ class WebhookStore:
             raise ValueError(
                 "webhook_url must be a non-empty http:// or https:// URL"
             )
+
+        # SSRF guard. Webhooks are an owner feature, but webhook_url is
+        # prompt-injectable, so block loopback/link-local/private targets.
+        # 192.168/10/172 are blocked DELIBERATELY: inward Home-Assistant
+        # webhooks are not the use-case, and 169.254 (metadata) always is.
+        host = urlsplit(webhook_url).hostname
+        if host:
+            h = host.lower()
+            if h == "localhost" or h.endswith(".local"):
+                raise ValueError(
+                    "webhook_url must not target localhost or a .local host"
+                )
+            try:
+                ip = ipaddress.ip_address(h)
+            except ValueError:
+                ip = None
+            if ip is not None and (
+                ip.is_loopback or ip.is_link_local
+                or ip.is_private or ip.is_unspecified
+            ):
+                raise ValueError(
+                    "webhook_url must not target a loopback/private IP"
+                )
 
         sub = {
             "id": str(uuid.uuid4()),
@@ -1189,12 +1212,9 @@ class MemoryStore:
         # (default behavior) so a bad client value can never crash recall.
         as_of_dt = _parse_iso(as_of)
         point_in_time = as_of_dt is not None
-        allowed_levels = [ACCESS_PUBLIC]
-        agent_lvl = ACCESS_HIERARCHY.get(agent_level, 0)
-        if agent_lvl >= 1:
-            allowed_levels.append(ACCESS_TRUSTED)
-        if agent_lvl >= 2:
-            allowed_levels.append(ACCESS_PRIVATE)
+        # Access filtering happens per-result below via the numeric
+        # ACCESS_HIERARCHY comparison; the dead allowed_levels list is gone
+        # (Nr 482) so the code no longer implies a second gate.
 
         raw_results = []
         query_vector = None

@@ -3,6 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
+import { limitText } from "../lib/text-preview.ts"
 import { log } from "../logger.ts"
 
 /**
@@ -11,10 +12,6 @@ import { log } from "../logger.ts"
  * unrelated memory would be silently deleted.
  */
 const FORGET_MIN_SCORE = 0.8
-
-function limitText(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text
-}
 
 export function registerForgetTool(
   api: OpenClawPluginApi,

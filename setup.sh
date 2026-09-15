@@ -125,7 +125,6 @@ ok "Nexus Memory installed: v$($PYTHON -c "from nexus import __version__; print(
 # ── Step 5: Embedding Provider ────────────────────────────────────────
 info "Detecting available embedding backends..."
 
-EMBED_SUGGEST="sentence-transformers"
 EMBED_HINT="🏠 Default (local, no key): pip install sentence-transformers"
 
 # Check Jina
@@ -150,7 +149,6 @@ emb = [m for m in models if 'embed' in m.lower()]
 print(emb[0] if emb else '')
 " 2>/dev/null)
     if [ -n "$OLLAMA_EMBED" ]; then
-        EMBED_SUGGEST="ollama:$OLLAMA_EMBED"
         EMBED_HINT="🦙 Ollama ($OLLAMA_EMBED detected) — recommended"
         ok "Ollama embedding detected: $OLLAMA_EMBED"
     fi
@@ -213,10 +211,10 @@ echo ""
 info "🔷 Hermes Agent — ~/.hermes/config.yaml:"
 echo '  mcp_servers:'
 echo '    nexus:'
-echo "      command: ${PYTHON}"
+echo "      command: \"${PYTHON}\""
 echo '      args: ["-m", "nexus_memory.mcp_server"]'
 echo '      env:'
-echo "        PYTHONPATH: ${INSTALL_DIR}"
+echo "        PYTHONPATH: \"${INSTALL_DIR}\""
 echo ""
 
 info "🔷 Claude Code — ~/.claude/settings.json:"
@@ -244,7 +242,7 @@ echo ""
 info "🔷 OpenClaw — ~/.openclaw/config.yaml:"
 echo '  mcp_servers:'
 echo '    nexus:'
-echo "      command: ${PYTHON}"
+echo "      command: \"${PYTHON}\""
 echo '      args: ["-m", "nexus_memory.mcp_server"]'
 echo ""
 

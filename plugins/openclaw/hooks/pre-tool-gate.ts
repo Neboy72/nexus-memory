@@ -16,6 +16,7 @@
  */
 
 import { statSync, unlinkSync } from "node:fs"
+import os from "node:os"
 import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
@@ -68,14 +69,17 @@ const ALWAYS_ALLOW_TOOLS = new Set([
 ])
 
 // Critical paths that should never be rm -rf'd
+// (tilde entries are expanded below; absolute entries are portable via os.homedir())
 const PROTECTED_PATHS = [
   "~/.openclaw",
   "~/.hermes",
   "~/nexus-memory",
-  "/Users/miosha/.openclaw",
-  "/Users/miosha/.hermes",
-  "/Users/miosha/nexus-memory",
 ]
+// W25 Nr-491-adjacent: developer-home absolute paths are not portable —
+// resolve from the runtime user's home instead of hardcoding one machine.
+for (const p of ["~/.openclaw", "~/.hermes", "~/nexus-memory"]) {
+  PROTECTED_PATHS.push(p.replace("~", os.homedir()))
+}
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -140,7 +144,7 @@ function needsPlan(toolName: string, params: Record<string, unknown>): boolean {
 }
 
 function isProtectedPath(path: string): boolean {
-  // PROTECTED_PATHS mixes case (/Users/miosha/...) — compare lowercased on
+  // PROTECTED_PATHS mixes tilde and absolute forms — compare lowercased on
   // both sides so the match does not depend on the caller's case.
   const p = path.toLowerCase()
   return PROTECTED_PATHS.some(pp => p.includes(pp.toLowerCase()))

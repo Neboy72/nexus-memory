@@ -128,14 +128,16 @@ export function buildCaptureHandler(
         // Strip any injected wrapper, then neutralize stray closing tags so
         // the STORED text can never break a future <nexus-context> block.
         const cleaned = neutralizeContextClose(stripNexusContextBlock(joined))
-        if (cleaned.length > 0) {
+        // Threshold on the RAW text: the wrapped "[role: ...]" form is always
+        // >10 chars, so a post-wrap filter could never fire. Very short raw
+        // texts are intentionally not captured — that is the fix.
+        if (cleaned.length >= 10) {
           texts.push(`[role: ${role}]\n${cleaned}\n[${role}:end]`)
         }
       }
     }
 
-    // Filter out very short captures
-    const captured = texts.filter((t) => t.length >= 10)
+    const captured = texts
 
     if (captured.length === 0) return
 

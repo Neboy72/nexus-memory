@@ -169,7 +169,10 @@ class TrustService:
             if new_status == STATUS_CONTESTED:
                 contested_open += 1
 
-            if not dry_run and (new_trust != old_trust or new_status != old_status):
+            if not dry_run and (
+                abs(float(new_trust) - float(old_trust or 0.0)) > 1e-6
+                or new_status != old_status
+            ):
                 self._store.client.set_payload(
                     collection_name=self._collection,
                     payload={
@@ -252,11 +255,12 @@ class TrustService:
 
     def _write_report(self, report: Dict[str, Any]) -> None:
         try:
-            path = self._data_dir / f"trust-{report['timestamp'][:10].replace(':', '')}.json"
+            ts = report['timestamp'].replace(':', '').replace(' ', 'T')
+            path = self._data_dir / f"trust-{ts}.json"
             with open(path, "w") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False, default=str)
             files = sorted(self._data_dir.glob("trust-*.json"))
-            for old in files[:-12]:
+            for old in files[:-12]:  # counts files not days, bewusst so
                 try:
                     old.unlink()
                 except OSError:

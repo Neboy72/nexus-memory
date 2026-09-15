@@ -31,7 +31,6 @@ from typing import Any, Optional
 SCOPE_MATCH_THRESHOLD = float(os.getenv("NEXUS_SCOPE_AUTO_THRESHOLD", "0.65"))
 SCOPE_MARGIN = float(os.getenv("NEXUS_SCOPE_AUTO_MARGIN", "0.05"))
 CENTROID_TTL_SECONDS = int(os.getenv("NEXUS_SCOPE_CACHE_TTL", "300"))
-MAX_POINTS_PER_SCOPE = 200
 
 
 def _normalize_scope(scope) -> str:
@@ -124,8 +123,13 @@ class ScopeCentroids:
             vec = p.vector
             if vec is None:
                 continue
-            if isinstance(vec, dict):  # named vectors — take the first entry
-                vec = next(iter(vec.values())) if vec else None
+            if isinstance(vec, dict):
+                # named vectors: single-vector collections only (store writes
+                # un-named); first entry is the only entry. More than one name
+                # is mixed vector spaces → skip the point, don't mix blindly.
+                if len(vec) != 1:
+                    continue
+                vec = next(iter(vec.values()))
             if not vec:
                 continue
             s, n = sums.get(scope, ([0.0] * len(vec), 0))
@@ -199,6 +203,7 @@ def prefetch_filter_scopes(
     to exactly one non-default scope. Returned set always includes 'default'
     plus the matched scope (plus the agent's own manual override if set).
     """
+    my_scope = _normalize_scope(my_scope)
     inferred = infer_scope(query_vector, centroids)
     if inferred == "default":
         return None
