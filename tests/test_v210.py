@@ -100,12 +100,15 @@ class TestProposedEdges:
     def test_promote_nonexistent_edge(self, qdrant_store):
         result = qdrant_store.promote_edge("nonexistent-id")
         assert result is None
-    def test_promote_active_edge(self, qdrant_store):
-        """Promoting an already active edge returns the edge (no-op)."""
+    def test_promote_active_edge_returns_none(self, qdrant_store):
+        """Promoting a non-proposed edge returns None (contract: only
+        proposed edges can be promoted) and leaves the edge untouched."""
         edge = qdrant_store.add_edge(F_FACT_A, F_FACT_B, "references", reason="test")
         result = qdrant_store.promote_edge(edge.edge_id)
-        assert result is not None
-        assert result.status == "active"
+        assert result is None
+        still = qdrant_store.get_edge(edge.edge_id)
+        assert still is not None
+        assert still.status == "active"
 
     def test_has_any_edge_true(self, qdrant_store):
         qdrant_store.add_proposed_edge(F_FACT_A, F_FACT_B, "references", confidence=0.78)

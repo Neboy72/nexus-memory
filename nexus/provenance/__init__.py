@@ -186,7 +186,7 @@ def format_provenance_report(provenance: dict) -> str:
         for name, count in cr.items():
             lines.append(f"    👤 {name}: {count}")
 
-    if provenance.get("confidences"):
+    if "confidence_avg" in provenance:
         lines.append("")
         lines.append(f"  **Confidence:** avg {provenance['confidence_avg']:.2f} "
                      f"(range {provenance['confidence_min']:.1f}–{provenance['confidence_max']:.1f})")

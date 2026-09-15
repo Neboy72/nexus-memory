@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -79,6 +80,12 @@ class EdgeStore:
         self._collection = collection or DEFAULT_COLLECTION
         self._client: QdrantClient | None = client
         self._valid_relations = {e.value for e in EdgeRelation}
+        # Serializes read-modify-write cycles on the ``edges`` payload array.
+        # Threads sharing ONE EdgeStore no longer lose concurrent appends to
+        # the same source fact. Concurrent processes are NOT covered — Qdrant
+        # has no conditional-set / CAS primitive, so cross-process writers
+        # remain last-write-wins by design (single-writer assumption).
+        self._edges_lock = threading.Lock()
 
     # ── Connection ──────────────────────────────────────────────────────────
 
@@ -199,39 +206,40 @@ class EdgeStore:
         """
         self._validate_relation(relation)
 
-        # Check source point exists
-        point = self._scroll_point(source_fact_id)
-        if point is None:
-            raise EdgeStoreError(
-                f"Source fact '{source_fact_id}' not found in Qdrant"
-            )
-
-        # Check for duplicates
-        existing_edges = self._get_edges_from_payload(point["payload"])
-        for entry in existing_edges:
-            if (
-                entry.get("target_fact_id") == target_fact_id
-                and entry.get("relation") == relation
-                and entry.get("status") == EdgeStatus.ACTIVE.value
-            ):
-                raise DuplicateEdgeError(
-                    f"Active edge already exists: "
-                    f"{source_fact_id} --[{relation}]--> {target_fact_id}"
+        with self._edges_lock:
+            # Check source point exists
+            point = self._scroll_point(source_fact_id)
+            if point is None:
+                raise EdgeStoreError(
+                    f"Source fact '{source_fact_id}' not found in Qdrant"
                 )
 
-        # Create edge
-        edge = Edge.new(
-            source_fact_id=source_fact_id,
-            target_fact_id=target_fact_id,
-            relation=relation,
-            reason=reason,
-            metadata=metadata,
-        )
+            # Check for duplicates
+            existing_edges = self._get_edges_from_payload(point["payload"])
+            for entry in existing_edges:
+                if (
+                    entry.get("target_fact_id") == target_fact_id
+                    and entry.get("relation") == relation
+                    and entry.get("status") == EdgeStatus.ACTIVE.value
+                ):
+                    raise DuplicateEdgeError(
+                        f"Active edge already exists: "
+                        f"{source_fact_id} --[{relation}]--> {target_fact_id}"
+                    )
 
-        # Append to payload edges array
-        entry = self._edge_to_entry(edge)
-        existing_edges.append(entry)
-        self._write_edges_back(source_fact_id, existing_edges)
+            # Create edge
+            edge = Edge.new(
+                source_fact_id=source_fact_id,
+                target_fact_id=target_fact_id,
+                relation=relation,
+                reason=reason,
+                metadata=metadata,
+            )
+
+            # Append to payload edges array
+            entry = self._edge_to_entry(edge)
+            existing_edges.append(entry)
+            self._write_edges_back(source_fact_id, existing_edges)
 
         _logger.info(
             "Edge added: %s (%s) --[%s]--> %s",
@@ -258,45 +266,46 @@ class EdgeStore:
         """
         self._validate_relation(relation)
 
-        point = self._scroll_point(source_fact_id)
-        if point is None:
-            raise EdgeStoreError(
-                f"Source fact '{source_fact_id}' not found in Qdrant"
-            )
-
-        # Check for ANY existing edge (dedup: don't rediscover)
-        existing_edges = self._get_edges_from_payload(point["payload"])
-        for entry in existing_edges:
-            if (
-                entry.get("target_fact_id") == target_fact_id
-                and entry.get("relation") == relation
-            ):
-                raise DuplicateEdgeError(
-                    f"Edge already exists (any status): "
-                    f"{source_fact_id} --[{relation}]--> {target_fact_id}"
+        with self._edges_lock:
+            point = self._scroll_point(source_fact_id)
+            if point is None:
+                raise EdgeStoreError(
+                    f"Source fact '{source_fact_id}' not found in Qdrant"
                 )
 
-        meta = dict(metadata or {})
-        if confidence is not None:
-            meta["confidence"] = confidence
+            # Check for ANY existing edge (dedup: don't rediscover)
+            existing_edges = self._get_edges_from_payload(point["payload"])
+            for entry in existing_edges:
+                if (
+                    entry.get("target_fact_id") == target_fact_id
+                    and entry.get("relation") == relation
+                ):
+                    raise DuplicateEdgeError(
+                        f"Edge already exists (any status): "
+                        f"{source_fact_id} --[{relation}]--> {target_fact_id}"
+                    )
 
-        now = datetime.now(timezone.utc).isoformat()
-        edge_id = str(uuid.uuid4())
+            meta = dict(metadata or {})
+            if confidence is not None:
+                meta["confidence"] = confidence
 
-        entry = {
-            "edge_id": edge_id,
-            "target_fact_id": target_fact_id,
-            "relation": relation,
-            "status": EdgeStatus.PROPOSED.value,
-            "created_at": now,
-            "updated_at": now,
-            "deprecated_at": None,
-            "reason": reason,
-            "metadata": meta,
-        }
+            now = datetime.now(timezone.utc).isoformat()
+            edge_id = str(uuid.uuid4())
 
-        existing_edges.append(entry)
-        self._write_edges_back(source_fact_id, existing_edges)
+            entry = {
+                "edge_id": edge_id,
+                "target_fact_id": target_fact_id,
+                "relation": relation,
+                "status": EdgeStatus.PROPOSED.value,
+                "created_at": now,
+                "updated_at": now,
+                "deprecated_at": None,
+                "reason": reason,
+                "metadata": meta,
+            }
+
+            existing_edges.append(entry)
+            self._write_edges_back(source_fact_id, existing_edges)
 
         edge = Edge(
             edge_id=edge_id,
@@ -513,48 +522,61 @@ class EdgeStore:
         edge_id: str,
         new_status: str,
         reason: str | None = None,
+        from_statuses: set[str] | None = None,
     ) -> Edge | None:
         """Find an edge by ID and update its status.
 
-        Returns ``None`` if the edge was not found.
+        Args:
+            edge_id: The edge to transition.
+            new_status: Target status value.
+            reason: Optional replacement reason.
+            from_statuses: Only transition an edge whose CURRENT status is in
+                this set. ``None`` accepts any current status.
+
+        Returns ``None`` if the edge was not found, or if it exists but its
+        current status is not an allowed source status for this transition.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        with self._edges_lock:
+            now = datetime.now(timezone.utc).isoformat()
 
-        # Scroll all points to find the edge
-        next_offset: Any = None
-        while True:
-            points, next_offset = self.client.scroll(
-                collection_name=self._collection,
-                limit=MAX_PAGE_SIZE,
-                offset=next_offset or None,
-                with_payload=True,
-                with_vectors=False,
-            )
-            for pt in points:
-                edges = self._get_edges_from_payload(pt.payload or {})
-                for i, entry in enumerate(edges):
-                    if entry.get("edge_id") != edge_id:
-                        continue
-                    if entry.get("status") == new_status:
-                        # Already in target status — no-op
-                        return Edge.from_payload_entry(
-                            entry, source_fact_id=str(pt.id),
-                        )
+            # Scroll all points to find the edge
+            next_offset: Any = None
+            while True:
+                points, next_offset = self.client.scroll(
+                    collection_name=self._collection,
+                    limit=MAX_PAGE_SIZE,
+                    offset=next_offset or None,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                for pt in points:
+                    edges = self._get_edges_from_payload(pt.payload or {})
+                    for i, entry in enumerate(edges):
+                        if entry.get("edge_id") != edge_id:
+                            continue
+                        if from_statuses is not None and entry.get("status") not in from_statuses:
+                            # Wrong source status — not this kind of edge.
+                            return None
+                        if entry.get("status") == new_status:
+                            # Already in target status — no-op
+                            return Edge.from_payload_entry(
+                                entry, source_fact_id=str(pt.id),
+                            )
 
-                    # Update
-                    edges[i]["status"] = new_status
-                    edges[i]["updated_at"] = now
-                    edges[i]["deprecated_at"] = now
-                    if reason:
-                        edges[i]["reason"] = reason
-                    self._write_edges_back(str(pt.id), edges)
+                        # Update
+                        edges[i]["status"] = new_status
+                        edges[i]["updated_at"] = now
+                        edges[i]["deprecated_at"] = now
+                        if reason:
+                            edges[i]["reason"] = reason
+                        self._write_edges_back(str(pt.id), edges)
 
-                    entry["source_fact_id"] = str(pt.id)
-                    return Edge.from_dict(entry)
+                        entry["source_fact_id"] = str(pt.id)
+                        return Edge.from_dict(entry)
 
-            if next_offset is None:
-                break
-        return None
+                if next_offset is None:
+                    break
+            return None
 
     def reject_edge(self, edge_id: str, reason: str | None = None) -> Edge | None:
         """Reject (soft-delete) an active/proposed edge.
@@ -563,14 +585,24 @@ class EdgeStore:
 
         Returns ``None`` if no active/proposed edge was found with that ID.
         """
-        return self._update_edge_status(edge_id, EdgeStatus.REJECTED.value, reason=reason)
+        return self._update_edge_status(
+            edge_id,
+            EdgeStatus.REJECTED.value,
+            reason=reason,
+            from_statuses={EdgeStatus.ACTIVE.value, EdgeStatus.PROPOSED.value},
+        )
 
     def deprecate_edge(self, edge_id: str, reason: str | None = None) -> Edge | None:
         """Deprecate an active edge (softer than reject).
 
         Returns ``None`` if no active edge was found with that ID.
         """
-        return self._update_edge_status(edge_id, EdgeStatus.DEPRECATED.value, reason=reason)
+        return self._update_edge_status(
+            edge_id,
+            EdgeStatus.DEPRECATED.value,
+            reason=reason,
+            from_statuses={EdgeStatus.ACTIVE.value},
+        )
 
     def promote_edge(self, edge_id: str, reason: str | None = None) -> Edge | None:
         """Promote a proposed edge to active status.
@@ -578,55 +610,55 @@ class EdgeStore:
         Returns ``None`` if no proposed edge was found with that ID.
         Raises ``DuplicateEdgeError`` if promoting would create a duplicate.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        with self._edges_lock:
+            now = datetime.now(timezone.utc).isoformat()
 
-        next_offset: Any = None
-        while True:
-            points, next_offset = self.client.scroll(
-                collection_name=self._collection,
-                limit=MAX_PAGE_SIZE,
-                offset=next_offset or None,
-                with_payload=True,
-                with_vectors=False,
-            )
-            for pt in points:
-                edges = self._get_edges_from_payload(pt.payload or {})
-                for i, entry in enumerate(edges):
-                    if entry.get("edge_id") != edge_id:
-                        continue
-                    if entry.get("status") != EdgeStatus.PROPOSED.value:
-                        return Edge.from_payload_entry(
-                            entry, source_fact_id=str(pt.id),
-                        )
-
-                    # Check for duplicate active before promoting
-                    for j, other in enumerate(edges):
-                        if i == j:
+            next_offset: Any = None
+            while True:
+                points, next_offset = self.client.scroll(
+                    collection_name=self._collection,
+                    limit=MAX_PAGE_SIZE,
+                    offset=next_offset or None,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                for pt in points:
+                    edges = self._get_edges_from_payload(pt.payload or {})
+                    for i, entry in enumerate(edges):
+                        if entry.get("edge_id") != edge_id:
                             continue
-                        if (
-                            other.get("target_fact_id") == entry.get("target_fact_id")
-                            and other.get("relation") == entry.get("relation")
-                            and other.get("status") == EdgeStatus.ACTIVE.value
-                        ):
-                            raise DuplicateEdgeError(
-                                f"Cannot promote — active edge already exists: "
-                                f"{pt.id} --[{entry['relation']}]--> {entry['target_fact_id']}"
-                            )
+                        if entry.get("status") != EdgeStatus.PROPOSED.value:
+                            # Not a proposed edge — contract says return None.
+                            return None
 
-                    edges[i]["status"] = EdgeStatus.ACTIVE.value
-                    edges[i]["updated_at"] = now
-                    if reason:
-                        edges[i]["reason"] = reason
-                    self._write_edges_back(str(pt.id), edges)
+                        # Check for duplicate active before promoting
+                        for j, other in enumerate(edges):
+                            if i == j:
+                                continue
+                            if (
+                                other.get("target_fact_id") == entry.get("target_fact_id")
+                                and other.get("relation") == entry.get("relation")
+                                and other.get("status") == EdgeStatus.ACTIVE.value
+                            ):
+                                raise DuplicateEdgeError(
+                                    f"Cannot promote — active edge already exists: "
+                                    f"{pt.id} --[{entry['relation']}]--> {entry['target_fact_id']}"
+                                )
 
-                    entry["source_fact_id"] = str(pt.id)
-                    entry["status"] = EdgeStatus.ACTIVE.value
-                    _logger.info("Edge promoted to active: %s", edge_id)
-                    return Edge.from_dict(entry)
+                        edges[i]["status"] = EdgeStatus.ACTIVE.value
+                        edges[i]["updated_at"] = now
+                        if reason:
+                            edges[i]["reason"] = reason
+                        self._write_edges_back(str(pt.id), edges)
 
-            if next_offset is None:
-                break
-        return None
+                        entry["source_fact_id"] = str(pt.id)
+                        entry["status"] = EdgeStatus.ACTIVE.value
+                        _logger.info("Edge promoted to active: %s", edge_id)
+                        return Edge.from_dict(entry)
+
+                if next_offset is None:
+                    break
+            return None
 
     # ── Count / Stats ───────────────────────────────────────────────────────
 

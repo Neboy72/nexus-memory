@@ -165,11 +165,14 @@ class FactVersion:
         The content/content_hash are FROZEN from the pending version.
         You cannot change content during promote — content_hash must match.
         """
-        assert pending_version.status == FactStatus.PENDING.value, \
-            f"Can only promote PENDING versions, got {pending_version.status}"
-        assert pending_version.content_hash == hashlib.sha256(
+        if pending_version.status != FactStatus.PENDING.value:
+            raise RuntimeError(
+                f"Can only promote PENDING versions, got {pending_version.status}"
+            )
+        if pending_version.content_hash != hashlib.sha256(
             json.dumps(pending_version.content, sort_keys=True, default=str).encode()
-        ).hexdigest(), "Content hash mismatch — payload drifted since staging"
+        ).hexdigest():
+            raise RuntimeError("Content hash mismatch — payload drifted since staging")
 
         now = datetime.now(timezone.utc).isoformat()
         return cls(
@@ -203,9 +206,12 @@ class FactVersion:
         is NOT modified — it remains in its current state as historical
         evidence.
         """
-        assert previous_version.status in (
+        if previous_version.status not in (
             FactStatus.CANONICAL.value, FactStatus.PENDING.value
-        ), f"Can only deprecate CANONICAL or PENDING, got {previous_version.status}"
+        ):
+            raise RuntimeError(
+                f"Can only deprecate CANONICAL or PENDING, got {previous_version.status}"
+            )
 
         now = datetime.now(timezone.utc).isoformat()
         return cls(
@@ -351,15 +357,22 @@ class CanonicalView:
         """Register a version in the canonical view.
 
         Only CANONICAL versions are stored. PENDING/DEPRECATED/ROLLED_BACK
-        are tracked in the chain but removed from canonical lookup.
+        are tracked in the supersedes chain. Only HISTORY versions
+        (deprecated/rolled_back) that supersede the live canonical evict it;
+        a PENDING version leaves the canonical entry untouched.
         """
         fid = version.fact_id
         if version.is_queryable():
             self._canonical[fid] = version
-        elif fid in self._canonical and self._canonical[fid].version_id == version.supersedes:
-            # If this version deprecates or rolls back the current canonical,
-            # remove it from the canonical set. The caller must promote a
-            # new canonical separately.
+        elif (
+            version.is_history()
+            and fid in self._canonical
+            and self._canonical[fid].version_id == version.supersedes
+        ):
+            # If this HISTORY version (deprecated/rolled_back) supersedes the
+            # current canonical, remove it from the canonical set. A PENDING
+            # version must NOT evict the live canonical — it only supersedes
+            # once promoted. The caller promotes a new canonical separately.
             del self._canonical[fid]
 
         # Track supersedes chain
