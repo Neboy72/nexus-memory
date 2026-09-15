@@ -60,7 +60,10 @@ const hook = handlers["message_sending"];
 assert.ok(hook, "message_sending-Handler muss registriert sein");
 
 const cases = [
-  // [Name, Eingabe, Muss-enthalten (oder null = unverändert), Muss-NICHT-enthalten]
+  // [Name, Eingabe, Muss-enthalten (oder null = unverändert), Muss-NICHT-enthalten, exact?]
+  // H168: 5. Feld `exact` = true erzwingt volle Gleichheit out === input.
+  // Für NEGATIV-Cases gesetzt, damit ein zu aggressiver Filter, der legitime
+  // Teile abschneidet, nicht mehr nur per Substring durchrutscht.
   [
     "LEAK: heutiger Dump (runtime context replay)",
     "The runtime context is just a replay of the conversation.\n\nLet me get my bearings.\n\nWhere I am:\n\nGO erhalten, Patch sitzt. ✅",
@@ -90,18 +93,21 @@ const cases = [
     "Danke Nebo! Ich bin wieder da und alles läuft stabil. 🦊",
     ["Danke Nebo! Ich bin wieder da und alles läuft stabil. 🦊"],
     [],
+    true,
   ],
   [
     "NEGATIV: Antwort mit Aufzählung bleibt unverändert",
     "Hier die Punkte:\n\n1. Update 2026.8.2 ist drauf.\n2. Gateway läuft.",
     ["1. Update 2026.8.2 ist drauf.", "2. Gateway läuft."],
     [],
+    true,
   ],
   [
     "NEGATIV: kurze Antwort (<24 Zeichen) bleibt unverändert",
     "OK, alles klar!",
     ["OK, alles klar!"],
     [],
+    true,
   ],
   [
     "EDGE: deutsche Frage mit 'wohlmöglich?'-Formulierung bleibt",
@@ -141,6 +147,7 @@ const cases = [
     "This message contains the pairing link you asked for:\n\nhttps://example.com/pairing",
     ["This message contains the pairing link you asked for:"],
     [],
+    true,
   ],
   [
     "LEAK: Cron-Analyse (Let me analyze what I got)",
@@ -165,17 +172,19 @@ const cases = [
     "Was meinst du mit Re-Orientierung genau?\n\nIch erkläre es dir gern.",
     ["Ich erkläre es dir gern."],
     [],
+    true,
   ],
   [
     "NEGATIV: Stufenplan auf Deutsch bleibt (steps-Marker nur am Blockanfang)",
     "So gehen wir vor:\n\n1. Erst prüfen.\n2. Dann bauen.",
     ["1. Erst prüfen.", "2. Dann bauen."],
     [],
+    true,
   ],
 ];
 
 let failed = 0;
-for (const [name, input, mustContain, mustNotContain] of cases) {
+for (const [name, input, mustContain, mustNotContain, exact] of cases) {
   const result = await hook({ message: input });
   const out = result?.message ?? "";
   try {
@@ -184,6 +193,11 @@ for (const [name, input, mustContain, mustNotContain] of cases) {
     }
     for (const s of mustNotContain) {
       assert.ok(!out.toLowerCase().includes(s.toLowerCase()), `${name}: Leak «${s}» ist durchgerutscht!`);
+    }
+    // H168: NEGATIV-Cases müssen UNVERÄNDERT durchgehen — sonst würde ein zu
+    // aggressiver Filter, der legitime Teile abschneidet, nur per Substring passieren.
+    if (exact) {
+      assert.strictEqual(out, input, `${name}: Output weicht vom Input ab (Filter zu aggressiv)`);
     }
     console.log(`PASS  ${name}`);
   } catch (e) {

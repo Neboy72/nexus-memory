@@ -28,6 +28,20 @@ def filter_new_edges(
         Only the candidates that do NOT already have an edge (any status)
         between the same source-target-relation triple.
     """
+    # H196: batch-preload existing edges per UNIQUE source instead of one
+    # scroll roundtrip per candidate (store.has_any_edge was N requests).
+    # list_edges is used read-only; the has_any_edge semantics (any status,
+    # directed source→target, same relation) are reproduced locally from the
+    # cached edges. M unique sources ≤ N candidates → M requests.
+    edges_by_source: dict[str, list] = {}
+
+    def _edges_for(source: str) -> list:
+        cached = edges_by_source.get(source)
+        if cached is None:
+            cached = store.list_edges(fact_id=source, status=None)
+            edges_by_source[source] = cached
+        return cached
+
     new = []
     skipped = 0
     for c in candidates:
@@ -38,7 +52,15 @@ def filter_new_edges(
         if not source or not target or not relation:
             continue
 
-        if store.has_any_edge(source, target, relation):
+        # list_edges is bidirectional → also require source_fact_id so only
+        # edges that really originate at `source` count (matches has_any_edge).
+        exists = any(
+            e.source_fact_id == source
+            and e.target_fact_id == target
+            and e.relation == relation
+            for e in _edges_for(source)
+        )
+        if exists:
             skipped += 1
             _logger.debug(
                 "Dedup skipped: %s --[%s]--> %s (already exists)",
@@ -54,11 +76,16 @@ def filter_new_edges(
 
 
 def count_existing(store: EdgeStore, source: str, target: str) -> int:
-    """Count how many edges (any status) exist between two facts.
+    """Count how many edges (any status) go FROM ``source`` TO ``target``.
 
     v2.2.0: Uses EdgeStore.list_edges() instead of raw SQL.
+    H197: ``list_edges(fact_id=...)`` is BIDIRECTIONAL (it also returns edges
+    where ``source`` is the target), so we additionally filter on
+    ``source_fact_id`` — only edges that really originate at ``source`` are
+    counted, never mirrored/incoming ones.
     """
     edges = store.list_edges(fact_id=source, status=None)
     return sum(
-        1 for e in edges if e.target_fact_id == target
+        1 for e in edges
+        if e.source_fact_id == source and e.target_fact_id == target
     )

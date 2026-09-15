@@ -40,6 +40,15 @@ VALID_STATUSES = {STATUS_ACTIVE, STATUS_CONTESTED, STATUS_RETRACTED, STATUS_SUPE
 # from floating-point drift. Used by both recompute_trust() and recompute_all().
 TRUST_EPSILON = 0.01
 
+# H194: fields a user may set through user_override(). Internal bookkeeping
+# fields (belief_id, evidences, provenance_trail, explicitly_set, ...) are
+# deliberately NOT writable this way — mirrors the allow-list that
+# apply_delta() already enforces. "trust" is what existing callers use.
+OVERRIDE_ALLOWED_FIELDS = {
+    "trust", "status", "fact", "content", "source", "category",
+    "confidence", "rationale", "valid_from", "valid_until",
+}
+
 
 # --- Collection Management ---
 
@@ -204,6 +213,9 @@ def user_override(belief_id: str, field: str, value: Any) -> dict:
     if not belief:
         return {"error": True, "message": "Belief not found"}
 
+    if field not in OVERRIDE_ALLOWED_FIELDS:
+        return {"error": True, "message": f"Field not allowed: {field}"}
+
     payload = belief["payload"]
     old_value = payload.get(field)
     payload[field] = value
@@ -298,6 +310,7 @@ def recompute_all() -> dict:
     stats = {"total": 0, "changed": 0, "skipped": 0, "overrides": 0, "errors": 0}
     limit = 100
     page_offset = None
+    changed_ids: list[str] = []  # for the single trust_changed event (H193)
 
     while True:
         scroll_params = {"limit": limit, "with_payload": True}
@@ -364,10 +377,32 @@ def recompute_all() -> dict:
             if not is_success(r2.status_code):
                 log.error(f"❌ Payload-update failed for {upd['id']}: {r2.status_code}")
                 stats["errors"] += 1
+            else:
+                changed_ids.append(upd["id"])
 
         page_offset = result.get("next_page_offset")
         if page_offset is None:
             break
+
+    # H193: bulk trust writes previously left no event trace (only the
+    # single-path helpers emit events). Emit ONE event per scan to avoid a
+    # flood. create_event() requires a belief_id, so the first changed belief
+    # is used and the rest are documented in delta.
+    if changed_ids:
+        try:
+            create_event(
+                belief_id=changed_ids[0],
+                event_type="trust_changed",
+                delta={
+                    "batch": stats["total"],
+                    "changed": len(changed_ids),
+                    "ids": changed_ids[:10],
+                    "reason": "bulk_recompute",
+                },
+            )
+        except Exception as e:
+            # Logging failure must NOT roll back successful trust writes.
+            log.warning(f"trust_changed bulk event failed: {e}")
 
     log.info(f"📊 Recompute scan done: {stats}")
     return stats

@@ -595,7 +595,14 @@ class TestRecomputeAll:
             if str(c.args[0]).endswith("/points/payload")
         ]
         assert len(payload_calls) == 2
-        assert mock_put.call_count == 0
+        # H193: recompute_all now also emits ONE trust_recompute event
+        # (PUT to nexus_events). Scope the invariant to the beliefs collection:
+        # the trust merge must never PUT /points on nexus_beliefs.
+        belief_puts = [
+            c for c in mock_put.call_args_list
+            if "nexus_beliefs" in str(c.args[0])
+        ]
+        assert belief_puts == [], "trust merge must never PUT /points on beliefs"
 
     @patch("nexus.apply.requests.post")
     def test_scroll_failure_increments_errors(self, mock_post):
@@ -676,7 +683,13 @@ class TestRecomputeAll:
         # Only the trust field is sent — set_payload merges it, so fact/
         # status/evidences/explicitly_set survive.
         assert body == {"payload": {"trust": 0.9}, "points": ["x"]}
-        mock_put.assert_not_called()
+        # H193: the trust write itself never goes through PUT /points on the
+        # beliefs collection (a PUT to nexus_events for the batch event is fine).
+        belief_puts = [
+            c for c in mock_put.call_args_list
+            if "nexus_beliefs" in str(c.args[0])
+        ]
+        assert belief_puts == [], "trust merge must never PUT /points on beliefs"
 
 
 # ---------------------------------------------------------------------------

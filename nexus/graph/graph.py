@@ -56,6 +56,16 @@ class SkillGraph:
     def store(self) -> EdgeStore:
         return self._store
 
+    @property
+    def graph(self) -> nx.DiGraph:
+        """Read-only access to the internal NetworkX cache (for analytics).
+
+        Consumers must treat this as read-only: every mutation must go through
+        ``add_edge``/``reject_edge``/``deprecate_edge`` so the Qdrant payload
+        store and this cache stay in sync.
+        """
+        return self._graph
+
     # ── Delegated store queries ─────────────────────────────────────────────
 
     def get_edge(self, edge_id: str) -> Edge | None:

@@ -59,26 +59,33 @@ def isolation_score(sg: SkillGraph, fact_id: str) -> dict:
     """Compute how isolated a fact is in the knowledge graph.
 
     Returns:
-        ``{"fact_id", "degree", "is_isolated", "neighbor_count"}``.
+        ``{"fact_id", "degree", "in_degree", "out_degree", "is_isolated",
+        "neighbor_count"}`` — plus ``"error"`` when the fact is not in the
+        graph (degree/in_degree/out_degree/neighbor_count are then all 0).
     """
     graph = _graph(sg)
     if not graph.has_node(fact_id):
         return {
             "fact_id": fact_id,
             "degree": 0,
+            "in_degree": 0,
+            "out_degree": 0,
             "is_isolated": True,
             "neighbor_count": 0,
             "error": "Fact not in graph (no edges yet)",
         }
 
     total_deg = graph.degree(fact_id)
+    # neighbor_count = DISTINCT neighbours, not total degree: reciprocal edges
+    # and self-loops would otherwise be counted twice (H175). `degree` stays raw.
+    neighbors = set(graph.predecessors(fact_id)) | set(graph.successors(fact_id))
     return {
         "fact_id": fact_id,
         "degree": total_deg,
         "in_degree": graph.in_degree(fact_id),
         "out_degree": graph.out_degree(fact_id),
         "is_isolated": total_deg == 0,
-        "neighbor_count": total_deg,
+        "neighbor_count": len(neighbors),
     }
 
 
