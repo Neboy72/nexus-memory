@@ -230,7 +230,15 @@ def _check_pi() -> dict:
 
 
 def _check_cline() -> dict:
-    """Detect Cline (#6 OpenRouter). VS Code extension."""
+    """Detect Cline (#6 OpenRouter). VS Code extension.
+
+    Real Cline extension ids on disk are ``saoudrizwan.claude-dev-<version>``.
+    Roo Code ships ``rooveterinaryinc.roo-cline-<version>`` — a DIFFERENT
+    extension whose folder name merely contains "cline". Matching a bare
+    "cline" substring therefore mis-flagged Roo Code as Cline; only the real
+    publisher id or a folder literally starting with "cline" counts, and
+    roo-cline folders are explicitly excluded.
+    """
     info = {"id": "cline", "name": "Cline", "icon": "🤖", "plugin_available": False, "mcp_available": True}
 
     # VS Code extension directory
@@ -241,7 +249,10 @@ def _check_cline() -> dict:
     cline_found = False
     if vscode_ext.exists():
         for item in vscode_ext.iterdir():
-            if "cline" in item.name.lower():
+            name = item.name.lower()
+            if "roo-cline" in name:
+                continue  # Roo Code, not Cline
+            if "saoudrizwan.claude-dev" in name or name.startswith("cline"):
                 cline_found = True
                 break
     info["detected"] = cline_found
@@ -263,7 +274,12 @@ def _check_openhands() -> dict:
 
 
 def _check_roo_code() -> dict:
-    """Detect Roo Code (#9 OpenRouter). VS Code extension."""
+    """Detect Roo Code (#9 OpenRouter). VS Code extension.
+
+    Real Roo Code extension ids on disk are
+    ``rooveterinaryinc.roo-cline-<version>`` — note the name has no "code"
+    substring, so the old ``"roo" and "code"`` predicate never matched it.
+    """
     info = {"id": "roo-code", "name": "Roo Code", "icon": "🦘", "plugin_available": False, "mcp_available": True}
 
     vscode_ext = Path.home() / ".vscode" / "extensions"
@@ -272,7 +288,8 @@ def _check_roo_code() -> dict:
     roo_found = False
     if vscode_ext.exists():
         for item in vscode_ext.iterdir():
-            if "roo" in item.name.lower() and "code" in item.name.lower():
+            name = item.name.lower()
+            if "roo-cline" in name or "rooveterinaryinc" in name:
                 roo_found = True
                 break
     info["detected"] = roo_found

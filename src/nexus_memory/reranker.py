@@ -149,6 +149,16 @@ except ImportError:
     _requests = None
 
 
+def _safe_score(v: Any) -> float:
+    """Coerce a reranker score to float, defaulting to 0.0 on bad input.
+
+    The API may return ``null`` (→ None) or a string; comparing/sorting the
+    raw value raised TypeError. bool is rejected too (it is an int subclass
+    and never a real relevance score).
+    """
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+
+
 def _rerank_voyage(
     query: str, results: List[Dict[str, Any]], voyage_api_key: str
 ) -> List[Dict[str, Any]]:
@@ -175,16 +185,28 @@ def _rerank_voyage(
         )
         raise RuntimeError(f"voyage rerank HTTP {resp.status_code}")
     ranking = resp.json().get("data", [])
+    if not isinstance(ranking, list):
+        ranking = []
+    # Drop malformed entries before sorting: a missing/non-int index would
+    # default to document 0, and a null/string relevance_score raised
+    # TypeError inside sorted(). Only genuinely indexable entries survive.
+    ranking = [
+        r for r in ranking
+        if isinstance(r, dict)
+        and isinstance(r.get("index"), int)
+        and not isinstance(r.get("index"), bool)
+        and 0 <= r["index"] < len(results)
+    ]
     ranked: List[Dict[str, Any]] = []
     seen_idx = set()
     for item in sorted(
-        ranking, key=lambda x: x.get("relevance_score", 0), reverse=True
+        ranking, key=lambda x: _safe_score(x.get("relevance_score")), reverse=True
     ):
-        idx = item.get("index", 0)
-        if 0 <= idx < len(results) and idx not in seen_idx:
+        idx = item["index"]
+        if idx not in seen_idx:
             seen_idx.add(idx)
             r = dict(results[idx])
-            r["_rerank_score"] = item.get("relevance_score", 0.0)
+            r["_rerank_score"] = _safe_score(item.get("relevance_score"))
             ranked.append(r)
     return ranked
 
@@ -200,6 +222,22 @@ def _rerank_local(
         return []
     pairs = [(query, r["text"][:MAX_DOC_CHARS]) for r in results]
     scores = ce.predict(pairs)
+    # A cross-encoder that returns fewer scores than pairs would raise
+    # IndexError in the sort key. Fail open to the caller's original order.
+    if len(scores) != len(pairs):
+        logger.warning(
+            "cross-encoder returned %d scores for %d pairs - "
+            "keeping original order",
+            len(scores), len(pairs),
+        )
+        return []
+
+    def _safe(i: int) -> float:
+        try:
+            return float(scores[i])
+        except (TypeError, ValueError, IndexError):
+            return -1.0
+
     indexed = list(enumerate(results))
-    indexed.sort(key=lambda x: float(scores[x[0]]), reverse=True)
+    indexed.sort(key=lambda x: _safe(x[0]), reverse=True)
     return [r for _, r in indexed]

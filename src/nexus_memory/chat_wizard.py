@@ -299,10 +299,15 @@ def apply_choice(provider_id: str, api_key: str = None) -> dict:
             except Exception:
                 pass
 
-    # Save config
+    # Save config. A corrupt config.json makes _save_config() refuse to
+    # overwrite it; surface that as a JSON error instead of a traceback so
+    # chat callers always receive a parseable response.
     config = _load_config()
     config["embedding_provider"] = provider_id
-    _save_config(config)
+    try:
+        _save_config(config)
+    except ValueError as ve:
+        return {"error": str(ve)}
 
     return {
         "step": "embedding_applied",
@@ -338,7 +343,10 @@ def save_trust_level(level_id: str) -> dict:
 
     config = _load_config()
     config["trust_level"] = level_id
-    _save_config(config)
+    try:
+        _save_config(config)
+    except ValueError as ve:
+        return {"error": str(ve)}
 
     level = next(l for l in TRUST_LEVELS if l["id"] == level_id)
     return {

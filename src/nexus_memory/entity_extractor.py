@@ -264,37 +264,76 @@ def _llm_extract_entities(
 
         data = json.loads(raw)
 
+        # The model can return any JSON shape (a list, a string, null, ...).
+        # Only a dict has the "entities"/"relationships" keys — anything else
+        # must be treated as an empty extraction, not crash on .get().
+        if not isinstance(data, dict):
+            logger.warning(
+                "EntityExtractor: LLM returned %s, not a JSON object - ignoring",
+                type(data).__name__,
+            )
+            return ExtractionResult([], [])
+
         entities = []
-        for e in data.get("entities", []):
+        raw_entities = data.get("entities")
+        if not isinstance(raw_entities, list):
+            raw_entities = []
+        for e in raw_entities:
             if not isinstance(e, dict):
                 continue
-            name = (e.get("name") or "").strip()
+            name_raw = e.get("name")
+            name = name_raw.strip() if isinstance(name_raw, str) else ""
             if not name:
                 continue
+            # Untrusted field types: fall back to safe defaults instead of
+            # letting a non-str type / non-dict attributes / out-of-range
+            # confidence propagate into Entity (whose own clamping would
+            # raise TypeError on a string).
+            entity_type = e.get("type", "concept")
+            if not isinstance(entity_type, str) or not entity_type.strip():
+                entity_type = "concept"
+            attrs = e.get("attributes", {})
+            if not isinstance(attrs, dict):
+                attrs = {}
+            conf = e.get("confidence", 0.8)
+            if not isinstance(conf, (int, float)) or isinstance(conf, bool):
+                conf = 0.8
+            conf = max(0.0, min(1.0, float(conf)))
             entities.append(Entity(
                 name=name[:200],
-                entity_type=e.get("type", "concept"),
-                attributes=e.get("attributes", {}),
-                confidence=e.get("confidence", 0.8),
+                entity_type=entity_type,
+                attributes=attrs,
+                confidence=conf,
             ))
 
         relationships = []
         entity_names = {e.name.lower() for e in entities}
-        for r in data.get("relationships", []):
+        raw_relationships = data.get("relationships")
+        if not isinstance(raw_relationships, list):
+            raw_relationships = []
+        for r in raw_relationships:
             if not isinstance(r, dict):
                 continue
-            source = (r.get("source") or "").strip()
-            target = (r.get("target") or "").strip()
+            source_raw = r.get("source")
+            target_raw = r.get("target")
+            if not isinstance(source_raw, str) or not isinstance(target_raw, str):
+                continue
+            source = source_raw.strip()
+            target = target_raw.strip()
             if not source or not target:
                 continue
             # Only keep relationships between extracted entities
             if source.lower() not in entity_names or target.lower() not in entity_names:
                 continue
+            conf = r.get("confidence", 0.7)
+            if not isinstance(conf, (int, float)) or isinstance(conf, bool):
+                conf = 0.7
+            conf = max(0.0, min(1.0, float(conf)))
             relationships.append(Relationship(
                 source=source[:200],
                 target=target[:200],
                 relation=r.get("relation", "connected_to"),
-                confidence=r.get("confidence", 0.7),
+                confidence=conf,
             ))
 
         logger.info(

@@ -269,6 +269,7 @@ class GuardrailEngine:
             # until the end so every rule page is loaded.
             offset = None
             pages = 0
+            exceeded = False
             while True:
                 results = self.client.scroll(
                     collection_name=self.collection,
@@ -345,13 +346,25 @@ class GuardrailEngine:
                     logger.warning(
                         "Guardrail: rule scroll exceeded 100 pages, stopping"
                     )
+                    exceeded = True
                     break
 
-            # Replace the cache only after a fully successful load
-            self._cache = rules
-            self._cache_time = now
-            self._last_load_state = "fresh"
-            logger.debug(f"Guardrail: loaded {len(rules)} protected rules from Qdrant")
+            if exceeded:
+                # Only a partial rule set was loaded. Mark the load degraded
+                # (check_action fails closed on unknown targets) and leave the
+                # previous cache UNTOUCHED — never replace a complete rule set
+                # with a truncated one.
+                self._last_load_state = "degraded"
+                logger.warning(
+                    "Guardrail: partial rule set (%d rules, >100 pages) — "
+                    "not cached, checks fail closed", len(rules),
+                )
+            else:
+                # Replace the cache only after a fully successful load
+                self._cache = rules
+                self._cache_time = now
+                self._last_load_state = "fresh"
+                logger.debug(f"Guardrail: loaded {len(rules)} protected rules from Qdrant")
         except Exception as e:
             logger.warning(f"Guardrail: failed to load rules from Qdrant: {e}")
             self._last_load_state = "degraded"
@@ -394,12 +407,26 @@ class GuardrailEngine:
             if path:
                 targets.append(path)
 
+        # Unresolved shell/Windows variable targets ($BACKUP_DIR, ${X}, %X%)
+        # cannot be matched against a concrete protected path — they would sail
+        # through the rule check as a "plain" unprotected target (bypass).
+        # Block instead of pretending we verified them.
+        var_hits = [t for t in targets if _VARIABLE_PATTERN.search(t)]
+        if var_hits:
+            return GuardrailResult(
+                verdict=GuardrailVerdict.BLOCK,
+                reason=(
+                    f"Unresolved variable target(s) {var_hits} - cannot verify "
+                    "protection; use concrete paths"
+                ),
+            )
+
         if not targets:
             # Destructive action with no identifiable target: block when rule
             # loading is incomplete (unknown targets must not pass silently),
             # allow with a caution reason when rules were fully loaded.
             self._load_protected_rules()
-            if self._last_load_state != "fresh":
+            if self._last_load_state not in ("fresh", "cached"):
                 return GuardrailResult(
                     verdict=GuardrailVerdict.BLOCK,
                     reason=(

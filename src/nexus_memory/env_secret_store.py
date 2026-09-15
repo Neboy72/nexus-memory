@@ -62,6 +62,23 @@ def serialize_env_value(value: str) -> str:
     return f"'{escaped}'"
 
 
+def _unquote_env_value(v: str) -> str:
+    """Invert :func:`serialize_env_value` (the exact complement).
+
+    Handles both single- and double-quoted values. For single quotes the
+    escape sequences are inverted (``\\'`` -> ``'``, ``\\\\`` -> ``\\``) so a
+    value round-trips losslessly; the old ``.strip("'").strip('"')`` code
+    stripped quoting WITHOUT inverting escapes, corrupting any value that
+    contained a quote or backslash.
+    """
+    v = v.strip()
+    if len(v) >= 2 and v.startswith("'") and v.endswith("'"):
+        return v[1:-1].replace("\\'", "'").replace("\\\\", "\\")
+    if len(v) >= 2 and v.startswith('"') and v.endswith('"'):
+        return v[1:-1]
+    return v
+
+
 def _parse_env_text(text: str) -> Dict[str, str]:
     """Parse simple KEY=value lines (used for read-modify-write)."""
     existing: Dict[str, str] = {}
@@ -69,7 +86,7 @@ def _parse_env_text(text: str) -> Dict[str, str]:
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, _, v = line.partition("=")
-            existing[k.strip()] = v.strip().strip('"').strip("'")
+            existing[k.strip()] = _unquote_env_value(v)
     return existing
 
 
@@ -153,9 +170,7 @@ def read_env_key(env_path: Path, key_env: str) -> str:
         k, _, v = line.partition("=")
         if k.strip() != key_env:
             continue
-        v = v.strip()
-        # Invert serialize_env_value(): single-quoted, backslash-escaped.
-        if len(v) >= 2 and v.startswith("'") and v.endswith("'"):
-            v = v[1:-1].replace("\\'", "'").replace("\\\\", "\\")
-        return v
+        # Invert serialize_env_value() for BOTH single- and double-quoted
+        # values (previously only single quotes were handled).
+        return _unquote_env_value(v)
     return ""
