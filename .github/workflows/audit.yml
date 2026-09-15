@@ -56,9 +56,15 @@ jobs:
       - name: Run Tests
         run: |
           echo "=== Running tests ==="
-          # No pipefail: capture pytest's exit code explicitly so a failing
-          # suite can never be masked by `head` exiting 0.
-          python -m pytest tests/ -v --tb=short > /tmp/pytest-out.txt 2>&1
+          # Capture pytest's exit code explicitly so a failing suite can never
+          # be masked by `head`/`tail` exiting 0. faulthandler guarantees a
+          # traceback in the output file even on a hard interpreter crash
+          # (observed 2026-09-15: exit 1 with a completely empty output file
+          # on the hosted runner while Mac + Ubuntu replicas were green).
+          python -X faulthandler -m pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
           EXIT=$?
-          tail -80 /tmp/pytest-out.txt
+          if [ ! -s /tmp/pytest-out.txt ]; then
+            echo "⚠️ pytest produced NO output (exit=$EXIT) — process likely killed (OOM?) before any output."
+          fi
+          tail -120 /tmp/pytest-out.txt
           exit $EXIT
