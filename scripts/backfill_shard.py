@@ -8,6 +8,12 @@ backlog ONCE and splits it into N disjoint point-ID lists. Each worker
 processes ONLY its own IDs (retrieve by ID → consolidate → mark). No scroll
 race, no double work, resume-safe: processed IDs are skipped via
 consolidated_by check before work.
+
+Conflict-resolution caveat: only the SOURCE point IDs are disjoint across
+shards. _resolve_conflicts/_store_fact/_supersede_old all operate on the
+shared fact collection with no cross-shard lock, so two shards CAN
+concurrently distill similar content and produce duplicate/superseding
+facts. Run a dedup pass (SICA / health audit) after a sharded backfill.
 """
 import argparse
 import os
@@ -42,16 +48,6 @@ def main() -> int:
         FieldCondition(key="category", match=MatchValue(value="session")),
         IsEmptyCondition(is_empty=PayloadField(key="consolidated_by")),
     ])
-    my_points, offset = [], None
-    while True:
-        batch, offset = client.scroll(coll, scroll_filter=flt, limit=64,
-                                      offset=offset, with_payload=False, with_vectors=False)
-        for p in batch:
-            if hash(str(p.id)) % args.num_shards == args.shard:
-                my_points.append(str(p.id))
-        if offset is None:
-            break
-
     # NOTE: hash() is salted per-process on Py3 — use a stable hash instead:
     import zlib
     my_points = []
@@ -63,7 +59,8 @@ def main() -> int:
         for p in batch:
             pid = str(p.id)
             if zlib.crc32(pid.encode()) % args.num_shards == args.shard:
-                my_points.append((pid, (p.payload or {}).get("content", "")))
+                src_date = (p.payload or {}).get("created_at") or ""
+                my_points.append((pid, (p.payload or {}).get("content", ""), src_date[:10] or None))
         if offset is None:
             break
 
@@ -72,25 +69,16 @@ def main() -> int:
 
     facts = superseded = dups = failed = 0
     t0 = time.time()
-    date = time.strftime("%Y-%m-%d")
-    for i, (pid, content) in enumerate(my_points, 1):
+    for i, (pid, content, src_date) in enumerate(my_points, 1):
         try:
-            conv = content[:cons._MAX_CONV_CHARS]
-            fl = cons._parse_facts(c._llm(cons.DISTILL_PROMPT.format(date=date, conv=conv)))
-            created_here = 0
-            for fact in fl:
-                decision, sup_ids = c._resolve_conflicts(fact)
-                if decision == "duplicate":
-                    dups += 1
-                    continue
-                new_id, _fact_scope = c._store_fact(fact, pid)
-                for old_id in sup_ids:
-                    c._supersede_old(old_id, new_id)
-                superseded += len(sup_ids)
-                created_here += 1
-                facts += 1
-            c._mark_consolidated(pid, created_here)
+            stats = c.consolidate_point(pid, content, source_date=src_date)
+            dups += stats["duplicates"]
+            superseded += stats["superseded"]
+            facts += stats["created"]
+            created_here = stats["created"]
         except Exception as exc:
+            # Nr 283: pipeline errors (LLM/parse/store) still fail the whole
+            # point — same as the daemon; supersede failures are handled inside.
             failed += 1
             print(f"[shard {args.shard}] WARN point {pid}: {exc}", flush=True)
         if i % 5 == 0 or i == total:

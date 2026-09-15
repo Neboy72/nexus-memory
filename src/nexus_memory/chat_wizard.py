@@ -162,7 +162,10 @@ def _save_config(config: dict) -> None:
 
 def _save_api_key(key_env: str, api_key: str) -> None:
     """Save an API key to the .env file (validated, escaped, 0600, atomic)."""
-    from nexus_memory.env_secret_store import write_env_key
+    try:
+        from nexus_memory.env_secret_store import write_env_key
+    except ImportError:  # standalone script execution: package not importable
+        from env_secret_store import write_env_key  # type: ignore[no-redef]
 
     env_path = _get_env_path()
     write_env_key(env_path, key_env, api_key)
@@ -368,7 +371,7 @@ def get_status() -> dict:
     qdrant_running = False
     try:
         import urllib.request
-        req = urllib.request.Request("http://localhost:6333/health", headers={"Content-Type": "application/json"})
+        req = urllib.request.Request("http://localhost:6333/healthz", headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=2) as resp:
             qdrant_running = resp.status == 200
     except Exception:
@@ -379,6 +382,16 @@ def get_status() -> dict:
     for p in PROVIDERS:
         if p["key_env"]:
             key = os.environ.get(p["key_env"], "")
+            if not key:
+                # Nr 287: same .env backfill as apply_choice() — a key written
+                # to .env by a previous run must be detected in a fresh process
+                try:
+                    from nexus_memory.env_secret_store import read_env_key
+                    stored = read_env_key(env_path, p["key_env"])
+                    if stored:
+                        key = stored
+                except Exception:
+                    pass
             api_keys[p["id"]] = bool(key)
 
     return {

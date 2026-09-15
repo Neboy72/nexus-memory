@@ -39,7 +39,8 @@ def qdrant_request(method: str, path: str, json_data: Optional[dict] = None) -> 
         raise RuntimeError(f"Qdrant {method} {path} failed: {resp.status_code} {resp.text}")
     data = resp.json()
     if data.get("status") == "error":
-        raise RuntimeError(f"Qdrant error: {data.get('status', {}).get('error', data)}")
+        # Nr 265: status is the string "error"; the message lives in result.error
+        raise RuntimeError(f"Qdrant error: {(data.get('result') or {}).get('error', data)}")
     return data.get("result", data)
 
 
@@ -47,29 +48,22 @@ def get_collection_info(name: str) -> dict:
     return qdrant_request("GET", f"/collections/{name}")
 
 
-def scroll_all_points(collection: str) -> list[dict]:
-    """Scroll ALL points from a collection, including vectors and payload."""
-    points = []
+def iter_scroll_batches(collection: str):
+    """Nr 267: yield scroll batches instead of materializing the whole collection."""
     offset = None
     total = 0
     while True:
-        body = {
-            "limit": SCROLL_LIMIT,
-            "with_payload": True,
-            "with_vector": True,
-        }
+        body = {"limit": SCROLL_LIMIT, "with_payload": True, "with_vector": True}
         if offset:
             body["offset"] = offset
-
         result = qdrant_request("POST", f"/collections/{collection}/points/scroll", body)
         batch = result.get("points", [])
-        points.extend(batch)
         total += len(batch)
         print(f"  Scrolled {len(batch)} points (total: {total})", file=sys.stderr)
+        yield batch
         offset = result.get("next_page_offset")
         if offset is None:
             break
-    return points
 
 
 def deduplicate(points: list[dict]) -> dict:
@@ -164,7 +158,7 @@ def upsert_points(points: list[dict], dry_run: bool = False) -> int:
         try:
             qdrant_request("PUT", f"/collections/{TARGET_COLLECTION}/points", {
                 "points": qdrant_batch,
-                "wait": False,
+                "wait": True,  # Nr 266: migration is one-shot — wait until points are actually durable
             })
             upserted += len(qdrant_batch)
             print(f"  Upserted {len(qdrant_batch)} points (batch {i//BATCH_SIZE + 1}, {upserted}/{total})", file=sys.stderr)
@@ -194,20 +188,14 @@ def main():
             print("  Skipping — empty", file=sys.stderr)
             continue
 
-        raw_points = scroll_all_points(col)
-
-        # Tag with source collection
-        for pt in raw_points:
-            if "payload" in pt:
-                pt["payload"]["_source_collection"] = col
-
-        # Deduplicate
-        deduped = deduplicate(raw_points)
-        print(f"  → {len(deduped)} unique points after dedup", file=sys.stderr)
-
-        # Merge into global dict (collision-safe, see merge_points)
-        added = merge_points(all_points, deduped)
-        print(f"  → {added} new points added to global pool", file=sys.stderr)
+        merged_here = 0
+        for batch in iter_scroll_batches(col):
+            for pt in batch:
+                if "payload" in pt:
+                    pt["payload"]["_source_collection"] = col
+            deduped = deduplicate(batch)
+            merged_here += merge_points(all_points, deduped)
+        print(f"  → {merged_here} new points merged from {col}", file=sys.stderr)
 
     total_points = len(all_points)
     print(f"\n{'='*50}", file=sys.stderr)
