@@ -20,8 +20,6 @@ import argparse
 import json
 import os
 import re
-import sys
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -370,8 +368,9 @@ def export_skill(
         **search_kw: Passed to ``search_knowledge()``.
 
     Returns:
-        Dict with keys: name, topic, facts_found, steps, pitfalls, prerequisites,
-        verification, output_path, skill_md
+        Dict with keys: name, topic, facts_found, clusters, output_path,
+        deployed. May additionally contain ``warning`` if no facts matched
+        (every exported section would be empty).
     """
     if topic is None:
         topic = name

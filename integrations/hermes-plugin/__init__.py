@@ -552,6 +552,14 @@ class NexusMemoryProvider:
         since _recall already had them). Skips points deprecated between
         recall and this bump (review fix B2). SICA uses access_count
         later as trust signal for retrieval weighting.
+
+        Best-effort by design: ``wait=False`` returns before Qdrant has
+        applied the write, and concurrent bumps for the same point race on
+        the read-modify-write of ``access_count``, so individual increments
+        can be lost. That is accepted - the counter is a soft trust signal
+        for retrieval weighting, not an exact audit trail. Making it exact
+        would require a serialised/await-ed update and is deliberately out
+        of scope here.
         """
         for pid, count, status in entries:
             try:
