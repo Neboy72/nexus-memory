@@ -208,22 +208,28 @@ class AutoDiscovery:
                 if score < MIN_DISCOVERY_THRESHOLD:
                     continue
 
-                # 3. Classify relation
+                # 3. Stable direction: source < target alphabetically.
+                #    Must be decided BEFORE classification — otherwise the
+                #    relation is classified fact→hit but stored target→source
+                #    whenever hit_id < fact_id, inverting the direction.
+                source_id, target_id = sorted([fact_id, hit_id])
+                if source_id == fact_id:
+                    source_payload, target_payload = payload, hit_payload
+                else:
+                    source_payload, target_payload = hit_payload, payload
+
                 classification = classify_relation(
-                    source_content=_extract_content(payload),
-                    target_content=_extract_content(hit_payload),
-                    source_category=_extract_category(payload),
-                    target_category=_extract_category(hit_payload),
-                    source_id=fact_id,
-                    target_id=hit_id,
+                    source_content=_extract_content(source_payload),
+                    target_content=_extract_content(target_payload),
+                    source_category=_extract_category(source_payload),
+                    target_category=_extract_category(target_payload),
+                    source_id=source_id,
+                    target_id=target_id,
                     similarity_score=score,
                 )
 
                 if classification is None:
                     continue
-
-                # Stable direction: source < target alphabetically
-                source_id, target_id = sorted([fact_id, hit_id])
 
                 all_candidates.append({
                     "source": source_id,
@@ -340,20 +346,31 @@ class AutoDiscovery:
             if hit_id == fact_id:
                 continue
 
+            # Stable direction first — see discover_all() for why the
+            # sort must happen before classification, not after.
+            source, target = sorted([fact_id, hit_id])
+            hit_content = _extract_content(hit_payload)
+            hit_category = _extract_category(hit_payload)
+            if source == fact_id:
+                src_content, src_category = content, category
+                tgt_content, tgt_category = hit_content, hit_category
+            else:
+                src_content, src_category = hit_content, hit_category
+                tgt_content, tgt_category = content, category
+
             classification = classify_relation(
-                source_content=content,
-                target_content=_extract_content(hit_payload),
-                source_category=category,
-                target_category=_extract_category(hit_payload),
-                source_id=fact_id,
-                target_id=hit_id,
+                source_content=src_content,
+                target_content=tgt_content,
+                source_category=src_category,
+                target_category=tgt_category,
+                source_id=source,
+                target_id=target,
                 similarity_score=hit["score"],
             )
 
             if classification is None:
                 continue
 
-            source, target = sorted([fact_id, hit_id])
             candidates.append({
                 "source": source,
                 "target": target,
@@ -361,7 +378,7 @@ class AutoDiscovery:
                 "confidence": classification.get("confidence", 0.0),
                 "similarity_score": hit["score"],
                 "reason": classification.get("reason", ""),
-                "target_content": _extract_content(hit_payload)[:200],
+                "target_content": tgt_content[:200],
             })
 
         return candidates

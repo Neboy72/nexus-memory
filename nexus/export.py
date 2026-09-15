@@ -19,12 +19,43 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from nexus.config import get_collection
+
+
+# ── Path safety ─────────────────────────────────────────────────────────────
+
+_SAFE_SKILL_NAME_RE = re.compile(r"[a-zA-Z0-9._-]{1,64}\Z")
+
+
+def _safe_skill_name(name: str) -> str:
+    """Validate *name* for safe use as a path component.
+
+    The skill name flows into ``os.path.join(...)`` / ``f"{name}.md"``, so
+    anything containing a separator or starting an absolute path would
+    escape the intended directory ("../..", "/etc/x", "a b").
+
+    Only ``[a-zA-Z0-9._-]`` (max 64 chars) is allowed; ``.``/``..`` are
+    rejected explicitly to block directory traversal.
+
+    Raises:
+        ValueError: if *name* is unsafe.
+    """
+    if (
+        not isinstance(name, str)
+        or name in (".", "..")
+        or not _SAFE_SKILL_NAME_RE.match(name)
+    ):
+        raise ValueError(
+            f"Invalid skill name {name!r}: only [a-zA-Z0-9._-] (max 64 chars) "
+            "are allowed — no path separators, spaces, or absolute paths."
+        )
+    return name
 
 
 # ── Search ──────────────────────────────────────────────────────────────────
@@ -337,6 +368,9 @@ def export_skill(
     """
     if topic is None:
         topic = name
+
+    # 0. Reject unsafe names before they reach any path join
+    name = _safe_skill_name(name)
 
     # 1. Search
     facts = search_knowledge(topic, limit=limit, **search_kw)

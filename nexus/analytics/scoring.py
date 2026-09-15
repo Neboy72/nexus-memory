@@ -82,13 +82,13 @@ def isolation_score(sg: SkillGraph, fact_id: str) -> dict:
     }
 
 
-def knowledge_gaps(sg: SkillGraph, isolation_threshold: float = 0.9) -> list[dict]:
+def knowledge_gaps(sg: SkillGraph, isolation_threshold: float = 0.5) -> list[dict]:
     """Find isolated or near-isolated facts.
 
     Args:
         sg: Initialised ``SkillGraph`` instance.
         isolation_threshold: ``1 / (1 + degree) >= threshold`` to be a gap.
-            Default 0.9 means degree 0 or 1 are gaps.
+            Default 0.5 flags degree 0 or 1: score(0)=1.0, score(1)=0.5.
 
     Returns:
         List of ``{"fact_id", "degree": N, "isolation_score": float}``.
