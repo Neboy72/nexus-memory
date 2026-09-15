@@ -26,7 +26,6 @@ Usage::
 from __future__ import annotations
 
 import logging
-from collections import deque
 from typing import Any, Dict, List, Optional, Set
 
 from nexus.graph.graph import SkillGraph
@@ -88,44 +87,81 @@ class GraphTraversal:
         results: List[Dict[str, Any]] = []
         visited: Set[str] = {start_fact_id}
 
-        # BFS with depth tracking
-        queue: deque = deque([(start_fact_id, 0, [])])
+        # BFS level by level. Each frontier is a list of (node, path-to-node)
+        # so the target_type payloads can be fetched in ONE batched scroll per
+        # level (H247) instead of one scroll per neighbor.
+        frontier: List[tuple] = [(start_fact_id, [])]
+        depth = 0
 
-        while queue:
-            current, depth, path = queue.popleft()
+        while frontier and depth < max_depth:
+            # (neighbor_id, relation, path, is_new)
+            candidates: List[tuple] = []
+            for current, path in frontier:
+                for neighbor in self._graph.neighbors(current, relation=relation):
+                    neighbor_id = neighbor["fact_id"]
+                    if neighbor_id in visited:
+                        continue
+                    visited.add(neighbor_id)
+                    candidates.append(
+                        (neighbor_id, neighbor["relation"], path + [neighbor_id])
+                    )
 
-            if depth >= max_depth:
-                continue
+            if not candidates:
+                break
 
-            neighbors = self._graph.neighbors(current, relation=relation)
+            if target_type:
+                # H248: strict type filtering. A missing payload (point
+                # deleted) or a point without ``entity_type`` is SKIPPED, not
+                # appended — an unknown type must not silently satisfy the
+                # type constraint ("unknown type included" is not documented).
+                payloads = self._fetch_payloads([c[0] for c in candidates])
+                for neighbor_id, rel, path in candidates:
+                    payload = payloads.get(neighbor_id)
+                    if payload and payload.get("entity_type") == target_type:
+                        results.append({
+                            "fact_id": neighbor_id,
+                            "depth": depth + 1,
+                            "relation": rel,
+                            "path": path,
+                        })
+                # Traversal continues through non-matching nodes (original
+                # "skip but continue traversing" semantics).
+            else:
+                for neighbor_id, rel, path in candidates:
+                    results.append({
+                        "fact_id": neighbor_id,
+                        "depth": depth + 1,
+                        "relation": rel,
+                        "path": path,
+                    })
 
-            for neighbor in neighbors:
-                neighbor_id = neighbor["fact_id"]
-                if neighbor_id in visited:
-                    continue
-                visited.add(neighbor_id)
-
-                step = {
-                    "fact_id": neighbor_id,
-                    "depth": depth + 1,
-                    "relation": neighbor["relation"],
-                    "path": path + [neighbor_id],
-                }
-
-                # Filter by target_type if specified
-                if target_type:
-                    point = self._graph.store._scroll_point(neighbor_id)
-                    if point:
-                        payload = point.get("payload", {})
-                        if payload.get("entity_type") != target_type:
-                            # Skip but continue traversing
-                            queue.append((neighbor_id, depth + 1, step["path"]))
-                            continue
-
-                results.append(step)
-                queue.append((neighbor_id, depth + 1, step["path"]))
+            frontier = [(c[0], c[2]) for c in candidates]
+            depth += 1
 
         return results
+
+    def _fetch_payloads(self, point_ids: List[str]) -> Dict[str, dict]:
+        """Fetch payloads for many points in one batched Qdrant scroll (H247).
+
+        Replaces the previous one-scroll-per-neighbor N+1 pattern. Uses the
+        store's public client + collection (same access path as
+        ``find_entities``). Points that no longer exist are simply absent from
+        the result; callers must treat a missing entry as "unknown".
+        """
+        from qdrant_client import models as qm
+
+        if not point_ids:
+            return {}
+        client = self._graph.store.client
+        collection = self._graph.store._collection
+        points, _ = client.scroll(
+            collection_name=collection,
+            scroll_filter=qm.Filter(must=[qm.HasIdCondition(has_id=point_ids)]),
+            limit=len(point_ids),
+            with_payload=True,
+            with_vectors=False,
+        )
+        return {str(pt.id): (pt.payload or {}) for pt in points}
 
     def find_entities(
         self,
@@ -137,6 +173,7 @@ class GraphTraversal:
         Scans Qdrant for points with category="entity".
         """
         from qdrant_client import models as qm
+        from qdrant_client.http.exceptions import UnexpectedResponse
 
         try:
             client = self._graph.store.client
@@ -180,8 +217,15 @@ class GraphTraversal:
 
             return results
 
+        except (ConnectionError, TimeoutError, UnexpectedResponse) as exc:
+            # Expected Qdrant/network failures — fail-open (empty result) is
+            # the documented contract for callers.
+            logger.warning("find_entities failed (Qdrant/network): %s", exc)
+            return []
         except Exception as exc:
-            logger.warning("find_entities failed: %s", exc)
+            # H249: unexpected (programming) errors keep their traceback so
+            # they are diagnosable instead of silently becoming "empty".
+            logger.warning("find_entities failed: %s", exc, exc_info=True)
             return []
 
     def get_subgraph(

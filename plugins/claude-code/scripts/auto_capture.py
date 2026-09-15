@@ -46,14 +46,33 @@ def _resolve_capture_scope(embedding) -> str:
         return "default"
 
 
-def _manual_scope_ok(s: str) -> bool:
-    return bool(s) and len(s) <= 40 and all(
-        ch in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in s
-    )
-
-
 def manual_scope_ok(s: str) -> bool:
-    return _manual_scope_ok(s)
+    """Public scope validator — the single source of truth (H252).
+
+    Applies the shared normalization (``_normalize_scope``: strip + lowercase)
+    and then the scope contract ``^[a-z0-9][a-z0-9-]{0,39}$``. Empty or
+    otherwise invalid input → False, so the caller falls through to centroid
+    inference / 'default'.
+
+    H252: a hand-built per-char check previously accepted a leading dash
+    ("-foo", "-" alone) and rejected uppercase — diverging from ``_SCOPE_RE``
+    and from the MCP server, so the same scope could be accepted on one path
+    and silently dropped on another.
+
+    NB: validates the normalized value directly rather than via
+    ``_normalize_scope`` — that helper maps anything invalid to ``"default"``,
+    which is itself a valid scope and would make every input pass.
+    """
+    if not isinstance(s, str):
+        return False
+    normalized = s.strip().lower()
+    if not normalized:
+        return False
+    return bool(_SCOPE_RE.match(normalized))
+
+
+# Backwards-compatible alias (older callers used the underscore name).
+_manual_scope_ok = manual_scope_ok
 
 
 def _normalize_scope(scope) -> str:
@@ -97,38 +116,60 @@ def _resolve_trust_level() -> str:
         return "public"
 
 def get_embedding(text: str) -> list:
-    """Get embedding from configured provider."""
-    if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
-        req_data = json.dumps({
-            "input": [text],
-            "model": EMBEDDING_MODEL,
-            "input_type": "document"
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.voyageai.com/v1/embeddings",
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {VOYAGE_API_KEY}"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            return data["data"][0]["embedding"]
-    elif EMBEDDING_PROVIDER == "ollama":
-        req_data = json.dumps({
-            "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
-            "input": text
-        }).encode()
-        req = urllib.request.Request(
-            "http://localhost:11434/api/embeddings",
-            data=req_data,
-            headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            return data["embedding"]
-    return None
+    """Get embedding from configured provider.
+
+    Returns None (→ nothing stored) on misconfiguration or failure. H253:
+    misconfiguration is now reported on stderr instead of silently returning
+    None, which made auto-capture quietly store nothing.
+    """
+    try:
+        if EMBEDDING_PROVIDER == "voyage":
+            if not VOYAGE_API_KEY:
+                print(
+                    "[nexus auto-capture] NEXUS_EMBEDDING_PROVIDER=voyage but "
+                    "VOYAGE_API_KEY is unset — memory not stored",
+                    file=sys.stderr,
+                )
+                return None
+            req_data = json.dumps({
+                "input": [text],
+                "model": EMBEDDING_MODEL,
+                "input_type": "document"
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.voyageai.com/v1/embeddings",
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {VOYAGE_API_KEY}"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                return data["data"][0]["embedding"]
+        elif EMBEDDING_PROVIDER == "ollama":
+            req_data = json.dumps({
+                "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+                "input": text
+            }).encode()
+            req = urllib.request.Request(
+                "http://localhost:11434/api/embeddings",
+                data=req_data,
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                return data["embedding"]
+        else:
+            print(
+                f"[nexus auto-capture] unknown NEXUS_EMBEDDING_PROVIDER="
+                f"{EMBEDDING_PROVIDER!r} — memory not stored",
+                file=sys.stderr,
+            )
+            return None
+    except Exception as exc:
+        print(f"[nexus auto-capture] embedding failed: {exc}", file=sys.stderr)
+        return None
 
 def store_memory(text: str, category: str = "session", point_id: str = None):
     """Store a memory in Qdrant."""
@@ -152,6 +193,11 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
                 "access_level": _resolve_trust_level(),
                 "created_at": now,
                 "agent": "claude-code",
+                # H257: fetch_centroids filters on lifecycle_status ==
+                # "canonical". Without this field these memories never feed the
+                # scope centroids, which breaks the self-organizing feedback
+                # loop (parity with the mcp_server.py writer).
+                "lifecycle_status": "canonical",
                 # Scope (self-organizing memory, Nebo law 07.09): explicit
                 # NEXUS_SCOPE wins; else infer from scoped centroids on a
                 # CLEAR match; else 'default'. Fail-open, zero config.
@@ -168,7 +214,10 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return True
-    except Exception:
+    except Exception as exc:
+        # H254: never drop a memory silently — report to stderr (stdout is the
+        # hook/MCP protocol channel and must stay clean).
+        print(f"[nexus auto-capture] memory not stored: {exc}", file=sys.stderr)
         return False
 
 def _iter_content_blocks(msg: dict):

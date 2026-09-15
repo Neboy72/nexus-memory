@@ -256,7 +256,25 @@ class FactVersion:
 
         Returns:
             (rolled_back_version, restored_canonical_version)
+
+        Raises:
+            ValueError: If the two versions belong to different facts. A
+                rollback may only revert a version *of the same fact* it
+                restores — otherwise the bad fact keeps no canonical entry
+                while foreign content is written under the wrong identity
+                (silent integrity break in the append-only store).
         """
+        # H231: identity guard. Without it a caller could pass a version of
+        # another fact and the restored canonical would be rebuilt from
+        # ``restore_version.fact_id`` — leaving ``bad_version`` without a
+        # canonical entry and mislabelling unrelated content.
+        if bad_version.fact_id != restore_version.fact_id:
+            raise ValueError(
+                "rollback requires both versions to belong to the same fact: "
+                f"bad_version.fact_id={bad_version.fact_id!r} != "
+                f"restore_version.fact_id={restore_version.fact_id!r}"
+            )
+
         now = datetime.now(timezone.utc).isoformat()
 
         # 1. Create rolled_back marker for bad version
@@ -318,9 +336,38 @@ class FactVersion:
 
     @classmethod
     def from_dict(cls, d: dict) -> "FactVersion":
+        """Rebuild a FactVersion from its ``to_dict`` form.
+
+        ``fact_id`` and ``version_id`` are the IDENTITY of the object: a
+        version without them cannot be addressed, superseded or restored and
+        is therefore useless. They must be present — unlike every other field,
+        which is optional and degrades to a sane default.
+
+        H232: these were the only two keys read via ``d[...]``, so a legacy or
+        partially-written payload (e.g. read back via
+        ``staging._get_current_canonical``) aborted with an opaque ``KeyError``
+        instead of a diagnosable error.
+
+        Raises:
+            ValueError: If ``fact_id`` or ``version_id`` is missing (or None),
+                naming the offending field(s). There is deliberately no
+                ``.get(...)`` fallback for identity fields.
+        """
+        fact_id = d.get("fact_id")
+        version_id = d.get("version_id")
+        missing = [
+            name
+            for name, value in (("fact_id", fact_id), ("version_id", version_id))
+            if value is None
+        ]
+        if missing:
+            raise ValueError(
+                "FactVersion.from_dict: missing required identity field(s): "
+                + ", ".join(missing)
+            )
         return cls(
-            fact_id=d["fact_id"],
-            version_id=d["version_id"],
+            fact_id=fact_id,
+            version_id=version_id,
             content=d.get("content", {}),
             content_hash=d.get("content_hash", ""),
             status=d.get("status", FactStatus.PENDING.value),
