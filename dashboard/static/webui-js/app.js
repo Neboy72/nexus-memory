@@ -113,12 +113,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   MemoryGraph.onNodeDeselect = () => hideDetail();
 
   // Reset graph view button — clears ALL filters back to All + resets zoom
-  document.getElementById('resetGraphBtn').addEventListener('click', () => {
+  const resetGraphBtn = document.getElementById('resetGraphBtn');
+  resetGraphBtn?.addEventListener('click', () => {
     state.filters = { category: 'all', access_level: 'all', drift: 'all', search: '' };
-    document.getElementById('filterCategory').value = 'all';
-    document.getElementById('filterAccess').value = 'all';
-    document.getElementById('filterDrift').value = 'all';
-    document.getElementById('searchInput').value = '';
+    const filterCategory = document.getElementById('filterCategory');
+    if (filterCategory) filterCategory.value = 'all';
+    const filterAccess = document.getElementById('filterAccess');
+    if (filterAccess) filterAccess.value = 'all';
+    const filterDrift = document.getElementById('filterDrift');
+    if (filterDrift) filterDrift.value = 'all';
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) searchInput.value = '';
     MemoryGraph.updateFilters(state.filters);
     MemoryGraph.resetZoom();
   });
@@ -311,8 +316,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.body.style.overflow = '';
   }
 
-  detailClose.addEventListener('click', hideDetail);
-  detailBackdrop.addEventListener('click', hideDetail);
+  detailClose?.addEventListener('click', hideDetail);
+  detailBackdrop?.addEventListener('click', hideDetail);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') hideDetail();
   });

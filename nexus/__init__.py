@@ -126,6 +126,9 @@ def nexus_update(
     """
     import requests as _req
 
+    # None-default would end up in the URL as literal "None" (404).
+    collection_name = get_collection(collection_name)
+
     url = f"http://{qdrant_host}:{qdrant_port}/collections/{collection_name}/points/scroll"
     # Always use the id-based filter when an id is present. The previous
     # length heuristic (> 20 chars) dropped the filter for short ids and
@@ -286,6 +289,9 @@ def nexus_remember(
     import requests as _req
     from nexus.provenance import attach_source
 
+    # None-default would end up in the URL as literal "None" (404).
+    collection_name = get_collection(collection_name)
+
     # Build payload (category wird nach Validierung korrigiert, siehe unten)
     payload: dict[str, Any] = {
         "content": content,
@@ -430,6 +436,9 @@ def nexus_consolidate(
         ImportError: If ``requests`` is not available.
     """
     import requests as _req
+
+    # None-default would end up in the URL as literal "None" (404).
+    collection_name = get_collection(collection_name)
 
     today = _today_iso()
     actions: list[dict] = []
@@ -646,6 +655,9 @@ def nexus_query_valid(
         ImportError: If ``requests`` is not available.
     """
     import requests as _req
+
+    # None-default would end up in the URL as literal "None" (404).
+    collection_name = get_collection(collection_name)
 
     target_date = at_date or _today_iso()
 

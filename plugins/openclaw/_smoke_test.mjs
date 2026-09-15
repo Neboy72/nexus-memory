@@ -31,8 +31,17 @@ try {
 } catch (e) { initError = String(e); }
 
 console.log("INIT_ERROR:", initError);
-console.log("REGISTERED_COUNT:", Object.keys(registered).length);
+const registeredCount = Object.keys(registered).length;
+console.log("REGISTERED_COUNT:", registeredCount);
 console.log("REGISTERED:", Object.keys(registered).sort().join(","));
+
+// The manifest contract promises 9 tools — a lower count means a tool
+// silently failed to register (e.g. missing dep) and the run is invalid.
+const EXPECTED_TOOL_COUNT = 9;
+if (registeredCount < EXPECTED_TOOL_COUNT) {
+  console.log(`SMOKE_RESULT: FAIL | only ${registeredCount} tools registered, expected >= ${EXPECTED_TOOL_COUNT}`);
+  process.exit(1);
+}
 
 // Exakte Doctor-Validierung aus openclaw dist/tools-*.js:
 //   !name -> "missing non-empty name"; typeof execute !== function -> "missing execute function";
@@ -52,7 +61,37 @@ console.log("SMOKE_RESULT: ALL PASS (0 malformed)");
 
 // Funktioneller Durchlauf des reparierten Tools (Qdrant localhost, fail-open)
 const gc = registered["nexus_guardrail_check"];
-const out1 = await gc.execute("t1", { command: "rm -rf /Users/miosha/nexus-memory-test/" });
+if (!gc || typeof gc.execute !== "function") {
+  console.log("SMOKE_RESULT: FAIL | tool 'nexus_guardrail_check' not registered or has no execute()");
+  process.exit(1);
+}
+
+// Tools return {content:[{type:"text",text: JSON.stringify(result)}]}; normalise
+// that to the guardrail verdict so the assertions below test something real.
+function guardrailVerdict(out) {
+  try {
+    const text = out?.content?.[0]?.text;
+    const parsed = text ? JSON.parse(text) : (out ?? {});
+    const verdict = parsed.verdict ?? (parsed.blocked === true ? "block" : undefined);
+    return { verdict, blocked: parsed.blocked === true || verdict === "block" };
+  } catch {
+    return { verdict: undefined, blocked: false };
+  }
+}
+
+const out1 = await gc.execute("t1", { command: "rm -rf /tmp/nexus-smoke-nonexistent/" });
 const out2 = await gc.execute("t2", { command: "ls -la /tmp" });
 console.log("EXEC guarded:", JSON.stringify(out1).slice(0, 220));
 console.log("EXEC benign :", JSON.stringify(out2).slice(0, 150));
+
+const res1 = guardrailVerdict(out1);
+const res2 = guardrailVerdict(out2);
+if (!res1.blocked) {
+  console.log(`SMOKE_RESULT: FAIL | destructive 'rm -rf' was not blocked (verdict=${res1.verdict})`);
+  process.exit(1);
+}
+if (res2.blocked) {
+  console.log(`SMOKE_RESULT: FAIL | benign 'ls -la /tmp' was blocked (verdict=${res2.verdict})`);
+  process.exit(1);
+}
+console.log(`SMOKE_RESULT: FUNCTIONAL PASS (guarded=${res1.verdict}, benign=${res2.verdict})`);

@@ -24,7 +24,8 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.7"
+    "openclaw": ">=2026.5.7",
+    "@sinclair/typebox": "^0.34.0"
   },
   "openclaw": {
     "extensions": [
