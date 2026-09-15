@@ -34,19 +34,37 @@ class _FakeStore:
         self._embedder = None
 
 
-def _watch(points, monkeypatch, min_score=None):
+class _FakeEmbedder:
+    def embed(self, _query):
+        return [0.1, 0.2, 0.3, 0.4]
+
+
+class _ScoredStore:
+    """Store whose embedder works, so _search takes the vector path and the
+    hits carry real similarity scores (embed_ok=True)."""
+
+    def __init__(self, points):
+        self.client = SimpleNamespace(
+            query_points=lambda **kw: SimpleNamespace(points=points),
+        )
+        self._embedder = _FakeEmbedder()
+
+
+def _watch(points, monkeypatch, min_score=None, store=None):
     if min_score is not None:
         monkeypatch.setattr(RW, "MIN_SCORE", min_score)
     monkeypatch.setenv("NEXUS_WATCH_QUERIES",
                        '[["Bose SoundLink Audio-Ausgabe Bluetooth", "Bose"]]')
-    store = _FakeStore(points)
+    store = store if store is not None else _FakeStore(points)
     return RW.RetrievalWatch(store, "test-coll", embedder=None)
 
 
 def test_min_score_failure_even_when_keyword_present(monkeypatch):
-    # Expected keyword IS in the text but similarity 0.12 < 0.5 → failure.
+    # Vector path (embed_ok=True): expected keyword IS in the text but the
+    # hit's similarity 0.12 < 0.5 → quality failure. The scroll fallback has
+    # no meaningful score and must NOT be judged by MIN_SCORE.
     points = [_FakePoint("Bose SoundLink gehört zur Audio-Ausgabe", 0.12)]
-    w = _watch(points, monkeypatch, min_score=0.5)
+    w = _watch(points, monkeypatch, min_score=0.5, store=_ScoredStore(points))
     rep = w.run()
     assert rep["failures"], "weak hit must count as failure"
     assert rep["failures"][0]["reason"] == "score_below_min"
@@ -54,9 +72,19 @@ def test_min_score_failure_even_when_keyword_present(monkeypatch):
 
 def test_strong_hit_passes_min_score(monkeypatch):
     points = [_FakePoint("Bose SoundLink gehört zur Audio-Ausgabe", 0.92)]
-    w = _watch(points, monkeypatch, min_score=0.5)
+    w = _watch(points, monkeypatch, min_score=0.5, store=_ScoredStore(points))
     rep = w.run()
     assert rep["failures"] == []
+
+
+def test_scroll_fallback_ignores_score_gate(monkeypatch):
+    # Scroll fallback carries no real similarity: a keyword hit counts as
+    # found even when its (meaningless) score is below MIN_SCORE.
+    points = [_FakePoint("Bose SoundLink gehört zur Audio-Ausgabe", 0.12)]
+    w = _watch(points, monkeypatch, min_score=0.5)  # _FakeStore → embed_ok=False
+    rep = w.run()
+    assert rep["failures"] == []
+    assert rep["failed_embeddings"] == 1
 
 
 def test_embedding_failure_visible_in_report(monkeypatch):

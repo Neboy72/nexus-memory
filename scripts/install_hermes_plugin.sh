@@ -45,6 +45,15 @@ fi
 
 # --- Link the plugin ---
 
+# Collision-free backup path: an existing .bak is never overwritten.
+backup_path() {
+    if [ -e "${PLUGIN_DST}.bak" ]; then
+        echo "${PLUGIN_DST}.bak.$(date +%Y%m%d%H%M%S)"
+    else
+        echo "${PLUGIN_DST}.bak"
+    fi
+}
+
 if [ -L "${PLUGIN_DST}" ]; then
     current_target="$(readlink "${PLUGIN_DST}")"
     if [ "${current_target}" = "${PLUGIN_SRC}" ]; then
@@ -56,11 +65,21 @@ if [ -L "${PLUGIN_DST}" ]; then
         echo -e "${GREEN}✓${NC} Plugin linked: ${PLUGIN_DST} → ${PLUGIN_SRC}"
     fi
 elif [ -d "${PLUGIN_DST}" ]; then
+    BACKUP_DST="$(backup_path)"
     echo -e "${YELLOW}⚠${NC} ${PLUGIN_DST} exists as a directory (not a symlink)."
-    echo "  Backing up to ${PLUGIN_DST}.bak and replacing with symlink."
-    mv "${PLUGIN_DST}" "${PLUGIN_DST}.bak"
+    echo "  Backing up to ${BACKUP_DST} and replacing with symlink."
+    mv "${PLUGIN_DST}" "${BACKUP_DST}"
     ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
-    echo -e "${GREEN}✓${NC} Plugin linked (backup at ${PLUGIN_DST}.bak)"
+    echo -e "${GREEN}✓${NC} Plugin linked (backup at ${BACKUP_DST})"
+elif [ -e "${PLUGIN_DST}" ]; then
+    # Regular file (or other non-dir) at the target path: back it up rather
+    # than clobbering it with ln -s.
+    BACKUP_DST="$(backup_path)"
+    echo -e "${YELLOW}⚠${NC} ${PLUGIN_DST} exists as a regular file (not a symlink)."
+    echo "  Backing up to ${BACKUP_DST} and replacing with symlink."
+    mv "${PLUGIN_DST}" "${BACKUP_DST}"
+    ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
+    echo -e "${GREEN}✓${NC} Plugin linked (backup at ${BACKUP_DST})"
 else
     ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
     echo -e "${GREEN}✓${NC} Plugin linked: ${PLUGIN_DST} → ${PLUGIN_SRC}"

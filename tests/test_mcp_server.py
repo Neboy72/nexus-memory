@@ -464,15 +464,20 @@ class TestCallToolRemember:
         payload = mock_qdrant_client.upsert.call_args.kwargs["points"][0].payload
         assert payload["access_level"] == "private"
 
-    async def test_invalid_access_level_falls_back_to_public(
+    async def test_invalid_access_level_fails_closed(
         self, mcp_store, mock_qdrant_client
     ):
-        await mcp.handle_call_tool(
+        # H7: never downgrade an unknown level to "public" (that would
+        # publish a private write to every agent). Return a JSON error.
+        mock_qdrant_client.upsert.reset_mock()
+        out = await mcp.handle_call_tool(
             "remember",
             {"text": "x", "category": "fact", "access_level": "GOD_MODE"},
         )
-        payload = mock_qdrant_client.upsert.call_args.kwargs["points"][0].payload
-        assert payload["access_level"] == "public"
+        body = _decode(out[0].text)
+        assert body["status"] == "error"
+        assert "access_level" in body["error"]
+        assert not mock_qdrant_client.upsert.called
 
     async def test_oversize_content_emits_warning(self, mcp_store):
         long_text = "a" * 6000  # exceeds 5000 char guardrail

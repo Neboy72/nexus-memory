@@ -38,7 +38,11 @@ AGE_MIDPOINT_DAYS = 180
 AGE_SCALE_DAYS = 90
 # Kategorien, die schneller alternieren (Conversational, nicht kanonisch)
 CATEGORY_WEIGHTS = {"session": 1.0, "temp": 1.0}
-CATEGORY_DEFAULT_WEIGHT = 0.6
+# Must exceed CANDIDATE_THRESHOLD so default-category aging is actually
+# reachable: the age sigmoid caps the score strictly below 1.0, and the
+# candidate filter compares the EXACT score against the threshold. With a
+# weight <= threshold no default-category point could ever become a candidate.
+CATEGORY_DEFAULT_WEIGHT = 1.0
 # Harte Schutzzonen — werden NIE als Kandidat gelistet
 PROTECTED_LIFECYCLE = {"canonical", "ACTIVE"}
 PROTECTED_SOURCE = {"paperless"}
@@ -170,15 +174,16 @@ class SelectiveForgettingAuditor:
                 # Filtering uses the EXACT score (kept separately from the
                 # rounded display value) so a rounded score can never cross
                 # the threshold that the exact score does not.
+                "exact_score": score,
                 "age_days": round(age_days),
                 "category": cat,
                 "id": str(p.id),
                 "text": str(payload.get("text") or payload.get("content") or "")[:120],
             })
 
-        scored.sort(key=lambda x: -x["score"])
+        scored.sort(key=lambda x: -x["exact_score"])
         # Threshold on the EXACT score, not a display-rounded one.
-        candidates = [s for s in scored if s["score"] >= CANDIDATE_THRESHOLD]
+        candidates = [s for s in scored if s["exact_score"] >= CANDIDATE_THRESHOLD]
 
         report: Dict[str, Any] = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),

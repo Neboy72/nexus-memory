@@ -2427,8 +2427,19 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             confidence = arguments.get("confidence")
             effective_from = arguments.get("effective_from")
 
+            # Fail CLOSED on an unknown level: silently downgrading to
+            # "public" would publish a private write to every agent.
             if access_level not in ALL_ACCESS_LEVELS:
-                access_level = ACCESS_PUBLIC
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": (
+                            f"Invalid access_level: {access_level!r}. "
+                            f"Allowed: {ALL_ACCESS_LEVELS}"
+                        ),
+                    }),
+                )]
 
             guardrails = _check_content_guardrails(text)
 
@@ -2495,8 +2506,19 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             filter_level = arguments.get("filter_level", ACCESS_PUBLIC)
             as_of = arguments.get("as_of")  # None = default behavior
 
+            # Fail CLOSED on an unknown level: defaulting to "public" can
+            # silently WIDEN what a private agent is allowed to see.
             if filter_level not in ALL_ACCESS_LEVELS:
-                filter_level = ACCESS_PUBLIC
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": (
+                            f"Invalid filter_level: {filter_level!r}. "
+                            f"Allowed: {ALL_ACCESS_LEVELS}"
+                        ),
+                    }),
+                )]
 
             results = await store.recall(
                 query, agent_level=filter_level, limit=limit, as_of=as_of

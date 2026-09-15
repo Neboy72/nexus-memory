@@ -15,6 +15,20 @@ OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 PLUGINS_DIR="$OPENCLAW_STATE_DIR/plugins"
 TARGET_DIR="$PLUGINS_DIR/nexus-memory"
 
+# Safety guards for the destructive rm -rf further down: never operate on a
+# root/empty plugins dir and never remove a target that is not exactly the
+# dedicated nexus-memory seat inside it.
+case "$PLUGINS_DIR" in
+  "/"|""|"//"*) echo "❌ ERROR: root PLUGINS_DIR '$PLUGINS_DIR' — refusing to install"; exit 1;;
+esac
+if [ "$TARGET_DIR" != "$PLUGINS_DIR/nexus-memory" ] || [ "$(basename "$TARGET_DIR")" != "nexus-memory" ]; then
+  echo "❌ ERROR: unexpected target directory '$TARGET_DIR' — refusing to install"; exit 1
+fi
+case "$TARGET_DIR" in
+  "$PLUGINS_DIR"/*) ;;
+  *) echo "❌ ERROR: target '$TARGET_DIR' is not under '$PLUGINS_DIR' — refusing to install"; exit 1;;
+esac
+
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║   Nexus Memory — OpenClaw Plugin Installer           ║"
 echo "╚══════════════════════════════════════════════════════╝"
