@@ -33,6 +33,10 @@ def test_bad_patterns_uses_ere_grep():
     assert "grep -rnE \"$BAD_PATTERNS\"" in text
     # the old BRE invocation must be gone
     assert 'grep -rn "$BAD_PATTERNS"' not in text
+    # scope: ACTIVE code only — nexus/ is the documented legacy layer whose
+    # collection names are pinned by tests/test_apply.py (deliberate).
+    assert 'grep -rnE "$BAD_PATTERNS" src/ dashboard/ plugins/' in text
+    assert '"$BAD_PATTERNS" nexus/' not in text
 
 
 def test_status_code_check_is_ere_without_double_backslash():

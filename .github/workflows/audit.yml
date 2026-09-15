@@ -36,7 +36,12 @@ jobs:
           BAD_PATTERNS='("openclaw-memory"|"openclaw_beliefs"|"openclaw_events"|"nexus_beliefs"|"nexus_events"|"hermes-memory-1024d"|"kiosha-memory")'
           # -E: the pattern is an ERE alternation; plain grep (BRE) treats
           # parentheses/pipe as literals, which made this check a silent no-op.
-          FOUND=$(grep -rnE "$BAD_PATTERNS" nexus/ src/ --include="*.py" --exclude="__pycache__" || true)
+          # Scope: ACTIVE runtime code (src/ + dashboard/ + plugins/) only.
+          # nexus/ is the documented LEGACY layer (tests/test_apply.py pins
+          # nexus_beliefs/nexus_events as deliberate backward-compat names,
+          # and mcp_server still writes live events there), so those three
+          # hits are intentional, not stale.
+          FOUND=$(grep -rnE "$BAD_PATTERNS" src/ dashboard/ plugins/ --include="*.py" --include="*.ts" --exclude="__pycache__" --exclude-dir=node_modules --exclude-dir=dist || true)
           if [ -n "$FOUND" ]; then
             echo "❌ Stale collection names found:"
             echo "$FOUND"
