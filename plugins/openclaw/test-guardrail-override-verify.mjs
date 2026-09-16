@@ -11,7 +11,9 @@
 import assert from "node:assert"
 import { register } from "node:module"
 
-// Deterministische ~-Expansion.
+// Deterministische ~-Expansion (W39/F5: restore im finally, Determinismus nicht
+// von der Ausführungsreihenfolge abhängig machen).
+const REAL_HOME = process.env.HOME
 process.env.HOME = "/home/tester"
 
 register("./_typebox-test-loader.mjs", import.meta.url)
@@ -24,7 +26,7 @@ const t = (name, fn) =>
     .then(() => console.log("PASS ", name))
     .catch((e) => {
       failed++
-      console.log("FAIL ", name, "—", e.message)
+      console.log("FAIL ", name, "—", e?.stack ?? String(e))
     })
 
 const PROTECTED = "/home/tester/.hermes"
@@ -33,6 +35,9 @@ const GOOD_RULE = {
   rule_text: `niemals löschen: ${PROTECTED}`,
   source_memory_id: "rule-0",
 }
+// F6 (W39): echte guardrail_check-Block-Payloads tragen zusätzlich target/action —
+// das Override-Tool muss extra Felder ignorieren, nicht ablehnen.
+const GOOD_RULE_WITH_CONTEXT = { ...GOOD_RULE, target: PROTECTED, action: "delete" }
 const REASONING = "Authorized by the operator for the migration window" // >= 30 chars
 
 function makeTool(ruleTexts = [`niemals löschen: ${PROTECTED}`]) {
@@ -70,6 +75,26 @@ await t("reasoning < 30 Zeichen → reject", async () => {
   assert.strictEqual(captured.length, 0)
 })
 
+// F9 (W39): exakte Grenzen 29/30/31 + trim-Verhalten
+await t("reasoning-Grenze: 29 reject, 30 ok, 31 ok, whitespace-only reject", async () => {
+  const mk = (reasoning) => {
+    const { tool, captured } = makeTool()
+    return { tool, captured, reason: reasoning => tool.execute("id", {
+      command: `rm -rf ${PROTECTED}`, reasoning, matched_rules: [GOOD_RULE], agent_id: "agent-7",
+    }) }
+  }
+  const r29 = await mk().reason("x".repeat(29))
+  assert.strictEqual(r29.isError, true, "29 Zeichen muss reject sein")
+  const r30 = await mk().reason("x".repeat(30))
+  assert.strictEqual(r30.isError, undefined, "30 Zeichen ist die Grenze: ok")
+  const r31 = await mk().reason("x".repeat(31))
+  assert.strictEqual(r31.isError, undefined, "31 Zeichen ok")
+  const rws = await mk().reason("x".repeat(30) + "   ")
+  // trailing whitespace wird getrimmt → immer noch 30 → ok (oder >=30-Check vor Trim)
+  assert.ok(rws.isError === undefined || /min 30/i.test(parse(rws).error ?? ""),
+            "whitespace-Padding muss deterministisch sein (ok ODER min-30-Error)")
+})
+
 await t("fehlende matched_rules → reject", async () => {
   const { tool, captured } = makeTool()
   const res = await tool.execute("id", {
@@ -95,8 +120,8 @@ await t("leeres matched_rules → reject", async () => {
   assert.strictEqual(captured.length, 0)
 })
 
-await t("matched_rules mit falscher Shape → reject", async () => {
-  const { tool } = makeTool()
+await t("matched_rules mit falscher Shape → reject (kein Audit-Record)", async () => {
+  const { tool, captured } = makeTool()
   const res = await tool.execute("id", {
     command: `rm -rf ${PROTECTED}`,
     reasoning: REASONING,
@@ -105,6 +130,7 @@ await t("matched_rules mit falscher Shape → reject", async () => {
   })
   assert.strictEqual(res.isError, true)
   assert.match(parse(res).error, /protected_path, rule_text and source_memory_id/)
+  assert.strictEqual(captured.length, 0, "kein Audit-Record bei Shape-Verstoß")
 })
 
 await t('agent_id "unknown" → reject', async () => {
@@ -187,7 +213,9 @@ await t("Re-check blockt, aber mit anderer Regel → reject", async () => {
     agent_id: "agent-7",
   })
   assert.strictEqual(res.isError, true)
-  assert.match(parse(res).error, /different rules/)
+  const err = parse(res).error
+  assert.match(err, /different rules/)
+  assert.match(err, /re-check produced block/, "re-check muss geblockt haben (sonst wäre es der allow-Pfad)")
   assert.strictEqual(captured.length, 0)
 })
 
@@ -212,7 +240,25 @@ await t("echter Block-Fall → override_recorded mit verifizierten Regeln", asyn
   assert.strictEqual(record.matched_rules[0].protected_path, PROTECTED)
   assert.strictEqual(record.matched_rules[0].source_memory_id, "rule-0")
   assert.strictEqual(record.recheck_verdict, "block")
-  assert.ok(record.verified_at, "verified_at erwartet")
+  assert.ok(typeof record.verified_at === "number" || !Number.isNaN(Date.parse(record.verified_at)),
+            `verified_at muss ein echter Zeitstempel sein: ${JSON.stringify(record.verified_at)}`)
+  // F4: Server-Verify-Beweis — die citierte Regel muss EXAKT der Mock-Regel entsprechen
+  // (Byte-Equalität von rule_text beweist, dass nicht der Caller-Payload durchging)
+  assert.strictEqual(record.matched_rules[0].rule_text, `niemals löschen: ${PROTECTED}`)
 })
 
-process.exit(failed ? 1 : 0)
+await t("echter Block-Fall mit target/action-Kontext (extra Felder werden ignoriert)", async () => {
+  const { tool, captured } = makeTool()
+  const res = await tool.execute("id", {
+    command: `rm -rf ${PROTECTED}`,
+    reasoning: REASONING,
+    matched_rules: [GOOD_RULE_WITH_CONTEXT],
+    agent_id: "agent-7",
+  })
+  const out = parse(res)
+  assert.strictEqual(out.status, "override_recorded", `extra Payload-Felder dürfen nicht ablehnen: ${JSON.stringify(out)}`)
+  assert.strictEqual(captured[0].matched_rules[0].source_memory_id, "rule-0")
+})
+
+process.env.HOME = REAL_HOME
+process.exitCode = failed ? 1 : 0

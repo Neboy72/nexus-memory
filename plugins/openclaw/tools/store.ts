@@ -105,6 +105,10 @@ export function registerStoreTool(
         const explicitScope = trimmedExplicit ? trimmedExplicit : null
         if (explicitScope !== null && !SCOPE_PATTERN.test(explicitScope)) {
           return {
+            // W39 (medium, Test-Fund): hard-fail paths carry the machine-readable
+            // error contract (isError:true) — callers must not mistake a rejected
+            // scope for a silent success. Mirrors the catch-path contract below.
+            isError: true,
             content: [
               {
                 type: "text" as const,

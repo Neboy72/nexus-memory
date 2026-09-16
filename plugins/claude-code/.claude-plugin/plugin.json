@@ -1,7 +1,7 @@
 {
   "name": "nexus-memory",
   "version": "1.0.0",
-  "description": "Self-hosted memory for Claude Code via Qdrant. Auto-Recall injects relevant memories before each prompt. Auto-Capture stores facts after each turn. Hybrid retrieval, reranking, memory dynamics, guardrails. One store shared with OpenClaw and Hermes (MCP). Attribution note: the MCP server is pinned to NEXUS_AGENT_ID=\"claude-code\" here, while the hook scripts inherit the shell value — set NEXUS_AGENT_ID shell-wide for consistent attribution across both paths.",
+  "description": "Self-hosted memory for Claude Code via Qdrant. Auto-Recall injects relevant memories before each prompt. Auto-Capture stores facts after each turn. Hybrid retrieval, reranking, memory dynamics, guardrails. One store shared with OpenClaw and Hermes (MCP). Attribution note: the MCP server is pinned to NEXUS_AGENT_ID=\"claude-code\" here (this env entry overrides the shell value for the MCP process), while the hook scripts inherit the shell value — exporting NEXUS_AGENT_ID shell-wide therefore only changes the hooks, not the MCP server.",
   "author": {
     "name": "Neboy72",
     "url": "https://github.com/Neboy72/nexus-memory"

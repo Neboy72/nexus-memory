@@ -15,7 +15,7 @@ const t = (name, fn) =>
     .then(() => console.log("PASS ", name))
     .catch((e) => {
       failed++
-      console.log("FAIL ", name, "—", e.message)
+      console.log("FAIL ", name, "—", e?.stack ?? String(e))
     })
 
 await t("String 'false' → false, '0' → false (nicht mehr truthy)", () => {
@@ -37,6 +37,16 @@ await t("echte Booleans bleiben erhalten, Defaults unverändert", () => {
   assert.strictEqual(parseConfig({}).thoughtFilter, true)
   assert.strictEqual(parseConfig({}).debug, false)
 })
+await t("autoCapture + thoughtFilter: truthy-String-Bug (H7-Kern) auch auf diesen Feldern", () => {
+  // W39/F8: '0'/'false' müssen auf ALLEN bool-Feldern falsifizieren, nicht nur auf
+  // autoRecall/debug — genau die Regression, die H7 schloss.
+  assert.strictEqual(parseConfig({ autoCapture: "0" }).autoCapture, false)
+  assert.strictEqual(parseConfig({ autoCapture: "false" }).autoCapture, false)
+  assert.strictEqual(parseConfig({ thoughtFilter: "0" }).thoughtFilter, false)
+  assert.strictEqual(parseConfig({ thoughtFilter: "false" }).thoughtFilter, false)
+  assert.strictEqual(parseConfig({ autoCapture: "1" }).autoCapture, true)
+  assert.strictEqual(parseConfig({ thoughtFilter: "true" }).thoughtFilter, true)
+})
 
 await t("maxRecallResults: String '15' → 15", () => {
   assert.strictEqual(parseConfig({ maxRecallResults: "15" }).maxRecallResults, 15)
@@ -50,6 +60,24 @@ await t("maxRecallResults: 0 → 1 (geclamped)", () => {
   assert.strictEqual(parseConfig({ maxRecallResults: 0 }).maxRecallResults, 1)
 })
 
+// W39/F4+F7: toClampedInt-Kontrakt-Vollzug — Grenzfälle, die derselbe Coercion-Pfad
+// entscheidet (Fractional truncation, Infinity, negative, Whitespace-Strings).
+await t("maxRecallResults: 3.7 → 3 (Fractional truncation Richtung Null)", () => {
+  assert.strictEqual(parseConfig({ maxRecallResults: 3.7 }).maxRecallResults, 3)
+  assert.strictEqual(parseConfig({ maxRecallResults: -3.7 }).maxRecallResults, 1, "negativer Fractional clamped auf minimum")
+})
+await t("maxRecallResults: Infinity → Default 10 (nicht-finite = fehlend), -5 → 1", () => {
+  // Kontrakt (toClampedInt): !Number.isFinite → dflt. Infinity/NaN sind 'fehlend',
+  // keine Clamps. Negative finite Zahlen werden auf minimum geclamped.
+  assert.strictEqual(parseConfig({ maxRecallResults: Infinity }).maxRecallResults, 10)
+  assert.strictEqual(parseConfig({ maxRecallResults: -5 }).maxRecallResults, 1)
+})
+await t("maxRecallResults: whitespace-String → 0-koerziert → clamp auf 1, String '0' → 1", () => {
+  // Kontrakt: Number("   ") = 0 (finite) → clamp auf min=1. '0' ebenso. Beide sind
+  // KEIN Default-Fall (Fund verlangte Coverage dieser Koerzions-Sonderfälle).
+  assert.strictEqual(parseConfig({ maxRecallResults: "   " }).maxRecallResults, 1)
+  assert.strictEqual(parseConfig({ maxRecallResults: "0" }).maxRecallResults, 1)
+})
 await t("maxRecallResults: nicht-numerisch → Default 10", () => {
   assert.strictEqual(parseConfig({ maxRecallResults: "abc" }).maxRecallResults, 10)
   assert.strictEqual(parseConfig({ maxRecallResults: NaN }).maxRecallResults, 10)
@@ -57,9 +85,13 @@ await t("maxRecallResults: nicht-numerisch → Default 10", () => {
 })
 
 await t("Schema deklariert minimum 1 / maximum 20", () => {
-  const schema = nexusConfigSchema.jsonSchema.properties.maxRecallResults
+  // W39/F3+F6: Schema-Pfad klar diagnostizieren statt TypeError-Blindflug.
+  const props = nexusConfigSchema?.jsonSchema?.properties
+  assert.ok(props && typeof props === "object", "nexusConfigSchema.jsonSchema.properties fehlt — Schema-Shape hat sich geändert")
+  const schema = props.maxRecallResults
+  assert.ok(schema && typeof schema === "object", "properties.maxRecallResults fehlt — Feld umbenannt?")
   assert.strictEqual(schema.minimum, 1)
   assert.strictEqual(schema.maximum, 20)
 })
 
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0
