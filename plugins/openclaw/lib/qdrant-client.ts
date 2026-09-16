@@ -1,5 +1,6 @@
 import { log } from "../logger.ts"
 import { fetchWithTimeout } from "./embedder.ts"
+import { statSync } from "node:fs"
 
 export type SearchResult = {
   id: string
@@ -56,6 +57,9 @@ export class QdrantClient {
   private qdrantUrl: string
   private collection: string
   private collectionReady: boolean = false
+  // OCR-5 (bug medium): memoized in-flight ensureCollection — concurrent
+  // first-writes share ONE create instead of racing two PUTs (loser 409s).
+  private ensurePromise: Promise<void> | undefined = undefined
 
   constructor(qdrantUrl: string, collection: string, dimensions: number) {
     this.qdrantUrl = qdrantUrl.replace(/\/+$/, "")
@@ -87,7 +91,10 @@ export class QdrantClient {
     let currentDim: number | undefined
     let resp: Response
     try {
-      resp = await fetch(url, { method: "GET" })
+      // OCR-5 (bug high): raw fetch() here could hang the startup liveness
+      // check forever on a black-holed connection, blocking ensureCollection
+      // invisibly. fetchWithTimeout bounds it like every other operation.
+      resp = await fetchWithTimeout(url, { method: "GET" })
     } catch (err) {
       // Network-level failure (DNS, refused, timeout) is NOT proof that the
       // collection is missing — surface it instead of silently creating.
@@ -132,6 +139,25 @@ export class QdrantClient {
       const mismatch =
         `Qdrant collection "${this.collection}" has dimensions=${currentDim}, expected=${dimensions}.`
       if (allowRecreate && backupPath) {
+        // OCR-5 (security medium): "verified backup" is now actually
+        // verified — the path must exist, be a file and be non-empty BEFORE
+        // the irreversible DELETE runs. A stale/typo'd path now throws
+        // instead of wiping every stored point against a dead backup.
+        let backupSize = 0
+        try {
+          backupSize = statSync(backupPath).size
+        } catch {
+          throw new Error(
+            `refusing recreate: backupPath \"${backupPath}\" does not exist or is not readable ` +
+            `(collection \"${this.collection}\" is NOT deleted)`,
+          )
+        }
+        if (backupSize === 0) {
+          throw new Error(
+            `refusing recreate: backup \"${backupPath}\" is empty (0 bytes) — ` +
+            `no verified backup, collection \"${this.collection}\" is NOT deleted`,
+          )
+        }
         // Explicit opt-in + verified backup path: recreate is permitted.
         log.warn(
           `${mismatch} — recreating (allowRecreate=true, backup=${backupPath}). ` +
@@ -179,7 +205,9 @@ export class QdrantClient {
 
     // Create collection — Qdrant uses PUT /collections/{name}
     log.debug(`creating collection ${this.collection} (dimensions=${dimensions}, distance=Cosine)`)
-    const createResp = await fetch(`${this.qdrantUrl}/collections/${this.collection}`, {
+    // OCR-5 (bug high): bounded like the rest — a hung connection must not
+    // block startup inside ensureCollection.
+    const createResp = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collection}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -206,7 +234,9 @@ export class QdrantClient {
    */
   async countPoints(): Promise<number | null> {
     try {
-      const resp = await fetch(`${this.qdrantUrl}/collections/${this.collection}`, {
+      // OCR-5 (bug high): bounded like every other Qdrant call — the raw
+      // fetch() here was the last unbounded probe (liveness path).
+      const resp = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collection}`, {
         method: "GET",
       })
       if (!resp.ok) return null
@@ -314,9 +344,21 @@ export class QdrantClient {
     // Qdrant was still booting). Retry once: ensure the collection exists,
     // then repeat the upsert. A 404 here means "collection absent" (the same
     // status ensureCollection treats as absent) — anything else surfaces.
+    // OCR-5 (bug medium): two concurrent first-writes both saw the 404 and
+    // both ran ensureCollection() → concurrent PUT /collections creates, the
+    // loser fails with 409/400 even though the collection now exists. The
+    // in-flight ensure is memoized as a shared promise (cleared on failure),
+    // so concurrent callers await ONE create.
     if (resp.status === 404 && !this.collectionReady) {
       log.info(`upsert: collection "${this.collection}" not found — ensuring collection, retrying once`)
-      await this.ensureCollection(vector.length)
+      try {
+        this.ensurePromise ??= this.ensureCollection(vector.length)
+        await this.ensurePromise
+      } catch (err) {
+        this.ensurePromise = undefined
+        throw err
+      }
+      this.ensurePromise = undefined
       resp = await fetchWithTimeout(
         `${this.qdrantUrl}/collections/${this.collection}/points`,
         {
@@ -346,7 +388,11 @@ export class QdrantClient {
   async delete(id: string): Promise<void> {
     log.debugRequest("delete", { id })
 
-    const resp = await fetch(
+    // OCR-5 (bug high): this was a raw fetch() — the ONLY unbounded Qdrant
+    // call on a destructive path. A hung connection left the forget-tool
+    // awaiting forever. Routed through fetchWithTimeout like every other
+    // operation, so a stalled backend surfaces as a timeout error.
+    const resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points/delete`,
       {
         method: "POST",
@@ -474,6 +520,18 @@ export class QdrantClient {
           },
         )
         if (!resp.ok) {
+          // OCR-5 (security medium): a first-page failure must not resolve to
+          // an empty array — security consumers (guardrail_check) treat [] as
+          // "no protection rules" and ALLOW destructive actions (fail-open).
+          // Page 0 with nothing collected → throw, so callers with a
+          // fail-closed contract (loadProtectionRules catch → null) see the
+          // outage. A mid-walk failure still returns the partial result
+          // (log stays), because those points are genuinely there.
+          if (collected.length === 0) {
+            throw new Error(
+              `scrollFiltered: Qdrant returned ${resp.status} for collection="${this.collection}" on the FIRST page — no points, failing loud (fail-closed for security consumers)`,
+            )
+          }
           log.error(
             `scrollFiltered: Qdrant returned ${resp.status} for collection="${this.collection}" (returning ${collected.length} points collected so far)`,
           )
@@ -498,6 +556,17 @@ export class QdrantClient {
       }
       return maxTotal !== undefined ? collected.slice(0, maxTotal) : collected
     } catch (err) {
+      // OCR-5 (security medium): a first-page failure re-throws — the outer
+      // contract must let fail-closed consumers (guardrail_check) see the
+      // outage instead of receiving [] ("no rules" → allow). Mid-walk
+      // failures (points already collected) keep the partial-result return.
+      if (collected.length === 0) {
+        log.error(
+          `scrollFiltered: first page failed for collection="${this.collection}" — no partial result, throwing (fail-closed)`,
+          err,
+        )
+        throw err
+      }
       log.error(
         `scrollFiltered: request failed for collection="${this.collection}" (returning ${collected.length} points collected so far)`,
         err,
@@ -519,9 +588,14 @@ export class QdrantClient {
       // entity-typed points and check their edges array in-memory. Uses the
       // paginated scrollFiltered (per-page limit 250, up to MAX_SCROLL_PAGES
       // pages) so edges past the first page are no longer missed.
+      // OCR-5 (performance low): an explicit maxTotal caps the in-memory walk
+      // at 5000 entity points (250*5=1250 was the implicit ceiling anyway
+      // before multi-page walks — the cap keeps a future MAX_SCROLL_PAGES
+      // bump from unboundedly growing this loop's memory).
       const points = await this.scrollFiltered(
         { must: [{ key: "category", match: { value: "entity" } }] },
         250,
+        5000,
       )
       const incoming: Array<{ source_id: string; relation: string; edge_id: string }> = []
 

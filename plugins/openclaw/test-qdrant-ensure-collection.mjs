@@ -7,6 +7,7 @@
  * Backup-Pfad sind explizit angegeben.
  */
 import assert from "node:assert"
+import { writeFileSync } from "node:fs"
 import { QdrantClient } from "./lib/qdrant-client.ts"
 
 let failed = 0
@@ -63,9 +64,13 @@ await t("Dimension-Mismatch → wirft und löscht NICHT", async () => {
   )
 })
 
-await t("explizites allowRecreate + Backup-Pfad → DELETE erlaubt", async () => {
+// OCR-5 (security medium, /tmp/z714): "verified backup" ist jetzt wirklich
+// verifiziert — der Pfad muss existieren und nicht-leer sein, BEVOR der
+// DELETE läuft. Der Test schreibt einen echten (nicht-leeren) Snapshot.
+await t("explizites allowRecreate + ECHTER Backup-Pfad → DELETE erlaubt", async () => {
   const calls = []
   mockFetch(1024, calls)
+  writeFileSync("/tmp/nexus-backup.snapshot", "snapshot-data", "utf8")
   const client = new QdrantClient("http://localhost:6333", "nexus", 1024)
   await client.ensureCollection(2048, true, "/tmp/nexus-backup.snapshot")
   // Fund W37 (medium): nicht nur irgendein DELETE — die Recreate-Kette muss
@@ -74,6 +79,29 @@ await t("explizites allowRecreate + Backup-Pfad → DELETE erlaubt", async () =>
   assert.ok(del, "mit allowRecreate+Backup muss DELETE auf /collections/nexus kommen")
   const put = calls.find((c) => c.method === "PUT" && /\/collections\/nexus$/.test(c.url))
   assert.ok(put, "nach dem DELETE muss die Collection neu erstellt werden (PUT)")
+})
+
+await t("allowRecreate + FEHLENDER Backup-Pfad → wirft, kein DELETE (OCR-5)", async () => {
+  const calls = []
+  mockFetch(1024, calls)
+  const client = new QdrantClient("http://localhost:6333", "nexus", 1024)
+  await assert.rejects(
+    () => client.ensureCollection(2048, true, "/tmp/nexus-backup.MISSING.snapshot"),
+    /refusing recreate: backupPath.*does not exist/,
+  )
+  assert.ok(!calls.some((c) => c.method === "DELETE"), "ohne echten Backup darf KEIN DELETE fliegen")
+})
+
+await t("allowRecreate + LEERER Backup (0 bytes) → wirft, kein DELETE (OCR-5)", async () => {
+  const calls = []
+  mockFetch(1024, calls)
+  writeFileSync("/tmp/nexus-backup.empty.snapshot", "", "utf8")
+  const client = new QdrantClient("http://localhost:6333", "nexus", 1024)
+  await assert.rejects(
+    () => client.ensureCollection(2048, true, "/tmp/nexus-backup.empty.snapshot"),
+    /refusing recreate: backup .* is empty/,
+  )
+  assert.ok(!calls.some((c) => c.method === "DELETE"), "mit leerem Backup darf kein DELETE fliegen")
 })
 
 await t("allowRecreate ohne Backup-Pfad → wirft, kein DELETE", async () => {

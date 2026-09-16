@@ -56,13 +56,27 @@ export function neutralizeContextClose(text: string): string {
  */
 export function stripNexusContextBlock(text: string): string {
   if (!text) return text
-  // `\s*` before `>`: without it a whitespace variant (`</nexus-context >`)
+  // `\\s*` before `>`: without it a whitespace variant (`</nexus-context >`)
   // never completed a block here, so the text instead fell through to the
   // unterminated-tag rule below and the whole prompt was truncated.
-  const withoutComplete = text.replace(
-    /<nexus-context[^>]*>[\s\S]*?<\/nexus-context\s*>\s*/gi,
-    "",
-  )
-  const withoutTags = withoutComplete.replace(/<\/?nexus-context[^>]*>/gi, "")
-  return withoutTags.trim()
+  // OCR-5 (security high, /tmp/z750-proof.mjs): both replaces ran ONCE, so a
+  // spliced fragment pair (`</nexus-con</nexus-context>text>`) removed the
+  // inner tag and re-joined the halves into a NEW live wrapper tag — the
+  // function was not a fixed point. recall.ts:190 uses this helper alone.
+  // Re-apply until stable: each pass either strictly shortens the string or
+  // removes nothing, so the loop terminates.
+  let out = text
+  for (let prev = ""; prev !== out; ) {
+    prev = out
+    // OCR-5 (bug medium): the closing tag accepted `\s*/?\s*` but the block
+    // regex required exactly `\s*>` — `</nexus-context/>` never completed a
+    // BLOCK and fell through to the stray-tag rule, leaving the block BODY
+    // behind as free query text. Also: HTML tokenizers ignore attributes on
+    // end tags, so `</nexus-context foo>` closes the wrapper for HTML-aware
+    // consumers — widen to the same `[^>]*` shape used by the stray rule
+    // (over-stripping is the safe direction for stored memory text).
+    out = out.replace(/<nexus-context[^>]*>[\s\S]*?<\/nexus-context[^>]*>\s*/gi, "")
+    out = out.replace(/<\/?nexus-context[^>]*>/gi, "")
+  }
+  return out.trim()
 }

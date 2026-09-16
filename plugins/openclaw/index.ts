@@ -77,9 +77,16 @@ export default {
     })
 
     // Roadmap v0.13.1: fire-and-forget update check (fail-open, 24h cache)
+    // OCR-5 (maintainability low): the catch is contractually dead
+    // (checkForUpdate must never throw — lib/update-check.ts), but if it
+    // EVER fires the error was silently discarded. Log it so a real defect
+    // in the fail-open contract becomes visible; shape matches fail-open.
     checkForUpdate()
       .then((result) => setUpdateCheckResult(result))
-      .catch(() => setUpdateCheckResult({ available: false, latest: "", url: "" }))
+      .catch((err) => {
+        log.error("checkForUpdate rejected (contract says never-throw — investigating)", err)
+        setUpdateCheckResult({ available: false, latest: "", url: "" })
+      })
 
     // Register memory capability
     // H122: the runtime probes delegate to the real embedder/client, so both
@@ -96,8 +103,13 @@ export default {
     const promptBuilder = (params: { availableTools: Set<string> }) => {
       const hasSearch = params.availableTools.has("nexus_search")
       const hasStore = params.availableTools.has("nexus_store")
-      const { text } = hasSearch || hasStore ? consumeUpdateNudge() : { text: null }
-      return buildPromptSection({ availableTools: params.availableTools, nudged: text === null })
+      // OCR-5 (bug low): the flag name hid the semantics — `nudged: text ===
+      // null` was true EXACTLY when nothing fresh was consumed (no update OR
+      // already shown). Explicit named flag + comment so a future change of
+      // consumeUpdateNudge() semantics cannot silently invert this.
+      const nudge = hasSearch || hasStore ? consumeUpdateNudge() : { text: null }
+      const nudgeConsumed = nudge.text !== null // fresh nudge handed out THIS build
+      return buildPromptSection({ availableTools: params.availableTools, nudged: !nudgeConsumed })
     }
 
     let memoryCapabilityRegistered = false

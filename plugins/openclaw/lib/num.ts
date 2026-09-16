@@ -50,8 +50,25 @@ export function clampInt(
   // (unbounded).
   const hiRaw = Number.isFinite(max) ? max : Number.isFinite(min) ? min : 0
   const loRaw = Number.isFinite(min) ? min : hiRaw
-  const lower = Math.min(Math.ceil(loRaw), Math.ceil(hiRaw))
-  const upper = Math.max(Math.floor(loRaw), Math.floor(hiRaw))
+  // OCR-5 (bug medium): the old Math.min/Math.max swap silently REORDERED an
+  // inverted interval (min=5, max=3 → [3,5]) and clampInt(4,…) returned 4 —
+  // above the declared max AND below the declared min, i.e. fail-open,
+  // contradicting the fail-closed contract below. An interval containing no
+  // integer (0.5..0.9) likewise collapsed to `upper` (0) for every input —
+  // below the declared min. Both degenerate shapes now collapse to ONE
+  // value: floor(smaller bound) — tiny, finite, documented. A
+  // schema-bypassing host gets the safe direction: as small as the smaller
+  // declared bound allows.
+  const inverted = min > max
+  const loBound = Math.min(loRaw, hiRaw)
+  const hiBound = Math.max(loRaw, hiRaw)
+  let lower = Math.ceil(loBound)
+  let upper = Math.floor(hiBound)
+  if (inverted || lower > upper) {
+    const collapsed = Math.floor(loBound)
+    lower = collapsed
+    upper = collapsed
+  }
   const clampInto = (x: number): number => Math.min(upper, Math.max(lower, x))
 
   const base = Number.isFinite(dflt) ? dflt : lower

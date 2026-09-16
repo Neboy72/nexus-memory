@@ -16,14 +16,20 @@ import assert from "node:assert"
 import fs from "node:fs"
 
 let failed = 0
-const t = (name, fn) =>
-  Promise.resolve()
+const pending = []
+const t = (name, fn) => {
+  // OCR-5 (maintainability low): the promise was fire-and-forget while the
+  // module ended in a bare process.exit() — a genuinely async case could
+  // finish after the exit decision (wrong exit code, unflushed stdout).
+  const p = Promise.resolve()
     .then(fn)
     .then(() => console.log("PASS ", name))
     .catch((e) => {
       failed++
       console.log("FAIL ", name, "—", e.message, "\n", e.stack)
     })
+  pending.push(p)
+}
 
 const src = fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8")
 
@@ -68,11 +74,17 @@ function extractBlock(source, marker) {
   return { block: source.slice(braceStart, i + 1), end: i + 1, masked }
 }
 
-const { block: thoughtFilterBlock, end, masked } = extractBlock(src, "if (cfg.thoughtFilter")
-const after = src.slice(end)
-const afterMasked = masked.slice(end)
-
+// OCR-5 (bug medium): extractBlock ran at module top level — a renamed
+// marker or unbalanced braces threw an UNHANDLED rejection (stack trace,
+// no test name, whole suite dead) instead of a clean FAIL line. The
+// extraction now runs inside the harness so a broken precondition prints
+// FAIL with its test name and the rest of the suite still reports.
+let thoughtFilterBlock, end, masked
 await t("extractBlock-Sanity: Marker + Klammern-Balance gefunden (top-level-Guard)", () => {
+  const r = extractBlock(src, "if (cfg.thoughtFilter")
+  thoughtFilterBlock = r.block
+  end = r.end
+  masked = r.masked
   assert.ok(thoughtFilterBlock.length > 0 && end > 0)
 })
 
@@ -103,15 +115,29 @@ await t("cron-form-gate hat eine eigene, Handler-Ebenen-Registrierung (indent, m
   // W38 (medium): exakt 4 Spaces bricht bei kosmetischem Reformat — statt dessen:
   // die Registrierung muss als ANWEISUNG mit geringem, einheitlichem indent stehen
   // (nicht tiefer verschachtelt), egal ob sie über eine oder mehrere Zeilen geht.
-  const m = masked.match(/^([ \t]*)api\.on\([\s\S]*?buildCronFormGateHandler\(\)[\s\S]*?\)/m)
+  // OCR-5 (bug high, /tmp/z285-proof.mjs): das alte Pattern (lazy [\s\S]*? über
+  // beliebige Zeilen) matchte ab der ERSTEN api.on-Zeile im File (Zeile 138,
+  // before_prompt_build) und vermaß deren Einrückung statt der Gate-Zeile.
+  // Jetzt: einzeilige Registrierung, keine Zeilensprünge im Pattern.
+  const m = masked.match(/^([ \t]*)api\.on\([^\n]*buildCronFormGateHandler\(\)[^\n]*\)/m)
   assert.ok(m, "unbedingte api.on(...buildCronFormGateHandler...)-Registrierung nicht gefunden")
   const indent = m[1]
   assert.ok(indent.length <= 8, `Registrierung muss auf Handler-Ebene stehen (indent ${indent.length}), war: "${indent.length} spaces"`)
-  assert.ok(!/^[ \t]{9,}/.test(masked.slice(masked.indexOf(m[0]), masked.indexOf(m[0]) + m[0].length + 200).split("\n").slice(1, 3).join("\n")), "Registrierung wirkt verschachtelt (9+ spaces) — nicht top-level")
+  // OCR-5 (bug medium): der zweite assert prüfte ein magic 200-char-Fenster
+  // NACH dem Match (fremde Zeilen) mit regex.test() — die Meldung
+  // interpolierte den statischen String statt des Befunds. Das Pattern ist
+  // jetzt EINZEILIG ([^\n]* statt [\s\S]*?): Verschachtelung zeigt sich
+  // UNMITTELBAR im indent von m[1], der separate Fenster-Assert ist
+  // redundant und wurde gestrichen.
 })
 
 await t("Reihenfolge: cron-gate kommt nach dem thoughtFilter-Block, vor autoCapture (OCR-4 bewiesen: Gate zuletzt gewinnt Merge)", () => {
-  const cronIdx = src.indexOf("buildCronFormGateHandler()")
+  // OCR-5 (bug medium): die Indices mixten zwei Quellen — cronIdx aus dem
+  // RAW-src (ein buildCronFormGateHandler()-Mention in String/Kommentar
+  // würde gezählt), autoIdx aus der MASKED Kopie, und beide nutzten den
+  // ERSTEN Treffer. Jetzt: beide aus `masked`, letzter Treffer (die echte
+  // Registrierungszeile) statt erster Mention.
+  const cronIdx = masked.lastIndexOf("buildCronFormGateHandler()")
   assert.ok(cronIdx > end, "cron-gate muss NACH dem thoughtFilter-Block stehen (Gate zuletzt = Gate-Urteil gewinnt Replacement-Merge)")
   const autoIdx = masked.indexOf("if (cfg.autoCapture)")
   assert.ok(autoIdx >= 0, `Marker "if (cfg.autoCapture)" nicht gefunden — Index-Check unmöglich (umbenannt?)`)
@@ -121,4 +147,5 @@ await t("Reihenfolge: cron-gate kommt nach dem thoughtFilter-Block, vor autoCapt
   )
 })
 
-process.exit(failed ? 1 : 0)
+await Promise.all(pending)
+process.exitCode = failed ? 1 : 0
