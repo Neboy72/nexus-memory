@@ -27,6 +27,7 @@ if (!existsSync(DIST_ENTRY)) {
 // Die PRODUKTIONS-Queue (~/.openclaw/workspace/data/capture-retry-queue.jsonl)
 // wird nie mehr angefasst: unlinkSync auf dem echten Pfad konnte bei einem
 // Lauf ohne Sandbox echte, noch nicht restaurierte Captures löschen.
+const QDRANT_BASE = "localhost:6333" // Single-Source für Mock + pluginConfig (W39/F4)
 const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "nexus-queue-test-"))
 process.env.NEXUS_CAPTURE_QUEUE_FILE = join(SANDBOX_DIR, "capture-retry-queue.jsonl")
 const QUEUE = process.env.NEXUS_CAPTURE_QUEUE_FILE
@@ -41,9 +42,13 @@ globalThis.fetch = async (url, opts) => {
     // Nr 379: parseEmbeddingResponse liest resp.text() zuerst — Mock erfuellt Contract
     return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ embedding: new Array(1024).fill(0.1) }] }), json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }) }
   }
-  if (u.includes("localhost:6333")) {
+  if (u.includes(QDRANT_BASE)) {
     if (!qdrantUp) return { ok: false, status: 503, text: async () => "simulated outage", json: async () => ({}) }
     return { ok: true, status: 200, json: async () => ({ result: {} }) }
+  }
+  if (u.includes("api.github.com")) {
+    // W39/F1: checkForUpdate() fire-and-forget — deterministisch beantworten
+    return { ok: true, status: 200, json: async () => ({ tag_name: "v0.0.0-noop", html_url: "http://localhost/noop" }), text: async () => "{}" }
   }
   return originalFetch(url, opts)
 }
@@ -55,7 +60,7 @@ const mockApi = {
   registerMemoryCapability() {}, // Nr 364: register() fail-loud wenn nichts registriert wird
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
   pluginConfig: {
-    qdrantUrl: "http://localhost:6333",
+    qdrantUrl: `http://${QDRANT_BASE}`,
     collection: "nexus-test-gate",
     autoRecall: false,
     autoCapture: true,
@@ -63,13 +68,25 @@ const mockApi = {
     embedding: { provider: "voyage", apiKey: "test" },
   },
 }
-const mod = await import(DIST_ENTRY)
-await mod.default.register(mockApi)
-const captureHandler = handlers["agent_end"][0]
-assert.ok(captureHandler, "agent_end (capture) muss registriert sein")
-
+// W39/F1+F3: Setup (import + register) läuft im try-Block — der finally-Restore
+// gilt ab da, nicht erst nach den Tests. F1: register() feuert checkForUpdate()
+// fire-and-forget gegen api.github.com — der Mock interceptiert es (kein echter
+// Netz-Call, keine Race gegen den realen fetch-Restore).
+let mod, captureHandler
 let failed = 0
-const t = (name, fn) => fn().then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e.message) })
+const t = (name, fn) => Promise.resolve().then(fn).then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e?.stack ?? String(e)) })
+
+try {
+mod = await import(DIST_ENTRY)
+await mod.default.register(mockApi)
+captureHandler = handlers["agent_end"]?.[0]
+assert.ok(captureHandler, "agent_end (capture) muss registriert sein")
+} catch (e) {
+  console.log("SETUP-FAIL:", e?.stack ?? String(e))
+  globalThis.fetch = originalFetch
+  process.exitCode = 1
+  process.exit(1)
+}
 
 // H166: statt festem 500ms-Sleep (unter Last zu kurz = false FAIL) pollen wir
 // die Queue-Datei bis sie leer ist — Timeout 3s, dann beschreibender FAIL.
@@ -93,7 +110,13 @@ try {
       { success: true, messages: [{ role: "user", content: "Wichtige Erinnerung während des Ausfalls: Testeintrag Drain-B" }] },
       { trigger: "user", messageProvider: "telegram", groupId: null },
     )
-    const q = readFileSync(QUEUE, "utf8")
+    let q
+    try { q = readFileSync(QUEUE, "utf8") } catch (e) {
+      // W39/F5: enqueueCapture kann bei internem Fehler still sein — die ENOENT hier
+      // ist dann BEWEIS (Queue nie angelegt), nicht ein Verwirr-Fehler.
+      if (e.code === "ENOENT") throw new Error("Queue-Datei wurde nie angelegt — enqueueCapture hat nicht geschrieben (Code-Verweis: hooks/capture-retry-queue.ts enqueue)")
+      throw e
+    }
     assert.ok(q.includes("Testeintrag Drain-B"), "Text muss in der Queue stehen")
   })
 
@@ -105,7 +128,11 @@ try {
     )
     // Drain läuft im Capture — auf leere Queue warten (H166: Poll statt fester Sleep)
     await waitForQueueEmpty()
-    const q = readFileSync(QUEUE, "utf8").trim()
+    let q = ""
+    try { q = readFileSync(QUEUE, "utf8").trim() } catch (e) {
+      if (e.code === "ENOENT") q = "" // W39/F7: drain darf Datei löschen ODER leeren
+      else throw e // W39/F6: EACCES/EISDIR ist KEIN 'Queue leer' → false-PASS-Guard
+    }
     assert.strictEqual(q, "", "Queue muss nach Drain leer sein")
   })
 
@@ -172,4 +199,4 @@ try {
   try { rmSync(SANDBOX_DIR, { recursive: true }) } catch {}
 }
 
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

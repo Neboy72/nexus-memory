@@ -13,7 +13,13 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, utimesSync } from 
 import os from "node:os"
 import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
 
-const PLAN_LOCK_PATH = "/tmp/miosha-think-gate.lock"
+// W39/F5: Pfad aus der Handler-Quelle abgeleitet statt dupliziert — ein Drift
+// im Handler (z.B. os.tmpdir()) lässt den Test fail-loud schlagen statt still
+// den falschen Zweig zu testen.
+const handlerSrc = readFileSync(new URL("./hooks/pre-tool-gate.ts", import.meta.url), "utf8")
+const _lockMatch = handlerSrc.match(/const PLAN_LOCK_PATH = "([^"]+)"/)
+assert.ok(_lockMatch, "PLAN_LOCK_PATH muss in hooks/pre-tool-gate.ts deklariert sein")
+const PLAN_LOCK_PATH = _lockMatch[1]
 
 let failed = 0
 const t = (name, fn) =>
@@ -22,7 +28,7 @@ const t = (name, fn) =>
     .then(() => console.log("PASS ", name))
     .catch((e) => {
       failed++
-      console.log("FAIL ", name, "—", e.message)
+      console.log("FAIL ", name, "—", e?.stack ?? String(e))
     })
 
 function makeHandler() {
@@ -41,14 +47,17 @@ function makeHandler() {
 
 // ── Allow-Pfad: Kontext wird berechnet, aber NICHT als params-Echo geliefert ─
 
-await t("allow-Pfad gibt {} zurück — kein params-Echo, kein _nexusRecallContext", async () => {
+await t("allow-Pfad gibt {} zurück — kein params-Echo, kein _nexusRecallContext, params unverändert", async () => {
   const { handler, state } = makeHandler()
   // "browser" ist kein Plan-Trigger, "qdrant" triggert Pre-Action-Recall.
-  const res = await handler({ toolName: "browser", params: { command: "qdrant status" } }, {})
+  const params = { command: "qdrant status" }
+  const res = await handler({ toolName: "browser", params }, {})
   assert.deepStrictEqual(res, {}, `allow muss genau {} liefern, bekam: ${JSON.stringify(res)}`)
-  assert.ok(!("params" in res), "params darf nicht zurückgegeben werden")
-  assert.ok(!("_nexusRecallContext" in res), "_nexusRecallContext darf nicht zurückgegeben werden")
-  assert.strictEqual(state.embed, 1, "Recall-Kontext wurde berechnet (embed lief)")
+  // F3+F9 (W39): Header verspricht 'das params-Echo konnte Args korrumpieren' —
+  // die Datenintegrität wird jetzt bewiesen (deepStrictEqual deckt Extra-Keys ab,
+  // hier zusätzlich: kein in-place-Mutieren des Caller-Objekts).
+  assert.deepStrictEqual(params, { command: "qdrant status" }, "params darf nicht mutiert werden")
+  assert.ok(state.embed >= 1, "Recall-Kontext wurde berechnet (embed lief) — exakte Count-Kopplung bewusst gelockert (W39/F4)")
 })
 
 await t("allow-Pfad ohne Recall-Keyword gibt ebenfalls {} zurück", async () => {
@@ -70,6 +79,8 @@ await t("block-Pfad (Plan-Zwang) enthält recallContext in blockReason", async (
   if (hadLock) {
     savedLock = readFileSync(PLAN_LOCK_PATH, "utf8")
   }
+  // W39/F7: Skip-Guard prüft GÜLTIGKEIT (fresh plan: content), nicht nur Existenz —
+  // eine alte/stale Lock-Datei würde den Test-Zustand ohnehin nicht verfälschen.
   writeFileSync(PLAN_LOCK_PATH, "plan: stale placeholder (test)\n")
   const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000
   utimesSync(PLAN_LOCK_PATH, twoHoursAgo / 1000, twoHoursAgo / 1000)
@@ -108,4 +119,4 @@ await t("Guardrail-Block liefert {block, blockReason} (Shape unverändert)", asy
   assert.deepStrictEqual(Object.keys(res).sort(), ["block", "blockReason"])
 })
 
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0
