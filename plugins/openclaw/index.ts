@@ -102,23 +102,9 @@ export default {
         flushPlanResolver: noopFlushPlan,
       })
       memoryCapabilityRegistered = true
-    } else {
-      // Deprecated fallback API — register whatever the host still offers.
-      if (typeof api.registerMemoryRuntime === "function") {
-        api.registerMemoryRuntime(memoryRuntime)
-        memoryCapabilityRegistered = true
-      }
-      if (typeof api.registerMemoryPromptSection === "function") {
-        api.registerMemoryPromptSection(promptBuilder)
-        memoryCapabilityRegistered = true
-      }
-      if (typeof api.registerMemoryFlushPlan === "function") {
-        api.registerMemoryFlushPlan(noopFlushPlan)
-        memoryCapabilityRegistered = true
-      }
     }
     if (!memoryCapabilityRegistered) {
-      // Neither the native nor the fallback path registered anything: fail
+      // Native capability API missing: fail
       // loudly instead of silently loading a memory-less plugin.
       api.logger.error("nexus: memory capability could not be registered")
       throw new Error("nexus: memory capability could not be registered")
