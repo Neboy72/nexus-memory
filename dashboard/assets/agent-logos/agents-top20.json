@@ -5,8 +5,8 @@
     "id": "hermes",
     "homepage": "https://nousresearch.com",
     "type": "CLI",
-    "mcp": true,
-    "plugin": true
+    "mcp_available": true,
+    "plugin_available": true
   },
   {
     "rank": 2,
@@ -14,8 +14,8 @@
     "id": "kilo-code",
     "homepage": "https://kilocode.ai",
     "type": "IDE",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 3,
@@ -23,8 +23,8 @@
     "id": "openclaw",
     "homepage": "https://openclaw.ai",
     "type": "CLI",
-    "mcp": true,
-    "plugin": true
+    "mcp_available": true,
+    "plugin_available": true
   },
   {
     "rank": 4,
@@ -32,8 +32,8 @@
     "id": "claude-code",
     "homepage": "https://anthropic.com",
     "type": "CLI",
-    "mcp": true,
-    "plugin": true
+    "mcp_available": true,
+    "plugin_available": true
   },
   {
     "rank": 5,
@@ -41,8 +41,8 @@
     "id": "pi",
     "homepage": "https://pi.dev",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 6,
@@ -50,8 +50,8 @@
     "id": "cline",
     "homepage": "https://cline.bot",
     "type": "IDE",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 7,
@@ -59,8 +59,8 @@
     "id": "codex",
     "homepage": "https://openai.com/codex",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 8,
@@ -68,8 +68,8 @@
     "id": "openhands",
     "homepage": "https://openhands.ai",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 9,
@@ -77,8 +77,8 @@
     "id": "roo-code",
     "homepage": "https://roocode.com",
     "type": "IDE",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 10,
@@ -86,8 +86,8 @@
     "id": "qwen-code",
     "homepage": "https://github.com/QwenLM/qwen-code",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 11,
@@ -95,8 +95,8 @@
     "id": "cursor",
     "homepage": "https://cursor.com",
     "type": "IDE",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 12,
@@ -104,8 +104,8 @@
     "id": "gemini-cli",
     "homepage": "https://github.com/google-gemini/gemini-cli",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 13,
@@ -113,8 +113,8 @@
     "id": "opencode",
     "homepage": "https://opencode.ai",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 14,
@@ -122,8 +122,8 @@
     "id": "zed",
     "homepage": "https://zed.dev",
     "type": "IDE",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 15,
@@ -131,8 +131,8 @@
     "id": "windsurf",
     "homepage": "https://windsurf.com",
     "type": "IDE",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 16,
@@ -140,8 +140,8 @@
     "id": "crush",
     "homepage": "https://charm.land",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 17,
@@ -149,8 +149,8 @@
     "id": "copilot",
     "homepage": "https://github.com/features/copilot",
     "type": "IDE",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 18,
@@ -158,8 +158,8 @@
     "id": "aider",
     "homepage": "https://aider.chat",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 19,
@@ -167,8 +167,8 @@
     "id": "continue",
     "homepage": "https://continue.dev",
     "type": "IDE",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   },
   {
     "rank": 20,
@@ -176,7 +176,7 @@
     "id": "warp",
     "homepage": "https://warp.dev",
     "type": "CLI",
-    "mcp": true,
-    "plugin": false
+    "mcp_available": true,
+    "plugin_available": false
   }
 ]

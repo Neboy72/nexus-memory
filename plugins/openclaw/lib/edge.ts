@@ -35,14 +35,16 @@ export type NormalizedEdge = {
  *    leaking `undefined`.
  */
 export function normalizeEdge(edge: unknown): NormalizedEdge | null {
-  if (!edge || typeof edge !== "object") return null
-  const e = edge as Record<string, unknown>
+  const e = asEdgeRecord(edge)
+  if (!e) return null
 
   const targetId = e.target_fact_id
-  if (typeof targetId !== "string" || targetId === "") return null
+  // W40-9: a whitespace-only id is as blank as "" and would poison `visited`
+  // just the same, so the emptiness test trims.
+  if (typeof targetId !== "string" || targetId.trim() === "") return null
 
   const relation = e.relation
-  if (typeof relation !== "string" || relation === "") return null
+  if (typeof relation !== "string" || relation.trim() === "") return null
 
   const edgeId =
     typeof e.edge_id === "string" && e.edge_id !== "" ? e.edge_id : ""
@@ -51,11 +53,29 @@ export function normalizeEdge(edge: unknown): NormalizedEdge | null {
 }
 
 /**
- * True when an edge is still active. An absent `status` counts as active
- * (legacy edges predate the field).
+ * Narrow an untrusted value to a plain object record, or null. Shared by both
+ * helpers so a future tightening (e.g. rejecting arrays, which currently pass
+ * `typeof edge === "object"`) cannot drift between them.
+ */
+function asEdgeRecord(edge: unknown): Record<string, unknown> | null {
+  return edge && typeof edge === "object" ? (edge as Record<string, unknown>) : null
+}
+
+/**
+ * True when an edge is still active.
+ *
+ * Intent (W40-9), in order:
+ *  - a non-object is not an edge → false;
+ *  - an ABSENT status counts as active (legacy edges predate the field);
+ *  - an empty-string status also counts as active (same legacy treatment);
+ *  - only the exact string "active" is active. Every other string — a
+ *    differently-cased "Active", "deleted", "  " — is inactive;
+ *  - a non-string status (null, 0, true) is inactive: a malformed value must
+ *    not silently resurrect an edge that was meant to be removed.
  */
 export function isActiveEdge(edge: unknown): boolean {
-  if (!edge || typeof edge !== "object") return false
-  const status = (edge as Record<string, unknown>).status
-  return typeof status !== "string" || status === "" || status === "active"
+  const e = asEdgeRecord(edge)
+  if (!e) return false
+  const status = e.status
+  return status === undefined || status === "" || status === "active"
 }
