@@ -18,15 +18,28 @@
  * self-closing and whitespace variants included) from stored text.
  *
  * `\\s*` and `/` before `>`: variants such as `</nexus-context >`,
- * `</nexus-context\t>` or `</nexus-context/>` close the wrapper just as well
+ * `</nexus-context\\t>` or `</nexus-context/>` close the wrapper just as well
  * in HTML and must not survive neutralization. W40-scan proved the bypass:
- * `</nexus-context/>` fell through the old `\\s*>` regex, survived into the
+ * `</nexus-context/>` fell through the old `\\\\s*>` regex, survived into the
  * recall wrapper and closed it early (everything after it became free prompt
  * text).
+ *
+ * Fixed-point loop (OCR-4 regression scan): a single pass is NOT idempotent.
+ * Removing a fragment can splice the two halves of the surrounding text into
+ * a NEW live tag — `</nexus-con</nexus-context>text>` becomes
+ * `</nexus-context>` after one pass. The loop re-applies the replace until
+ * the output stabilizes; the length strictly decreases on every non-empty
+ * iteration, so it always terminates.
  */
 export function neutralizeContextClose(text: string): string {
   if (!text) return text
-  return text.replace(/<\/nexus-context\s*\/?\s*>/gi, "")
+  let out = text
+  let prev: string
+  do {
+    prev = out
+    out = out.replace(/<\/nexus-context\s*\/?\s*>/gi, "")
+  } while (out !== prev && out.length < prev.length)
+  return out
 }
 
 /**

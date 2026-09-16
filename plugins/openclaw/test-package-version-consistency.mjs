@@ -11,7 +11,11 @@
 import { readFileSync } from "node:fs"
 import assert from "node:assert/strict"
 
-const CALVER = /\b\d{4}\.\d+\.\d+\b/g
+// OCR-4: \b alone is satisfied at a '.', so a 4-segment version ("2026.5.7.1")
+// matched as "2026.5.7" and a version embedded in another number
+// ("1.2026.5.7") was extracted as a bare calver. The lookarounds reject a
+// leading word/dot character and a trailing ".<digit>" continuation.
+const CALVER = /(?<![\w.])\d{4}\.\d+\.\d+(?!\.\d)(?![\w])/g
 
 function loadJson(url, label) {
   try {
@@ -56,7 +60,13 @@ console.log("PASS  Nr 408: alle 4 OpenClaw-Version-Stellen auf Basis", lower)
 // wird so sichtbar statt vom calver-only-Vergleich verschluckt.
 const pluginApi = pkg.openclaw.compat.pluginApi
 assert.match(pluginApi, /^>=/, "compat.pluginApi muss die peer-Untergrenze als >=-Range tragen")
-assert.ok(pluginApi.includes(lower), "pluginApi muss die untere peer-Grenze tragen")
+// OCR-4: plain includes(lower) can never fail here (the W23 loop already
+// asserted pluginApi's calver === lower) AND it accepts substrings like
+// ">=2026.5.70" for "2026.5.7". Anchor as a whole token instead.
+assert.ok(
+  new RegExp(`^>=${lower}(?:\\s|$)`).test(pluginApi),
+  `pluginApi muss die untere peer-Grenze (>=${lower}) exakt tragen`,
+)
 
 // Obergrenze der peerRange (wenn vorhanden): muss NACH der Untergrenze
 // liegen — eine vertippte/geschrumpfte Upper-Bound (<2026.5.7) wuerde eine
@@ -68,10 +78,20 @@ assert.ok(pluginApi.includes(lower), "pluginApi muss die untere peer-Grenze trag
 const upper = calvers.get("peerDependencies.openclaw")[1]
 const segNum = (v) => v.split(".").map((s) => parseInt(s, 10))
 if (upper !== undefined) {
-  const [uA, uB, uC] = segNum(upper)
-  const [lA, lB, lC] = segNum(lower)
-  const greater =
-    uA !== lA ? uA > lA : uB !== lB ? uB > lB : uC > lC
+  const uSeg = segNum(upper)
+  const lSeg = segNum(lower)
+  // OCR-4: nested ternary banned — segment loop instead. Pads to the longer
+  // version so "2026.10" vs "2026.10.0" compares segment-wise, not by length.
+  const width = Math.max(uSeg.length, lSeg.length)
+  let greater = false
+  for (let i = 0; i < width; i++) {
+    const u = uSeg[i] ?? 0
+    const l = lSeg[i] ?? 0
+    if (u !== l) {
+      greater = u > l
+      break
+    }
+  }
   assert.ok(greater, `peer-Range leer (Upper ${upper} <= Lower ${lower})`)
   console.log("PASS  Nr 408: peerRange-Upper-Bound", upper, "> Lower", lower)
 }

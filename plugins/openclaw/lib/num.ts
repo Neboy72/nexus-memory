@@ -35,6 +35,11 @@ export function clampInt(
   // instead of a bounded integer. Normalize to a finite, ordered interval.
   // W40-scan: fractional bounds are truncated like values, so the clamp can
   // never widen a declared integer interval ("max: 4.5" behaves as 4).
+  // OCR-4: trunc on the LOWER bound WIDENED the declared interval
+  // (clampInt(-1, 1, 0.5, 4) returned 0, below the declared min). Bounds are
+  // now rounded INWARD: lower = ceil(min), upper = floor(max) — an integer
+  // inside [ceil(min), floor(max)] is always inside [min, max]. Degenerate
+  // bounds still fail closed exactly as before.
   // DEGENERATE BOUNDS (non-finite or inverted) FAIL CLOSED BY DESIGN: a host
   // that bypasses the schema is misconfigured, and a silently unbounded
   // clamp ("max: Infinity" → every input passes) is the unsafe direction for
@@ -43,13 +48,14 @@ export function clampInt(
   // pass finite constants (1..5 / 1..500 / 1..50), so this path only fires
   // for schema-bypassing hosts, and fail-closed (tiny) beats fail-open
   // (unbounded).
-  const hi = Number.isFinite(max) ? Math.trunc(max) : Number.isFinite(min) ? Math.trunc(min) : 0
-  const lo = Number.isFinite(min) ? Math.trunc(min) : hi
-  const lower = Math.min(lo, hi)
-  const upper = Math.max(lo, hi)
+  const hiRaw = Number.isFinite(max) ? max : Number.isFinite(min) ? min : 0
+  const loRaw = Number.isFinite(min) ? min : hiRaw
+  const lower = Math.min(Math.ceil(loRaw), Math.ceil(hiRaw))
+  const upper = Math.max(Math.floor(loRaw), Math.floor(hiRaw))
+  const clampInto = (x: number): number => Math.min(upper, Math.max(lower, x))
 
   const base = Number.isFinite(dflt) ? dflt : lower
-  const fallback = Math.min(upper, Math.max(lower, Math.trunc(base)))
+  const fallback = clampInto(Math.trunc(base))
 
   let n: number
   if (typeof v === "number") {
@@ -61,5 +67,5 @@ export function clampInt(
   }
 
   if (!Number.isFinite(n)) return fallback
-  return Math.min(upper, Math.max(lower, Math.trunc(n)))
+  return clampInto(Math.trunc(n))
 }

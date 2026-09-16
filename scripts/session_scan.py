@@ -32,8 +32,9 @@ with contextlib.closing(sqlite3.connect(db_path)) as con:
     rows = con.execute(
         "SELECT id, source, started_at, ended_at, end_reason, message_count, tool_call_count,"
         " output_tokens, title, last_activity_description"
-        " FROM sessions WHERE (started_at >= ? OR ended_at IS NULL) AND archived=0 AND hidden=0 ORDER BY started_at DESC",
-        (cutoff,),
+        " FROM sessions WHERE (started_at >= ? OR COALESCE(ended_at, started_at) >= ?)"
+        " AND archived=0 AND hidden=0 ORDER BY started_at DESC",
+        (cutoff, cutoff),
     ).fetchall()
     print(f"Sessions letzte 24h: {len(rows)}")
     for r in rows:

@@ -87,9 +87,13 @@ await t("cron-form-gate steht NICHT im thoughtFilter-Block", () => {
   )
 })
 
-await t("cron-form-gate wird unbedingt danach registriert", () => {
+// OCR-4 (final): Reihenfolge bleibt Filter-erst/Gate-zuletzt — der
+// Tausch-Entwurf wurde durch Kette-Beweise (/tmp/chain-probe2.mjs) als
+// fail-open widerlegt und zurückgebaut. Der Test-Vertrag bleibt der
+// Original-Kontrakt: Gate nach thoughtFilter-Block, vor autoCapture.
+await t("cron-form-gate wird unbedingt registriert (eigenständiger Block)", () => {
   assert.match(
-    after,
+    src,
     /api\.on\(\s*"message_sending",\s*buildCronFormGateHandler\(\)\s*\)/,
     "eigene, unbedingte api.on-Registrierung erwartet",
   )
@@ -99,16 +103,16 @@ await t("cron-form-gate hat eine eigene, Handler-Ebenen-Registrierung (indent, m
   // W38 (medium): exakt 4 Spaces bricht bei kosmetischem Reformat — statt dessen:
   // die Registrierung muss als ANWEISUNG mit geringem, einheitlichem indent stehen
   // (nicht tiefer verschachtelt), egal ob sie über eine oder mehrere Zeilen geht.
-  const m = afterMasked.match(/^([ \t]*)api\.on\([\s\S]*?buildCronFormGateHandler\(\)[\s\S]*?\)/m)
+  const m = masked.match(/^([ \t]*)api\.on\([\s\S]*?buildCronFormGateHandler\(\)[\s\S]*?\)/m)
   assert.ok(m, "unbedingte api.on(...buildCronFormGateHandler...)-Registrierung nicht gefunden")
   const indent = m[1]
   assert.ok(indent.length <= 8, `Registrierung muss auf Handler-Ebene stehen (indent ${indent.length}), war: "${indent.length} spaces"`)
-  assert.ok(!/^[ \t]{9,}/.test(afterMasked.slice(afterMasked.indexOf(m[0]), afterMasked.indexOf(m[0]) + m[0].length + 200).split("\n").slice(1, 3).join("\n")), "Registrierung wirkt verschachtelt (9+ spaces) — nicht top-level")
+  assert.ok(!/^[ \t]{9,}/.test(masked.slice(masked.indexOf(m[0]), masked.indexOf(m[0]) + m[0].length + 200).split("\n").slice(1, 3).join("\n")), "Registrierung wirkt verschachtelt (9+ spaces) — nicht top-level")
 })
 
-await t("Reihenfolge: cron-gate kommt nach dem thoughtFilter-Block, vor autoCapture", () => {
+await t("Reihenfolge: cron-gate kommt nach dem thoughtFilter-Block, vor autoCapture (OCR-4 bewiesen: Gate zuletzt gewinnt Merge)", () => {
   const cronIdx = src.indexOf("buildCronFormGateHandler()")
-  assert.ok(cronIdx > end, "cron-gate muss nach dem thoughtFilter-Block stehen")
+  assert.ok(cronIdx > end, "cron-gate muss NACH dem thoughtFilter-Block stehen (Gate zuletzt = Gate-Urteil gewinnt Replacement-Merge)")
   const autoIdx = masked.indexOf("if (cfg.autoCapture)")
   assert.ok(autoIdx >= 0, `Marker "if (cfg.autoCapture)" nicht gefunden — Index-Check unmöglich (umbenannt?)`)
   assert.ok(

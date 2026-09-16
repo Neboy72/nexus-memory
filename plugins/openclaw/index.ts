@@ -89,8 +89,14 @@ export default {
 
     // H138: buildPromptSection is pure. The caller owns the once-per-process
     // update nudge here so prompt building is deterministic.
+    // OCR-4: consume the nudge ONLY when the prompt section will actually
+    // carry tools — when neither nexus_search nor nexus_store is available,
+    // buildPromptSection returns [] and the consumed nudge would be thrown
+    // away forever (no reset), so no session would ever see the update hint.
     const promptBuilder = (params: { availableTools: Set<string> }) => {
-      const { text } = consumeUpdateNudge()
+      const hasSearch = params.availableTools.has("nexus_search")
+      const hasStore = params.availableTools.has("nexus_store")
+      const { text } = hasSearch || hasStore ? consumeUpdateNudge() : { text: null }
       return buildPromptSection({ availableTools: params.availableTools, nudged: text === null })
     }
 
@@ -138,6 +144,16 @@ export default {
     // Thought-Filter (29.08.2026): GLM-5.x emittiert CoT als plain text
     // (GitHub #42062) — filtert Reasoning-Blöcke vor dem Senden.
     // Standard: an. Ausschaltbar via thoughtFilter: false in Plugin-Config.
+    // OCR-4 (korrigiert): der Filter läuft VOR dem Gate. Begründung: die
+    // message_sending-Merge-Semantik ist "last returned content wins" — ein
+    // späterer Handler ERSETZT das bisherige Ergebnis. Läuft das Gate zuerst,
+    // ersetzt die Filter-Rückgabe ({ message: undefined } beim Drop) das
+    // Gate-Urteil { cancel: true } vollständig = fail-open. In dieser
+    // Reihenfolge (Filter erst, Gate zuletzt) ist jeder Fall sicher:
+    // Filter-Drop → Gate { cancel: false } ohne message-Key → Original-Text
+    // geht raus (kein Verlust); Gate-Block → cancel:true bleibt letzte
+    // Rückgabe. (Der ursprüngliche OCR-4-Tausch-Entwurf wurde durch die
+    // Kette-Kette-Beweise /tmp/chain-probe2.mjs widerlegt und zurückgebaut.)
     if (cfg.thoughtFilter !== false) {
       api.on("message_sending", buildThoughtFilterHandler())
       log.info("thought-filter: message_sending hook aktiv")
