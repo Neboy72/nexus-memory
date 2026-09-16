@@ -20,6 +20,12 @@ const t = (name, fn) =>
       failed++
       console.log("FAIL ", name, "—", e.message)
     })
+    // Restore the real fetch after EVERY test: a throwing stub (e.g. the
+    // "Qdrant down" case) must not leak into later tests, and a failure must
+    // not leave the patched stub in place for the process tail.
+    .finally(() => {
+      globalThis.fetch = realFetch
+    })
 
 const realFetch = globalThis.fetch
 

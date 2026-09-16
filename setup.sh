@@ -141,13 +141,17 @@ fi
 
 # Check Ollama
 if curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+    # `|| true`: this probe is optional. Under `set -euo pipefail` a failing
+    # command substitution would abort the whole installer silently (the port
+    # can close between the curl check and this call, or the JSON shape can
+    # differ). The empty default keeps the subsequent `[ -n ]` meaningful.
     OLLAMA_EMBED=$($PYTHON -c "
 import json, urllib.request
 r = urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2)
 models = [m['name'] for m in json.loads(r.read()).get('models', [])]
 emb = [m for m in models if 'embed' in m.lower()]
 print(emb[0] if emb else '')
-" 2>/dev/null)
+" 2>/dev/null || true)
     if [ -n "$OLLAMA_EMBED" ]; then
         EMBED_HINT="🦙 Ollama ($OLLAMA_EMBED detected) — recommended"
         ok "Ollama embedding detected: $OLLAMA_EMBED"

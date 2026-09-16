@@ -385,7 +385,16 @@ class TestBrokenConfigProtection:
 # ---------------------------------------------------------------------------
 
 class TestDockerRunLocalhostOnly:
-    def test_welcome_recommends_loopback_binding(self):
+    def test_welcome_recommends_loopback_binding(self, monkeypatch):
+        # W34-6 fixed the /healthz endpoint — a REAL running Qdrant (local
+        # production) now makes qdrant_running=True and instructions=None.
+        # Pin the qdrant-down scenario so the assertion stays deterministic.
+        import urllib.request as _ur
+
+        def _boom(*a, **kw):
+            raise OSError("qdrant down (mocked)")
+
+        monkeypatch.setattr(_ur, "urlopen", _boom)
         welcome = setup_mod.step_welcome()
         instructions = welcome["qdrant_instructions"]
         assert instructions is not None

@@ -32,7 +32,7 @@ const API = {
         }
         throw new Error(`HTTP ${res.status}: ${detail || res.statusText || 'request failed'}`);
       }
-      return res.json();
+      return await this.parseJson(res);
     } catch (err) {
       if (err && err.name === 'AbortError') {
         throw new Error(`Request timed out after 15000ms: ${url}`);
@@ -40,6 +40,28 @@ const API = {
       throw err;
     } finally {
       clearTimeout(timeout);
+    }
+  },
+
+  // A 2xx does not guarantee a JSON body: 204/205 have none, and a proxy or
+  // error page can be served with a 2xx status and a non-JSON content type.
+  // Parsing those unconditionally would surface as a raw "Unexpected end of
+  // JSON input" instead of a usable result.
+  async parseJson(res) {
+    if (res.status === 204 || res.status === 205) return {};
+    const text = await res.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      const contentType = res.headers.get('content-type') || '';
+      // Advertised as JSON but malformed — surface a concrete error rather
+      // than silently returning an empty object.
+      if (contentType.includes('json')) {
+        throw new Error(`Invalid JSON in response from ${res.url || 'request'} (HTTP ${res.status})`);
+      }
+      // Non-JSON success body: treat as no data. Callers guard their fields.
+      return {};
     }
   },
 

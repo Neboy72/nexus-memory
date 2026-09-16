@@ -144,11 +144,21 @@ def _validate_llm_facts(facts: List[Any]) -> List[Dict[str, Any]]:
     for f in facts:
         if not isinstance(f, dict):
             continue
-        fact_text = f.get("text", "").strip()
-        category = f.get("category", "fact").strip().lower()
-        confidence = f.get("confidence", 0.7)
+        # A JSON null / numeric / structured value would make `.strip()` raise
+        # AttributeError, which the broad `except` upstream turns into None —
+        # discarding the whole otherwise-valid batch and falling back to
+        # heuristics. Coerce scalar text, skip entries with no usable text.
+        raw_text = f.get("text")
+        if isinstance(raw_text, bool) or not isinstance(raw_text, (str, int, float)):
+            continue
+        fact_text = str(raw_text).strip()
         if not fact_text:
             continue
+        # Same for category: only a string is meaningful; null/numeric falls
+        # back to the default instead of raising.
+        raw_category = f.get("category")
+        category = raw_category.strip().lower() if isinstance(raw_category, str) else "fact"
+        confidence = f.get("confidence", 0.7)
         if category not in ("fact", "rule", "preference", "belief"):
             category = "fact"
         try:

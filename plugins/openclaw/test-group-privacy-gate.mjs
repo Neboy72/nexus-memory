@@ -142,6 +142,21 @@ try {
     assert.strictEqual(searches[0].accessLevel, "public", "Gruppen-Recall MUSS auf public gecappt sein");
   });
 
+  // Nr (W34-Fund): recall mit LEEREM groupId → capped public (fail-closed)
+  await t("recall blank groupId → capped public", async () => {
+    searches.length = 0;
+    await handlers["before_prompt_build"](
+      { prompt: "was weißt du über geheimnisse?" },
+      { trigger: "user", groupId: "" },
+    );
+    assert.ok(searches.length > 0, "kein Search-Call — Cap fehlt komplett?");
+    assert.strictEqual(
+      searches[0].accessLevel,
+      "public",
+      "blank groupId muss als Gruppe zählen (cap) — got: " + searches[0].accessLevel,
+    );
+  });
+
   // 4. recall DM → cfg-Level (private)
   await t("recall DM → private", async () => {
     searches.length = 0;

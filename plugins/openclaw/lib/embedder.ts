@@ -43,7 +43,30 @@ function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
   const anyFn = (AbortSignal as unknown as {
     any?: (signals: AbortSignal[]) => AbortSignal
   }).any
-  return typeof anyFn === "function" ? anyFn([a, b]) : b
+  if (typeof anyFn === "function") return anyFn([a, b])
+  // Fallback for runtimes without AbortSignal.any: combine manually so BOTH
+  // signals stay live. Returning only `b` silently dropped the caller's
+  // signal (e.g. session/cache-level cancellation), leaving the request
+  // uncancellable on those runtimes.
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  if (a.aborted || b.aborted) {
+    controller.abort()
+    return controller.signal
+  }
+  a.addEventListener("abort", onAbort, { once: true })
+  b.addEventListener("abort", onAbort, { once: true })
+  // Detach the listeners once either side wins, so a long-lived signal does
+  // not accumulate handlers across requests.
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      a.removeEventListener("abort", onAbort)
+      b.removeEventListener("abort", onAbort)
+    },
+    { once: true },
+  )
+  return controller.signal
 }
 
 /**

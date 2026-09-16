@@ -446,8 +446,11 @@ class TestH9OpenclawGuard:
         rm_cmd = 'rm -rf "$TARGET_DIR"'
         assert rm_cmd in src
         # Both guards sit above the destructive command.
-        assert src.index('case "$PLUGINS_DIR"') < src.index(rm_cmd)
+        # W34-14 reshaped the guards: STATE_DIR validation (case + trailing
+        # slash normalize) + defense-in-depth basename/case on TARGET_DIR.
+        assert src.index('case "$OPENCLAW_STATE_DIR"') < src.index(rm_cmd)
         assert src.index('basename "$TARGET_DIR"') < src.index(rm_cmd)
+        assert src.index('case "$TARGET_DIR"') < src.index(rm_cmd)
 
     def test_syntax_ok(self):
         assert subprocess.run(["bash", "-n", str(OPENCLAW_INSTALLER)]).returncode == 0

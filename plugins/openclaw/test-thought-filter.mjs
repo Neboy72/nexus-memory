@@ -186,9 +186,19 @@ const cases = [
 
 let failed = 0;
 for (const [name, input, mustContain, mustNotContain, exact] of cases) {
-  const result = await hook({ message: input });
-  const out = result?.message ?? "";
+  let out = "";
   try {
+    // Hook-Call INSIDE the try: a rejecting/throwing handler must count as a
+    // failed case (not an unhandled rejection that aborts the whole loop and
+    // skips the summary).
+    const result = await hook({ message: input });
+    out = result?.message ?? "";
+    // Silent-pass hole: a LEAK case with empty mustContain AND empty
+    // mustNotContain asserts nothing (both loops no-op). Such a case is a
+    // test bug — count it as failed instead of passing silently.
+    if (!mustContain.length && !mustNotContain.length && !exact) {
+      throw new Error("case declares no assertions (mustContain/mustNotContain/exact all empty)");
+    }
     for (const s of mustContain) {
       assert.ok(out.includes(s), `${name}: erwartet «${s.slice(0, 40)}» in Output`);
     }
