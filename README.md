@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.20.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.20.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-1818%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -726,6 +726,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.20.1** | 2026-09-16 | Post-release verification round: proven prompt-injection bypass closed (slash close-tag), missing `_logger` fixed, session-scan/num/clamp hardening, 22 findings from the 3rd scan. 1945 tests. |
 | **v0.20.0** | 2026-09-16 | OCR review campaign complete: all 513 findings closed (15 critical/high dashboard XSS+injection, 258 medium incl. graph-store races + webhook SSRF, 240 low). 26 waves, each with a proof-carrying test file. 1818 tests. |
 | **v0.19.1** | 2026-09-13 | Memory Quality Gates: junk filtered at ingestion (stated/horizon/single-mention rules), salience follows confidence, poisoned entries flagged + demoted |
 | **v0.19.0** | 2026-09-13 | Query Rewriting: sloppy queries rewritten before embedding, hit-rate 67%→75% on live-store bench |
