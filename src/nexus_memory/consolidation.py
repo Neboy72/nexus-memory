@@ -277,6 +277,14 @@ def _parse_verdict(raw: str) -> str:
     try:
         d = json.loads(txt)
     except Exception:
+        # W33-2 SKIPPED: the requested "lift the first balanced {...} out of
+        # surrounding prose, key name independent" rescue for the VERDICT was
+        # NOT applied — it is exactly the lenient behaviour this function's
+        # strict mode was designed to reject (see the docstring above and
+        # tests/test_consolidation.py::TestParseVerdict: prose/echoed
+        # instruction text carrying {"verdict": "supersede"} must never
+        # deactivate a memory). _parse_facts below keeps that leniency, where
+        # a wrong parse cannot deactivate anything.
         return "unrelated"
     if not isinstance(d, dict):
         return "unrelated"
@@ -605,30 +613,74 @@ class Consolidator:
             points=[point_id],
         )
 
+    def backfill_point(self, point_id: str, content: str, *,
+                       source_date: Optional[str] = None,
+                       source_payload: Optional[dict] = None) -> dict:
+        """Public backfill entry (W33-3): distill one stored conversation.
+
+        Identical to ``consolidate_point``, but the caller hands in the SOURCE
+        payload so the hard rule also holds on the backfill path: a
+        guardrail-override audit entry is skipped with a log instead of being
+        distilled into ordinary canonical facts.
+        """
+        return self.consolidate_point(point_id, content,
+                                      source_date=source_date,
+                                      source_payload=source_payload)
+
     def consolidate_point(self, point_id: str, content: str, *,
-                          source_date: Optional[str] = None) -> dict:
+                          source_date: Optional[str] = None,
+                          source_payload: Optional[dict] = None) -> dict:
         """Public per-point entry for backfill/worker scripts (Nr 279).
 
         Distills one conversation into facts, stores them and supersedes
         conflicts — WITHOUT reaching into underscored internals. Returns
-        {"created": n, "duplicates": n, "superseded": n, "failed_supersedes": n}.
+        {"created": n, "duplicates": n, "superseded": n, "failed_supersedes": n,
+        "skipped": n}.
+
+        ``source_payload`` (W33-3) is forwarded to ``_store_fact`` and carries
+        the guardrail-override marker, so this entry enforces the same rule as
+        ``run()``/``_store_fact``: audit entries of protected-resource
+        bypasses are NEVER consolidated (skipped + logged, no exception).
 
         Raises ValueError on an unparseable LLM response (Nr 280: the caller
         must NOT mark the point consolidated in that case) and propagates
         LLM/store errors.
         """
+        src = source_payload if isinstance(source_payload, dict) else {}
+        if src.get("guardrail_override"):
+            # W33-3: same exclusion run() applies before any LLM work — the
+            # entry holds commands + reasoning from protected-resource
+            # bypasses and must never become a canonical fact.
+            log.info("backfill: guardrail override audit point %s excluded "
+                     "(never consolidated)", point_id)
+            return {"created": 0, "duplicates": 0, "superseded": 0,
+                    "failed_supersedes": 0, "skipped": 1}
         conv = content[:_MAX_CONV_CHARS]
         date = source_date or time.strftime("%Y-%m-%d")
         facts = _parse_facts(self._llm(DISTILL_PROMPT.format(date=date, conv=conv)))
         if facts is None:
             raise ValueError("unparseable LLM response (point left unmarked for retry)")
-        created = duplicates = superseded = failed_supersedes = 0
+        created = duplicates = superseded = failed_supersedes = skipped = 0
         for fact in facts:
             decision, sup_ids = self._resolve_conflicts(fact)
             if decision == "duplicate":
                 duplicates += 1
                 continue
-            new_id, _fact_scope = self._store_fact(fact, point_id)
+            try:
+                # W33-3: forward the source payload when there is one — the
+                # plain 2-arg form stays valid for callers that have none
+                # (access level and scope inheritance come from the payload).
+                if source_payload:
+                    new_id, _fact_scope = self._store_fact(
+                        fact, point_id, source_payload=source_payload)
+                else:
+                    new_id, _fact_scope = self._store_fact(fact, point_id)
+            except _SkipPointError as skip_exc:
+                # W33-3: defense in depth — _store_fact refuses the audit
+                # entry itself. Skip it with a log, never as an exception.
+                log.info("backfill: point %s skipped: %s", point_id, skip_exc)
+                skipped += 1
+                continue
             for old_id in sup_ids:
                 try:
                     self._supersede_old(old_id, new_id)
@@ -642,7 +694,8 @@ class Consolidator:
             created += 1
         self._mark_consolidated(point_id, created)
         return {"created": created, "duplicates": duplicates,
-                "superseded": superseded, "failed_supersedes": failed_supersedes}
+                "superseded": superseded, "failed_supersedes": failed_supersedes,
+                "skipped": skipped}
 
     # ── pending supersede retry store (review-fix: partial failures must
     #    complete on a later tick instead of being lost) ────────────────

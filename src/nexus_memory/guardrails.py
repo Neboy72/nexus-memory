@@ -155,6 +155,18 @@ _BARE_OPERAND_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# W33-7: QUOTED first operand of a destructive command word
+# ('rm -rf "/data/protected dir"'). The path patterns above stop at the
+# first whitespace and _BARE_OPERAND_PATTERN refuses to cross a quote, so a
+# quoted target containing a space produced only its first token (or
+# nothing) — a bypass. Captures the COMPLETE quoted string, spaces included.
+_QUOTED_OPERAND_PATTERN = re.compile(
+    r"\b(?:rm|rmdir|shred|unlink|erase|truncate|kill|pkill|killall|taskkill"
+    r"|drop|uninstall|remove-item)\b"
+    r"(?:\s+(?:-{1,2}[\w-]+|/[A-Za-z]))*\s+[\"']([^\"']+)[\"']",
+    re.IGNORECASE,
+)
+
 # Operations that destroy a whole subtree (rm -r, del /s, ...)
 _RECURSIVE_DELETE_PATTERN = re.compile(
     r"(?:^|\s)-{1,2}[a-zA-Z]*r[a-zA-Z]*(?=$|\s)|(?:^|\s)/s(?=$|\s)",
@@ -184,6 +196,14 @@ def extract_targets(command: str) -> list[str]:
     # Extract variable references (cannot be resolved -> must not pass checks)
     for match in _VARIABLE_PATTERN.finditer(command):
         targets.append(match.group(0))
+    # Extract QUOTED operands of destructive command words first (W33-7):
+    # they are the only place where the complete target — whitespace
+    # included — is available, and the bare-operand pattern below cannot
+    # see past the opening quote.
+    for match in _QUOTED_OPERAND_PATTERN.finditer(command):
+        operand = match.group(1).strip()
+        if operand and operand not in ("~", "/", "."):
+            targets.append(os.path.expanduser(operand))
     # Extract the first operand of destructive command words, so relative
     # paths, PIDs and package names are captured as targets as well
     for match in _BARE_OPERAND_PATTERN.finditer(command):
@@ -392,8 +412,17 @@ class GuardrailEngine:
             GuardrailResult with verdict, reason, and matched rules
         """
         # Step 1: Classify the action
-        full_input = f"{tool_name} {command} {tool_input or ''}"
-        action = classify_action(full_input)
+        # W33-6: classify the COMMAND (the shell line) only. Serializing
+        # tool_input into the classified string fed file contents and
+        # descriptions to the destructive patterns, so a harmless write whose
+        # body merely contained '>', 'truncate', 'kill ' or 'drop' was
+        # classified destructive. tool_input stays in use for PATH extraction
+        # and the protected-file check below — never for the patterns; a
+        # write tool passes its tool name as ``command`` (see test_guardrails
+        # write_file path check), so it is still classified as OVERWRITE.
+        # command=None/"" is never destructive on its own — like the plugin
+        # wrappers, which treat an empty command as "nothing to gate".
+        action = classify_action(command or "")
         if action is None:
             return GuardrailResult(
                 verdict=GuardrailVerdict.ALLOW,
