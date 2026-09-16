@@ -22,6 +22,52 @@ const ENTITIES_LIMIT_MAX = 500
 const SUBGRAPH_DEPTH_DEFAULT = 2
 const SUBGRAPH_DEPTH_MAX = 5
 
+// W31-18: relations that may enter the public result contract. Mirrors the
+// canonical `nexus.graph.schema.EdgeRelation` values — the whitelist the
+// outgoing (normalizeEdge) and incoming validation gates share.
+const KG_RELATIONS: readonly string[] = [
+  "supersedes",
+  "contradicts",
+  "supports",
+  "alternative_to",
+  "depends_on",
+  "references",
+  "installed_at",
+  "connected_to",
+  "manages",
+  "runs_on",
+  "part_of",
+  "owns",
+  "located_at",
+  "depends_on_service",
+  "uses",
+  "provides",
+  "controls",
+]
+
+/**
+ * Validate one INCOMING edge (a `findIncomingEdges` result) before it enters
+ * the public `{ fact_id, relation, edge_id }` contract.
+ *
+ * W31-18(a): the incoming branch used to push raw payload fields as casts —
+ * mirroring the H125 gate the outgoing branch already runs through
+ * (`normalizeEdge`): fact_id must be a non-empty string, relation must be a
+ * non-empty whitelisted string, edge_id degrades to "" (never `undefined`).
+ */
+function validateIncomingEdge(
+  edge: { source_id?: unknown; relation?: unknown; edge_id?: unknown } | null | undefined,
+): { fact_id: string; relation: string; edge_id: string } | null {
+  if (!edge || typeof edge !== "object") return null
+  const factId = edge.source_id
+  if (typeof factId !== "string" || factId === "") return null
+  const relation = edge.relation
+  if (typeof relation !== "string" || relation === "") return null
+  if (!KG_RELATIONS.includes(relation)) return null
+  const edgeId =
+    typeof edge.edge_id === "string" && edge.edge_id !== "" ? edge.edge_id : ""
+  return { fact_id: factId, relation, edge_id: edgeId }
+}
+
 /**
  * Multi-hop traversal from a starting fact.
  * Answers 'what is connected to X?' across the entity graph.
@@ -173,7 +219,10 @@ export function registerFindEntitiesTool(
             })
           }
 
-          const points = await qdrantClient.scrollFiltered(filter, limit)
+          // W31-18(b): `limit` is the PER-PAGE scroll limit; scrollFiltered
+          // walks up to 5 pages, so without a total cap this returned up to
+          // limit*5 entities. Pass `limit` as the total cap as well.
+          const points = await qdrantClient.scrollFiltered(filter, limit, limit)
           const entities = points.map((pt) => {
             const payload = (pt.payload ?? {}) as Record<string, unknown>
             return {
@@ -360,10 +409,19 @@ export function registerGetRelatedTool(
           // Incoming edges
           const incoming = await qdrantClient.findIncomingEdges(factId, relation)
           for (const edge of incoming) {
+            // W31-18(a): run the SAME validation gate as the outgoing branch
+            // (normalizeEdge/H125). Raw casts used to leak `fact_id:
+            // undefined` / `edge_id: undefined` into the public contract.
+            const normalized = validateIncomingEdge(edge)
+            if (!normalized) {
+              log.debug(`get_related: skipping malformed incoming edge on ${factId}`)
+              continue
+            }
+            if (relation && normalized.relation !== relation) continue
             results.push({
-              fact_id: edge.source_id,
-              relation: edge.relation,
-              edge_id: edge.edge_id,
+              fact_id: normalized.fact_id,
+              relation: normalized.relation,
+              edge_id: normalized.edge_id,
               direction: "incoming",
             })
           }

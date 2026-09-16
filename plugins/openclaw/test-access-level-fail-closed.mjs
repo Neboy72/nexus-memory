@@ -54,13 +54,10 @@ await t("search: public → Filter any ['public']", async () => {
   assert.deepStrictEqual(body.filter.must[0].match.any, ["public"])
 })
 
-await t("search: unbekannter Level → Filter any [] (fail-closed)", async () => {
+await t("search: unbekannter Level → kein Qdrant-Call (fail-closed, W31-16)", async () => {
   const body = await captureSearchBody("geheim")
-  assert.deepStrictEqual(
-    body.filter.must[0].match.any,
-    [],
-    "unbekannter Level darf NICHTS sehen",
-  )
+  // W31-16: empty levels return EARLY — no fetch, no filter semantics bet.
+  assert.strictEqual(body, undefined, "unbekannter Level darf NICHTS sehen")
 })
 
 globalThis.fetch = realFetch

@@ -178,7 +178,15 @@ class NexusMemoryProvider:
         self._backup_thread.start()
 
     def _do_backup(self) -> str:
-        """Create a full backup of all memories as JSON. Returns backup file path."""
+        """Create a payload-only backup of all memories as JSON. Returns path.
+
+        W31-13: vectors are deliberately NOT included. Collecting every point
+        (payload + 1024d vector, ~16 KB each) into one list before
+        ``json.dump`` doubled the RAM peak and scaled with the collection.
+        The backup stays self-sufficient because restore re-embeds from the
+        payload content when a point carries no vector (nexus_restore with
+        reembed=true, or automatically on a missing vector).
+        """
         import json, os, time
         from datetime import datetime
 
@@ -195,13 +203,12 @@ class NexusMemoryProvider:
                 limit=100,
                 offset=offset,
                 with_payload=True,
-                with_vectors=True,  # Include vectors for zero-cost restore
+                with_vectors=False,  # W31-13: payload-only, no vector blow-up
             )
             for p in results:
                 all_points.append({
                     "id": str(p.id),
                     "payload": p.payload or {},
-                    "vector": p.vector if isinstance(p.vector, list) else None,
                 })
             if not offset:
                 break
@@ -859,7 +866,16 @@ class NexusMemoryProvider:
 
     def _guardrail_check(self, command: str, tool_name: str = "",
                          tool_input: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Check if an action is safe before executing it."""
+        """Check if an action is safe before executing it.
+
+        W31-12: fail-CLOSED. A guardrail-infrastructure failure (Qdrant
+        unreachable, embedder/engine init failure) used to collapse to
+        ``verdict: "allow"`` — the destructive-op path ran unguarded exactly
+        when the guardrail was broken. Decision: only a real ENGINE answer may
+        allow; an infrastructure error denies, flagged with
+        ``guardrail_status: "infra-error"`` so the caller sees why. An empty
+        command stays allow (no destructive action to gate).
+        """
         if not command:
             return {"verdict": "allow", "reason": "Empty command"}
         try:
@@ -870,8 +886,12 @@ class NexusMemoryProvider:
             result = engine.check_action(command, tool_name, tool_input or {})
             return result.to_dict()
         except Exception as exc:
-            logger.warning("Guardrail check failed (fail-open): %s", exc)
-            return {"verdict": "allow", "reason": f"Guardrail check failed (fail-open): {exc}"}
+            logger.warning("Guardrail check unavailable (fail-closed): %s", exc)
+            return {
+                "verdict": "deny",
+                "reason": f"guardrail unavailable (fail-closed): {exc}",
+                "guardrail_status": "infra-error",
+            }
 
     def _guardrail_override(self, command: str, matched_rules: List[Dict[str, Any]],
                             reasoning: str, agent_id: str = "unknown") -> Dict[str, Any]:

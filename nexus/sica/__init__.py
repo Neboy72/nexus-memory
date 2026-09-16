@@ -56,6 +56,28 @@ def _safe_float(raw: str, fallback: float) -> float:
         return fallback
 
 
+def _prov_dict(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the payload's ``provenance`` as a dict (W31-9b).
+
+    A present-but-null or non-dict provenance used to hit ``.get`` directly
+    and raise AttributeError, killing the whole SICA run.
+    """
+    prov = payload.get("provenance")
+    return prov if isinstance(prov, dict) else {}
+
+
+def _safe_conf(value: Any, default: float = 1.0) -> float:
+    """Coerce a provenance confidence to float (W31-9b).
+
+    ``float("abc")`` / ``float(None)`` used to raise ValueError/TypeError out
+    of the detectors. Non-numeric (and bool) values degrade to ``default``
+    instead of aborting the run.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return default
+
+
 def _get_config() -> Dict[str, Any]:
     """Read SICA config at call time (not import time).
 
@@ -263,7 +285,7 @@ def _detect_retention(
                     "auto_fixable": True,
                     "action": "delete",
                     "category": category,
-                    "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) if (payload.get("provenance") or {}).get("confidence") is not None else 0.5),
+                    "confidence": _safe_conf(_prov_dict(payload).get("confidence"), 0.5),
                 })
         except (ValueError, TypeError) as exc:
             skipped += 1
@@ -350,6 +372,10 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
         if not isinstance(edges, list):
             continue
         for edge in edges:
+            # W31-9a: edges come from untyped JSON payloads — a string/None
+            # entry would raise AttributeError on `.get` and kill the run.
+            if not isinstance(edge, dict):
+                continue
             if edge.get("relation") == "contradicts" and edge.get("status") == "active":
                 issues.append({
                     "id": p["id"],
@@ -358,7 +384,7 @@ def _detect_contradictions(points: List[Dict]) -> List[Dict[str, Any]]:
                     "auto_fixable": False,
                     "action": "review",
                     "category": payload.get("category", "fact"),
-                    "confidence": float((payload.get("provenance") or {}).get("confidence", 0.5) if (payload.get("provenance") or {}).get("confidence") is not None else 0.5),
+                    "confidence": _safe_conf(_prov_dict(payload).get("confidence"), 0.5),
                     "target_id": edge.get("target_fact_id"),
                 })
     return issues

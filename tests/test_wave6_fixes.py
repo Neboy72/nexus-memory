@@ -107,8 +107,10 @@ class TestG1NoCategorySupersedes:
         assert result is None or result["relation"] != "supersedes"
 
     def test_same_category_still_supersedes(self):
+        # W31-4: conjunction — category match alone is not enough; the pair
+        # needs version strings AND direction language (see TestG2VersionMarker).
         result = _check_supersedes(
-            "release v2.0.1", "release v2.0.0", "release", "release"
+            "release v2.0.1 is the latest", "release v2.0.0 is older", "release", "release"
         )
         assert result is not None and result["relation"] == "supersedes"
 
@@ -121,19 +123,36 @@ class TestG2VersionMarker:
         assert _check_supersedes("latency is 2.5 ms", "latency is 1.75 ms", "cfg", "cfg") is None
 
     def test_real_version_string_matches(self):
-        result = _check_supersedes("release v2.0.1", "release v2.0.0", "release", "release")
+        # W31-4: conjunction — version PLUS direction language; bare version
+        # alone no longer emits (old test asserted the removed disjunction).
+        assert _check_supersedes("release v2.0.1", "release v2.0.0", "release", "release") is None
+
+    def test_version_and_language_both_present_matches(self):
+        # W31-4: both signals together still classify as supersedes.
+        result = _check_supersedes(
+            "release v2.0.1 — the latest build", "release v2.0.0 is now old", "release", "release",
+        )
         assert result is not None and result["relation"] == "supersedes"
 
-    def test_bare_semver_matches(self):
-        assert _check_supersedes("build 1.2.3", "build 1.2.2", "rel", "rel") is not None
+    def test_bare_semver_without_language_does_not_match(self):
+        # W31-4: semver without any newer/older wording no longer emits.
+        assert _check_supersedes("build 1.2.3", "build 1.2.2", "rel", "rel") is None
 
     def test_word_marker_still_matches(self):
-        # review #41: explicit newer/older language is a valid signal on its own;
-        # only bare decimals were the false-positive source.
-        assert _check_supersedes("the newer approach", "the old approach", "c", "c") is not None
+        # review #41: explicit newer/older language remains a signal; W31-4
+        # narrows it to require a parseable version on BOTH sides.
+        assert _check_supersedes(
+            "the newer approach v1.1.0", "the old approach v1.0.0", "c", "c",
+        ) is not None
 
     def test_two_component_decimal_not_a_version(self):
         assert _check_supersedes("ratio 3.14 here", "ratio 2.71 here", "c", "c") is None
+
+    def test_same_version_pair_never_supersedes(self):
+        # W31-4: identical versions must not produce a supersedes edge.
+        assert _check_supersedes(
+            "release v2.0.0 latest", "release v2.0.0 older notes", "c", "c",
+        ) is None
 
 
 # ── G3: dedup hash before lock (#42) ──────────────────────────────────────

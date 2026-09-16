@@ -137,7 +137,22 @@ export class QdrantClient {
           `${mismatch} — recreating (allowRecreate=true, backup=${backupPath}). ` +
           `All existing points are deleted!`,
         )
-        await fetch(url, { method: "DELETE" })
+        // W31-17: verify the DELETE. The response used to be ignored and the
+        // request had no timeout — a 401/403/500 silently left the old
+        // collection in place, so the recreate-branch below either failed
+        // confusingly or upserted into a wrong-dimension collection. Refuse
+        // to continue on any non-2xx, and bound the request with a timeout.
+        const deleteResp = await fetch(url, {
+          method: "DELETE",
+          signal: AbortSignal.timeout(10000),
+        })
+        if (!deleteResp.ok) {
+          throw new Error(
+            `DELETE failed HTTP ${deleteResp.status} — refusing recreate ` +
+              `(collection="${this.collection}", url=${this.qdrantUrl})`,
+          )
+        }
+        log.info(`collection ${this.collection} deleted (allowRecreate opt-in)`)
         exists = false
       } else {
         // Default: never delete. Refuse and point at the manual procedure.
@@ -211,6 +226,17 @@ export class QdrantClient {
    */
   async search(queryVector: number[], limit: number, accessLevel: string): Promise<SearchResult[]> {
     const levels = visibleAccessLevels(accessLevel)
+
+    // W31-16: unknown level → levels=[] → fail-closed with NO Qdrant call.
+    // Sending `match: { any: [] }` relied on the unverified Qdrant semantics
+    // that an empty `any` matches nothing; if Qdrant ignored the clause an
+    // unknown level would see every memory. Return empty instead.
+    if (levels.length === 0) {
+      log.debug(
+        `search: no visible access levels for "${accessLevel}" — fail-closed (empty result)`,
+      )
+      return []
+    }
 
     const filter =
       levels.length < 3
@@ -372,6 +398,7 @@ export class QdrantClient {
   async scrollFiltered(
     filter: Record<string, unknown>,
     limit: number,
+    maxTotal?: number,
   ): Promise<Array<{ id: string; payload?: Record<string, unknown> }>> {
     const collected: Array<{ id: string; payload?: Record<string, unknown> }> = []
     let offset: unknown = undefined
@@ -408,11 +435,15 @@ export class QdrantClient {
         for (const p of data.result?.points ?? []) {
           collected.push({ id: String(p.id), payload: p.payload })
         }
+        // W31-18(b): honor a TOTAL cap — `limit` is per-page, so without this
+        // the 5-page walk returned up to limit*MAX_SCROLL_PAGES points and a
+        // caller's `limit` was silently exceeded.
+        if (maxTotal !== undefined && collected.length >= maxTotal) break
         const next = data.result?.next_page_offset
         if (next === null || next === undefined) break
         offset = next
       }
-      return collected
+      return maxTotal !== undefined ? collected.slice(0, maxTotal) : collected
     } catch (err) {
       log.error(
         `scrollFiltered: request failed for collection="${this.collection}" (returning ${collected.length} points collected so far)`,
@@ -480,6 +511,15 @@ export class QdrantClient {
     accessLevel: string,
   ): Promise<SearchResult[]> {
     const levels = visibleAccessLevels(accessLevel)
+
+    // W31-16: same fail-closed early return as search() — never send an empty
+    // `match: { any: [] }` and never match a point for an unknown level.
+    if (levels.length === 0) {
+      log.debug(
+        `searchByVector: no visible access levels for "${accessLevel}" — fail-closed (empty result)`,
+      )
+      return []
+    }
 
     const filter =
       levels.length < 3

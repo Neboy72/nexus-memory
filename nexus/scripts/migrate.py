@@ -106,6 +106,10 @@ def group_edges_by_source(
             "status": e["status"],
             "target_name": "",
             "confidence": 1,
+            # W31-8: the SQLite reason must land in BOTH keys. Edge.from_payload_entry
+            # reads entry["reason"] (not "context"), so writing only "context" lost
+            # the reason after migration. "context" is kept for backwards compat.
+            "reason": e.get("reason", ""),
             "context": e.get("reason", ""),
             "source_doc_id": source,
             "created_at": e.get("created_at", ""),
@@ -187,6 +191,15 @@ def migrate(
                 # W27: use the real point id — the scroll matched on the
                 # payload field fact_id, which is not necessarily the
                 # Qdrant point id (set_payload would hit the wrong point).
+                # W31-7: verify that assumption before writing. If the found
+                # point's id differs from the payload fact_id the grouping
+                # keyed on, set_payload would target a different point — so
+                # refuse the blind write instead of corrupting another fact.
+                if str(scroll_result[0][0].id) != str(source_id):
+                    raise RuntimeError(
+                        f"Point id {scroll_result[0][0].id!r} does not match "
+                        f"source_id {source_id!r} — refusing blind set_payload"
+                    )
                 point_id = scroll_result[0][0].id
                 existing_payload = scroll_result[0][0].payload or {}
                 existing_edges = existing_payload.get("edges")

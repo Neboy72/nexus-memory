@@ -9,7 +9,8 @@ Strategies (in priority order) — mirrors the branch order in
      dependency patterns = ``depends_on``
   2. **Contradiction** → explicit marker (+ shared topics) or weak discourse
      cue (+ strong overlap) = ``contradicts``
-  3. **Supersedes** → same category + version/newer language = ``supersedes``
+  3. **Supersedes** → same category + parseable version on both sides +
+     newer/older language = ``supersedes`` (conjunction, W31-4)
   4. **Category match** → same category tag = ``references``
   5. **Keyword overlap** → high overlap (≥80%) = ``references``
 
@@ -243,6 +244,14 @@ def _check_contradiction(source_content: str, target_content: str) -> Optional[d
     return None
 
 
+def _parse_version(text: str) -> Optional[tuple[int, int, int]]:
+    """Parse the first 3-component version ("v2.0.1" / "1.2.3") or None."""
+    m = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", text)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
 def _check_supersedes(
     source_content: str,
     target_content: str,
@@ -251,7 +260,12 @@ def _check_supersedes(
 ) -> Optional[dict]:
     """Check if one fact supersedes another (same topic, newer approach).
 
-    Only returns a result if categories match and version/newer language is detected.
+    W31-4: the emit condition is a CONJUNCTION — a real version string AND
+    explicit newer/older language must both be present (the previous
+    disjunction fired on either signal alone and on two facts sharing the
+    same version). Direction comes from comparing the two parsed versions;
+    when they cannot both be parsed the pair is skipped instead of guessed.
+    Same-version pairs never emit.
     """
     source_lower = source_content.lower()
     target_lower = target_content.lower()
@@ -267,26 +281,39 @@ def _check_supersedes(
     # Explicit newer/older language (review #41: still a valid signal).
     word_pattern = r"\b(newer|older|deprecated|legacy|current|latest|neu|alt|veraltet|aktuell|neueste)\b"
 
-    has_version_source = re.search(version_pattern, source_lower) is not None
-    has_version_target = re.search(version_pattern, target_lower) is not None
-    has_word_source = re.search(word_pattern, source_lower) is not None
-    has_word_target = re.search(word_pattern, target_lower) is not None
+    has_version = (
+        re.search(version_pattern, source_lower) is not None
+        or re.search(version_pattern, target_lower) is not None
+    )
+    has_direction_word = (
+        re.search(word_pattern, source_lower) is not None
+        or re.search(word_pattern, target_lower) is not None
+    )
 
-    # A real 3-component version string or explicit newer/older language
-    # (review #41: the bug was bare decimals like "2.5" matching the old
-    # pattern — those no longer match the tightened regex).
-    has_version = has_version_source or has_version_target
-    has_word = has_word_source or has_word_target
-    if has_version or has_word:
-        return {
-            "relation": "supersedes",
-            "confidence": 0.70,  # Lower confidence — manual verification advised
-            "reason": "Version string + newer/older language in same-category facts → supersedes",
-        }
+    # Conjunction: both signals are required. A version string alone, or
+    # generic newer/older words alone, is not enough evidence.
+    if not (has_version and has_direction_word):
+        return None
 
-    return None
+    # Direction via version compare — only when BOTH sides are parseable.
+    source_version = _parse_version(source_lower)
+    target_version = _parse_version(target_lower)
+    if source_version is None or target_version is None:
+        return None  # cannot establish a direction → skip (conservative)
+    if source_version == target_version:
+        return None  # same-version pair is never a supersession
 
-    return None
+    # `direction` documents which side the version compare favours; it is not
+    # exposed in the return contract, only used to build the reason text.
+    direction = "source is newer" if source_version > target_version else "target is newer"
+    return {
+        "relation": "supersedes",
+        "confidence": 0.70,  # Lower confidence — manual verification advised
+        "reason": (
+            f"Version compare {source_version} vs {target_version} "
+            f"({direction}) + newer/older language in same-category facts → supersedes"
+        ),
+    }
 
 
 # H205: guard — with only 1–2 distinct keywords a single shared long word
