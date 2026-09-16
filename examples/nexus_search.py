@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Nexus Memory Search — BM25 + Vector Hybrid. Blazing fast, cached."""
 
-import sys, json, os, re
+import sys, os
 os.environ['TQDM_DISABLE'] = '1'
 from nexus.retrieval import HybridRetriever
 
@@ -14,13 +14,14 @@ if not query:
 
 r = HybridRetriever(qdrant_host='127.0.0.1', qdrant_port=6333, collection_name=None)
 
-# Load or build BM25 index
-if r._bm25 is None:
+# Load or build BM25 index. The retriever's internal attributes are guarded
+# with getattr so a representation change cannot break this example silently.
+if getattr(r, '_bm25', None) is None:
     print("⌛ Indexing BM25...", end=' ', flush=True)
     stats = r.index_memories()
     print(f"{stats['indexed']} points indexed")
 else:
-    print(f"✅ Loaded {len(r._ids)} points from cache")
+    print(f"✅ Loaded {len(getattr(r, '_ids', None) or [])} points from cache")
 
 # Get Voyage embedding for vector search
 vec = None
@@ -31,8 +32,10 @@ try:
             if 'voyage_api_key:' in line:
                 voyage_key = line.split(':', 1)[1].strip().strip("'\"")
                 break
-except:
-    pass
+except (OSError, UnicodeDecodeError) as e:
+    # Narrowed from a bare except: a typo or permission problem must not
+    # silently degrade the run to BM25-only without a hint.
+    print(f"⚠️ config read failed ({e}) — continuing without vector search")
 
 if voyage_key:
     import requests
@@ -65,33 +68,25 @@ if not results:
 # ── Clean display ──────────────────────────────────────────────────────
 print()
 for i, hit in enumerate(results, 1):
-    # Determine method badges
+    # Determine method badges (computed once)
     methods = hit.get('methods', ['bm25'] if 'rrf_score' not in hit else ['?'])
     method_badge = '+'.join(m.upper()[:4] for m in methods)
 
-    # Score
-    score = hit.get('rerank_score', hit.get('rrf_score', hit.get('score', 0)))
+    # Score: dict.get only defaults when the key is ABSENT — a present-but-None
+    # rerank_score/rrf_score/score would make the format below raise. Pick the
+    # first numeric value and coerce.
+    score = next((hit[k] for k in ('rerank_score', 'rrf_score', 'score')
+                  if isinstance(hit.get(k), (int, float))), 0.0)
+    score = float(score)
 
-    # Tier
-    tier = hit.get('tier', '?')
+    # Tier is free-form in the payload — normalize so tier[-1:] cannot raise.
+    tier = str(hit.get('tier') or '?')
 
-    # Method badges
-    method_badge = '+'.join(m.upper()[:4] for m in methods)
-
-    # Get clean text - strip JSON-like prefix/suffix
-    text = hit.get('text', '')
-    # Remove common Qdrant payload formatting like {'content': '...', 'category': '...', ...}
-    text = re.sub(r"^\{'content':\s*'", '', text)
-    text = re.sub(r"',\s*'[^']+':\s*'[^']*'(,\s*'[^']+':\s*'[^']*')*\}", '', text)
-    text = re.sub(r"'\}$", '', text)
-    text = re.sub(r"^'", '', text)
-    text = re.sub(r"'$", '', text)
-    # Unescape
-    text = text.replace("\\n", "\n").replace("\\'", "'").replace('\\"', '"')
-    # Remove leading/trailing whitespace per line
-    lines_clean = [l.strip() for l in text.split('\n')]
-    text = '\n'.join(lines_clean)
-    # Truncate
+    # The retriever already returns clean text. The old regex chain assumed the
+    # value was a str(dict) repr and silently corrupted legitimate content that
+    # contained quotes or "'key': 'value'" sequences — use it as-is.
+    text = hit.get('text')
+    text = text if isinstance(text, str) else ('' if text is None else str(text))
     if len(text) > 300:
         text = text[:300] + '...'
 

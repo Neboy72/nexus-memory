@@ -31,14 +31,22 @@ const mod = await import(DIST_ENTRY)
 // (Node type-stripping) — kein tsx/Build nötig.
 
 let failed = 0
-const t = (name, fn) => fn().then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e.stack || e.message) })
+const t = async (name, fn) => {
+  try {
+    await fn()
+    console.log("PASS ", name)
+  } catch (e) {
+    failed++
+    console.log("FAIL ", name, "—", e.stack || e.message)
+  }
+}
 
 // Session-Erkennung wird über Handler-Verhalten bewiesen (DM-Test vs Cron-Tests)
 
 // --- Handler-Tests: registriere das Plugin und greife auf message_sending zu
 const handlers = {}
 const mockApi = {
-  on(e, h) { handlers[e] = h },
+  on(e, h) { (handlers[e] = handlers[e] || []).push(h) },
   registerTool() {}, registerProvider() {}, registerService() {},
   registerMemoryCapability() {}, // Nr 364: register() fail-loud wenn nichts registriert wird
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -62,15 +70,25 @@ globalThis.fetch = async (url, opts) => {
   if (u.includes("localhost:6333")) {
     return { ok: true, status: 200, json: async () => ({ result: [] }) }
   }
-  return originalFetch(url, opts)
+  // Fund W36 (medium): kein Fallthrough zum echten fetch — unbekannte URLs sind ein
+  // Test-Fehler (hermetisch, deterministisch, keine echten Netz-Calls).
+  throw new Error(`unexpected fetch in test: ${u}`)
 }
 
 // T6: der GESAMTE Flow in try/catch/finally — ein Fehler außerhalb von t() darf den
 // failed-Counter nicht umgehen und muss deterministisch mit Exit-Code 1 enden.
 try {
   await mod.default.register(mockApi)
-  const sendingHandler = handlers["message_sending"]
-  assert.ok(sendingHandler, "message_sending Handler muss registriert sein")
+  const sendingHandlers = handlers["message_sending"] || []
+  assert.ok(sendingHandlers.length >= 1, "mind. ein message_sending Handler muss registriert sein")
+  // Fund W36 (medium): index.ts registriert ZWEI message_sending-Handler (thought-filter
+  // + cron-form-gate). Der E2E-Flow muss durch ALLE laufen — sonst prueft der Test nur
+  // den ersten (Zufall der Reihenfolge) und ein Gate-Regression kann durchrutschen.
+  const sendingHandler = async (event, ctx) => {
+    let out = event
+    for (const h of sendingHandlers) out = (await h(out, ctx)) ?? out
+    return out
+  }
 
   const CRON_KEY = "agent:main:cron:98d4e5bb-7971-4348-805b-2a38b640878f:run:9b65cf0a"
   const DM_KEY = "agent:main:telegram:default:direct:5763330319"
@@ -85,7 +103,9 @@ try {
 
   await t("cron + gültiges Formular → durchgelassen", async () => {
     const res = await sendingHandler({ to: "telegram:5763330319", content: goodForm }, { sessionKey: CRON_KEY })
+    // Fund W36 (medium): Präziser Kontrakt — durchgelassen = kein cancel:true.
     assert.ok(!res || !res.cancel, "gültiges Formular darf NICHT geblockt werden")
+    if (res) assert.ok(typeof res === "object", "Handler-Rückgabe muss Objekt oder undefined sein")
   })
 
   await t("cron + Thinking-Leak → BLOCKED", async () => {
@@ -155,10 +175,23 @@ try {
     assert.ok(!res || !res.cancel, "gültiges Formular darf nicht geblockt werden")
   })
 
-  await t("H7: interactiv (DM) bleibt unangetastet, auch via message", async () => {
+  await t("H7: interaktiv (DM) bleibt unangetastet, auch via message", async () => {
     const res = await gate({ to: "telegram:5763330319", message: shortSpam }, { sessionKey: DM_KEY })
     assert.ok(!res || !res.cancel, "interaktive DM darf NIE geblockt werden")
   })
+
+  // Fund W36 (medium): dist-vs-source-Parität — der E2E-Flow oben laeuft gegen das
+  // echte dist-Bundle, die H6/H7-Checks gegen die .ts-Quelle. Wenn Build stale ist,
+  // merkt keiner. Beweis: beide Entscheiden gleich auf dem kritischen Leak-Input.
+  {
+    const leakProbe = "🚀 OpenClaw Release\nLet me work through this task step by step. First I need to fetch the feed.\n\nMiosha 🦊"
+    const srcRes = await gate({ to: "telegram:5763330319", content: leakProbe }, cronCtx)
+    const distRes = await sendingHandler({ to: "telegram:5763330319", content: leakProbe }, { sessionKey: CRON_KEY })
+    assert.strictEqual(
+      !!(srcRes && srcRes.cancel), !!(distRes && distRes.cancel),
+      "dist-Bundle und .ts-Quelle müssen beim Leak-Input identisch entscheiden (Build frisch?)"
+    )
+  }
 
   // H165: 6. Check — Session-Key-Erkennung direkt am echten Export.
   await t("6. isUnattendedSession: Key-Erkennung korrekt", async () => {
@@ -177,8 +210,9 @@ try {
 } finally {
   // T3: Mock IMMER restaurieren.
   globalThis.fetch = originalFetch
-  // T6/W34-Fund: exitCode statt process.exit — ein Hard-Exit im finally
-  // kappt gepufferte stdout-Ausgabe (PASS/FAIL-Zeilen) bei gepipestem stdout
-  // (CI) und killt laufende Promises. Exit-Code bleibt deterministisch.
+  // T6/W34-Fund + W36-Fund (medium): exitCode statt process.exit — ein Hard-Exit
+  // im finally kappt gepufferte stdout-Ausgabe (PASS/FAIL-Zeilen) bei gepipestem
+  // stdout (CI) und killt laufende Promises. Exit-Code bleibt deterministisch.
+  // Das fruehere dead-code process.exitCode=1 im catch ist damit auch eliminiert.
   process.exitCode = failed === 0 ? 0 : 1
 }

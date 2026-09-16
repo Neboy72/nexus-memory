@@ -22,6 +22,10 @@ if (!existsSync(DIST_ENTRY)) {
 // nicht auseinanderdriften (der Mock muss denselben Pfad sehen wie der echte Client).
 const QDRANT_BASE = "http://localhost:6333";
 const EP_SEARCH = "/points/search";
+// Fund W36 (low): EP_QUERY wird vom Plugin aktuell nie produziert (search() und
+// searchByVector() POSTen beide .../points/search). Der Arm bleibt als Kontrakt-Wache:
+// wenn qdrant-client.ts kuenftig auf /points/query migriert, greift der Mock dort
+// bereits und der Test zeigt sofort, ob der Filter-Mittransport noch klappt.
 const EP_QUERY = "/points/query";
 const EP_POINTS = "/points";
 
@@ -49,9 +53,19 @@ const mockApi = {
   },
 };
 
+// Fund W36 (medium): DM-Case erreicht die echte drainQueue() in capture.ts — die
+// liest/rewrites ~/.openclaw/workspace/data/capture-retry-queue.jsonl (homedir-basiert,
+// kein Test-Override). Isolation: Queue-File in Sandbox umleiten BEVOR dist lädt.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "nexus-privacy-gate-"));
+process.env.NEXUS_CAPTURE_QUEUE_FILE = join(SANDBOX_DIR, "capture-retry-queue.jsonl");
+
 const mod = await import(DIST_ENTRY);
 
 // Fetch-Mock: Voyage (Fake-Vektoren) + Qdrant (Recorder) — keine Netzwerk-/API-Abhängigkeit
+const EMBED_RESPONSE = { data: [{ embedding: new Array(1024).fill(0.1) }] }; // Fund W36 (low): einmal gebaut
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : url.url;
@@ -60,11 +74,13 @@ globalThis.fetch = async (url, opts) => {
       ok: true, status: 200,
       // Nr 379: parseEmbeddingResponse liest resp.text() zuerst — der Mock
       // muss das Response-Contract erfuellen, sonst TypeError statt Embedding.
-      text: async () => JSON.stringify({ data: [{ embedding: new Array(1024).fill(0.1) }] }),
-      json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }),
+      text: async () => JSON.stringify(EMBED_RESPONSE),
+      json: async () => EMBED_RESPONSE,
     };
   }
   if (u.includes(QDRANT_BASE)) {
+    // Fund W36 (medium): Routing nach laengstem/praezisestem Pfad ZUERST —
+    // "/points" waere ein Prefix von "/points/search"; Reihenfolge ist Kontrakt.
     if (u.includes(EP_SEARCH) || u.includes(EP_QUERY)) {
       // Filter-Format: { must: [{ key: "access_level", match: { any: [levels] } }] }
       // private sieht ALLES → kein filter-Feld → "no-filter" (legitim, kein Fehler).
@@ -73,12 +89,13 @@ globalThis.fetch = async (url, opts) => {
       let lvl = "no-filter";
       try {
         const body = JSON.parse((opts && opts.body) || "{}");
-        if (body.filter) {
-          const any = body.filter.must[0].match.any;
-          lvl = Array.isArray(any) ? any.join("|") : String(any);
-        }
-      } catch {
-        lvl = "parse-error";
+        // Fund W36 (medium): robust — fehlender/veraenderter Filter-Shape darf nicht
+        // als TypeError durchschlagen, sondern als eigener Sentinel sichtbar sein.
+        const any = body?.filter?.must?.[0]?.match?.any;
+        if (any !== undefined) lvl = Array.isArray(any) ? any.join("|") : String(any);
+        else if (body?.filter) lvl = "filter-without-any";
+      } catch (e) {
+        lvl = e instanceof SyntaxError ? "parse-error" : "extract-error";
       }
       searches.push({ accessLevel: lvl });
       return {
@@ -89,12 +106,25 @@ globalThis.fetch = async (url, opts) => {
       };
     }
     if (u.includes(EP_POINTS) && opts && opts.method === "PUT") {
-      capturedUpserts.push({ body: JSON.parse(opts.body) });
+      // Fund W36 (low): guarded parse — malformed Body = klarer Testfehler, keine opaque SyntaxError-Kette.
+      let body;
+      try {
+        body = JSON.parse(opts.body ?? "{}");
+      } catch (e) {
+        throw new Error("Qdrant-Upsert-Body ist kein gueltiges JSON: " + e.message);
+      }
+      capturedUpserts.push({ body });
       return { ok: true, status: 200, json: async () => ({ result: { status: "ok" } }) };
     }
     return { ok: true, status: 200, json: async () => ({ result: {} }) };
   }
-  return originalFetch(url, opts);
+  // Fund W36 (medium): hermetisch — kein Fallthrough zum echten fetch. register()
+  // feuert checkForUpdate() gegen api.github.com; ein Fallthrough macht den Test
+  // netzwerk-abhaengig und schreibt moeglicherweise Update-State.
+  if (u.includes("api.github.com")) {
+    return { ok: true, status: 200, json: async () => ({ updateAvailable: false }) };
+  }
+  throw new Error(`unexpected fetch in test: ${u}`);
 };
 
 let failed = 0;
@@ -109,7 +139,18 @@ try {
     process.exit(1);
   }
 
-  const t = (name, fn) => fn().then(() => console.log("PASS ", name)).catch((e) => { failed++; console.log("FAIL ", name, "—", e.message); });
+  const t = async (name, fn) => {
+  try {
+    await Promise.race([
+      fn(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout: test hing 10s")), 10000)),
+    ]);
+    console.log("PASS ", name);
+  } catch (e) {
+    failed++;
+    console.log("FAIL ", name, "—", (e && e.stack) || String(e));
+  }
+};
 
   // 1. capture MIT groupId → kein Upsert
   await t("capture group → skip", async () => {
@@ -119,6 +160,16 @@ try {
       { trigger: "user", messageProvider: "telegram", groupId: "-1001234" },
     );
     assert.strictEqual(capturedUpserts.length, before, "Gruppen-Turn darf NICHT gespeichert werden");
+  });
+
+  // Fund W36 (medium): capture mit LEEREM groupId → fail-closed wie Gruppe (skip)
+  await t("capture blank groupId → skip (fail-closed)", async () => {
+    const before = capturedUpserts.length;
+    await handlers["agent_end"](
+      { success: true, messages: [{ role: "user", content: "Leer-Gruppe: Token xyz789" }] },
+      { trigger: "user", messageProvider: "telegram", groupId: "" },
+    );
+    assert.strictEqual(capturedUpserts.length, before, "blank groupId MUSS wie Gruppe behandelt werden (skip)");
   });
 
   // 2. capture DM → speichert
@@ -139,7 +190,11 @@ try {
       { trigger: "user", groupId: "-1001234" },
     );
     assert.ok(searches.length > 0, "Suche muss stattfinden");
-    assert.strictEqual(searches[0].accessLevel, "public", "Gruppen-Recall MUSS auf public gecappt sein");
+    // Fund W36 (medium): ALLE Searches pruefen — ein zweiter uncapped Call (graph-boost,
+    // Fallback, retry) duerfte nicht durchrutschen.
+    for (const s of searches) {
+      assert.strictEqual(s.accessLevel, "public", "JEDE Gruppen-Suche MUSS auf public gecappt sein — got: " + s.accessLevel);
+    }
   });
 
   // Nr (W34-Fund): recall mit LEEREM groupId → capped public (fail-closed)
@@ -150,14 +205,20 @@ try {
       { trigger: "user", groupId: "" },
     );
     assert.ok(searches.length > 0, "kein Search-Call — Cap fehlt komplett?");
-    assert.strictEqual(
-      searches[0].accessLevel,
-      "public",
-      "blank groupId muss als Gruppe zählen (cap) — got: " + searches[0].accessLevel,
-    );
+    for (const s of searches) {
+      assert.strictEqual(
+        s.accessLevel,
+        "public",
+        "blank groupId: JEDE Suche muss capped sein — got: " + s.accessLevel,
+      );
+    }
   });
 
-  // 4. recall DM → cfg-Level (private)
+  // 4. recall DM → cfg-Level (private).
+  // Fund W36 (medium): Der Sentinel "filter-without-any" (im Mock, F6-Fix) macht die
+  // DM-Assertion jetzt unterscheidend: ein Regression-Filter (leerer must) liefert
+  // NICHT mehr "no-filter", sondern den Sentinel und failt hier. "Filter bewusst
+  // weggelassen" (private sieht alles) bleibt der einzige Weg zu no-filter.
   await t("recall DM → private", async () => {
     searches.length = 0;
     await handlers["before_prompt_build"](
@@ -165,19 +226,20 @@ try {
       { trigger: "user", groupId: null },
     );
     assert.ok(searches.length > 0, "Suche muss stattfinden");
-    // private sieht ALLES → Qdrant-Client schickt bewusst KEINEN Filter.
-    // H163: exakter Sentinel statt startsWith("private"): ein Parse-Fehler
-    // erscheint als "parse-error" und fällt hier durch; "private-no-filter"
-    // (der alte, zu lockere Treffer) existiert nicht mehr.
-    assert.strictEqual(
-      searches[0].accessLevel,
-      "no-filter",
-      "DM-Recall nutzt cfg.accessLevel (private = kein Filter, sieht alles) — got: " + searches[0].accessLevel,
-    );
+    for (const s of searches) {
+      // Fund W36 (medium): auch hier ALLE — keine zweite uncapped Suche durchrutschen lassen.
+      assert.strictEqual(
+        s.accessLevel,
+        "no-filter",
+        "DM-Recall (private = kein Filter) muss fuer ALLE Calls gelten — got: " + s.accessLevel,
+      );
+    }
   });
 } finally {
-  // T3: Mock IMMER restaurieren (läuft vor dem finalen process.exit).
+  // T3: Mock IMMER restaurieren.
   globalThis.fetch = originalFetch;
+  // Fund W36 (low): exitCode statt process.exit — Hard-Exit kappt gepufferte
+  // stdout-Ausgabe (PASS/FAIL) bei gepipestem stdout. Natürliches Ende flushes.
+  process.exitCode = failed ? 1 : 0;
+  rmSync(SANDBOX_DIR, { recursive: true, force: true });
 }
-
-process.exit(failed ? 1 : 0);

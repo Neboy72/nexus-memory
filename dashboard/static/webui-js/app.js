@@ -11,6 +11,19 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+// Shared drift labels (used by the legacy drift Ampel). The colors come from
+// NEXUS_DRIFT_COLORS (colors.js) so both stay in one place.
+const DRIFT_LABELS = {'fresh':'Fresh','drifting':'Drifting','drifted':'Drifted','not_tracked':'Not Tracked'};
+
+// Paperless titles follow "Datum – Kategorie – Beschreibung" (en dash,
+// space-separated). Parsed in one named helper so the expected format and the
+// delimiter live in a single documented spot if the upstream format changes.
+const PAPERLESS_TITLE_SEPARATOR = ' – ';
+function parsePaperlessCategory(title) {
+  if (!title) return '';
+  return title.split(PAPERLESS_TITLE_SEPARATOR)[1] || '';
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
 
   // ─── State ───
@@ -70,10 +83,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const menuToggle = document.getElementById('menuToggle');
   const headerLinks = document.querySelector('.header__links');
 
-  menuToggle?.addEventListener('click', () => {
-    const isOpen = headerLinks.classList.toggle('header__links--open');
-    menuToggle.setAttribute('aria-expanded', isOpen);
-  });
+  // Both elements are optional (graph.html has no header) — guard them
+  // together so a missing links container cannot throw on click.
+  if (menuToggle && headerLinks) {
+    menuToggle.addEventListener('click', () => {
+      const isOpen = headerLinks.classList.toggle('header__links--open');
+      menuToggle.setAttribute('aria-expanded', isOpen);
+    });
+  }
 
   // Close mobile menu on link click
   headerLinks?.querySelectorAll('.header__link').forEach(link => {
@@ -105,10 +122,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // ─── Graph ───
   const graphSvg = document.getElementById('graphSvg');
-  const graphTooltip = document.getElementById('graphTooltip');
   const graphLoading = document.getElementById('graphLoading');
 
-  MemoryGraph.init(graphSvg);
+  // Both are optional (graph.html omits graphLoading). Guard the init/lookup
+  // so a markup change degrades gracefully instead of aborting the rest of
+  // the DOMContentLoaded handler.
+  if (graphSvg) MemoryGraph.init(graphSvg);
 
   // Node selection → detail panel
   MemoryGraph.onNodeSelect = (d) => showDetail(d);
@@ -136,10 +155,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   // one. Only the latest-started request is allowed to commit state.
   let loadSeq = 0;
 
+  // Captured before the first load so a retry restores the spinner instead of
+  // leaving the stale error markup visible while the new request is in flight.
+  const graphLoadingDefaultHtml = graphLoading ? graphLoading.innerHTML : '';
+
   async function loadData() {
     const seq = ++loadSeq;
     try {
-      graphLoading.style.display = 'flex';
+      if (graphLoading) {
+        graphLoading.innerHTML = graphLoadingDefaultHtml;
+        graphLoading.style.display = 'flex';
+      }
 
       const [memData, statsData] = await Promise.all([
         API.getMemories(state.filters),
@@ -152,18 +178,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       state.memories = memData.memories || [];
       state.edges = memData.edges || [];
 
-      MemoryGraph.load(state.memories, state.edges, memData.category_counts || {});
+      if (graphSvg) MemoryGraph.load(state.memories, state.edges, memData.category_counts || {});
 
       renderStats(statsData);
-      graphLoading.style.display = 'none';
+      if (graphLoading) graphLoading.style.display = 'none';
 
     } catch (err) {
       if (seq !== loadSeq) return;
+      // The detail (URL/stack) goes to the console; the overlay stays generic.
       console.error('Failed to load data:', err);
-      graphLoading.innerHTML = `
-        <p style="color:var(--color-drift-drifted)">⚠️ Failed to load graph data</p>
-        <p style="font-size:0.8rem;opacity:0.5;margin-top:8px">${escapeHtml(err.message)}</p>
-      `;
+      // Drop the stale graph + state so the previous load's data is not left
+      // on screen as if it were current, and offer a retry action.
+      state.memories = [];
+      state.edges = [];
+      if (graphSvg) MemoryGraph.load([], [], {});
+      if (graphLoading) {
+        graphLoading.innerHTML = `
+          <p style="color:var(--color-drift-drifted)">⚠️ Failed to load graph data</p>
+          <p style="font-size:0.8rem;opacity:0.5;margin-top:8px">${escapeHtml(err.message)}</p>
+          <button type="button" id="graphRetryBtn" class="btn btn--secondary" style="margin-top:12px">Retry</button>
+        `;
+        document.getElementById('graphRetryBtn')?.addEventListener('click', () => { void loadData(); });
+      }
     }
   }
 
@@ -184,8 +220,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Confidence is a 0..1 ratio; a missing/NaN value must not render as "NaN%".
+  // The type check must come FIRST: `null * 100 === 0` and Number.isFinite(0)
+  // is true, so a null confidence would otherwise render as "0%".
   function formatConfidence(v) {
-    return Number.isFinite(v * 100) ? (v * 100).toFixed(0) + '%' : '-';
+    return (typeof v === 'number' && Number.isFinite(v * 100)) ? (v * 100).toFixed(0) + '%' : '-';
   }
 
   function renderStats(stats) {
@@ -195,7 +233,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (el('statEdges')) el('statEdges').textContent = stats.total_edges;
     if (el('statConfidence')) el('statConfidence').textContent = formatConfidence(stats.avg_confidence);
     if (el('statSources')) el('statSources').textContent = stats.total_unique_sources;
-    if (el('statCategories')) el('statCategories').textContent = Object.keys(stats.by_category).length;
+    if (el('statCategories')) el('statCategories').textContent = Object.keys(stats.by_category || {}).length;
 
     // Stats cards (graph view)
     if (el('statTotalMemories')) el('statTotalMemories').textContent = stats.total_memories;
@@ -206,7 +244,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (el('statLastMemory')) {
       el('statLastMemory').textContent = stats.last_memory_at ? timeAgo(stats.last_memory_at) : '—';
     }
-    if (el('statSources')) el('statSources').textContent = stats.total_unique_sources;
 
     // Drift Ampel
     const drift = stats.by_drift_status || {};
@@ -215,17 +252,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (el('driftDrifted')) el('driftDrifted').textContent = drift.drifted || 0;
     if (el('driftNotTracked')) el('driftNotTracked').textContent = drift.not_tracked || 0;
 
-    // Drift (legacy)
+    // Drift (legacy) — reuses the `drift` map resolved above. Shares
+    // DRIFT_LABELS with the Ampel so the labels cannot drift apart.
     const statDrift = el('statDrift');
     if (statDrift) {
-      const drift = stats.by_drift_status || {};
       const ampel = [];
       for (const [key, color] of Object.entries(NEXUS_DRIFT_COLORS)) {
         if (drift[key] && drift[key] > 0) {
-          const labels = {'fresh':'Fresh','drifting':'Drifting','drifted':'Drifted','not_tracked':'Not Tracked'};
           ampel.push(`<div style="display:flex;align-items:center;gap:12px;padding:3px 8px">
             <span style="width:12px;height:12px;border-radius:50%;background:${color};display:inline-block;box-shadow:0 0 5px ${color}50;flex-shrink:0"></span>
-            <span style="font-size:0.8rem;color:#aaa;flex-shrink:0">${labels[key]}</span>
+            <span style="font-size:0.8rem;color:#aaa;flex-shrink:0">${DRIFT_LABELS[key]}</span>
             <span style="font-size:1.1rem;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;text-align:right;flex:1">${drift[key]}</span>
           </div>`);
         }
@@ -250,23 +286,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     void applyFilters().catch((err) => { console.error('filter failed', err); });
   }
 
-  document.getElementById('filterCategory').addEventListener('change', (e) => {
+  // Optional lookups (same pattern as resetGraphBtn): a page variant without
+  // one of these controls must not abort the remaining listener registration.
+  document.getElementById('filterCategory')?.addEventListener('change', (e) => {
     state.filters.category = e.target.value;
     queueApplyFilters();
   });
 
-  document.getElementById('filterAccess').addEventListener('change', (e) => {
+  document.getElementById('filterAccess')?.addEventListener('change', (e) => {
     state.filters.access_level = e.target.value;
     queueApplyFilters();
   });
 
-  document.getElementById('filterDrift').addEventListener('change', (e) => {
+  document.getElementById('filterDrift')?.addEventListener('change', (e) => {
     state.filters.drift = e.target.value;
     queueApplyFilters();
   });
 
   let searchTimeout;
-  document.getElementById('searchInput').addEventListener('input', (e) => {
+  document.getElementById('searchInput')?.addEventListener('input', (e) => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
       state.filters.search = e.target.value.trim();
@@ -293,7 +331,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }) : '-';
 
     // Paperless-Kategorie aus Titel parsen: "Datum – Kategorie – Beschreibung"
-    const paperCat = d.title ? (d.title.split(' – ')[1] || '') : '';
+    const paperCat = parsePaperlessCategory(d.title);
 
     // Bar width needs a real percentage; a missing confidence must not emit
     // `width:NaN%` (invalid CSS, silently dropped by the browser).
@@ -353,7 +391,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       // throws a SyntaxError. Only resolve/scroll when there is a real target.
       const href = anchor.getAttribute('href');
       if (href && href.length > 1) {
-        const target = document.querySelector(href);
+        // A length check is not a selector check: "#!", "#123" or "#a b" make
+        // querySelector throw a SyntaxError and abort the click handler.
+        let target = null;
+        try {
+          target = document.querySelector(href);
+        } catch (err) {
+          console.warn('ignoring invalid anchor selector', href, err);
+        }
         if (target) {
           target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }

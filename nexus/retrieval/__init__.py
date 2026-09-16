@@ -17,15 +17,16 @@ Requirements: bm25s (pip install bm25s)
 """
 
 from __future__ import annotations
-import json, re
+import json, logging, re
 
 from nexus.config import is_success
 from collections import defaultdict
 from pathlib import Path
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 from nexus.config import get_collection
+
+log = logging.getLogger("nexus.retrieval")
 
 if TYPE_CHECKING:
     from nexus.graph.graph import SkillGraph
@@ -145,9 +146,9 @@ class HybridRetriever:
         "going", "come", "came", "coming", "said", "tell", "told",
         "like", "just", "also", "very", "then", "than", "now", "some",
         "from", "about", "into", "over", "after", "before",
-        "called", "named", "known", "asked", "told", "told",
-        "recommended", "suggested", "mentioned", "said",
-        "went", "goes", "go", "coming", "comes",
+        "called", "named", "known", "asked",
+        "recommended", "suggested", "mentioned",
+        "goes", "go",
         "think", "thought", "know", "knew", "want", "wanted",
         "need", "needed", "use", "used", "using",
     }
@@ -240,7 +241,10 @@ class HybridRetriever:
         offset = None
         while True:
             body = {"limit": 100, "with_payload": True}
-            if offset:
+            # next_page_offset is a point ID, not a page counter: for a
+            # collection with integer IDs a legitimate offset of 0 is falsy
+            # and would truncate the index. Compare against None instead.
+            if offset is not None:
                 body["offset"] = offset
             r = requests.post(
                 f"{self.qdrant_url}/collections/{self.collection}/points/scroll",
@@ -253,7 +257,7 @@ class HybridRetriever:
                 break
             points.extend(batch)
             offset = data.get("next_page_offset")
-            if not offset:
+            if offset is None:
                 break
 
         self._ids = []
@@ -448,6 +452,12 @@ class HybridRetriever:
         self._texts = [t.lower() for t in texts]
         self._texts_raw = list(texts)
 
+        # Rebuild the auxiliary indexes from the new corpus: without this,
+        # _chunk_text_lookup/_entity_index/_chunk_graph keep pointing at the
+        # previously loaded corpus, so graph_expand serves stale text and
+        # entity_boost boosts ids that are no longer indexed.
+        self._rebuild_aux_indexes()
+
         if self._texts:
             corpus_tokens = bm25s.tokenize(self._texts)
             self._bm25 = bm25s.BM25()
@@ -538,6 +548,10 @@ class HybridRetriever:
             corpus_tokens = bm25s.tokenize(self._texts)
             self._bm25 = bm25s.BM25()
             self._bm25.index(corpus_tokens)
+            # Persist the incremental update — otherwise the next process start
+            # reloads the stale ids.json/texts.json from disk and the new
+            # memories silently fall out of keyword search.
+            self._save_bm25_cache()
         elif not self._texts:
             # Corpus fully emptied — invalidate so search_bm25 returns [].
             self._bm25 = None
@@ -567,6 +581,15 @@ class HybridRetriever:
                 self._ids = json.load(f)
             with open(texts_file) as f:
                 self._texts = json.load(f)
+            # ids/texts are written to two independent files: a save that was
+            # interrupted between them (or an externally edited cache) leaves
+            # the lists misaligned, which later raises IndexError on
+            # self._texts[idx]. Reject the cache instead of serving it.
+            if len(self._texts) != len(self._ids):
+                raise ValueError(
+                    f"BM25 cache misaligned: {len(self._ids)} ids vs "
+                    f"{len(self._texts)} texts ({self._index_dir})"
+                )
             # Original-cased texts (optional sidecar, H235). Absent in caches
             # written by older versions → entity extraction falls back to the
             # lowercased corpus.
@@ -581,7 +604,10 @@ class HybridRetriever:
             # after a restart and graph_expand/entity_boost would no-op.
             self._rebuild_aux_indexes()
             return True
-        except Exception:
+        except Exception as exc:
+            # A corrupt/partial cache must not look identical to "no cache" —
+            # log it so index-loading failures are diagnosable.
+            log.warning("BM25 cache load failed (%s): %s", self._index_dir, exc)
             self._bm25 = None
             self._ids = []
             self._texts = []
@@ -605,7 +631,10 @@ class HybridRetriever:
                 with open(self._index_dir / "texts_raw.json", "w") as f:
                     json.dump(self._texts_raw, f)
             return True
-        except Exception:
+        except Exception as exc:
+            # A failed/partial persistence is otherwise invisible: callers
+            # report success and the next startup silently rebuilds from Qdrant.
+            log.warning("BM25 cache save failed (%s): %s", self._index_dir, exc)
             return False
 
     # ── Search ──────────────────────────────────────────────────────────────
@@ -644,15 +673,21 @@ class HybridRetriever:
         # 768d) against a 1024d collection gets rejected by Qdrant with an
         # HTTP error — which callers then swallow into empty results. Fail
         # loudly instead so the mismatch is diagnosable.
-        try:
-            r_dim_resp = requests.get(
-                f"{self.qdrant_url}/collections/{self.collection}",
-                timeout=5,
-            )
-            r_dim_resp.raise_for_status()
-            r_dim = r_dim_resp.json()["result"]["config"]["params"]["vectors"]["size"]
-        except Exception:
-            r_dim = None  # Qdrant unreachable — let the search attempt decide
+        # The collection dimension is effectively immutable, so resolve it once
+        # and cache it: the guard used to cost a blocking GET on every query
+        # (doubled when stepback_query is set).
+        r_dim = getattr(self, "_collection_dim", None)
+        if r_dim is None:
+            try:
+                r_dim_resp = requests.get(
+                    f"{self.qdrant_url}/collections/{self.collection}",
+                    timeout=5,
+                )
+                r_dim_resp.raise_for_status()
+                r_dim = r_dim_resp.json()["result"]["config"]["params"]["vectors"]["size"]
+                self._collection_dim = r_dim
+            except Exception:
+                r_dim = None  # Qdrant unreachable — let the search attempt decide
         if r_dim is not None and query_vector and len(query_vector) != r_dim:
             raise ValueError(
                 f"Embedding dimension mismatch: query vector is "
@@ -981,6 +1016,9 @@ class HybridRetriever:
         methods = defaultdict(set)
         # doc_id → Qdrant payload (first hit that has one wins)
         hit_payloads: dict[str, dict] = {}
+        # doc_id → the hit's own text, used as a fallback when the id is not in
+        # the local BM25 corpus (vector-only hits, stale/partial cache).
+        hit_texts: dict[str, str] = {}
 
         for hit in bm25_hits + vector_hits:
             doc_id = hit["id"]
@@ -990,6 +1028,9 @@ class HybridRetriever:
             payload = hit.get("payload")
             if isinstance(payload, dict) and doc_id not in hit_payloads:
                 hit_payloads[doc_id] = payload
+            hit_text = hit.get("text")
+            if isinstance(hit_text, str) and hit_text and doc_id not in hit_texts:
+                hit_texts[doc_id] = hit_text
 
         # Text lookup
         id_to_text = {}
@@ -1005,7 +1046,10 @@ class HybridRetriever:
                 "id": doc_id,
                 "rrf_score": score,
                 "methods": sorted(methods[doc_id]),
-                "text": id_to_text.get(doc_id, ""),
+                # Local corpus text is truncated to 200 chars; a vector-only
+                # hit falls back to its own text so downstream rerankers
+                # (r.get('text','')) and snippets are not empty.
+                "text": id_to_text.get(doc_id) or hit_texts.get(doc_id, ""),
             }
             payload = hit_payloads.get(doc_id)
             if payload is not None:
@@ -1060,9 +1104,12 @@ class HybridRetriever:
                 continue  # No timestamp = no penalty
 
             try:
-                # Parse ISO timestamp (handle Z suffix and timezone offsets)
-                ts_str = ts_str.replace("Z", "+00:00")
-                ts = datetime.fromisoformat(ts_str)
+                # Parse ISO timestamp (handle Z suffix and timezone offsets).
+                # created_at/timestamp are heterogeneous in this repo (epoch
+                # int/float OR an ISO string): coerce to str first, otherwise a
+                # numeric value raises AttributeError inside .replace(), which
+                # is not in the caught tuple below and would abort search_hybrid.
+                ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
 
@@ -1074,7 +1121,7 @@ class HybridRetriever:
                 decay = math.exp(-0.5 * ((age_days - offset_days) / scale_days) ** 2)
                 item["rrf_score"] *= decay
                 item["age_days"] = round(age_days, 1)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError, OverflowError):
                 continue  # Unparseable timestamp = no penalty
 
         return sorted(ranked, key=lambda x: x["rrf_score"], reverse=True)

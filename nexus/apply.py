@@ -50,26 +50,55 @@ OVERRIDE_ALLOWED_FIELDS = {
 
 # --- Collection Management ---
 
+# Payload indexes for nexus_beliefs (field, schema type). Qdrant has no
+# ``payload_indices`` field in the collection-create body — it is silently
+# ignored, so the indexes are created separately via PUT /collections/{c}/index
+# (exactly the pattern nexus/events.py::_ensure_indexes() documents). Without
+# them every resolve_belief() exact-match filter degrades to a full scan.
+_INDEX_FIELDS = [
+    ("belief_id", "keyword"),
+    ("status", "keyword"),
+    ("source", "keyword"),
+    ("trust", "float"),
+    ("valid_from", "datetime"),
+    ("valid_until", "datetime"),
+    # resolve_belief()/_find_by_fact() filter on `content` — without a keyword
+    # index that lookup is a collection-wide scan on every call.
+    ("content", "keyword"),
+]
+
+
+def _ensure_belief_indexes() -> None:
+    """Creates the payload indexes for nexus_beliefs (idempotent)."""
+    for field, idx_type in _INDEX_FIELDS:
+        resp = requests.put(
+            f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}/index",
+            json={"field_name": field, "field_schema": {"type": idx_type}, "wait": True},
+            timeout=10,
+        )
+        # 200/201 = created or already present; anything else is logged at
+        # debug level (an existing index is answered with a success code).
+        if resp.status_code not in (200, 201):
+            log.debug("Belief index '%s' not created: %s", field, resp.status_code)
+
+
 def ensure_beliefs_collection() -> bool:
-    """Creates nexus_beliefs if not exists (with payload schema)."""
+    """Creates nexus_beliefs if not exists and ensures its payload indexes."""
     r = requests.get(f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}", timeout=10)
     if is_success(r.status_code):
+        # An existing collection (e.g. from an older version) may have no
+        # indexes at all — ensure them here as well.
+        _ensure_belief_indexes()
         return True
 
+    # Create without indexes first: Qdrant ignores payload_indices in the body.
     payload = {
         "name": BELIEFS_COLLECTION,
         "vectors": {"size": 1024, "distance": "Cosine"},
-        "payload_indices": [
-            {"field_name": "belief_id", "type": "keyword"},
-            {"field_name": "status", "type": "keyword"},
-            {"field_name": "source", "type": "keyword"},
-            {"field_name": "trust", "type": "float"},
-            {"field_name": "valid_from", "type": "datetime"},
-            {"field_name": "valid_until", "type": "datetime"},
-        ],
     }
     r = requests.put(f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}", json=payload, timeout=10)
     if is_success(r.status_code):
+        _ensure_belief_indexes()
         log.info(f"✅ Collection '{BELIEFS_COLLECTION}' angelegt")
         return True
     log.error(f"❌ Anlage fehlgeschlagen: {r.status_code}")
@@ -166,9 +195,13 @@ def apply_delta(belief_id: str, delta: dict) -> dict:
             continue
         if key not in ("fact", "status", "trust", "source", "rationale"):
             continue
-        if payload.get(key) != value:
-            payload[key] = value
-            changed[key] = value
+        # The belief text is stored under "content" (see resolve_belief() /
+        # _find_by_fact()); "fact" is the API-facing alias. Writing it as
+        # payload["fact"] would create a stray field that nothing reads.
+        store_key = "content" if key == "fact" else key
+        if payload.get(store_key) != value:
+            payload[store_key] = value
+            changed[store_key] = value
 
     if not changed:
         return {"belief_id": belief_id, "changed": False, "overrides": overrides}
@@ -215,8 +248,10 @@ def user_override(belief_id: str, field: str, value: Any) -> dict:
         return {"error": True, "message": f"Field not allowed: {field}"}
 
     payload = belief["payload"]
-    old_value = payload.get(field)
-    payload[field] = value
+    # "fact" is the API alias for the belief text, which lives under "content".
+    store_field = "content" if field == "fact" else field
+    old_value = payload.get(store_field)
+    payload[store_field] = value
     payload["explicitly_set"] = True
 
     # In provenance_trail festhalten
@@ -251,7 +286,6 @@ def recompute_trust(belief_id: str) -> dict:
     Respects explicitly_set=True - does not overwrite locked fields.
     """
     belief = _get_belief(belief_id)
-    # TODO: Pagination for >100 beliefs
     if not belief:
         return {"error": True, "message": "Belief not found"}
 
@@ -337,8 +371,9 @@ def recompute_all() -> dict:
         batch_updates = []
         for p in points:
             stats["total"] += 1
-            bid = p["payload"].get("belief_id", "")
-            payload = p["payload"]
+            # Qdrant returns "payload": null for points stored without one —
+            # a bare p["payload"] would raise AttributeError and abort the scan.
+            payload = p.get("payload") or {}
 
             # Check override protection first (avoids N+1 recompute calls)
             if payload.get("explicitly_set"):
@@ -360,14 +395,16 @@ def recompute_all() -> dict:
                 (e.get("trust_contribution", 0.5) for e in evidences if isinstance(e, dict)),
                 default=payload.get("trust", 0.5),
             )
-            old_trust = payload.get("trust", 0.0)
+            # Same missing-trust default as recompute_trust() (0.5): a point
+            # without a `trust` field must not be treated as 0.0 here, or the
+            # scan considers the delta too small and silently skips it.
+            old_trust = payload.get("trust", 0.5)
 
             if abs(new_trust - old_trust) > TRUST_EPSILON:
                 batch_updates.append({
                     "id": p["id"],
                     "trust": new_trust,
                 })
-                stats["changed"] += 1
 
         # set_payload — merges {"trust": ...} into the existing payload, so
         # every other field survives. The endpoint takes one payload for N
@@ -384,6 +421,9 @@ def recompute_all() -> dict:
                 stats["errors"] += 1
             else:
                 changed_ids.append(upd["id"])
+                # Count only writes that actually succeeded — otherwise a
+                # failed belief is reported as both "changed" and "errors".
+                stats["changed"] += 1
 
         page_offset = result.get("next_page_offset")
         if page_offset is None:
@@ -433,7 +473,14 @@ def _find_by_fact(fact: str) -> Optional[dict]:
     points = r.json()["result"]["points"]
     if not points:
         return None
-    p = points[0]["payload"]
+    # Prefer an ACTIVE belief: Qdrant returns up to 5 matches in arbitrary
+    # order, so a RETRACTED/SUPERSEDED/HISTORICAL point could otherwise be
+    # reported as the "existing" match, defeating the status lifecycle.
+    p = next(
+        (q.get("payload") or {} for q in points
+         if (q.get("payload") or {}).get("status") == STATUS_ACTIVE),
+        points[0].get("payload") or {},
+    )
     return {
         "belief_id": p.get("belief_id"),
         "content": p.get("content"),
