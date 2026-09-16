@@ -102,19 +102,24 @@ def _get_trust_filter() -> dict:
         ]
     }
 
-def get_embedding(text: str) -> list:
+def get_embedding(text: str, input_type: str = "query") -> list:
     """Get embedding from configured provider.
 
     H243: every failure path (URL error, non-2xx, malformed body such as a
     missing ``data[0].embedding``) degrades to ``None`` — the hook then skips
     recall instead of aborting. Mirrors auto_capture.get_embedding's contract.
+
+    W32-8: Voyage embeddings are asymmetric. Memories are STORED with
+    input_type="document" (auto_capture, mcp_server), so embedding the recall
+    query as a document too degrades every score. The default here is
+    therefore "query"; auto_capture keeps "document" for the write path.
     """
     try:
         if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
             req_data = json.dumps({
                 "input": [text],
                 "model": EMBEDDING_MODEL,
-                "input_type": "document"
+                "input_type": input_type
             }).encode()
             req = urllib.request.Request(
                 "https://api.voyageai.com/v1/embeddings",
@@ -347,8 +352,8 @@ def main():
     if not prompt or len(prompt) < 10:
         sys.exit(0)
 
-    # Get embedding
-    embedding = get_embedding(prompt)
+    # Get embedding (W32-8: explicit "query" — stored memories are documents)
+    embedding = get_embedding(prompt, input_type="query")
     if not embedding:
         sys.exit(0)
 

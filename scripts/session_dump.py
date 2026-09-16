@@ -42,9 +42,15 @@ def main() -> None:
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     q, params = build_query(sid, role_filter)
-    rows = con.execute(q, params).fetchall()
-    print(f"=== {sid}: {len(rows)} msgs (showing last {limit}, {maxlen} chars each)")
-    for r in rows[-limit:]:
+    all_rows = con.execute(q, params).fetchall()
+    # W32-12: ``rows[-limit:]`` is ``rows[0:]`` for limit == 0 (the whole
+    # session) and slices from the wrong end for a negative limit. Clamp to a
+    # non-negative int; 0 means "show nothing". The header keeps the TOTAL
+    # count and reports how many rows are actually shown.
+    limit = max(0, int(limit))
+    rows = all_rows[-limit:] if limit > 0 else []
+    print(f"=== {sid}: {len(all_rows)} msgs (showing last {len(rows)}, {maxlen} chars each)")
+    for r in rows:
         ts = datetime.fromtimestamp(r['timestamp'], berlin).strftime('%H:%M')
         c = (r['content'] or '').strip()
         c = re.sub(r'\s+', ' ', c)

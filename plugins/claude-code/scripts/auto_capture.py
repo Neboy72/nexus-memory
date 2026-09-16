@@ -148,18 +148,25 @@ def get_embedding(text: str) -> list:
                 data = json.loads(resp.read())
                 return data["data"][0]["embedding"]
         elif EMBEDDING_PROVIDER == "ollama":
+            # W32-9: endpoint ↔ field mismatch. The legacy /api/embeddings
+            # endpoint reads the text from "prompt" and returns a single
+            # "embedding"; the current /api/embed reads "input" and returns
+            # "embeddings". We called the legacy URL with the new "input"
+            # field, so Ollama received no prompt and returned no vector.
+            # Migrated to the new API (same one confidence._embed uses).
             req_data = json.dumps({
                 "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
                 "input": text
             }).encode()
             req = urllib.request.Request(
-                "http://localhost:11434/api/embeddings",
+                "http://localhost:11434/api/embed",
                 data=req_data,
                 headers={"Content-Type": "application/json"}
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
-                return data["embedding"]
+            embeddings = data.get("embeddings") or []
+            return embeddings[0] if embeddings else None
         else:
             print(
                 f"[nexus auto-capture] unknown NEXUS_EMBEDDING_PROVIDER="

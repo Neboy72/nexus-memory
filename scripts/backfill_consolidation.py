@@ -41,6 +41,13 @@ def main() -> int:
     coll = os.environ.get("NEXUS_COLLECTION", "nexus")
     c = Consolidator(store, coll)
     total_done = 0
+    # W32-2: count consecutive batches that produced NO durable outcome. A
+    # batch can end with done == 0 for two very different reasons — the
+    # backlog is empty (success) or every point in it failed (transient
+    # outage). Treating them identically both hid persistent failures and
+    # risked spinning on them.
+    no_progress_streak = 0
+    max_no_progress = 3
     t0 = time.time()
     print(f"[backfill] start — batch={args.batch} sleep={args.sleep}s")
     try:
@@ -70,8 +77,34 @@ def main() -> int:
                       f"failed={report.get('failed',0)}) | total={total_done} | "
                       f"{(time.time()-t0)/60:.1f}min")
             if done == 0:
-                print("[backfill] backlog empty — done.")
-                break
+                failed = report.get("failed", 0)
+                if failed == 0:
+                    # W32-2: no progress AND no failures — the backlog really
+                    # is empty.
+                    print("[backfill] backlog empty — done.")
+                    break
+                # W32-2: all points failed. This is a persistent failure, not
+                # an empty backlog, so count consecutive no-progress batches
+                # and abort after N of them instead of grinding forever.
+                no_progress_streak += 1
+                if no_progress_streak >= max_no_progress or total_done == 0:
+                    # A cold start whose very first batch fails entirely gets
+                    # no benefit from retrying (Ollama/db unreachable).
+                    print(
+                        f"[backfill] ERROR: {no_progress_streak} consecutive "
+                        f"batch(es) with no durable progress ({failed} failed) "
+                        f"— aborting."
+                    )
+                    break
+                print(
+                    f"[backfill] WARNING: {failed} point(s) failed with no "
+                    f"progress (streak {no_progress_streak}/{max_no_progress}) "
+                    f"— retrying."
+                )
+                time.sleep(args.sleep)
+                continue
+            # W32-2: durable progress resets the consecutive-failure counter.
+            no_progress_streak = 0
             if args.max and total_done >= args.max:
                 print(f"[backfill] reached max={args.max}")
                 break

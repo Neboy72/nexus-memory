@@ -71,6 +71,10 @@ class SignalScores:
     grounding: float = 0.0
     coverage: float = 0.0
     factual: float = 0.0
+    # W32-6: False when the answer embedding was unavailable, so grounding /
+    # factual could not be computed and were set to a neutral 0.5. Consumers
+    # must treat the aggregate as degraded rather than trusting it.
+    embedder_ok: bool = True
 
 
 @dataclass
@@ -343,6 +347,15 @@ class GroundingScorer:
             signals.grounding = self._signal_grounding(a_emb[0], chunk_embs)
             # Factual check: lexical overlap (protects against hallucinations)
             signals.factual = self._signal_factual(answer, chunk_texts)
+        else:
+            # W32-6: the answer embedding failed (None/empty). Leaving the
+            # dataclass defaults made grounding=0.0 and factual=0.0 look like
+            # a real "ungrounded answer" verdict, silently poisoning the
+            # aggregate. Set both to a neutral 0.5 and flag the embedder as
+            # unavailable so the report declares the signal is missing.
+            signals.grounding = 0.5
+            signals.factual = 0.5
+            signals.embedder_ok = False
 
         report.signals = signals
 

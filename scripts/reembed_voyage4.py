@@ -228,7 +228,11 @@ def reembed_collection(collection: str, dry_run: bool = False):
 
     logger.info("  DONE: %s", collection)
     logger.info("  Re-embedded: %s, Skipped: %s, Errors: %s", reembedded, skipped, errors)
-    logger.info("  Estimated tokens used: ~%,d", total_tokens)
+    # W32-10: a percent-comma thousands separator is not a valid
+    # %-conversion — it raised ValueError when the lazy log record was
+    # formatted, so the run's own summary line crashed. Use the str.format
+    # comma specifier instead.
+    logger.info("  Estimated tokens used: ~{:,}".format(total_tokens))
 
     return {"reembedded": reembedded, "skipped": skipped, "errors": errors, "tokens": total_tokens}
 
@@ -275,8 +279,10 @@ def main():
     # Summary
     logger.info("=== SUMMARY ===")
     for col, r in results.items():
-        logger.info("  %s: %s re-embedded, %s skipped, %s errors, ~%,d tokens",
-                    col, r['reembedded'], r['skipped'], r['errors'], r['tokens'])
+        # W32-10: same percent-comma bug on the summary line — pre-format it.
+        tokens_str = f"{r['tokens']:,}"
+        logger.info("  %s: %s re-embedded, %s skipped, %s errors, ~%s tokens",
+                    col, r['reembedded'], r['skipped'], r['errors'], tokens_str)
     if failed_cols:
         logger.info("  FAILED collections: %s", ', '.join(failed_cols))
 
