@@ -25,12 +25,34 @@ import os
 import time
 from typing import Any, Optional
 
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var without crashing at import time (W31-10).
+
+    ``float(os.getenv(...))`` at module scope raised ValueError on a malformed
+    value (proven: '0.65x') and killed the module import instead of failing
+    open to the default.
+    """
+    try:
+        return float(os.getenv(name) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """W31-10: int counterpart of ``_env_float`` (garbage → default)."""
+    try:
+        return int(os.getenv(name) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 # Conservative thresholds (Spec /tmp/kiosha-think-gate.lock):
 # - Under-tagging is harmless (everything visible, like today).
 # - Over-tagging is dangerous (apparent forgetting) → require a clear margin.
-SCOPE_MATCH_THRESHOLD = float(os.getenv("NEXUS_SCOPE_AUTO_THRESHOLD", "0.65"))
-SCOPE_MARGIN = float(os.getenv("NEXUS_SCOPE_AUTO_MARGIN", "0.05"))
-CENTROID_TTL_SECONDS = int(os.getenv("NEXUS_SCOPE_CACHE_TTL", "300"))
+SCOPE_MATCH_THRESHOLD = _env_float("NEXUS_SCOPE_AUTO_THRESHOLD", 0.65)
+SCOPE_MARGIN = _env_float("NEXUS_SCOPE_AUTO_MARGIN", 0.05)
+CENTROID_TTL_SECONDS = _env_int("NEXUS_SCOPE_CACHE_TTL", 300)
 
 
 def _normalize_scope(scope) -> str:
@@ -206,6 +228,10 @@ def prefetch_filter_scopes(
     my_scope = _normalize_scope(my_scope)
     inferred = infer_scope(query_vector, centroids)
     if inferred == "default":
+        # W31-11 (checked): the server-side no-match path stays None. Here the
+        # manual override is DELIBERATELY not honored on an ambiguous query —
+        # the MCP contract (Nr472) pins this: ambiguous = fail-open, no filter.
+        # Only the Claude-Code hook (short-lived prefetch) adds the manual scope.
         return None
     allowed = {"default", inferred}
     if my_scope:

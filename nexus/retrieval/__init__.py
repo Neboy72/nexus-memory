@@ -104,6 +104,35 @@ def _resolve_tier(content: str, metadata: dict | None = None) -> tuple[str, floa
 RRF_K = 60  # Reciprocal Rank Fusion constant
 
 
+def _timestamp_sort_key(point: dict) -> str:
+    """Uniform sort key for points that may carry an ISO timestamp.
+
+    W31-5: the previous key was ``payload.get("timestamp", 0)`` — an ISO
+    *string* on some points and the *int* 0 on others. As soon as a bucket
+    mixed both, ``list.sort`` compared str with int and raised TypeError.
+    Everything normalizes to a string here; a missing/unusable timestamp
+    becomes "" (a floor that sorts deterministically before real ISO values).
+    """
+    payload = point.get("payload")
+    ts = payload.get("timestamp") if isinstance(payload, dict) else None
+    return ts if isinstance(ts, str) and ts else ""
+
+
+def _session_bucket(payload: dict, point_id: str) -> str:
+    """Session-graph bucket key for one corpus id.
+
+    W31-6: a missing ``session_id`` used to fall back to the payload ``type``
+    ("memory"/"turn"), so every session-less memory collapsed into ONE bucket
+    and the session graph glued unrelated memories together. A genuinely set
+    session_id keeps its shared bucket; anything else gets a per-point bucket
+    and stays standalone.
+    """
+    sid = payload.get("session_id") if isinstance(payload, dict) else None
+    if isinstance(sid, str) and sid:
+        return f"session:{sid}"
+    return f"point:{point_id}"
+
+
 class HybridRetriever:
     """Hybrid BM25 + Vector search with RRF and source-tier boosting."""
 
@@ -252,9 +281,9 @@ class HybridRetriever:
 
             # Process turn buckets into chunks
             for sid, turn_points in turn_buckets.items():
-                # Sort turns by timestamp if available, otherwise by order in list
-                turn_points.sort(key=lambda pt: pt.get("payload", {}).get("timestamp", 0))
-                
+                # W31-5: uniform key — see _timestamp_sort_key.
+                turn_points.sort(key=_timestamp_sort_key)
+
                 # Extract texts
                 turn_texts = []
                 turn_ids = []
@@ -273,7 +302,7 @@ class HybridRetriever:
                     self._ids.append(chunk_id)
                     self._texts.append(chunk_text.lower())
                     self._texts_raw.append(chunk_text)
-                    id_session[chunk_id] = sid
+                    id_session[chunk_id] = f"session:{sid}"
                 else:
                     for start in range(0, n - window_size + 1):
                         window_texts = turn_texts[start:start + window_size]
@@ -283,7 +312,7 @@ class HybridRetriever:
                         self._ids.append(chunk_id)
                         self._texts.append(chunk_text.lower())
                         self._texts_raw.append(chunk_text)
-                        id_session[chunk_id] = sid
+                        id_session[chunk_id] = f"session:{sid}"
 
             # Memory points stay as-is
             for p in memory_points:
@@ -298,9 +327,9 @@ class HybridRetriever:
                 self._ids.append(pid_str)
                 self._texts.append(text.lower())
                 self._texts_raw.append(text)
-                id_session[pid_str] = str(
-                    payload.get("session_id", payload.get("type", "unknown"))
-                )
+                # W31-6: real session_id keeps its shared bucket; no session →
+                # its own per-point bucket (never the blanket `type` fallback).
+                id_session[pid_str] = _session_bucket(payload, pid_str)
         else:
             # Original behavior: each point = one document
             for p in points:
@@ -315,9 +344,9 @@ class HybridRetriever:
                 self._ids.append(pid_str)
                 self._texts.append(text.lower())
                 self._texts_raw.append(text)
-                id_session[pid_str] = str(
-                    payload.get("session_id", payload.get("type", "unknown"))
-                )
+                # W31-6: real session_id keeps its shared bucket; no session →
+                # its own per-point bucket (never the blanket `type` fallback).
+                id_session[pid_str] = _session_bucket(payload, pid_str)
 
         # Build auxiliary indexes (chunk text lookup, session chunk graph,
         # entity index) from the freshly built corpus.
@@ -377,7 +406,8 @@ class HybridRetriever:
             # callers that supply points without an id_session map.
             for p in points:
                 payload = p.get("payload", {})
-                sid = str(payload.get("session_id", payload.get("type", "unknown")))
+                # W31-6: same bucket contract as the index_memories path.
+                sid = _session_bucket(payload, str(p.get("id", "")))
                 session_groups.setdefault(sid, []).append(str(p.get("id", "")))
         for sid, pids in session_groups.items():
             if len(pids) < 2:

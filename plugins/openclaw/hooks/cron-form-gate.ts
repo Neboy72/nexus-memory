@@ -73,7 +73,7 @@ function appendDailyNote(line: string): void {
  */
 export function buildCronFormGateHandler() {
   return async (
-    event: { to?: string; content?: string },
+    event: { to?: string; content?: string; message?: unknown; text?: unknown },
     ctx?: { sessionKey?: string },
   ) => {
     try {
@@ -81,12 +81,26 @@ export function buildCronFormGateHandler() {
       if (!isUnattendedSession(sessionKey)) return // interaktiv → nichts tun
       // Gleiche Payload-Kette wie thought-filter: der Sender kann den Text in
       // content ODER message ODER text legen — sonst wäre das Gate umgehbar.
-      const raw = event?.content ?? (event as any)?.message ?? (event as any)?.text
-      if (typeof raw !== "string") return
+      // W31-15 (2 Punkte):
+      //  (1) der Event kann null/undefined sein — erst defensiv auf ein Objekt
+      //      normalisieren, dann lesen.
+      //  (2) der alte `??`-Chain nahm den ERSTEN non-nullish-Wert, auch wenn er
+      //      kein String war (z.B. content als Objekt). `typeof raw !== "string"`
+      //      beendete den Handler dann still → Gate umgangen. Jetzt gewinnt der
+      //      erste STRING-Kandidat; `message`/`text` werden nur als String
+      //      akzeptiert.
+      const payload = (event ?? {}) as Record<string, unknown>
+      const raw = [payload.content, payload.message, payload.text].find(
+        (candidate): candidate is string => typeof candidate === "string",
+      )
+      // Kein Text → kein Formular-Verstoß (fail-open, nichts zu blocken).
+      if (typeof raw !== "string") return { cancel: false }
       const trimmed = raw.trim()
       if (trimmed.length === 0) return // leer/whitespace
       if (SHORT_TOKENS.has(trimmed)) return // explizite Steuersignale (NO_REPLY etc.)
       if (isCompliantForm(raw)) return // Formular ok → durchlassen
+      // Ab hier: echter Formular-Verstoß (nicht-leerer String ohne gültiges
+      // Formular und ohne Steuersignal) → blockieren.
       log.warn(
         `cron-form-gate: BLOCKED (kein gültiges Formular, ${raw.length} Zeichen, session=${sessionKey})`
       )
@@ -94,8 +108,12 @@ export function buildCronFormGateHandler() {
         `⛔ cron-form-gate: ungeformte Cron-Nachricht blockiert (${raw.length} Zeichen) — bitte Cron-Prompt prüfen`
       )
       return { cancel: true, cancelReason: "cron-form-gate: kein gültiges Formular" }
-    } catch {
-      return // Fail-open bei Gate-eigenem Fehler: nie Senden kaputt machen
+    } catch (err) {
+      // W31-14: bewusster Fail-open (Gate darf den Sendepfad nie kaputt machen)
+      // — aber NICHT mehr still: ohne diesen Log blieb ein Gate-Crash
+      // unsichtbar und non-compliant Nachrichten passierten unbemerkt.
+      log.warn("cron-form-gate: gate error — fail-open (allow)", err)
+      return { cancel: false }
     }
   }
 }
