@@ -92,13 +92,16 @@
     "additionalProperties": false,
     "properties": {
       "qdrantUrl": {
-        "type": "string"
+        "type": "string",
+        "default": "http://localhost:6333"
       },
       "collection": {
-        "type": "string"
+        "type": "string",
+        "default": "nexus"
       },
       "embedding": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
           "provider": {
             "type": "string",
@@ -126,18 +129,22 @@
         }
       },
       "autoRecall": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "autoCapture": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "thoughtFilter": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "maxRecallResults": {
         "type": "number",
         "minimum": 1,
-        "maximum": 20
+        "maximum": 20,
+        "default": 10
       },
       "accessLevel": {
         "type": "string",
@@ -145,13 +152,17 @@
           "public",
           "trusted",
           "private"
-        ]
+        ],
+        "default": "public"
       },
       "scope": {
-        "type": "string"
+        "type": "string",
+        "maxLength": 40,
+        "pattern": "^$|^[a-z0-9][a-z0-9-]{0,39}$"
       },
       "debug": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": false
       }
     },
     "required": []
