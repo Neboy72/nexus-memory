@@ -1,3 +1,54 @@
+## [0.20.1] - 2026-09-16
+
+### Fixed
+
+- **Proven prompt-injection bypass closed (security).** A stored
+  `</nexus-context/>` (slash before `>`) slipped past the closing-tag
+  neutralizer, survived into the recall wrapper and closed it early — the
+  injection text plus the disclaimer became free prompt text. The
+  neutralizer now strips every close/self-closing variant including the
+  slash form. Proven end-to-end with a Node reproduction before and after
+  the fix.
+- **`nexus.health`: `_logger` used but never defined.** Wave 37 added log
+  lines to four contradiction-detection fallback paths without defining the
+  logger, so any exception there raised `NameError` and masked the real
+  failure (reproduced via the drift demo). A module-level logger restores
+  honest error reporting.
+- **SessionStart hook fail-soft actually enforced.** The embedding response
+  is now shape-validated (a top-level array / `null` data no longer raises
+  `TypeError` and aborts the hook); the payload filter loop carries the
+  same `isinstance` guard as `main()`.
+- **session_scan robustness.** A missing session DB is now a clean error
+  instead of a silently created empty database; running sessions stay
+  visible (window no longer drops `ended_at IS NULL` rows); an epoch-0
+  `ended_at` counts as running; unused columns dropped.
+- **num.ts clamp hardening.** Fractional bounds are truncated like values;
+  degenerate bounds (non-finite / inverted) fail closed by design and are
+  documented.
+- **text-preview fast path.** Short-enough strings return before the
+  code-point array is materialized.
+- **nexus-sica-analyzer honesty.** Failed counts return `None` instead of a
+  fabricated `0` (no "all clear" during a Qdrant outage); a failed scroll
+  marks `affected_ids` as unavailable; every suggestion branch gates on the
+  count having succeeded.
+- **Typebox test stub interop.** The test-only stub no longer throws on
+  interop keys (`default`, `__esModule`, `toJSON`, `inspect`, …); unknown
+  builder typos still throw; error message now English.
+
+### Tests
+
+- Version-consistency test compares calver bounds segment-wise numerically
+  (lexicographic comparison falsely failed `2026.9.0` < `2026.10.0`); the
+  lockfile peerRange mirror is now a hard assert.
+- Evidence: macOS suite 1945 passed / 3 skipped; Ubuntu container replica
+  1940 passed / 8 skipped; OpenClaw JS tests green (thought-filter 20/20
+  with env provided); smoke ALL PASS + FUNCTIONAL PASS; tsc clean;
+  leak-check clean.
+
+[0.20.1]: https://github.com/Neboy72/nexus-memory/releases/tag/v0.20.1
+
+---
+
 ## [0.20.0] - 2026-09-16
 
 ### Fixed
