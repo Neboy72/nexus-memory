@@ -1183,4 +1183,13 @@ __all__ = [
     "nexus_search_hybrid",
     "nexus_discover",
     "nexus_graph_report",
+    # Provenance layer re-exported for `from nexus import ...` convenience —
+    # declared here so the package surface matches what is imported above.
+    "attach_source",
+    "find_corroboration",
+    "corroborate_entry",
+    "add_dependency",
+    "build_dependency_graph",
+    "format_source",
+    "SOURCE_TYPES",
 ]
