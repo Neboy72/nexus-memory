@@ -26,6 +26,10 @@ export const ELLIPSIS = "…"
  */
 export function limitText(text: string, max: number = PREVIEW_MAX): string {
   const limit = Number.isFinite(max) ? Math.max(0, Math.trunc(max)) : PREVIEW_MAX
+  // W40-scan: a short-enough string can never be truncated — skip the
+  // code-point materialization entirely (UTF-16 length <= code-point count,
+  // so this fast path is always safe).
+  if (text.length <= limit) return text
   const chars = Array.from(text)
   return chars.length > limit ? `${chars.slice(0, limit).join("")}${ELLIPSIS}` : text
 }

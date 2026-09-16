@@ -88,7 +88,23 @@ def get_embedding(text: str) -> Optional[list]:
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
-                return data["data"][0]["embedding"]
+                # W40-scan (high): the response is untrusted JSON. A top-level
+                # array/string/number or "data": null raises TypeError on the
+                # subscript chain — absent from the tuple below, so the hook
+                # aborted instead of failing soft. Validate the shape instead
+                # of widening the except (KeyError/IndexError/ValueError stay
+                # caught for genuinely malformed bodies).
+                if (
+                    isinstance(data, dict)
+                    and isinstance(data.get("data"), list)
+                    and len(data["data"]) > 0
+                    and isinstance(data["data"][0], dict)
+                ):
+                    emb = data["data"][0].get("embedding")
+                    if isinstance(emb, list) and emb:
+                        return emb
+                print("[nexus session-start] embedding response shape unexpected", file=sys.stderr)
+                return None
     except (urllib.error.URLError, OSError, KeyError, IndexError, ValueError) as exc:
         print(f"[nexus session-start] embedding failed: {exc}", file=sys.stderr)
         return None
@@ -154,7 +170,11 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
         # H250: Qdrant can store points without a payload — ``"payload": null``
         # makes the default-arg form return None, then ``payload.get`` raises
         # AttributeError outside any try/except and crashes the hook.
-        payload = hit.get("payload") or {}
+        # W40-scan (medium): same guard as in main() — a truthy NON-dict
+        # payload (e.g. a list) also has no .get and crashed the filter loop.
+        payload = hit.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
         mem_level = payload.get("access_level", "private")
         mem_idx = level_order.index(mem_level) if mem_level in level_order else 2
         if mem_idx <= agent_idx:

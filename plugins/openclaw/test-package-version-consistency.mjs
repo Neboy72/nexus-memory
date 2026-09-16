@@ -61,9 +61,18 @@ assert.ok(pluginApi.includes(lower), "pluginApi muss die untere peer-Grenze trag
 // Obergrenze der peerRange (wenn vorhanden): muss NACH der Untergrenze
 // liegen — eine vertippte/geschrumpfte Upper-Bound (<2026.5.7) wuerde eine
 // leere Range bedeuten und ist hier ein harter Fehler.
+// W40-scan (high): lexikalischer String-Vergleich war falsch ("2026.9.0" >
+// "2026.10.0" lexikalisch, aber numerisch kleiner). Segmentweise numerisch
+// vergleichen — ein 2-stelliges Minor-Segment (2026.10.0) darf den Test nicht
+// fälschlich rot machen.
 const upper = calvers.get("peerDependencies.openclaw")[1]
+const segNum = (v) => v.split(".").map((s) => parseInt(s, 10))
 if (upper !== undefined) {
-  assert.ok(upper > lower, `peer-Range leer (Upper ${upper} <= Lower ${lower})`)
+  const [uA, uB, uC] = segNum(upper)
+  const [lA, lB, lC] = segNum(lower)
+  const greater =
+    uA !== lA ? uA > lA : uB !== lB ? uB > lB : uC > lC
+  assert.ok(greater, `peer-Range leer (Upper ${upper} <= Lower ${lower})`)
   console.log("PASS  Nr 408: peerRange-Upper-Bound", upper, "> Lower", lower)
 }
 
@@ -83,8 +92,9 @@ console.log("PASS  Nr 408: package-lock version+name = package.json =", pkg.vers
 // peerRange-Upper-Bound (W34-Fund b): die peerDependency-Range muss
 // VOLLSTAENDIG zwischen package.json und der gespiegelten Lock-Angabe
 // uebereinstimmen — nicht nur das erste Token.
+// W40-scan (medium): still schweigen (if-Guard) verschluckt einen fehlenden
+// Mirror — fehlt die Spiegelung, ist das ein harter Fehler.
 const peerRange = pkg.peerDependencies.openclaw
-if (lockRoot.peerDependencies?.openclaw) {
-  assert.equal(lockRoot.peerDependencies.openclaw, peerRange, "peerRange in package-lock driftet von package.json")
-}
+assert.ok(lockRoot.peerDependencies?.openclaw, "package-lock root spiegelt peerDependencies.openclaw nicht (Drift oder Format)")
+assert.equal(lockRoot.peerDependencies.openclaw, peerRange, "peerRange in package-lock driftet von package.json")
 console.log("PASS  Nr 408: package-lock peerRange gespiegelt:", peerRange)

@@ -14,15 +14,19 @@
  */
 
 /**
- * Remove every "</nexus-context>" (case-insensitive) from stored text.
+ * Remove every "<nexus-context …>" and "</nexus-context>" (case-insensitive,
+ * self-closing and whitespace variants included) from stored text.
  *
- * `\s*` before `>`: variants such as `</nexus-context >` or
- * `</nexus-context\t>` close the wrapper just as well in HTML and must not
- * survive neutralization.
+ * `\\s*` and `/` before `>`: variants such as `</nexus-context >`,
+ * `</nexus-context\t>` or `</nexus-context/>` close the wrapper just as well
+ * in HTML and must not survive neutralization. W40-scan proved the bypass:
+ * `</nexus-context/>` fell through the old `\\s*>` regex, survived into the
+ * recall wrapper and closed it early (everything after it became free prompt
+ * text).
  */
 export function neutralizeContextClose(text: string): string {
   if (!text) return text
-  return text.replace(/<\/nexus-context\s*>/gi, "")
+  return text.replace(/<\/nexus-context\s*\/?\s*>/gi, "")
 }
 
 /**
