@@ -29,7 +29,17 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+# W40-scan proof: `_logger` is used in the contradiction-detection fallback
+# paths (lines 564/676/745/799) but was never defined — W37 (a960660) added
+# the log lines without the logger. Any exception inside those paths then
+# raised NameError itself, masking the real failure (drift_demo crashed
+# exactly this way). Module-level logger, project style:
+# `_logger = logging.getLogger(__name__)`.
+import logging
+
 from nexus.config import get_collection
+
+_logger = logging.getLogger(__name__)
 
 try:
     import requests

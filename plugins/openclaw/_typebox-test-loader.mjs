@@ -25,12 +25,18 @@ const BUILDERS = [
 
 const STUB = `
 const BUILDERS = new Set([${BUILDERS.map((b) => JSON.stringify(b)).join(",")}]);
+// W40-scan (high): interop/inspect keys are consulted by bundlers, REPLs and
+// Node's util.inspect — throwing on them broke consumers that never call a
+// builder at all. The strictness guarantee stays: an unknown FUNCTION-style
+// name (a real typo like Type.Ojbect) still throws.
+const INTEROP_KEYS = new Set(["default", "__esModule", "toJSON", "inspect", "valueOf", "toString"]);
 export const Type = new Proxy({}, {
   get(_target, prop) {
     if (typeof prop === "symbol") return undefined;
     if (prop === "then") return undefined;
+    if (INTEROP_KEYS.has(prop)) return undefined;
     if (!BUILDERS.has(prop)) {
-      throw new Error("Unknown Type." + String(prop) + " — Typo oder fehlt im Typebox-Stub (_typebox-test-loader.mjs)");
+      throw new Error("Unknown Type." + String(prop) + " - typo or missing from the typebox test stub (_typebox-test-loader.mjs)");
     }
     return () => ({});
   },
