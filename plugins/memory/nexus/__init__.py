@@ -112,6 +112,9 @@ class NexusMemoryProvider:
         self._backup_thread: Optional[threading.Thread] = None
         self._update_thread: Optional[threading.Thread] = None
         self._backup_nudged = False
+        # Sibling of _backup_nudged: must exist on instances built via __new__
+        # (bench/test pattern) because system_prompt_block() reads it unguarded.
+        self._update_nudged = False
         self._last_backup_time: float = 0
         self._last_backup_path: str = ""
         self._skill_graph = None  # cached SkillGraph for graph-boost
@@ -121,11 +124,18 @@ class NexusMemoryProvider:
         # None, so a missing attribute raised AttributeError on fresh
         # instances (prefetch before any other scope-touching path).
         self._scope_centroids: ScopeCentroids | None = None
+        self._scope_centroids_lock = threading.Lock()  # lazy ScopeCentroids init
         self._rerank_cfg = None  # cached rerank config (lazy, roadmap 1.2)
         self._embed_cache = None  # roadmap 3.1 L0: lazy EmbedCache
         self._embed_cache_lock = threading.Lock()
         self._entity_extract_lock = threading.Lock()  # single-flight enrich (1.1)
         self._rerank_lock = threading.Lock()
+        # Single-flight guard for queue_prefetch: a new prefetch thread per call
+        # would let a slow/old query overwrite a fresher _prefetch_result.
+        self._prefetch_gate = threading.Lock()
+        # Serializes the flywheel read-modify-write (Qdrant has no atomic
+        # increment, so concurrent recalls would lose a bump).
+        self._flywheel_lock = threading.Lock()
 
     @property
     def name(self) -> str: return "nexus"
@@ -142,6 +152,12 @@ class NexusMemoryProvider:
         self._session_id = session_id; self._hermes_home = kwargs.get("hermes_home", "")
         self._agent_context = kwargs.get("agent_context", "primary")
         cfg = self._load_config(); self._collection = cfg.get("collection_name", _COLLECTION)
+        # A key entered through the config UI is persisted by save_config(); the
+        # embedder reads VOYAGE_API_KEY from the environment, so export it when
+        # the env var is not already set (otherwise the setting was ignored).
+        _vkey = (cfg.get("voyage_api_key") or "").strip()
+        if _vkey and not os.environ.get("VOYAGE_API_KEY"):
+            os.environ["VOYAGE_API_KEY"] = _vkey
         self._qdrant = QdrantClient(host=_HOST, port=_PORT)
         self._embedder = _Embedder()
         self._ensure_collection()
@@ -156,8 +172,9 @@ class NexusMemoryProvider:
 
     def _start_auto_backup(self) -> None:
         """Start automatic daily backup of all memories."""
-        import threading, time, json, os
-        from datetime import datetime
+        # Only what the closure actually uses (json/os/datetime were redundant
+        # shadowing imports — _do_backup imports its own).
+        import threading, time
 
         def _backup_loop():
             # Wait 60s after startup before first backup (interruptible: Nr 290)
@@ -167,7 +184,7 @@ class NexusMemoryProvider:
                 try:
                     self._do_backup()
                 except Exception as e:
-                    logger.warning(f"Auto-backup failed: {e}")
+                    logger.warning("Auto-backup failed: %s", e)
                 # Sleep 24h (check stop flag every 60s for responsive shutdown)
                 for _ in range(BACKUP_INTERVAL_ITERATIONS):
                     if self._write_stop.is_set():
@@ -197,6 +214,11 @@ class NexusMemoryProvider:
         all_points = []
         offset = None
         while True:
+            # shutdown() joins this thread for only 2s and then closes the
+            # client — abort here so a partial backup is never written and the
+            # scroll does not hit a closed client.
+            if self._write_stop.is_set():
+                raise RuntimeError("backup aborted: shutdown in progress")
             from qdrant_client import models as qm
             results, offset = self._qdrant.scroll(
                 collection_name=self._collection,
@@ -338,6 +360,14 @@ class NexusMemoryProvider:
                 try: self._skill_graph.store.close()
                 except Exception: pass
                 self._skill_graph = None
+        # ThreadPoolExecutor workers are non-daemon: without an explicit
+        # shutdown a queued/running rewrite keeps the interpreter alive and may
+        # still touch the embedding provider after _qdrant is closed below.
+        _ex = getattr(self, "_rewrite_exec", None)
+        if _ex is not None:
+            try: _ex.shutdown(wait=False)
+            except Exception: pass
+            self._rewrite_exec = None
         if self._qdrant: self._qdrant.close(); self._qdrant = None
         logger.info("NexusMemoryProvider shut down")
 
@@ -345,7 +375,23 @@ class NexusMemoryProvider:
         with self._prefetch_lock: return self._prefetch_result
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
-        threading.Thread(target=self._do_prefetch, args=(query,), name="nexus-prefetch", daemon=True).start()
+        """Single-flight: with several prefetches in flight the slowest/oldest
+        query could overwrite a fresher _prefetch_result (and each thread pays
+        a rewrite + embedding + query). A prefetch already running makes this
+        call a no-op — its result is still fresher than an older query's.
+        """
+        gate = getattr(self, "_prefetch_gate", None)
+        if gate is None:
+            gate = self._prefetch_gate = threading.Lock()
+        if not gate.acquire(blocking=False):
+            return  # one prefetch in flight — skip instead of racing it
+        try:
+            threading.Thread(target=self._do_prefetch, args=(query,),
+                             name="nexus-prefetch", daemon=True).start()
+        except Exception as exc:
+            # Thread spawn failed: release or prefetch dies for the lifetime
+            gate.release()
+            logger.warning("Prefetch thread start failed: %s", exc)
 
     def _get_embed_cache(self):
         """Roadmap 3.1 L0: lazy EmbedCache (repeated queries skip Voyage)."""
@@ -515,6 +561,17 @@ class NexusMemoryProvider:
         return ex
 
     def _do_prefetch(self, query: str) -> None:
+        try:
+            self._do_prefetch_inner(query)
+        finally:
+            # Release the queue_prefetch single-flight gate. Guarded because
+            # _do_prefetch is also called directly (tests) without acquiring it.
+            gate = getattr(self, "_prefetch_gate", None)
+            if gate is not None:
+                try: gate.release()
+                except RuntimeError: pass
+
+    def _do_prefetch_inner(self, query: str) -> None:
         if not self._embedder or not self._qdrant: return
         try:
             query = self._rewrite_if_enabled(query)
@@ -532,8 +589,14 @@ class NexusMemoryProvider:
             allowed_scopes = None
             try:
                 from nexus_memory.scope_auto import ScopeCentroids, prefetch_filter_scopes
+                # Double-checked lock: _do_prefetch runs in multiple threads,
+                # so two could otherwise each build a ScopeCentroids and race
+                # on the attribute while one is already calling .get().
                 if self._scope_centroids is None:
-                    self._scope_centroids = ScopeCentroids(self._qdrant, self._collection)
+                    lock = getattr(self, "_scope_centroids_lock", None) or threading.Lock()
+                    with lock:
+                        if self._scope_centroids is None:
+                            self._scope_centroids = ScopeCentroids(self._qdrant, self._collection)
                 allowed_scopes = prefetch_filter_scopes(vector, self._scope_centroids.get(), my_scope)
             except Exception as exc:
                 logger.debug("scope_auto: prefetch inference skipped (%s)", exc)
@@ -590,10 +653,29 @@ class NexusMemoryProvider:
         # Auto-Entity-Detection (Nebo 30.08.2026): Hardware-Fakten sofort als Entity speichern,
         # nicht nur bei session_end. Pattern: "Ich habe X" / "Ich nutze X" / "Ich habe X per Y"
         if any(sig in user_content.lower() for sig in ["ich habe ", "ich nutze ", "ich hab ", "ich nutz "]):
+            # Extraction is LLM/network-bound: run it in a daemon thread and
+            # honour the same single-flight lock + NEXUS_AUTO_ENRICH opt-out as
+            # the async enrichment path, so it cannot block the turn loop or
+            # race a concurrent enrichment.
+            if os.environ.get("NEXUS_AUTO_ENRICH", "1").strip().lower() in ("0", "false", "no", "off"):
+                return
+            if not self._entity_extract_lock.acquire(blocking=False):
+                return  # one extraction in flight; skipping beats stacking
+
+            def _run_hardware_extract():
+                try:
+                    self._maybe_extract_hardware_entities(user_content, session_id)
+                except Exception as exc:
+                    logger.debug("Hardware-entity auto-extract failed (non-fatal): %s", exc)
+                finally:
+                    self._entity_extract_lock.release()
             try:
-                self._maybe_extract_hardware_entities(user_content, session_id)
+                threading.Thread(target=_run_hardware_extract,
+                                 name="nexus-hw-entity-extract", daemon=True).start()
             except Exception as exc:
-                logger.debug("Hardware-entity auto-extract failed (non-fatal): %s", exc)
+                # Thread spawn failed: release the lock or the path dies forever
+                logger.warning("Hardware entity extraction thread start failed: %s", exc)
+                self._entity_extract_lock.release()
 
     def _write_loop(self) -> None:
         while not self._write_stop.is_set():
@@ -815,46 +897,55 @@ class NexusMemoryProvider:
         falls der Retrieve fehlschlägt. Skips points deprecated between
         recall and this bump (review fix B2). SICA uses access_count
         later as trust signal for retrieval weighting.
+
+        Best-effort serialization: the retrieve→+1→set_payload sequence is not
+        atomic (Qdrant has no atomic increment). The in-process lock around it
+        keeps two concurrent recalls from reading the same counter and both
+        writing n+1 (a lost update).
         """
-        _client = self._qdrant
-        _fresh = {}
-        if _client is not None:
-            try:
-                _ids = [pid for pid, _u, _a, _s in entries]
-                _fresh = {
-                    str(p.id): (p.payload or {})
-                    for p in _client.retrieve(
+        lock = getattr(self, "_flywheel_lock", None)
+        if lock is None:
+            lock = self._flywheel_lock = threading.Lock()
+        with lock:
+            _client = self._qdrant
+            _fresh = {}
+            if _client is not None:
+                try:
+                    _ids = [pid for pid, _u, _a, _s in entries]
+                    _fresh = {
+                        str(p.id): (p.payload or {})
+                        for p in _client.retrieve(
+                            collection_name=self._collection,
+                            ids=_ids, with_payload=True, with_vectors=False)
+                    }
+                except Exception:
+                    _fresh = {}
+            for pid, use_count, access_count, status in entries:
+                try:
+                    # Review fix: skip facts deprecated after the recall snapshot
+                    if status in ("deprecated", "rolled_back"):
+                        continue
+                    # v0.15 (Review-Fix): aktuelle Zähler verwenden wenn lesbar,
+                    # sonst Snapshot — und von der eigenen Basis incrementieren
+                    # (use_count nicht mehr aus access_count abgeleitet, das
+                    # überschrieb sonst MCP-Zähler → Reset auf 1).
+                    fp = _fresh.get(str(pid)) or {}
+                    try:
+                        u_now = max(0, int(fp.get("use_count", use_count) or 0))
+                    except (TypeError, ValueError):
+                        u_now = max(0, int(use_count) or 0)
+                    try:
+                        a_now = max(0, int(fp.get("access_count", access_count) or 0))
+                    except (TypeError, ValueError):
+                        a_now = max(0, int(access_count) or 0)
+                    self._qdrant.set_payload(
                         collection_name=self._collection,
-                        ids=_ids, with_payload=True, with_vectors=False)
-                }
-            except Exception:
-                _fresh = {}
-        for pid, use_count, access_count, status in entries:
-            try:
-                # Review fix: skip facts deprecated after the recall snapshot
-                if status in ("deprecated", "rolled_back"):
-                    continue
-                # v0.15 (Review-Fix): aktuelle Zähler verwenden wenn lesbar,
-                # sonst Snapshot — und von der eigenen Basis incrementieren
-                # (use_count nicht mehr aus access_count abgeleitet, das
-                # überschrieb sonst MCP-Zähler → Reset auf 1).
-                fp = _fresh.get(str(pid)) or {}
-                try:
-                    u_now = max(0, int(fp.get("use_count", use_count) or 0))
-                except (TypeError, ValueError):
-                    u_now = max(0, int(use_count) or 0)
-                try:
-                    a_now = max(0, int(fp.get("access_count", access_count) or 0))
-                except (TypeError, ValueError):
-                    a_now = max(0, int(access_count) or 0)
-                self._qdrant.set_payload(
-                    collection_name=self._collection,
-                    payload={"access_count": a_now + 1,
-                             "use_count": u_now + 1,
-                             "last_accessed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                    points=[pid], wait=False)
-            except Exception as exc:
-                logger.debug("flywheel bump skip %s: %s", str(pid)[:8], exc)
+                        payload={"access_count": a_now + 1,
+                                 "use_count": u_now + 1,
+                                 "last_accessed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                        points=[pid], wait=False)
+                except Exception as exc:
+                    logger.debug("flywheel bump skip %s: %s", str(pid)[:8], exc)
 
     def _forget(self, memory_id: str) -> Dict[str, Any]:
         if not self._qdrant: raise RuntimeError("Provider not initialized")
@@ -924,10 +1015,15 @@ class NexusMemoryProvider:
                 qdrant_url=f"http://{_HOST}:{_PORT}",
                 collection=self._collection,
             )
-            sg.initialize()
-            gt = GraphTraversal(sg)
-            results = gt.traverse(fact_id, max_depth=max_depth, relation=relation, target_type=target_type)
-            sg.store.close()
+            try:
+                sg.initialize()
+                gt = GraphTraversal(sg)
+                results = gt.traverse(fact_id, max_depth=max_depth, relation=relation, target_type=target_type)
+            finally:
+                # Release the store (and its Qdrant client) even when the
+                # traversal raises — the outer handler only logs and returns.
+                try: sg.store.close()
+                except Exception: pass
             return {"results": results}
         except Exception as exc:
             logger.warning("Graph traverse failed: %s", exc)
@@ -944,10 +1040,13 @@ class NexusMemoryProvider:
                 qdrant_url=f"http://{_HOST}:{_PORT}",
                 collection=self._collection,
             )
-            sg.initialize()
-            gt = GraphTraversal(sg)
-            results = gt.find_entities(entity_type=entity_type, limit=limit)
-            sg.store.close()
+            try:
+                sg.initialize()
+                gt = GraphTraversal(sg)
+                results = gt.find_entities(entity_type=entity_type, limit=limit)
+            finally:
+                try: sg.store.close()
+                except Exception: pass
             return {"entities": results}
         except Exception as exc:
             logger.warning("Find entities failed: %s", exc)
@@ -963,10 +1062,13 @@ class NexusMemoryProvider:
                 qdrant_url=f"http://{_HOST}:{_PORT}",
                 collection=self._collection,
             )
-            sg.initialize()
-            gt = GraphTraversal(sg)
-            result = gt.get_subgraph(fact_id, max_depth=max_depth)
-            sg.store.close()
+            try:
+                sg.initialize()
+                gt = GraphTraversal(sg)
+                result = gt.get_subgraph(fact_id, max_depth=max_depth)
+            finally:
+                try: sg.store.close()
+                except Exception: pass
             return result
         except Exception as exc:
             logger.warning("Get subgraph failed: %s", exc)
@@ -982,10 +1084,13 @@ class NexusMemoryProvider:
                 qdrant_url=f"http://{_HOST}:{_PORT}",
                 collection=self._collection,
             )
-            sg.initialize()
-            gt = GraphTraversal(sg)
-            results = gt.get_related(fact_id, relation=relation)
-            sg.store.close()
+            try:
+                sg.initialize()
+                gt = GraphTraversal(sg)
+                results = gt.get_related(fact_id, relation=relation)
+            finally:
+                try: sg.store.close()
+                except Exception: pass
             return {"results": results}
         except Exception as exc:
             logger.warning("Get related failed: %s", exc)
@@ -1122,7 +1227,11 @@ class NexusMemoryProvider:
         d = os.path.join(hermes_home, "nexus"); os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "config.json"), "w") as f:
             json.dump({"qdrant_url": values.get("qdrant_url", ""),
-                        "collection_name": values.get("collection_name", _COLLECTION)}, f, indent=2)
+                        "collection_name": values.get("collection_name", _COLLECTION),
+                        # get_config_schema() advertises this key — persisting
+                        # it keeps the schema honest (initialize() exports it
+                        # to the env the embedder reads).
+                        "voyage_api_key": values.get("voyage_api_key", "")}, f, indent=2)
         logger.info("Nexus config saved to %s/nexus/config.json", hermes_home)
 
     def _enqueue_entity_extraction(self, text: str, source: str = "nexus_remember") -> None:
