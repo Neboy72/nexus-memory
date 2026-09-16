@@ -361,18 +361,49 @@ class TestGetRecentEvents:
 
 
 class TestEnsureCollection:
-    """``ensure_collection()`` is idempotent: no PUT if the collection exists."""
+    """``ensure_collection()`` is idempotent and W28-2: indexes are ensured on
+    BOTH paths (create + exists) — the exists-path issues index PUTs, not none."""
 
     @patch("nexus.events.requests.put")
     @patch("nexus.events.requests.get")
     def test_noop_when_collection_exists(self, mock_get, mock_put):
+        # W28-2 supersession: the exists-path now calls _ensure_indexes()
+        # (idempotent PUT /index calls). Index PUTs succeed → still True.
         mock_get.return_value = _resp(200, {"result": {"name": "nexus_events"}})
+        mock_put.return_value = _resp(200, {"result": {"status": "ok"}})
 
         result = ensure_collection()
 
         assert result is True
-        # No PUT should be issued if the collection is already there
-        mock_put.assert_not_called()
+        # Collection-creation PUT must NOT be issued, but index PUTs must.
+        create_bodies = [c.kwargs.get("json", {}) for c in mock_put.call_args_list]
+        assert not any("vectors" in b for b in create_bodies), (
+            "exists-path must not re-create the collection"
+        )
+        index_bodies = [b for b in create_bodies if "field_name" in b]
+        assert index_bodies, "exists-path must ensure indexes (W28-2)"
+        assert any(b.get("field_name") == "ingested_at" for b in index_bodies)
+
+    @patch("nexus.events.requests.get")
+    def test_exists_path_survives_index_failure(self, mock_get):
+        # W28-2: index failure on the exists-path logs but does not flip the result.
+        mock_get.return_value = _resp(200, {"result": {"name": "nexus_events"}})
+
+        class _Fail:
+            status_code = 409  # "already exists" style response
+
+            def json(self):
+                return {"error": "index exists"}
+
+        import nexus.events as ev
+
+        orig = ev.requests.put
+        ev.requests.put = lambda *a, **k: _Fail()
+        try:
+            result = ensure_collection()
+            assert result is True
+        finally:
+            ev.requests.put = orig
 
     @patch("nexus.events.requests.put")
     @patch("nexus.events.requests.get")

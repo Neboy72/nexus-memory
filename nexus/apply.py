@@ -352,7 +352,14 @@ def recompute_all() -> dict:
                 stats["skipped"] += 1
                 continue
 
-            new_trust = max(e.get("trust_contribution", 0.0) for e in evidences)
+            # H24/H66: same semantics as recompute_trust() — 0.5 default, and
+            # non-dict evidence entries are skipped instead of crashing the
+            # whole scan; a list with no usable entry falls back to the
+            # already stored trust (not 0.0).
+            new_trust = max(
+                (e.get("trust_contribution", 0.5) for e in evidences if isinstance(e, dict)),
+                default=payload.get("trust", 0.5),
+            )
             old_trust = payload.get("trust", 0.0)
 
             if abs(new_trust - old_trust) > TRUST_EPSILON:
