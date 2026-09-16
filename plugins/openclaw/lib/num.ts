@@ -19,6 +19,9 @@
  *  - The result is clamped into [min, max]. `dflt` is clamped the same way, so
  *    a misconfigured default can never escape the declared bounds.
  *  - Negative inputs are NOT treated as "missing": they clamp up to `min`.
+ *  - String parsing is `Number()` semantics: "0x1f" (31), "1e5" and
+ *    surrounding whitespace are accepted on purpose. Note that "1e999"
+ *    therefore parses to Infinity and falls back to `dflt`.
  */
 export function clampInt(
   v: unknown,
@@ -26,7 +29,17 @@ export function clampInt(
   min: number,
   max: number,
 ): number {
-  const fallback = Math.min(max, Math.max(min, Math.trunc(dflt)))
+  // W40-11: bounds come from the caller, not from the schema. A non-finite
+  // bound or an inverted interval (min > max) made the clamp math return NaN
+  // for *every* input — including the fallback (Math.trunc(NaN) → NaN) —
+  // instead of a bounded integer. Normalize to a finite, ordered interval.
+  const hi = Number.isFinite(max) ? max : Number.isFinite(min) ? min : 0
+  const lo = Number.isFinite(min) ? min : hi
+  const lower = Math.min(lo, hi)
+  const upper = Math.max(lo, hi)
+
+  const base = Number.isFinite(dflt) ? dflt : lower
+  const fallback = Math.min(upper, Math.max(lower, Math.trunc(base)))
 
   let n: number
   if (typeof v === "number") {
@@ -38,5 +51,5 @@ export function clampInt(
   }
 
   if (!Number.isFinite(n)) return fallback
-  return Math.min(max, Math.max(min, Math.trunc(n)))
+  return Math.min(upper, Math.max(lower, Math.trunc(n)))
 }

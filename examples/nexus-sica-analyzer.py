@@ -37,12 +37,14 @@ def _scroll_all(host: str, port: int, collection: str,
 
     url = f"http://{host}:{port}/collections/{collection}/points/scroll"
     points: list[dict] = []
-    offset: str | None = None
+    # W40-2: offset is a Qdrant point id (unsigned 64-bit) — the numeric 0 is a
+    # legitimate offset, so pagination must test against None, never truthiness.
+    offset: Any = None
 
     try:
         while True:
             body: dict[str, Any] = {"limit": 100}
-            if offset:
+            if offset is not None:
                 body["offset"] = offset
             if filter_cond:
                 body["filter"] = filter_cond
@@ -54,7 +56,7 @@ def _scroll_all(host: str, port: int, collection: str,
             batch = data.get("result", {}).get("points", [])
             points.extend(batch)
             offset = data.get("result", {}).get("next_page_offset")
-            if not offset:
+            if offset is None:
                 break
     except Exception as exc:  # W31-1: RequestException/HTTP error → structured result
         _logger.warning("SICA analyzer: scroll failed: %s", exc)
@@ -161,12 +163,16 @@ def analyze() -> dict:
 
     # Beliefs mit low confidence abrufen
     low_conf_beliefs = []
+    # W40-2: the previews below stay capped, but the ids are collected for the
+    # FULL result — `affected_ids` drives the review agent, so truncating it
+    # silently under-reported the real scope (low_conf_count).
+    affected_ids: list[Any] = []
     if low_conf_count > 0:
         points = _scroll_all(QDRANT_HOST, QDRANT_PORT, COLLECTION, low_conf_filter)
         if points is None:
             errors.append("scroll failed: low_confidence_beliefs")
             points = []
-        for p in points[:20]:
+        for p in points:
             payload = p.get("payload") or {}  # W31-2: explicit null → {}
             if not isinstance(payload, dict):
                 payload = {}
@@ -175,6 +181,9 @@ def analyze() -> dict:
             if not isinstance(prov, dict):
                 prov = {}
             content = payload.get("content") or ""
+            affected_ids.append(p.get("id"))
+            if len(low_conf_beliefs) >= 20:
+                continue
             low_conf_beliefs.append({
                 "id": p.get("id"),
                 "content": str(content)[:120],
@@ -205,7 +214,7 @@ def analyze() -> dict:
                 "aktualisieren (-> fact) oder verwerfen (-> temp)."
             ),
             "action": "review_beliefs",
-            "affected_ids": [b["id"] for b in low_conf_beliefs],
+            "affected_ids": affected_ids,
         })
 
     if session_count > 3 and belief_count == 0:
