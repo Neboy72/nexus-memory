@@ -772,17 +772,30 @@ def _get_version(
     host: str = "localhost",
     port: int = 6333,
 ) -> Optional[FactVersion]:
-    """Get a specific version by ID from the full-history collection."""
+    """Get a specific version by ID from the full-history collection.
+
+    W30-9: transport/HTTP failures are NOT "version does not exist" — same
+    fail-loud contract as ``_get_current_canonical`` (W27). A swallowed outage
+    made ``rollback()`` abort with "no previous version" instead of reporting
+    the Qdrant failure.
+    """
     url = f"{_qdrant_url(host, port, _collection_all())}/points/{version_id}"
     try:
         r = requests.get(url, timeout=10)
-        if is_success(r.status_code):
-            result = r.json().get("result")
-            if result:
-                payload = result.get("payload", {})
-                return FactVersion.from_dict(payload)
-    except requests.RequestException:
-        pass
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Qdrant unreachable while reading version {version_id}: {exc}"
+        ) from exc
+    if r.status_code == 404:
+        return None  # regular: this version id does not exist
+    if not is_success(r.status_code):
+        raise RuntimeError(
+            f"Qdrant returned HTTP {r.status_code} while reading version {version_id}"
+        )
+    result = r.json().get("result")
+    if result:
+        payload = result.get("payload", {})
+        return FactVersion.from_dict(payload)
     return None
 
 

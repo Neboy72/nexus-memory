@@ -17,7 +17,8 @@ from nexus.graph.graph import SkillGraph
 MIN_CLUSTER_SIZE = 2  # Clusters smaller than this are "singletons"
 
 
-def _build_clusters(graph: nx.DiGraph, min_size: int) -> list[dict]:
+# W30-4: SkillGraph.graph is a MultiDiGraph (parallel relations per node pair).
+def _build_clusters(graph: nx.MultiDiGraph, min_size: int) -> list[dict]:
     """Collect clusters from *graph* — shared by both public functions.
 
     Uses weakly connected components (undirected clusters), keeps only

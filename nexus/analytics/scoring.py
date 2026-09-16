@@ -125,6 +125,8 @@ def relation_distribution(sg: SkillGraph) -> dict[str, int]:
     graph = _graph(sg)
     counts: dict[str, int] = {}
 
+    # W30-4: SkillGraph.graph is a MultiDiGraph — keys=False keeps yielding
+    # (u, v, data), once per parallel edge between the same pair.
     for _, _, data in graph.edges(data=True):
         rel = data.get("relation", "unknown")
         counts[rel] = counts.get(rel, 0) + 1

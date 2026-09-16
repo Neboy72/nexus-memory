@@ -21,6 +21,7 @@ import time
 import re
 import sys
 import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -58,7 +59,7 @@ from nexus_memory.agent_detect import (
 _logger = logging.getLogger(__name__)
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Depends, FastAPI, HTTPException, Request
     from fastapi.responses import HTMLResponse, JSONResponse
     from pydantic import BaseModel
     from fastapi.staticfiles import StaticFiles
@@ -91,6 +92,56 @@ def _qdrant_request(endpoint: str, data: dict = None) -> dict:
             return json.loads(resp.read())
     except Exception as e:
         return {"error": str(e)}
+
+
+async def _qdrant_request_async(endpoint: str, data: dict = None) -> dict:
+    """W30-1 (blocking I/O moved off the event loop).
+
+    ``_qdrant_request`` uses a blocking urllib call with a 5s timeout. Every
+    async handler must go through this wrapper — a direct call would freeze
+    the whole event loop (all other requests AND WebSockets) for the duration
+    of the Qdrant round-trip.
+    """
+    return await asyncio.to_thread(_qdrant_request, endpoint, data)
+
+
+def _probe_ollama(timeout: float = 2.0) -> None:
+    """Blocking ollama liveness probe (W30-1) — call via ``asyncio.to_thread``."""
+    urllib.request.urlopen("http://localhost:11434/api/tags", timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# W30-3 CSRF/local-origin guard
+# ---------------------------------------------------------------------------
+# State-changing routes (POST/PATCH/DELETE) are only reachable from the local
+# dashboard: they require the custom header below AND, when the browser sends
+# Origin/Referer, a loopback host. A cross-site page can neither set a custom
+# header without a CORS preflight nor forge these, which closes the
+# DNS-rebinding / cross-origin-POST hole on the localhost port.
+# NOTE: this is not an auth system — the server binds loopback only
+# (uvicorn default host 127.0.0.1, see ``main()``); if that ever changes to
+# 0.0.0.0 the guard must be revisited (TODO, intentionally not changed here).
+_ALLOWED_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def verify_local_mutation(request: Request) -> None:
+    """FastAPI dependency: reject non-local state-changing requests (W30-3)."""
+    if request.headers.get("X-Nexus-Dashboard") != "1":
+        raise HTTPException(
+            status_code=403,
+            detail="missing X-Nexus-Dashboard header — dashboard mutations only",
+        )
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    if origin:
+        try:
+            host = urlparse(origin).hostname
+        except ValueError:
+            host = None
+        if host not in _ALLOWED_ORIGIN_HOSTS:
+            raise HTTPException(
+                status_code=403,
+                detail="cross-origin mutation blocked",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +177,7 @@ def _set_payload(memory_id: str, payload: dict) -> bool:
 @app.get("/api/memories/{memory_id}/why")
 async def inspector_why(memory_id: str):
     """Full metadata: WHY this memory exists and how it behaves."""
-    pl = _retrieve_payload(memory_id)
+    pl = await asyncio.to_thread(_retrieve_payload, memory_id)
     if pl is None:
         return JSONResponse({"error": "Memory not found"}, status_code=404)
     return {
@@ -146,7 +197,7 @@ async def inspector_why(memory_id: str):
     }
 
 
-@app.patch("/api/memories/{memory_id}/text")
+@app.patch("/api/memories/{memory_id}/text", dependencies=[Depends(verify_local_mutation)])
 async def inspector_patch_text(memory_id: str, body: dict | None = None):
     """Edit-in-place: replace the memory's text in its payload."""
     if not body:
@@ -154,7 +205,7 @@ async def inspector_patch_text(memory_id: str, body: dict | None = None):
     new_text = str(body.get("text") or "").strip()
     if not new_text:
         return JSONResponse({"error": "text must not be empty"}, status_code=400)
-    pl = _retrieve_payload(memory_id)
+    pl = await asyncio.to_thread(_retrieve_payload, memory_id)
     if pl is None:
         return JSONResponse({"error": "Memory not found"}, status_code=404)
     payload = dict(pl)
@@ -163,35 +214,35 @@ async def inspector_patch_text(memory_id: str, body: dict | None = None):
     if "text" in payload or "content" not in payload:
         payload["text"] = new_text
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-    if not _set_payload(memory_id, payload):
+    if not await asyncio.to_thread(_set_payload, memory_id, payload):
         return JSONResponse({"error": "Qdrant update failed"}, status_code=500)
     return {"status": "ok", "id": memory_id, "text": new_text[:120]}
 
 
-@app.post("/api/memories/{memory_id}/deprecate")
+@app.post("/api/memories/{memory_id}/deprecate", dependencies=[Depends(verify_local_mutation)])
 async def inspector_deprecate(memory_id: str):
     """Soft-delete: mark deprecated (recoverable — never hard delete)."""
-    pl = _retrieve_payload(memory_id)
+    pl = await asyncio.to_thread(_retrieve_payload, memory_id)
     if pl is None:
         return JSONResponse({"error": "Memory not found"}, status_code=404)
     payload = dict(pl)
     payload["lifecycle_status"] = "deprecated"
     payload["deprecated_at"] = datetime.now(timezone.utc).isoformat()
-    if not _set_payload(memory_id, payload):
+    if not await asyncio.to_thread(_set_payload, memory_id, payload):
         return JSONResponse({"error": "Qdrant write failed"}, status_code=500)
     return {"status": "ok", "id": memory_id, "lifecycle_status": "deprecated"}
 
 
-@app.post("/api/memories/{memory_id}/restore")
+@app.post("/api/memories/{memory_id}/restore", dependencies=[Depends(verify_local_mutation)])
 async def inspector_restore(memory_id: str):
     """Undelete: deprecated → canonical (rollback of a soft-delete)."""
-    pl = _retrieve_payload(memory_id)
+    pl = await asyncio.to_thread(_retrieve_payload, memory_id)
     if pl is None:
         return JSONResponse({"error": "Memory not found"}, status_code=404)
     payload = dict(pl)
     payload["lifecycle_status"] = "canonical"
     payload["restored_at"] = datetime.now(timezone.utc).isoformat()
-    if not _set_payload(memory_id, payload):
+    if not await asyncio.to_thread(_set_payload, memory_id, payload):
         return JSONResponse({"error": "Qdrant write failed"}, status_code=500)
     return {"status": "ok", "id": memory_id, "lifecycle_status": "canonical"}
 
@@ -203,7 +254,7 @@ async def get_system_status():
     qdrant_healthy = False
     points_count = 0
     try:
-        resp = _qdrant_request(f"/collections/{COLLECTION}")
+        resp = await _qdrant_request_async(f"/collections/{COLLECTION}")
         result = resp.get("result", {})
         # Qdrant returns "status" field (e.g. "green") not "collection_name"
         qdrant_healthy = result.get("status") in ("green", "yellow", "red") or "points_count" in result
@@ -228,8 +279,7 @@ async def get_system_status():
                     break
             else:
                 try:
-                    import urllib.request as ur
-                    ur.urlopen("http://localhost:11434/api/tags", timeout=2)
+                    await asyncio.to_thread(_probe_ollama, 2)
                     embed_provider = "ollama"
                 except Exception as e:
                     _logger.debug("get_system_status: ollama probe failed: %s", e)
@@ -290,7 +340,7 @@ class FuelPaidRequest(BaseModel):
     enabled: bool = True
 
 
-@app.post("/api/fuel/paid")
+@app.post("/api/fuel/paid", dependencies=[Depends(verify_local_mutation)])
 async def api_fuel_paid(request: FuelPaidRequest):
     """User-Toggle für PAID Konsolidierungs-Stationen (OpenAI/OpenRouter).
 
@@ -329,13 +379,13 @@ async def get_agents():
     return registry
 
 
-@app.post("/api/agents/cleanup")
+@app.post("/api/agents/cleanup", dependencies=[Depends(verify_local_mutation)])
 async def cleanup_agents():
     """Manually trigger ghost-agent cleanup. Returns the removal report."""
     return cleanup_removed_agents()
 
 
-@app.post("/api/agents/{agent_id}/trust")
+@app.post("/api/agents/{agent_id}/trust", dependencies=[Depends(verify_local_mutation)])
 async def update_trust_level(agent_id: str, level: str):
     """Change trust level for an agent."""
     result = set_agent_trust_level(agent_id, level)
@@ -518,7 +568,7 @@ async def get_full_stats():
     # Sync urllib scroll (up to 500 requests) — off the event loop.
     all_points = await asyncio.to_thread(_scroll_all_memories, 500_000)
 
-    total_resp = _qdrant_request(f"/collections/{COLLECTION}")
+    total_resp = await _qdrant_request_async(f"/collections/{COLLECTION}")
     total = total_resp.get("result", {}).get("points_count", 0)
 
     by_cat = {}
@@ -540,7 +590,15 @@ async def get_full_stats():
         by_cat[f["category"]] = by_cat.get(f["category"], 0) + 1
         by_drift[f["drift"]] = by_drift.get(f["drift"], 0) + 1
         sources.add(f["source"])
-        confidences.append(f["confidence"])
+        # W30-2: `payload.get("confidence", 0.7)` only covers a MISSING key —
+        # an explicit `"confidence": null` (or a str/bool) reached the
+        # aggregation and crashed sum() with TypeError. Non-numeric values
+        # fall back to the neutral default (bool is an int subclass — exclude
+        # it explicitly).
+        _conf = f["confidence"]
+        confidences.append(
+            _conf if isinstance(_conf, (int, float)) and not isinstance(_conf, bool) else 0.7
+        )
         if payload.get("confidence") is not None:
             confidences_real += 1
 
@@ -596,7 +654,7 @@ async def get_full_stats():
 @app.get("/api/graph")
 async def get_graph_data():
     """Get memory graph data (categories as nodes, shared attributes as edges)."""
-    resp = _qdrant_request(
+    resp = await _qdrant_request_async(
         f"/collections/{COLLECTION}/points/scroll",
         {"limit": 500, "with_payload": True, "with_vector": False}
     )
@@ -647,18 +705,20 @@ async def health_check():
     checks = {}
     
     # Qdrant
+    def _probe_qdrant_healthz() -> None:
+        with urllib.request.urlopen(f"{QDRANT_URL}/healthz", timeout=5) as r:
+            r.read()
+
     try:
-        import urllib.request as ur
-        health_url = f"{QDRANT_URL}/healthz"
-        with ur.urlopen(health_url, timeout=5) as r:
-            body = r.read().decode()
+        # W30-1: blocking probe moved off the event loop.
+        await asyncio.to_thread(_probe_qdrant_healthz)
         checks["qdrant"] = {"status": "ok", "detail": "alive"}
     except Exception as e:
         checks["qdrant"] = {"status": "error", "detail": str(e)}
-    
+
     # Collection
     try:
-        resp = _qdrant_request(f"/collections/{COLLECTION}")
+        resp = await _qdrant_request_async(f"/collections/{COLLECTION}")
         result = resp.get("result", {})
         checks["collection"] = {
             "status": "ok" if result.get("status") in ("green", "yellow", "red") or "points_count" in result else "error",
@@ -687,8 +747,7 @@ async def health_check():
             else:
                 # Check for ollama
                 try:
-                    import urllib.request as ur
-                    r = ur.urlopen("http://localhost:11434/api/tags", timeout=2)
+                    await asyncio.to_thread(_probe_ollama, 2)
                     embed_provider = "ollama"
                 except Exception as e:
                     _logger.debug("health: ollama probe failed: %s", e)
@@ -706,7 +765,7 @@ async def health_check():
     return checks
 
 
-@app.post("/api/backup")
+@app.post("/api/backup", dependencies=[Depends(verify_local_mutation)])
 async def trigger_backup():
     """Trigger a manual backup (full JSON export via the production backup engine)."""
     try:
@@ -727,7 +786,7 @@ async def trigger_backup():
         return {"status": "error", "error": str(e)}
 
 
-@app.post("/api/agents/{agent_id}/connect")
+@app.post("/api/agents/{agent_id}/connect", dependencies=[Depends(verify_local_mutation)])
 async def connect_agent(agent_id: str):
     """One-click connect: write the nexus MCP entry into the agent's own config.
 
@@ -793,7 +852,7 @@ async def connect_agent(agent_id: str):
     return {"status": "ok", "action": "connected" if not already else "already-connected", "config": str(cfg_path)}
 
 
-@app.post("/api/agents/{agent_id}/disconnect")
+@app.post("/api/agents/{agent_id}/disconnect", dependencies=[Depends(verify_local_mutation)])
 async def disconnect_agent(agent_id: str):
     """Toggle Off: remove the nexus MCP entry from the agent's own config.
 

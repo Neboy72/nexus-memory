@@ -137,7 +137,9 @@ const Inspector = {
     const msg = document.getElementById('inspMsg');
     try {
       const res = await fetch(`/api/memories/${encodeURIComponent(id)}/text`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        // W30-3: mutating routes require the dashboard guard header.
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Nexus-Dashboard': '1' },
         body: JSON.stringify({ text }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -149,12 +151,18 @@ const Inspector = {
   },
 
   async deprecate(id) {
-    await fetch(`/api/memories/${encodeURIComponent(id)}/deprecate`, { method: 'POST' });
+    // W30-3: mutating routes require the dashboard guard header.
+    await fetch(`/api/memories/${encodeURIComponent(id)}/deprecate`, {
+      method: 'POST', headers: { 'X-Nexus-Dashboard': '1' },
+    });
     this.why(id);
   },
 
   async restore(id) {
-    await fetch(`/api/memories/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+    // W30-3: mutating routes require the dashboard guard header.
+    await fetch(`/api/memories/${encodeURIComponent(id)}/restore`, {
+      method: 'POST', headers: { 'X-Nexus-Dashboard': '1' },
+    });
     this.why(id);
   },
 

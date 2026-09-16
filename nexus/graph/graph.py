@@ -48,7 +48,12 @@ class SkillGraph:
             qdrant_url=qdrant_url,
             collection=collection,
         )
-        self._graph: nx.DiGraph = nx.DiGraph()
+        # W30-4: a DiGraph holds at most ONE edge per (source, target) pair, so
+        # several active relations between the same pair (e.g. supports AND
+        # depends_on) overwrote each other and the cache silently lost edges
+        # Qdrant still had. MultiDiGraph keeps one edge per (u, v, key) with
+        # ``key=edge_id``, so parallel relations coexist.
+        self._graph: nx.MultiDiGraph = nx.MultiDiGraph()
 
     # ── Store access ────────────────────────────────────────────────────────
 
@@ -57,12 +62,17 @@ class SkillGraph:
         return self._store
 
     @property
-    def graph(self) -> nx.DiGraph:
+    def graph(self) -> nx.MultiDiGraph:
         """Read-only access to the internal NetworkX cache (for analytics).
 
         Consumers must treat this as read-only: every mutation must go through
         ``add_edge``/``reject_edge``/``deprecate_edge`` so the Qdrant payload
         store and this cache stay in sync.
+
+        W30-4: this is a MultiDiGraph — parallel relations between the same
+        node pair are kept as separate edges (``key=edge_id``). Note that
+        ``edges(data=True)`` still yields ``(u, v, data)`` (networkx default
+        ``keys=False``), just once per parallel edge.
         """
         return self._graph
 
@@ -105,12 +115,14 @@ class SkillGraph:
             self._graph.add_node(source)
             self._graph.add_node(target)
 
-            # Directed edge with relation as attribute
-            self._graph.add_edge(source, target, relation=rel, edge_id=edge.edge_id)
+            # Directed edge with relation as attribute. W30-4: ``key=edge_id``
+            # keeps parallel relations between the same pair distinct AND makes
+            # the edge addressable for removal.
+            self._graph.add_edge(source, target, key=edge.edge_id, relation=rel, edge_id=edge.edge_id)
 
             # Symmetric contradicts: also add reverse edge
             if rel == EdgeRelation.CONTRADICTS.value:
-                self._graph.add_edge(target, source, relation=rel, edge_id=edge.edge_id)
+                self._graph.add_edge(target, source, key=edge.edge_id, relation=rel, edge_id=edge.edge_id)
 
         _logger.debug(
             "SkillGraph rebuilt: %d nodes, %d edges",
@@ -151,6 +163,8 @@ class SkillGraph:
             return []
 
         results = []
+        # W30-4: on a MultiDiGraph ``edges(data=True)`` uses keys=False and
+        # therefore yields (u, v, data) once per parallel edge (networkx 3.6).
         for _, target, data in self._graph.edges(fact_id, data=True):
             rel = data.get("relation", "")
             if relation is None or rel == relation:
@@ -233,34 +247,36 @@ class SkillGraph:
         self._graph.add_node(edge.source_fact_id)
         self._graph.add_node(edge.target_fact_id)
         rel = edge.relation
+        # W30-4: ``key=edge_id`` — parallel relations between the same pair no
+        # longer overwrite each other, and the key makes the exact edge
+        # addressable for removal.
         self._graph.add_edge(
-            edge.source_fact_id, edge.target_fact_id,
+            edge.source_fact_id, edge.target_fact_id, key=edge.edge_id,
             relation=rel, edge_id=edge.edge_id,
         )
         # Symmetric contradicts
         if rel == EdgeRelation.CONTRADICTS.value:
             self._graph.add_edge(
-                edge.target_fact_id, edge.source_fact_id,
+                edge.target_fact_id, edge.source_fact_id, key=edge.edge_id,
                 relation=rel, edge_id=edge.edge_id,
             )
 
     def _remove_edge_from_graph(self, edge: Edge) -> None:
         """Remove a single edge from the NetworkX cache.
 
-        Review #48: a DiGraph holds at most one edge per node pair, so when
-        several relations connect the same pair the slot may belong to a
-        *different* edge. Only drop a cached edge when its ``edge_id``
-        matches — otherwise the cache silently loses the wrong relation.
+        Review #48 / W30-4: with ``key=edge_id`` the cached edge is addressed
+        exactly — no "the slot may belong to a different edge" ambiguity left.
+        Removal is idempotent (a missing key is simply not an error).
         """
-        if not self._graph.has_node(edge.source_fact_id):
-            return
-        if self._graph.has_edge(edge.source_fact_id, edge.target_fact_id):
-            if self._graph.edges[edge.source_fact_id, edge.target_fact_id].get("edge_id") == edge.edge_id:
-                self._graph.remove_edge(edge.source_fact_id, edge.target_fact_id)
-        if edge.relation == EdgeRelation.CONTRADICTS.value:
-            if self._graph.has_edge(edge.target_fact_id, edge.source_fact_id):
-                if self._graph.edges[edge.target_fact_id, edge.source_fact_id].get("edge_id") == edge.edge_id:
-                    self._graph.remove_edge(edge.target_fact_id, edge.source_fact_id)
+        try:
+            if self._graph.has_edge(edge.source_fact_id, edge.target_fact_id, key=edge.edge_id):
+                self._graph.remove_edge(edge.source_fact_id, edge.target_fact_id, key=edge.edge_id)
+            if edge.relation == EdgeRelation.CONTRADICTS.value:
+                if self._graph.has_edge(edge.target_fact_id, edge.source_fact_id, key=edge.edge_id):
+                    self._graph.remove_edge(edge.target_fact_id, edge.source_fact_id, key=edge.edge_id)
+        except nx.NetworkXError as exc:
+            # A vanished edge must never break a reject/deprecate flow.
+            _logger.debug("remove_edge cache miss for %s: %s", edge.edge_id, exc)
 
     def add_edge(
         self,
