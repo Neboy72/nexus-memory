@@ -24,6 +24,10 @@ DESIGN RULES (agreed with Nebo 2026-08-31, hardened after the 2026-09 review):
     (payload + vector + original id type) in ONE atomically written JSON
     file BEFORE the first deletion; the backup is re-read and verified
     before Qdrant is touched.
+  - A report is published ONLY once it is COMPLETE: the registry cleanup
+    and the dedup_sweep key are attached first, and only then is the
+    in-memory report handed over (self._last_report, under the lock), so a
+    concurrent health check can never observe a half-built report (W33-5).
   - No external scheduler needed: thread lives with the server process.
   - Failures are logged, never thrown into the MCP loop.
 """
@@ -217,8 +221,9 @@ class HealthAuditor:
             log.warning("Agent registry cleanup failed: %s", reg_exc)
         try:
             report = self._audit()
-            with self._lock:
-                self._last_report = report
+            # W33-5: build the report COMPLETELY first. It used to be
+            # published right here, so a concurrent get_flags() could read a
+            # report that still lacked the dedup_sweep/agent_cleanup keys.
             if agent_cleanup is not None:
                 report["agent_cleanup"] = agent_cleanup
             # 2026-09-02 (Nebo-GO): in-process dedup sweep — DESTRUCTIVE and
@@ -240,6 +245,11 @@ class HealthAuditor:
                     }
             self._write_report(report)
             self._maybe_webhook(report)
+            # W33-5: publish LAST — every key (incl. dedup_sweep) and the
+            # report_file are attached by now, so no intermediate state is
+            # ever visible to get_flags(). Atomic via the lock.
+            with self._lock:
+                self._last_report = report
         except Exception as exc:  # never break the server
             log.warning("Health audit failed: %s", exc)
             return agent_cleanup  # still return the registry report
@@ -413,6 +423,35 @@ class HealthAuditor:
             # backup row is harmless, deleting on a stale proof is not.
             verified_plan = []
             for keeper, keeper_attrs, orig_attrs, to_delete, exp_ctx, exp_chash in plan:
+                # W33-4: keeper re-check. The guard below re-reads only the
+                # DELETE targets — the keeper was trusted from scan time. If
+                # the keeper was deleted or its content / security context
+                # changed since the scan, this plan would still delete its
+                # duplicates and lose the content for good. Re-read the keeper
+                # (payload only) and ABORT the whole plan on any mismatch:
+                # nothing is deleted, the caller re-scans.
+                kp_scan = keeper.payload or {}
+                scan_text = str(
+                    kp_scan.get("text") or kp_scan.get("content") or "").strip()
+                fresh_keeper = self._store.client.retrieve(
+                    collection_name=self._collection,
+                    ids=[keeper.id],
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                if not fresh_keeper:
+                    raise RuntimeError(
+                        f"dedup sweep: keeper {keeper.id} vanished since the "
+                        "scan — plan aborted, nothing deleted; re-run the scan")
+                fkp = fresh_keeper[0].payload or {}
+                fresh_text = str(
+                    fkp.get("text") or fkp.get("content") or "").strip()
+                if (_content_hash(fresh_text) != _content_hash(scan_text)
+                        or _security_context(fkp) != _security_context(kp_scan)):
+                    raise RuntimeError(
+                        f"dedup sweep: keeper {keeper.id} changed since the "
+                        "scan (content or security context) — plan aborted, "
+                        "nothing deleted; re-run the scan")
                 fresh = self._store.client.retrieve(
                     collection_name=self._collection,
                     ids=to_delete,

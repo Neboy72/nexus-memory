@@ -86,7 +86,13 @@ class Relationship:
     ):
         self.source = source.strip()
         self.target = target.strip()
-        self.relation = relation if relation in RELATION_TYPES else "connected_to"
+        # W33-1(a): type-check BEFORE the membership test — `relation in
+        # RELATION_TYPES` on an unhashable value (dict/list from the LLM)
+        # raises TypeError, which used to abort the whole parse. Non-str
+        # values degrade to the default relation instead.
+        if not isinstance(relation, str) or relation not in RELATION_TYPES:
+            relation = "connected_to"
+        self.relation = relation
         self.confidence = max(0.0, min(1.0, confidence))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -278,33 +284,46 @@ def _llm_extract_entities(
         raw_entities = data.get("entities")
         if not isinstance(raw_entities, list):
             raw_entities = []
+        # W33-1(b): every entry is parsed on its OWN. The single outer
+        # `except Exception` around the whole parse/normalise block meant one
+        # malformed entry discarded ALL already-successfully parsed entities
+        # and relationships — now only the failing entry is logged + skipped.
         for e in raw_entities:
-            if not isinstance(e, dict):
-                continue
-            name_raw = e.get("name")
-            name = name_raw.strip() if isinstance(name_raw, str) else ""
-            if not name:
-                continue
-            # Untrusted field types: fall back to safe defaults instead of
-            # letting a non-str type / non-dict attributes / out-of-range
-            # confidence propagate into Entity (whose own clamping would
-            # raise TypeError on a string).
-            entity_type = e.get("type", "concept")
-            if not isinstance(entity_type, str) or not entity_type.strip():
-                entity_type = "concept"
-            attrs = e.get("attributes", {})
-            if not isinstance(attrs, dict):
-                attrs = {}
-            conf = e.get("confidence", 0.8)
-            if not isinstance(conf, (int, float)) or isinstance(conf, bool):
-                conf = 0.8
-            conf = max(0.0, min(1.0, float(conf)))
-            entities.append(Entity(
-                name=name[:200],
-                entity_type=entity_type,
-                attributes=attrs,
-                confidence=conf,
-            ))
+            try:
+                if not isinstance(e, dict):
+                    continue
+                name_raw = e.get("name")
+                name = name_raw.strip() if isinstance(name_raw, str) else ""
+                if not name:
+                    continue
+                # Untrusted field types: fall back to safe defaults instead of
+                # letting a non-str type / non-dict attributes / out-of-range
+                # confidence propagate into Entity (whose own clamping would
+                # raise TypeError on a string).
+                entity_type = e.get("type", "concept")
+                if not isinstance(entity_type, str) or not entity_type.strip():
+                    entity_type = "concept"
+                attrs = e.get("attributes", {})
+                if not isinstance(attrs, dict):
+                    attrs = {}
+                conf = e.get("confidence", 0.8)
+                if not isinstance(conf, (int, float)) or isinstance(conf, bool):
+                    conf = 0.8
+                conf = max(0.0, min(1.0, float(conf)))
+                entities.append(Entity(
+                    name=name[:200],
+                    entity_type=entity_type,
+                    attributes=attrs,
+                    confidence=conf,
+                ))
+            except Exception as entry_exc:
+                # W33-1(b): only THIS entry is lost, the already parsed ones
+                # survive (an entry dict is attacker/model controlled, so any
+                # field type can blow up the Entity constructor).
+                logger.warning(
+                    "EntityExtractor: skipping malformed entity entry: %s",
+                    entry_exc,
+                )
 
         relationships = []
         entity_names = {e.name.lower() for e in entities}
@@ -312,29 +331,43 @@ def _llm_extract_entities(
         if not isinstance(raw_relationships, list):
             raw_relationships = []
         for r in raw_relationships:
-            if not isinstance(r, dict):
-                continue
-            source_raw = r.get("source")
-            target_raw = r.get("target")
-            if not isinstance(source_raw, str) or not isinstance(target_raw, str):
-                continue
-            source = source_raw.strip()
-            target = target_raw.strip()
-            if not source or not target:
-                continue
-            # Only keep relationships between extracted entities
-            if source.lower() not in entity_names or target.lower() not in entity_names:
-                continue
-            conf = r.get("confidence", 0.7)
-            if not isinstance(conf, (int, float)) or isinstance(conf, bool):
-                conf = 0.7
-            conf = max(0.0, min(1.0, float(conf)))
-            relationships.append(Relationship(
-                source=source[:200],
-                target=target[:200],
-                relation=r.get("relation", "connected_to"),
-                confidence=conf,
-            ))
+            try:
+                if not isinstance(r, dict):
+                    continue
+                source_raw = r.get("source")
+                target_raw = r.get("target")
+                if not isinstance(source_raw, str) or not isinstance(target_raw, str):
+                    continue
+                source = source_raw.strip()
+                target = target_raw.strip()
+                if not source or not target:
+                    continue
+                # Only keep relationships between extracted entities
+                if source.lower() not in entity_names or target.lower() not in entity_names:
+                    continue
+                relation = r.get("relation", "connected_to")
+                # W33-1(a): type-check before the RELATION_TYPES membership
+                # test — an unhashable relation (dict/list) raises TypeError
+                # there and used to kill the whole parse.
+                if not isinstance(relation, str) or relation not in RELATION_TYPES:
+                    continue
+                conf = r.get("confidence", 0.7)
+                if not isinstance(conf, (int, float)) or isinstance(conf, bool):
+                    conf = 0.7
+                conf = max(0.0, min(1.0, float(conf)))
+                relationships.append(Relationship(
+                    source=source[:200],
+                    target=target[:200],
+                    relation=relation,
+                    confidence=conf,
+                ))
+            except Exception as entry_exc:
+                # W33-1(b): per-entry isolation — one broken relationship must
+                # not discard the entities/relationships already parsed.
+                logger.warning(
+                    "EntityExtractor: skipping malformed relationship entry: %s",
+                    entry_exc,
+                )
 
         # Same cap + pairwise endpoint consistency as the heuristic path:
         # dedupe by name (case-insensitive), cap entities at 10, then keep at

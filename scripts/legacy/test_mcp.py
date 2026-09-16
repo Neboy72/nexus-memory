@@ -74,18 +74,24 @@ async def test():
             health = json.loads(_text(result))
             print(f"✅ Health: {health}")
 
-            # Remember
-            result = await session.call_tool("remember", {
-                "text": "Test user lives in a city and likes food.",
-                "access_level": "trusted",
-                "category": "fact",
-                "source": "test",
-            })
-            r = json.loads(_text(result))
-            mem_id = r["id"]
-            print(f"✅ Stored memory: {mem_id} [{r['access_level']}]")
+            # Remember. W33-11: the call AND the id extraction live inside the
+            # guarded block — a response without "id" (or a non-JSON payload)
+            # used to escape before the finally was ever entered, so `forget`
+            # never ran and the test memory leaked into the store. `mem_id`
+            # stays None until the id is actually known.
+            mem_id = None
             # Nr 261: forget must ALWAYS run, even if an assert below fails
             try:
+                result = await session.call_tool("remember", {
+                    "text": "Test user lives in a city and likes food.",
+                    "access_level": "trusted",
+                    "category": "fact",
+                    "source": "test",
+                })
+                r = json.loads(_text(result))
+                mem_id = r["id"]
+                print(f"✅ Stored memory: {mem_id} [{r['access_level']}]")
+
                 # Recall (public → should NOT find the trusted memory)
                 result = await session.call_tool("recall", {
                     "query": "test user city",
@@ -108,10 +114,27 @@ async def test():
                 for mem in r["results"]:
                     print(f"   → {mem['text'][:60]}... [score: {mem['score']:.3f}]")
             finally:
-                # Forget
-                result = await session.call_tool("forget", {"memory_id": mem_id})
-                r = json.loads(_text(result))
-                print(f"✅ Delete: {r['status']}")
+                # Forget. W33-11: cleanup must never MASK the real defect — a
+                # raising call_tool/_text/json.loads used to replace the
+                # in-flight AssertionError and lose the original traceback.
+                # Cleanup problems are reported on stderr instead, and the
+                # delete status is checked (the handler answers
+                # {"status": "not_found"} / "error" without raising).
+                if mem_id is None:
+                    print("⚠️ no memory id — nothing to clean up", file=sys.stderr)
+                else:
+                    try:
+                        result = await session.call_tool("forget", {"memory_id": mem_id})
+                        r = json.loads(_text(result))
+                        if r.get("status") != "deleted":
+                            print(f"⚠️ delete did not succeed: {r}", file=sys.stderr)
+                        else:
+                            print(f"✅ Delete: {r['status']}")
+                    except Exception as exc:
+                        print(
+                            f"⚠️ cleanup failed (test verdict above stands): {exc!r}",
+                            file=sys.stderr,
+                        )
 
     print("\n🎉 ALL TESTS PASSED")
 

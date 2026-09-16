@@ -300,7 +300,11 @@ class EmbeddingProvider:
             return self._try_jina()
         elif provider_id == "ollama":
             return self._try_ollama()
-        elif provider_id == "local" or provider_id == "sentence-transformers":
+        elif provider_id in ("local", "sentence-transformers", "huggingface"):
+            # W33-9: the wizard records "huggingface" when its bge-m3 HF
+            # fallback (NEXUS_HF_BGE3=1) replaced Ollama. Without this id the
+            # explicit preference would hit the fail-closed branch below and
+            # refuse to initialise any embedding backend at all.
             return self._try_sentence_transformers()
         return False
 
