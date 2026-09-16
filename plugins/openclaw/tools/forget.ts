@@ -3,7 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
-import { limitText } from "../lib/text-preview.ts"
+import { limitText, PREVIEW_MAX } from "../lib/text-preview.ts"
 import { log } from "../logger.ts"
 
 /**
@@ -151,7 +151,7 @@ export function registerForgetTool(
 
             await qdrantClient.delete(target.id)
 
-            const preview = limitText(target.text, 100)
+            const preview = limitText(target.text, PREVIEW_MAX)
             return {
               content: [{ type: "text" as const, text: `Forgot: "${preview}"` }],
             }

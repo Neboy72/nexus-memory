@@ -298,7 +298,7 @@ export class QdrantClient {
   async upsert(id: string, vector: number[], payload: Record<string, unknown>): Promise<void> {
     log.debugRequest("upsert", { id, payloadKeys: Object.keys(payload), vectorDim: vector.length })
 
-    const resp = await fetchWithTimeout(
+    let resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points`,
       {
         method: "PUT",
@@ -308,6 +308,26 @@ export class QdrantClient {
         }),
       },
     )
+
+    // OCR-4: a missing collection fails the FIRST write (404) — the startup
+    // ensureCollection() is fire-and-forget and may not have run yet (or
+    // Qdrant was still booting). Retry once: ensure the collection exists,
+    // then repeat the upsert. A 404 here means "collection absent" (the same
+    // status ensureCollection treats as absent) — anything else surfaces.
+    if (resp.status === 404 && !this.collectionReady) {
+      log.info(`upsert: collection "${this.collection}" not found — ensuring collection, retrying once`)
+      await this.ensureCollection(vector.length)
+      resp = await fetchWithTimeout(
+        `${this.qdrantUrl}/collections/${this.collection}/points`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            points: [{ id, vector, payload }],
+          }),
+        },
+      )
+    }
 
     if (!resp.ok) {
       const text = await resp.text()
