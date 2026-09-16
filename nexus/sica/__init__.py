@@ -313,8 +313,12 @@ def _age_days(created_at) -> float:
 def _detect_low_confidence(points: List[Dict], low_confidence_threshold: float = 0.5) -> List[Dict[str, Any]]:
     """Detect memories with confidence below threshold.
 
-    Returns list of issue dicts. Auto-fixable: bump confidence to threshold
-    if the memory has been accessed/used (heuristic: has edges).
+    Returns list of issue dicts. Below-threshold points are review-only
+    unless they match the roadmap 4.8 purge rule (confidence < 0.2 AND
+    never accessed AND age > 30 days), which is emitted with
+    ``action="delete"`` / ``auto_fixable=True`` and physically removes the
+    point when auto_patch is enabled. Everything else stays
+    ``action="review"``.
     """
     issues = []
     for p in points:
@@ -497,7 +501,7 @@ def _synthesize_insights(
             "suggested_resolution": "confirm_or_supersede",
             "winner_confidence": round(_conf(winner), 3),
             "involved_ids": sorted({str(i.get("id")) for i in group}),
-            "preview": str(by_id.get(winner_id, {}).get("content") or "")[:300],
+            "preview": str(winner_payload.get("content") or "")[:300],
         })
     return insights
 
@@ -643,9 +647,17 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
         # Deletion-type issues are batched into a single Qdrant delete call
         # (one RTT instead of one per expired point; roadmap 2.2 scale-up).
         delete_ids: List[str] = []
+        delete_id_set: set = set()
         delete_types: Dict[str, str] = {}
         for issue in all_issues:
             if issue["auto_fixable"] and auto_patch and issue.get("action") == "delete":
+                # A point can be flagged twice (retention + low-confidence
+                # purge). Deduplicate so the batch delete and the reported
+                # auto_patches count one deletion per memory, and keep a set
+                # for O(1) membership below.
+                if issue["id"] in delete_id_set:
+                    continue
+                delete_id_set.add(issue["id"])
                 delete_ids.append(issue["id"])
                 delete_types[issue["id"]] = issue.get("type", "retention_expired")
                 continue
@@ -670,11 +682,12 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
                 # Emptying it lets every delete-issue fall through to the
                 # normal per-issue handling (suggestion / auto-patch).
                 delete_ids.clear()
+                delete_id_set.clear()
                 delete_types.clear()
         for issue in all_issues:
             if issue["auto_fixable"] and auto_patch:
                 # Deletion-type issues were handled by the batch above.
-                if issue.get("action") == "delete" and issue["id"] in delete_ids:
+                if issue.get("action") == "delete" and issue["id"] in delete_id_set:
                     continue
                 patch = _apply_auto_patch(client, coll, issue)
                 if patch:
@@ -726,7 +739,6 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult,
     try:
         from qdrant_client import models as qm
         from nexus_memory.embeddings import EmbeddingProvider
-        import asyncio
         import concurrent.futures
 
         summary = (

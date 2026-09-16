@@ -59,6 +59,17 @@ try {
 
 const hook = handlers["message_sending"];
 assert.ok(hook, "message_sending-Handler muss registriert sein");
+// W38 (medium): index.ts registriert MEHRERE message_sending-Handler (thought-filter +
+// cron-form-gate). handlers[event] wählt den ERSTEN — wenn sich die Reihenfolge dreht,
+// laufen alle Leak-Cases gegen den falschen Handler und bestehen grün obwohl nichts
+// gefiltert wird. Beweis: der gewählte Handler MUSS den ersten LEAK-Case filtern.
+const probeLeak = "The runtime context is just a replay.\n\nPROBE-OK. 🦊";
+const probeRes = await hook({ message: probeLeak });
+const probeOut = probeRes?.message ?? "";
+assert.ok(
+  !/replay/i.test(probeOut),
+  `gewählter message_sending-Handler filtert nicht (${JSON.stringify(probeOut.slice(0, 60))}) — handlerLists[${handlerLists["message_sending"].length}] falsch gewählt? (Registrierungs-Reihenfolge geändert)`,
+);
 
 const cases = [
   // [Name, Eingabe, Muss-enthalten, Muss-NICHT-enthalten, exact?]
@@ -191,7 +202,10 @@ for (const [name, input, mustContain, mustNotContain, exact] of cases) {
     // Hook-Call INSIDE the try: a rejecting/throwing handler must count as a
     // failed case (not an unhandled rejection that aborts the whole loop and
     // skips the summary).
-    const result = await hook({ message: input });
+    // W38 (medium): Produktion liest ctx.content (H1-Doku + sibling cron-form-gate-Test).
+    // Die Case-Tabelle fährt jetzt den Produktion-Shape; ein zusätzlicher COMPAT-Case
+    // unten beweist, dass ctx.message als Fallback weiterhin funktioniert.
+    const result = await hook({ content: input });
     out = result?.message ?? "";
     // Silent-pass hole: a LEAK case with empty mustContain AND empty
     // mustNotContain asserts nothing (both loops no-op). Such a case is a
@@ -217,6 +231,17 @@ for (const [name, input, mustContain, mustNotContain, exact] of cases) {
   }
 }
 
+// ── COMPAT: ctx.message-Fallback (alter Shape) bleibt unterstützt ──
+try {
+  const compatInput = "Danke Nebo! COMPAT-Fallback läuft. 🦊";
+  const r = await hook({ message: compatInput });
+  assert.strictEqual(r?.message, compatInput, "message-Fallback muss unverändert durchreichen");
+  console.log("PASS  COMPAT: ctx.message-Fallback bleibt unterstützt");
+} catch (e) {
+  failed++;
+  console.log(`FAIL  COMPAT: message-Fallback — ${e?.message}\n${e?.stack}`);
+}
+
 // ── H1: Fail-open darf die Message nicht droppen (lokale Quelle) ──
 // Payload liegt in ctx.content (ctx.message === undefined) und der Gate-Crash
 // wird über einen werfenden Logger erzwungen. Der catch MUSS den Original-Text
@@ -235,7 +260,8 @@ try {
   failed++;
   console.log(`FAIL  H1: Fail-open — ${e.message}`);
 }
-initLogger({ info() {}, warn() {}, error() {}, debug() {} }, false); // Backend zurücksetzen
+initLogger({ info() {}, warn() {}, error() {}, debug() {} }, false); // Backend zurücksetzen (auch bei H1-Fail: finally-äquivalent hier nach catch)
 
-console.log(`\n${cases.length - failed}/${cases.length} PASS`);
+const totalChecks = cases.length + 1 + 1; // cases + COMPAT + H1
+console.log(`\n${totalChecks - failed}/${totalChecks} PASS`);
 process.exit(failed === 0 ? 0 : 1);
