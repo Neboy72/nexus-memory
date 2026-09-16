@@ -300,6 +300,8 @@ class GraphTraversal:
         kg_edge_count = 0
         if graph.number_of_nodes():
             edge_ids = set()
+            # W30-4: SkillGraph.graph is a MultiDiGraph — with keys=False this
+            # still yields (u, v, data), once per parallel edge.
             for _u, _v, data in graph.edges(data=True):
                 if data.get("relation") in KG_RELATIONS:
                     kg_edge_count += 1
