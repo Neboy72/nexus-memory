@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Nexus Memory — Persistent vector memory for Hermes Agent.
 
 Three layers of intelligence:
@@ -20,6 +18,10 @@ v2.1.0+: Auto-Discovery + Graph Analytics
 - Graph Boost: Fact connectivity boosts Hybrid Search rankings
 - REFERENCES relation + PROPOSED edge status
 """
+
+# First statement AFTER the docstring: putting it before made the module
+# docstring a no-op expression, so nexus.__doc__ stayed None.
+from __future__ import annotations
 
 import logging
 from datetime import date, datetime
@@ -324,14 +326,16 @@ def nexus_remember(
     # PII-Hinweis: E-Mail oder Telefonnummer im Content?
     import re as _re
     if _re.search(r'[\w.+-]+@[\w-]+\.[\w.-]+', content) and source_type != "chat":
+        # Log only the FACT of the detection — logging the content would write
+        # the very PII this warning is about into the log files.
         _logger.info(
-            "Potential email address in memory (source=%s) — review if intended: %.40s",
-            source_type, content,
+            "Potential email address detected in memory (source=%s) — review if intended",
+            source_type,
         )
     if _re.search(r'\+?\d[\d\s\-().]{7,}', content) and source_type not in ("chat", "session"):
         _logger.info(
-            "Potential phone number in memory (source=%s) — review if intended: %.40s",
-            source_type, content,
+            "Potential phone number detected in memory (source=%s) — review if intended",
+            source_type,
         )
 
     if not source_url and source_type not in ("chat", "session"):
@@ -526,15 +530,11 @@ def nexus_consolidate(
         # If timestamps cannot be resolved, use id ordering as fallback
         if ts_a and ts_b:
             older_id, newer_id = (id_a, id_b) if ts_a < ts_b else (id_b, id_a)
-            older_payload, newer_payload = (
-                (payload_a, payload_b)
-                if ts_a < ts_b
-                else (payload_b, payload_a)
-            )
+            newer_payload = payload_b if ts_a < ts_b else payload_a
         else:
             # Fallback: treat id_a as older (as returned by detection)
             older_id, newer_id = id_a, id_b
-            older_payload, newer_payload = payload_a, payload_b
+            newer_payload = payload_b
 
         # ── Action 1: Mark older entry as historical ─────────────────────
         action_older = {
@@ -559,23 +559,30 @@ def nexus_consolidate(
         actions.append(action_newer)
 
         if not dry_run:
-            # Apply older entry changes
-            _apply_consolidation(
+            # Apply older entry changes. The helper's result is checked so a
+            # failed write is not reported as a resolved contradiction.
+            res = _apply_consolidation(
                 older_id,
                 {"valid_until": today, "status": "HISTORICAL"},
                 qdrant_host,
                 qdrant_port,
                 collection_name,
             )
+            if isinstance(res, dict) and res.get("error"):
+                _logger.warning("mark_historical failed for %s: %s", older_id, res["error"])
+                action_older["error"] = res["error"]
             # Apply newer entry changes
             if not newer_payload.get("valid_from"):
-                _apply_consolidation(
+                res = _apply_consolidation(
                     newer_id,
                     {"valid_from": today},
                     qdrant_host,
                     qdrant_port,
                     collection_name,
                 )
+                if isinstance(res, dict) and res.get("error"):
+                    _logger.warning("set_valid_from failed for %s: %s", newer_id, res["error"])
+                    action_newer["error"] = res["error"]
 
     return actions
 
@@ -640,6 +647,14 @@ def _apply_consolidation(
         },
         timeout=10,
     )
+    # Surface a rejected write instead of returning a body that looks like a
+    # success (nexus_consolidate reports the action as performed either way).
+    if not is_success(r.status_code):
+        _logger.error(
+            "_apply_consolidation: upsert failed for point %s (HTTP %s): %s",
+            point_id, r.status_code, r.text[:200],
+        )
+        return {"error": f"HTTP {r.status_code}: {r.text[:200]}"}
     return r.json()
 
 
@@ -696,7 +711,9 @@ def nexus_query_valid(
     offset = None
     while True:
         body: dict = {"limit": 100, "with_payload": True}
-        if offset:
+        # next_page_offset is a point ID, not a page counter: `if offset` would
+        # never send a legitimate offset of 0 and would end pagination early.
+        if offset is not None:
             body["offset"] = offset
         r = _req.post(
             f"{base}/collections/{collection_name}/points/scroll",
@@ -709,7 +726,7 @@ def nexus_query_valid(
             break
         all_points.extend(batch)
         offset = data.get("next_page_offset")
-        if not offset:
+        if offset is None:
             break
 
     # Filter by temporal validity
@@ -857,7 +874,9 @@ def resolve_authority(
 
     winner = dict(scored[0][2])
     winner["_authority_level"] = scored[0][0]
-    level_lookup = {k: v for k, _, v in AUTHORITY_CHAIN}
+    # Each AUTHORITY_CHAIN entry is (level, name, description): unpack the NAME
+    # (middle element), not the description, or the reason prints a sentence.
+    level_lookup = {level: name for level, name, _ in AUTHORITY_CHAIN}
     level_name = level_lookup.get(scored[0][0], "unknown")
     winner["_authority_reason"] = (
         f"Wins by authority level {scored[0][0]} ({level_name})"
@@ -965,19 +984,25 @@ def nexus_search_hybrid(
     query_vector = None
     resolved_provider = embed_provider
     if resolved_provider is None:
-        # Try detecting from Hermes config
+        # Try detecting from Hermes config. Log the failure: a bare `pass` made
+        # a malformed config indistinguishable from "no provider configured"
+        # and silently degraded every hybrid search to BM25-only.
         try:
             import os, yaml
             cfg_path = os.path.expanduser("~/.hermes/config.yaml")
             if os.path.exists(cfg_path):
                 with open(cfg_path) as f:
-                    cfg = yaml.safe_load(f)
+                    cfg = yaml.safe_load(f) or {}
+                # A `nexus-memory:` key whose value is None would raise
+                # AttributeError on the chained .get — normalize first.
                 resolved_provider = (
-                    cfg.get("nexus-memory", {})
+                    (cfg.get("nexus-memory") or {})
                     .get("embed_provider")
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning(
+                "nexus_search_hybrid: config detection failed — falling back to BM25-only: %s", e
+            )
 
     if resolved_provider:
         query_vector = _embed_query(query, resolved_provider)

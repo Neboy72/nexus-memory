@@ -160,6 +160,13 @@ def _qdrant_id(memory_id: str):
 def _retrieve_payload(memory_id: str) -> dict | None:
     body = {"ids": [_qdrant_id(memory_id)], "with_payload": True}
     resp = _qdrant_request(f"/collections/{COLLECTION}/points", body)
+    if "error" in resp:
+        # A transport failure is not a missing memory: without this, every
+        # inspector route would answer a misleading 404 for a Qdrant outage.
+        raise HTTPException(
+            status_code=503,
+            detail=f"Qdrant unavailable: {resp['error']}",
+        )
     result = resp.get("result")
     # Qdrant returns result as a LIST of points for /points (retrieve)
     points = result if isinstance(result, list) else (result.get("points") if isinstance(result, dict) else None)
@@ -171,7 +178,23 @@ def _retrieve_payload(memory_id: str) -> dict | None:
 def _set_payload(memory_id: str, payload: dict) -> bool:
     body = {"payload": payload, "points": [_qdrant_id(memory_id)]}
     resp = _qdrant_request(f"/collections/{COLLECTION}/points/payload?wait=true", body)
+    if "error" in resp:
+        # Same distinction as _retrieve_payload: an unreachable Qdrant must not
+        # be reported as a generic write failure (misleads retry/diagnostics).
+        raise HTTPException(
+            status_code=503,
+            detail=f"Qdrant unavailable: {resp['error']}",
+        )
     return resp.get("status") == "ok"
+
+
+def _env_float(name: str, default: str) -> float:
+    """Parse a float env var defensively — a malformed value (e.g. "5,00")
+    must not abort the whole response with a ValueError."""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
 
 
 @app.get("/api/memories/{memory_id}/why")
@@ -208,13 +231,15 @@ async def inspector_patch_text(memory_id: str, body: dict | None = None):
     pl = await asyncio.to_thread(_retrieve_payload, memory_id)
     if pl is None:
         return JSONResponse({"error": "Memory not found"}, status_code=404)
-    payload = dict(pl)
-    if "content" in payload:
-        payload["content"] = new_text
-    if "text" in payload or "content" not in payload:
-        payload["text"] = new_text
-    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-    if not await asyncio.to_thread(_set_payload, memory_id, payload):
+    # set_payload MERGES, so send only the changed fields: writing the whole
+    # read payload back would clobber any field changed by a concurrent edit /
+    # deprecate between the read above and this write.
+    changes = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if "content" in pl:
+        changes["content"] = new_text
+    if "text" in pl or "content" not in pl:
+        changes["text"] = new_text
+    if not await asyncio.to_thread(_set_payload, memory_id, changes):
         return JSONResponse({"error": "Qdrant update failed"}, status_code=500)
     return {"status": "ok", "id": memory_id, "text": new_text[:120]}
 
@@ -225,10 +250,12 @@ async def inspector_deprecate(memory_id: str):
     pl = await asyncio.to_thread(_retrieve_payload, memory_id)
     if pl is None:
         return JSONResponse({"error": "Memory not found"}, status_code=404)
-    payload = dict(pl)
-    payload["lifecycle_status"] = "deprecated"
-    payload["deprecated_at"] = datetime.now(timezone.utc).isoformat()
-    if not await asyncio.to_thread(_set_payload, memory_id, payload):
+    # Merge-write only the changed fields (see inspector_patch_text).
+    changes = {
+        "lifecycle_status": "deprecated",
+        "deprecated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not await asyncio.to_thread(_set_payload, memory_id, changes):
         return JSONResponse({"error": "Qdrant write failed"}, status_code=500)
     return {"status": "ok", "id": memory_id, "lifecycle_status": "deprecated"}
 
@@ -239,10 +266,12 @@ async def inspector_restore(memory_id: str):
     pl = await asyncio.to_thread(_retrieve_payload, memory_id)
     if pl is None:
         return JSONResponse({"error": "Memory not found"}, status_code=404)
-    payload = dict(pl)
-    payload["lifecycle_status"] = "canonical"
-    payload["restored_at"] = datetime.now(timezone.utc).isoformat()
-    if not await asyncio.to_thread(_set_payload, memory_id, payload):
+    # Merge-write only the changed fields (see inspector_patch_text).
+    changes = {
+        "lifecycle_status": "canonical",
+        "restored_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not await asyncio.to_thread(_set_payload, memory_id, changes):
         return JSONResponse({"error": "Qdrant write failed"}, status_code=500)
     return {"status": "ok", "id": memory_id, "lifecycle_status": "canonical"}
 
@@ -305,7 +334,7 @@ async def get_system_status():
         "enabled": fuel_enabled,   # Default AN — User-Toggle via POST /api/fuel/paid
         "model": os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud"),
         "provider": "ollama-cloud" if ":cloud" in os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud") else "ollama-local",
-        "budget_usd": float(os.environ.get("NEXUS_FUEL_BUDGET_USD", "5.00")),
+        "budget_usd": _env_float("NEXUS_FUEL_BUDGET_USD", "5.00"),
         "spent_usd": 0.0,
     }
     try:
@@ -495,8 +524,6 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
     all_points = await asyncio.to_thread(_scroll_all_memories, scan_cap)
 
     memories = []
-    by_cat = {}
-    by_source = {}
 
     for p in all_points:
         payload = p.get("payload", {})
@@ -606,8 +633,13 @@ async def get_full_stats():
         created = f.get("created_at")
         ts = None
         if isinstance(created, (int, float)):
-            # seconds or milliseconds epoch
-            ts = datetime.fromtimestamp(created / 1000 if created > 1e11 else created, tz=timezone.utc)
+            # seconds or milliseconds epoch. An out-of-range value (absurdly
+            # large or negative) makes fromtimestamp raise — that must not
+            # abort the whole /api/stats response.
+            try:
+                ts = datetime.fromtimestamp(created / 1000 if created > 1e11 else created, tz=timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                ts = None
         elif isinstance(created, str) and created.strip():
             try:
                 raw = created.strip().replace("Z", "+00:00")
@@ -640,7 +672,9 @@ async def get_full_stats():
         "total_memories": total,
         "total_edges": edge_count,
         "avg_confidence": avg_conf,
-        "confidence_real_count": sum(1 for p in all_points if (p.get("payload") or {}).get("confidence") is not None),
+        # Counted during the scan above — the previous second full pass over
+        # every point was redundant (and the counter was dead code).
+        "confidence_real_count": confidences_real,
         "total_unique_sources": len(sources),
         "by_category": by_cat,
         "by_drift_status": drift_summary,
@@ -706,8 +740,9 @@ async def health_check():
     
     # Qdrant
     def _probe_qdrant_healthz() -> None:
-        with urllib.request.urlopen(f"{QDRANT_URL}/healthz", timeout=5) as r:
-            r.read()
+        # Only liveness matters — the body is not needed (no dead read).
+        with urllib.request.urlopen(f"{QDRANT_URL}/healthz", timeout=5):
+            pass
 
     try:
         # W30-1: blocking probe moved off the event loop.
@@ -819,6 +854,13 @@ async def connect_agent(agent_id: str):
             )
 
     servers = existing.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        # A non-object "mcpServers" would make servers.update() raise an opaque
+        # 500 — fail with a clear error like the unreadable-config path above.
+        return JSONResponse(
+            {"error": "config unreadable: mcpServers must be a JSON object"},
+            status_code=500,
+        )
     already = "nexus" in servers
     if not already:
         # Backup before write (Regel 1: proof first)
@@ -985,7 +1027,11 @@ if static_dir.exists():
 # Handbook (offline user guide) — ships with the package, opens from the Docs button
 handbook_dir = DASHBOARD_DIR / "handbook"
 if handbook_dir.exists():
-    app.mount("/handbook", NoCacheStatic(directory=str(handbook_dir)), name="handbook")
+    # html=True so the mount itself serves index.html for "/handbook": the
+    # mount is registered before the explicit route below and Starlette matches
+    # in registration order, so without it that route was unreachable and
+    # "/handbook" answered 404 (StaticFiles html=False on a directory path).
+    app.mount("/handbook", NoCacheStatic(directory=str(handbook_dir), html=True), name="handbook")
 
     @app.get("/handbook", response_class=HTMLResponse, include_in_schema=False)
     async def handbook_index():
@@ -1055,7 +1101,12 @@ def main():
     parser.add_argument("--port", type=int, default=9121)
     parser.add_argument("--host", type=str, default="127.0.0.1")
     args = parser.parse_args()
-    url = f"http://127.0.0.1:{args.port}"
+    # Derive the printed/bookmarked URL from --host so it is reachable: a
+    # wildcard bind (0.0.0.0) maps to loopback for the banner.
+    host = args.host
+    if host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
+    url = f"http://{host}:{args.port}"
 
     print_url_banner(url)
     maybe_open_browser(url)
