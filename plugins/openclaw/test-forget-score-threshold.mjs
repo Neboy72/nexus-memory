@@ -32,7 +32,10 @@ function makeTool(results) {
       searchByVector: async () => results,
       // Nr 388 (W22): delete geht jetzt nur nach bestandenem Lookup —
       // der Mock muss scrollPoint existieren lassen (Punkt vorhanden).
+      // W34-Supersession: forget.ts nutzt jetzt scrollPointStrict (transiente
+      // Qdrant-Fehler dürfen nicht als 404 gelten) — Mock ebenfalls strikt.
       scrollPoint: async (id) => ({ id }),
+      scrollPointStrict: async (id) => ({ id }),
       delete: async (id) => { deleted.push(id) },
     },
     {},

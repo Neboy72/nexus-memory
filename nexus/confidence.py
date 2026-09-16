@@ -1,4 +1,4 @@
-"""Grounding Scoring for RAG — 4-Signal Method.
+"""Grounding Scoring for RAG — 5-Signal Method.
 
 Evaluates how trustworthy a generated answer is based on the retrieved
 chunks. Does not modify the existing pipeline.
@@ -10,11 +10,12 @@ facts during pre-training. The result: hallucination.
 Grounding is the countermeasure — it checks whether the answer is actually
 supported by the retrieved facts, not just whether it sounds good.
 
-Signals:
-1. **similarity** — Query-Embedding ↔ Chunk-Embeddings (max cosine)
-2. **dominance**  — How much does everything rely on a single top chunk?
-3. **grounding**  — Answer-Embedding ↔ Chunk-Embeddings (max cosine)
-4. **coverage**   — Chunk diversity / query breadth covered?
+Signals (weights in :meth:`GroundingScorer._aggregate`):
+1. **similarity** — Query-Embedding ↔ Chunk-Embeddings (max cosine), 25%
+2. **dominance**  — How much does everything rely on a single top chunk?, 15%
+3. **grounding**  — Answer-Embedding ↔ Chunk-Embeddings (max cosine), 25%
+4. **factual**    — Answer entities found in the chunks (anti-hallucination), 20%
+5. **coverage**   — Chunk diversity / query breadth covered?, 15%
 
 Usage:
     from nexus.confidence import GroundingScorer
@@ -121,6 +122,30 @@ def _cosine_sim(a: list[float], b: list[float]) -> float:
 
 # ── Embedding ──────────────────────────────────────────────────────
 
+# W37: the underlying model/client used to be constructed inside ``_embed`` on
+# every call — one per query batch and one per chunk batch on a per-request
+# path, i.e. SentenceTransformer reloaded its weights each time.
+_ST_MODEL_CACHE: dict[str, object] = {}
+_VOYAGE_CLIENT: object | None = None
+
+
+def _get_voyage_client():
+    """Cache the voyageai client for the process."""
+    global _VOYAGE_CLIENT
+    if _VOYAGE_CLIENT is None:
+        _VOYAGE_CLIENT = voyageai.Client()
+    return _VOYAGE_CLIENT
+
+
+def _get_st_model():
+    """Cache the sentence-transformers model for the process."""
+    model = _ST_MODEL_CACHE.get("model")
+    if model is None:
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        _ST_MODEL_CACHE["model"] = model
+    return model
+
 
 def _embed(
     texts: list[str],
@@ -144,20 +169,19 @@ def _embed(
             _logger.warning("voyageai not installed")
             return None
         try:
-            client = voyageai.Client()
+            client = _get_voyage_client()
             result = client.embed(texts, model="voyage-3-lite", input_type=input_type)
             return result.embeddings
         except Exception as e:
-            _logger.warning(f"Voyage embedding failed: {e}")
+            _logger.warning("Voyage embedding failed: %s", e)
             return None
 
     elif provider == "sentence-transformers":
         try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer("all-MiniLM-L6-v2")
+            model = _get_st_model()
             return model.encode(texts).tolist()
         except Exception as e:
-            _logger.warning(f"sentence-transformers embedding failed: {e}")
+            _logger.warning("sentence-transformers embedding failed: %s", e)
             return None
 
     elif provider == "ollama":
@@ -172,11 +196,11 @@ def _embed(
             data = r.json()
             return data.get("embeddings", None)
         except Exception as e:
-            _logger.warning(f"Ollama embedding failed: {e}")
+            _logger.warning("Ollama embedding failed: %s", e)
             return None
 
     else:
-        _logger.warning(f"Unknown embedding provider: {provider}")
+        _logger.warning("Unknown embedding provider: %s", provider)
         return None
 
 
@@ -208,8 +232,13 @@ def _fetch_chunks(
             },
             timeout=10,
         )
+        # W37: without this a non-200 reply (server error, bad collection,
+        # auth failure) has no "result" key, so the function returned [] and
+        # evaluate() reported the misleading "No chunks found" instead of
+        # surfacing the real failure.
+        r.raise_for_status()
         results = []
-        for point in r.json().get("result", []):
+        for point in r.json().get("result") or []:
             payload = point.get("payload", {})
             results.append({
                 "id": str(point.get("id", "")),
@@ -218,7 +247,7 @@ def _fetch_chunks(
             })
         return results
     except Exception as e:
-        _logger.warning(f"Qdrant search failed: {e}")
+        _logger.warning("Qdrant search failed: %s", e)
         return []
 
 
@@ -245,11 +274,12 @@ def _entity_pattern(entity: str) -> re.Pattern[str]:
 class GroundingScorer:
     """Evaluates the trustworthiness of a RAG answer.
 
-    Uses four signals:
+    Uses five signals (see :meth:`_aggregate` for the weights):
     1. similarity  — Query↔Chunk: Does the best chunk match the question?
     2. dominance   — Chunk distribution: One dominant chunk or many?
     3. grounding   — Answer↔Chunk: Does the answer actually use the chunks?
-    4. coverage    — Chunk↔Query: Do the chunks cover the question breadth?
+    4. factual     — Answer entities: Do the answer's terms appear in the chunks?
+    5. coverage    — Chunk↔Query: Do the chunks cover the question breadth?
     """
 
     def __init__(
@@ -311,7 +341,12 @@ class GroundingScorer:
             return report
 
         report.num_chunks = len(chunks)
-        report.top_chunk_score = chunks[0].get("score", 0.0) if chunks else 0.0
+        # W37: `chunks[0]` is only the best chunk on the internal _fetch_chunks
+        # path (Qdrant returns hits score-sorted). evaluate(chunks=...) accepts
+        # caller-supplied chunks in arbitrary order, so take the real maximum.
+        report.top_chunk_score = max(
+            (c.get("score", 0.0) or 0.0 for c in chunks), default=0.0,
+        )
 
         # Step 3: Embed chunk texts.
         # H180: build texts and scores in ONE pass so they stay index-aligned.
@@ -399,7 +434,9 @@ class GroundingScorer:
         similarities = [_cosine_sim(query_emb, ce) for ce in chunk_embs]
         # Maximum + leichter Boost durch Qdrant-Score
         max_sim = max(similarities) if similarities else 0.0
-        qdrant_factor = min(chunk_scores[0] / 0.8, 1.0) if chunk_scores else 0.0
+        # W37: max instead of chunk_scores[0] — position 0 is only the highest
+        # score when the caller passes Qdrant-sorted chunks (see evaluate()).
+        qdrant_factor = min(max(chunk_scores) / 0.8, 1.0) if chunk_scores else 0.0
         return min((max_sim * 0.7 + qdrant_factor * 0.3), 1.0)
 
     @staticmethod
@@ -515,7 +552,7 @@ class GroundingScorer:
         Idea: The more chunks have high similarity to the query,
         the more aspects of the question are covered.
         """
-        if not chunk_embs or len(chunk_embs) < 1:
+        if not chunk_embs:
             return 0.0
         similarities = [_cosine_sim(query_emb, ce) for ce in chunk_embs]
         mean_sim = sum(similarities) / len(similarities)

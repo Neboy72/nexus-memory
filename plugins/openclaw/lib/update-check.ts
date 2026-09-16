@@ -56,6 +56,10 @@ function readInstalledVersion(): string {
  * comparison is used.
  */
 export function isNewerVersion(remote: string, local: string): boolean {
+  // W37 (medium, Test-Fund): non-string inputs (null/undefined/objects from an
+  // unchecked cached value) must fail-open (false), never throw — the callers
+  // treat a throw as a contract violation ("any error → no update").
+  if (typeof remote !== "string" || typeof local !== "string") return false
   // A component that is not a whole number (e.g. "1.2.x", "1.2.beta") makes
   // the WHOLE comparison fail-open (false) instead of being masked to 0 —
   // `parseInt(...) || 0` turned "1.x.0" into "1.0.0" and could report an
@@ -168,7 +172,12 @@ async function checkForUpdateOnce(): Promise<UpdateCheckResult> {
   if (!entry) {
     try {
       entry = await fetchLatest()
-      writeCache(entry)
+      // W37 (medium, Test-Fund): a garbage tag arrives as latest:"" — caching it
+      // would hide a real release published within the 24h TTL window (the empty
+      // sentinel passes readCache's shape check). The 403/404 path already avoids
+      // caching by throwing; keep the same guarantee for garbage tags by skipping
+      // the cache write whenever there is no usable version.
+      if (entry.latest) writeCache(entry)
     } catch {
       // fail-open: network error -> report nothing available
       return { available: false, latest: local, url: "" }
