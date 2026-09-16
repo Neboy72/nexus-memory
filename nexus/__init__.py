@@ -292,6 +292,7 @@ def nexus_remember(
     Raises:
         ImportError: If ``requests`` is not available.
         ConnectionError: If Qdrant is unreachable.
+        RuntimeError: If Qdrant rejects the write (non-2xx response).
     """
     import requests as _req
     from nexus.provenance import attach_source
@@ -388,6 +389,19 @@ def nexus_remember(
     url = f"http://{qdrant_host}:{qdrant_port}/collections/{collection_name}/points"
     data = {"points": [{"id": point_id, "vector": vector, "payload": payload}]}
     r = _req.put(url, json=data, timeout=10)
+    # W28-3 (H61): the status was never checked — a rejected write (4xx/5xx)
+    # still ran into r.json() and could return a dict that looked like success
+    # while the memory was never stored. Same behaviour as nexus_update:
+    # log and raise on non-2xx.
+    if not is_success(r.status_code):
+        _logger.error(
+            "nexus_remember: upsert failed for point %s (HTTP %s): %s",
+            point_id, r.status_code, r.text[:200],
+        )
+        raise RuntimeError(
+            f"nexus_remember: upsert failed for point {point_id!r} "
+            f"(HTTP {r.status_code}): {r.text[:200]}"
+        )
     return r.json()
 
 
@@ -703,7 +717,14 @@ def nexus_query_valid(
     for p in all_points:
         payload = p.get("payload", {})
         if query_norm:
-            haystack = f"{payload.get('text', '')}\n{payload.get('fact', '')}".lower()
+            # H62: nexus_remember() stores the text under payload["content"].
+            # The haystack only looked at text/fact, so the query filter never
+            # matched memories written through our own API.
+            haystack = (
+                f"{payload.get('content', '')}\n"
+                f"{payload.get('text', '')}\n"
+                f"{payload.get('fact', '')}"
+            ).lower()
             if query_norm not in haystack:
                 continue
         vf = payload.get("valid_from")

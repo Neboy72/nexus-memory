@@ -121,6 +121,20 @@ DEFAULT_EXPIRY_DAYS: dict[ExpiryPolicy, int | None] = {
 }
 
 
+def _as_aware_utc(dt: datetime) -> datetime:
+    """H25/H70: attach UTC to naive datetimes (payload strings without offset).
+
+    Payload timestamps are written with ``datetime.now().isoformat()`` which
+    carries no offset, while every comparison in this module uses
+    ``datetime.now(timezone.utc)``. Comparing the two raised TypeError — which
+    the surrounding ``except (ValueError, TypeError)`` swallowed, so all
+    expiry/age checks silently skipped naive payloads.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def compute_expires_at(
     created_at: datetime | None,
     last_confirmed_at: datetime | None,
@@ -153,7 +167,10 @@ def compute_expires_at(
         return None, False
 
     # Determine the anchor date: last_confirmed_at if available, else created_at
-    anchor = last_confirmed_at or created_at
+    # H25/H70: callers may hand over naive datetimes (parsed from payload
+    # strings without an offset) — normalize before the aware-UTC comparison.
+    anchor_src = last_confirmed_at or created_at
+    anchor = _as_aware_utc(anchor_src) if anchor_src is not None else None
     if anchor is None:
         # No anchor → treat as already expired (unknown age is unsafe)
         return datetime.now(timezone.utc), True
@@ -353,8 +370,10 @@ class DriftDetector:
         valid_until_str = payload.get("valid_until")
         if valid_until_str:
             try:
-                valid_until = datetime.fromisoformat(
-                    valid_until_str.replace("Z", "+00:00")
+                # H25/H70: naive payload dates would raise TypeError against
+                # the aware `now` below and silently skip the expiry check.
+                valid_until = _as_aware_utc(
+                    datetime.fromisoformat(valid_until_str.replace("Z", "+00:00"))
                 )
                 now = datetime.now(timezone.utc)
                 if now > valid_until:
@@ -370,7 +389,10 @@ class DriftDetector:
         created_at = None
         if created:
             try:
-                created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                # H25/H70: normalize — payload timestamps carry no offset.
+                created_at = _as_aware_utc(
+                    datetime.fromisoformat(created.replace("Z", "+00:00"))
+                )
             except (ValueError, TypeError):
                 pass
 
@@ -378,7 +400,9 @@ class DriftDetector:
         last_confirmed_at = None
         if last_confirmed:
             try:
-                last_confirmed_at = datetime.fromisoformat(last_confirmed.replace("Z", "+00:00"))
+                last_confirmed_at = _as_aware_utc(
+                    datetime.fromisoformat(last_confirmed.replace("Z", "+00:00"))
+                )
             except (ValueError, TypeError):
                 pass
 
@@ -478,7 +502,11 @@ class DriftDetector:
             ts = payload.get("timestamp")
             if ts:
                 try:
-                    created = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    # H25/H70: `now` is aware — a naive `created` made the age
+                    # check raise TypeError and skip silently.
+                    created = _as_aware_utc(
+                        datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    )
                     age = now - created
                     if age > self.old_threshold:
                         report.old.append({
@@ -592,7 +620,11 @@ class DriftDetector:
             ts = entry.get("timestamp")
             if ts:
                 try:
-                    created = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    # H25/H70: see DriftDetector.run — naive timestamps must be
+                    # normalized before the aware-UTC subtraction.
+                    created = _as_aware_utc(
+                        datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    )
                     age = now - created
                     if age > self.old_threshold:
                         report.old.append({
@@ -871,9 +903,8 @@ class DriftDetector:
 
         for memory_id, ts_str in usage.items():
             try:
-                ts = datetime.fromisoformat(ts_str)
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
+                # H25/H70: now via the shared helper (was inlined here).
+                ts = _as_aware_utc(datetime.fromisoformat(ts_str))
                 if ts < cutoff:
                     unused.append(memory_id)
             except (ValueError, TypeError):

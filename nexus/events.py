@@ -46,10 +46,54 @@ EVENT_TYPES = [e.value for e in EventType]
 
 # --- Collection Management ---
 
+# Payload indexes for nexus_events (field, schema type).
+_INDEX_FIELDS = [
+    ("event_id", "keyword"),
+    ("event_type", "keyword"),
+    ("belief_id", "keyword"),
+    ("status", "keyword"),
+    # get_events_since() range-filters on ingested_at — without this index
+    # the query degrades to a full collection scan (review #45).
+    ("ingested_at", "datetime"),
+    ("event_time", "datetime"),
+]
+
+
+def _ensure_indexes() -> None:
+    """Creates the payload indexes for nexus_events.
+
+    W28-2 (H21): extracted from the create path so the already-exists path can
+    run it too — a collection created by an older version had no indexes at
+    all, and get_events_since()/get_recent_events() need the ingested_at
+    datetime index. Qdrant's PUT /index is idempotent for identical schemas,
+    so re-running it is safe.
+    """
+    for field, idx_type in _INDEX_FIELDS:
+        idx_payload = {
+            "field_name": field,
+            "field_schema": {"type": idx_type},
+            "wait": True,
+        }
+        resp = requests.put(
+            f"{QDRANT_URL}/collections/{COLLECTION}/index",
+            json=idx_payload,
+            timeout=10,
+        )
+        # 200/201 = created or already present. Anything else is worth a
+        # look, but "index already exists" is answered with 200/201 — so a
+        # non-success reply is logged at debug level, not as a warning.
+        if resp.status_code not in (200, 201):
+            log.debug("Index '%s' not created: %s", field, resp.status_code)
+
+
 def ensure_collection() -> bool:
-    """Creates nexus_events if not exists (indexes created separately later)."""
+    """Creates nexus_events if not exists and ensures its payload indexes."""
     r = requests.get(f"{QDRANT_URL}/collections/{COLLECTION}", timeout=10)
     if is_success(r.status_code):
+        # W28-2 (H21): an existing collection (e.g. from an older version) may
+        # be missing the ingested_at datetime index that get_events_since()
+        # and get_recent_events() rely on — ensure them here as well.
+        _ensure_indexes()
         return True
 
     # Create collection without indexes first (Qdrant ignores payload_schema in PUT body)
@@ -66,31 +110,12 @@ def ensure_collection() -> bool:
         return False
 
     # Indizes separat anlegen
-    indices = [
-        ("event_id", "keyword"),
-        ("event_type", "keyword"),
-        ("belief_id", "keyword"),
-        ("status", "keyword"),
-        # get_events_since() range-filters on ingested_at — without this index
-        # the query degrades to a full collection scan (review #45).
-        ("ingested_at", "datetime"),
-        ("event_time", "datetime"),
-    ]
-    for field, idx_type in indices:
-        idx_payload = {
-            "field_name": field,
-            "field_schema": {"type": idx_type},
-            "wait": True,
-        }
-        resp = requests.put(
-            f"{QDRANT_URL}/collections/{COLLECTION}/index",
-            json=idx_payload,
-            timeout=10,
-        )
-        if resp.status_code not in (200, 201):
-            log.warning("⚠️ Index '%s' not created: %s", field, resp.status_code)
+    _ensure_indexes()
 
-    log.info("✅ Collection '%s' angelegt (1024d Cosine, %d Indizes)", COLLECTION, len(indices))
+    log.info(
+        "✅ Collection '%s' angelegt (1024d Cosine, %d Indizes)",
+        COLLECTION, len(_INDEX_FIELDS),
+    )
     return True
 
 
@@ -155,8 +180,13 @@ def create_event(
 
 
 def _parse_event(p: dict) -> dict:
-    """Extracts event data from a Qdrant point."""
-    pl = p["payload"]
+    """Extracts event data from a Qdrant point.
+
+    Defensive: a point without a ``payload`` key yields an all-``None`` event
+    instead of crashing the whole scroll (same spirit as the delta handling
+    below and H216).
+    """
+    pl = p.get("payload") or {}
     delta = {}
     raw = pl.get("delta", "{}")
     if isinstance(raw, str):
@@ -246,17 +276,29 @@ def get_events_since(
         filters.append({"key": "event_type", "match": {"value": event_type}})
     
     all_events: list[dict] = []
-    offset: Optional[str] = None
+    # H215: with order_by the scroll offset is an integer, otherwise a point id.
+    offset: Optional[Any] = None
 
-    # Page size is constant — no reason to vary it across iterations. The
-    # loop terminates once we've collected `limit` events or no more pages.
+    # W28-1 (H20): the page size is DECOUPLED from `limit`. When both were the
+    # same value, the very first page already satisfied `len(all_events) >=
+    # limit`, so the loop stopped after one page even though newer events were
+    # still waiting on later pages — the cap must not double as the page size.
+    page_size = max(limit, 100)
+
     while True:
         params = {
-            "limit": limit,
+            "limit": page_size,
             "with_payload": True,
             "filter": {"must": filters},
+            # W28-1 (H65): without order_by Qdrant paginates in raw point-id
+            # order (events use random UUIDs), so the `limit` cap truncated an
+            # ARBITRARY subset of the matching history. desc on ingested_at
+            # (index created in ensure_collection) makes the events kept by
+            # the cap the newest ones. Same style as get_recent_events (H217).
+            "order_by": {"key": "ingested_at", "direction": "desc"},
         }
-        if offset:
+        # `is not None`: with order_by the offset is an integer, and 0 is valid.
+        if offset is not None:
             params["offset"] = offset
 
         r = requests.post(
@@ -272,14 +314,20 @@ def get_events_since(
         batch = [_parse_event(p) for p in data["points"]]
         all_events.extend(batch)
 
-        next_offset = data.get("next_page_offset")
-        if not next_offset or not data["points"]:
-            break
-        offset = str(next_offset)
-
+        # W28-1: enforce the cap on EVERY iteration, including the last page —
+        # checked before the "no more pages" break, so a final page that pushes
+        # us past `limit` is still truncated instead of being returned whole.
+        # desc order → the survivors are the newest events.
         if len(all_events) >= limit:
             all_events = all_events[:limit]
             break
+
+        next_offset = data.get("next_page_offset")
+        if next_offset is None or not data["points"]:
+            break
+        # H215: keep the native type — with order_by Qdrant returns an integer
+        # offset (str() would send it back as a string and break pagination).
+        offset = next_offset
 
     return all_events
 
