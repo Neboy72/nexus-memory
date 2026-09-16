@@ -24,15 +24,24 @@ if not os.path.exists(db_path):
 # W40-13: closing the connection only on the success path leaked the handle
 # whenever the query or a print() raised. `with sqlite3.connect(...)` would
 # only scope commit/rollback, so contextlib.closing is the right wrapper.
-with contextlib.closing(sqlite3.connect(db_path)) as con:
+with contextlib.closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as con:
+    # OCR-5 (maintainability low): the report is read-only — the old
+    # read-write connect could take a write lock and mutate the state DB by
+    # accident. mode=ro also fails fast when the path does not exist.
     con.row_factory = sqlite3.Row
     # W40-scan (medium): a still-RUNNING session started >24h ago has
     # ended_at IS NULL and fell out of the started_at-only window — the
     # long-runner vanished from the report. Keep it explicitly.
+    # OCR-5 (bug high, /tmp/z352-proof.py): the previous COALESCE predicate
+    # collapsed to `started_at >= ?` for a running row (ended_at NULL →
+    # COALESCE = started_at), so the long-runner was STILL filtered out and
+    # the first OR-branch was redundant. Honest window: recently started OR
+    # still running OR recently finished. (Old-but-finished rows that ended
+    # before the cutoff stay out — activity window is the ended_at bound.)
     rows = con.execute(
         "SELECT id, source, started_at, ended_at, end_reason, message_count, tool_call_count,"
         " output_tokens, title, last_activity_description"
-        " FROM sessions WHERE (started_at >= ? OR COALESCE(ended_at, started_at) >= ?)"
+        " FROM sessions WHERE (started_at >= ? OR ended_at IS NULL OR ended_at >= ?)"
         " AND archived=0 AND hidden=0 ORDER BY started_at DESC",
         (cutoff, cutoff),
     ).fetchall()

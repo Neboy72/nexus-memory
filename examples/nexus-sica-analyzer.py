@@ -17,11 +17,31 @@ from typing import Any
 _logger = logging.getLogger(__name__)
 
 # ━━ Config ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# OCR-5 (bug medium): int()/float() at import time crashed the whole cron run
+# on a malformed env value (stray char, comma decimal) BEFORE analyze() could
+# produce its structured _error_report. Parse defensively: a bad value
+# degrades to the default and is recorded as a warning.
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        _logger.warning("SICA analyzer: invalid %s, using default %d", name, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        _logger.warning("SICA analyzer: invalid %s, using default %s", name, default)
+        return default
+
+
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
-QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
+QDRANT_PORT = _env_int("QDRANT_PORT", 6333)
 COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
 OUTPUT_DIR = Path.home() / ".hermes/self-improvement"
-SILENT_THRESHOLD = float(os.environ.get("SICA_SILENT_THRESHOLD", "0.6"))
+SILENT_THRESHOLD = _env_float("SICA_SILENT_THRESHOLD", 0.6)
 
 
 # ━━ Qdrant Helper ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -53,9 +73,22 @@ def _scroll_all(host: str, port: int, collection: str,
             resp.raise_for_status()
             data = resp.json()
 
-            batch = data.get("result", {}).get("points", [])
+            # OCR-5 (bug medium): the payload was dereferenced before its shape
+            # was validated — a 2xx response with "result": null (or a non-dict
+            # result) raised AttributeError inside the guard, and the broad
+            # handler below mislabelled it as a network/scroll failure. Validate
+            # the shape explicitly: a malformed payload is a DEGRADED scroll
+            # (None), a genuine bug stays distinguishable from an outage.
+            result = data.get("result") if isinstance(data, dict) else None
+            if not isinstance(result, dict):
+                _logger.warning("SICA analyzer: unexpected scroll payload: %r", data)
+                return None
+            batch = result.get("points", [])
+            if not isinstance(batch, list):
+                _logger.warning("SICA analyzer: unexpected points shape: %r", result)
+                return None
             points.extend(batch)
-            offset = data.get("result", {}).get("next_page_offset")
+            offset = result.get("next_page_offset")
             if offset is None:
                 break
     except Exception as exc:  # W31-1: RequestException/HTTP error → structured result
@@ -320,6 +353,16 @@ if __name__ == "__main__":
 
     # Bei Vorschlägen: Output für Cron-Delivery
     print(f"🔔 SICA: {len(actions_needed)} Verbesserungsvorschlag/-vorschläge")
+    # OCR-5 (bug medium): the comment above promises "Errors are always
+    # surfaced", but in the MIXED case (suggestions AND errors) only the
+    # suggestions were printed and the process exited 0 — a partial outage
+    # (counts failed, one review suggestion) stayed invisible to the cron
+    # watchdog. Surface the errors here too, degraded exit.
+    if errors_present:
+        print(f"⚠️ SICA: zusätzlich {len(report['errors'])} Fehler bei der Analyse (degraded):")
+        for e in report["errors"]:
+            print(f"  • {e}")
+        sys.exit(1)
     for s in actions_needed[:3]:
         affected = ""
         if s.get("affected_ids"):
