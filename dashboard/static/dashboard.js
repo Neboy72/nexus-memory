@@ -40,8 +40,15 @@ function getInstallBadge(installType) {
 // ── API Helpers ──────────────────────────────────────────────
 
 async function fetchAPI(endpoint, options = {}) {
+  // W30-3: every dashboard call carries the local-mutation guard header. The
+  // backend rejects POST/PATCH/DELETE without it — a cross-site page cannot
+  // set a custom header without a CORS preflight, so this blocks CSRF.
+  const opts = {
+    ...options,
+    headers: { 'X-Nexus-Dashboard': '1', ...(options.headers || {}) },
+  };
   try {
-    const resp = await fetch(endpoint, options);
+    const resp = await fetch(endpoint, opts);
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || 'API Error');
     return data;
@@ -113,7 +120,8 @@ document.getElementById('fuel-toggle')?.addEventListener('change', async (e) => 
   e.target.disabled = true;
   try {
     const res = await fetch('/api/fuel/paid', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Nexus-Dashboard': '1'},  // W30-3
       body: JSON.stringify({enabled})
     });
     const d = await res.json();

@@ -147,7 +147,15 @@ class NexusMemoryProvider:
         from datetime import datetime
 
         backup_dir = os.path.expanduser("~/.nexus-memory/backups")
-        os.makedirs(backup_dir, exist_ok=True)
+        # W30-7: a backup holds the full private payloads — the default umask
+        # (0o022 → 0o755/0o644) left it world-readable. Restrict the directory
+        # (0o700) AND the file (0o600). The chmod is needed because an existing
+        # dir keeps its old mode even when makedirs(mode=...) is passed.
+        os.makedirs(backup_dir, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(backup_dir, 0o700)
+        except OSError as e:
+            logger.warning(f"Backup dir chmod failed (non-fatal): {e}")
 
         # Scroll all points from Qdrant
         all_points = []
@@ -180,7 +188,10 @@ class NexusMemoryProvider:
             "point_count": len(all_points),
             "points": all_points,
         }
-        with open(backup_path, "w") as f:
+        # W30-7: create the file with 0o600 from the start (no window where it
+        # is world-readable before a chmod).
+        _fd = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(_fd, "w") as f:
             json.dump(backup_data, f, default=str)
 
         self._last_backup_time = time.time()
@@ -323,7 +334,8 @@ class NexusMemoryProvider:
             return self._skill_graph
 
     def _graph_boost(self, top_points: list, max_boost: int = 3,
-                     out_pids: Optional[set] = None, max_depth: int = 2) -> List[str]:
+                     out_pids: Optional[set] = None, max_depth: int = 2,
+                     out_levels: Optional[List[str]] = None) -> List[str]:
         """Fetch graph neighbors for the top vector search results.
 
         For each of the top ``max_boost`` points, walks the Knowledge Graph.
@@ -336,6 +348,10 @@ class NexusMemoryProvider:
 
         Failures are logged and silently skipped - vector results alone are
         always returned without the graph boost.
+
+        W30-6: neighbours are also filtered by ``access_level`` — only
+        public/trusted (plus this agent's own default level) content is
+        boosted; ``out_levels`` receives the real level per returned item.
         """
         boosted: List[str] = []
         if not self._qdrant: return boosted
@@ -368,12 +384,27 @@ class NexusMemoryProvider:
                     # 4.6: deprecated neighbors never surface as graph-boost
                     if (pt_payload.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
                         continue
+                    # W30-6 (4-bot-review F2): the graph walk previously filtered
+                    # lifecycle only — private/trusted neighbour payloads leaked
+                    # straight into recall/prefetch. Allowed = public + trusted
+                    # plus this agent's own default level (the owner may read its
+                    # own private memories; every other level is dropped).
+                    _allowed_levels = {"public", "trusted",
+                                       getattr(self, "_default_access_level", "private")}
+                    _pt_level = pt_payload.get("access_level", "public")
+                    if _pt_level not in _allowed_levels:
+                        continue
                     text = pt_payload.get("content", "")
                     if text:
                         # depth-2 items: shorter excerpt, still tagged for provenance
                         text = text[:400] if max_depth <= 1 else text[:240]
                         boosted.append(f"[graph:{rel}{':'*max(1, min(3, depth))}{rel if depth > 1 else ''}] {text}" if depth > 1
                                        else f"[graph:{rel}] {text}")
+                        # W30-6(a): carry the REAL access level alongside the
+                        # item so _recall can label it honestly (the formatted
+                        # string alone loses the payload).
+                        if out_levels is not None:
+                            out_levels.append(_pt_level)
                         if out_pids is not None:
                             out_pids.add(nid)
                 if len(boosted) >= budget_boost: break
@@ -424,7 +455,11 @@ class NexusMemoryProvider:
         if self._agent_context != "primary": return
         with self._write_lock:
             self._write_queue.append({"text": f"User: {user_content}\nAssistant: {assistant_content}",
-                                       "category": "session", "access_level": "public",
+                                       # W30-5 / Review #43 parity: session turns are
+                                       # private by default (self._default_access_level),
+                                       # never blanket "public" — session content must
+                                       # not leak into the public pool.
+                                       "category": "session", "access_level": self._default_access_level,
                                        "source": "hermes-plugin", "confidence": 0.5})
 
         # Auto-Entity-Detection (Nebo 30.08.2026): Hardware-Fakten sofort als Entity speichern,
@@ -525,7 +560,9 @@ class NexusMemoryProvider:
         # Graph items are APPENDED (not sorted into vector results) so they
         # survive the limit slice regardless of their 0.0 score.
         graph_pids: set = set()
-        graph_items = self._graph_boost(pts, max_boost=3, out_pids=graph_pids)
+        graph_levels: List[str] = []
+        graph_items = self._graph_boost(pts, max_boost=3, out_pids=graph_pids,
+                                        out_levels=graph_levels)
         # Review fix B1 (blocker): graph-boosted neighbors count as accessed -
         # ohne Bump stuft autonomous purge aktiv genutzte Nachbarn als
         # "never accessed" ein und loescht sie (Datenverlust).
@@ -538,9 +575,14 @@ class NexusMemoryProvider:
             threading.Thread(target=self._flywheel_bump, args=(flywheel,),
                              name="nexus-flywheel", daemon=True).start()
         vector_results = results[:limit]
-        for gi in graph_items:
+        for _idx, gi in enumerate(graph_items):
+            # W30-6(a): label each graph item with the neighbour's REAL access
+            # level (was a blanket "public" even for private content). Falls
+            # back to this agent's default when no level was recorded.
+            _lvl = (graph_levels[_idx] if _idx < len(graph_levels)
+                    else getattr(self, "_default_access_level", "private"))
             vector_results.append({"id": "", "text": gi, "score": 0.0, "source": "graph-boost",
-                            "source_url": "", "access_level": "public",
+                            "source_url": "", "access_level": _lvl,
                             "category": "graph", "confidence": None,
                             "created_at": ""})
         return vector_results
@@ -951,7 +993,8 @@ class NexusMemoryProvider:
         store = None
         try:
             from nexus.graph.store import EdgeStore
-            store = EdgeStore(qdrant_url=f"{_HOST}:{_PORT}", collection=self._collection)
+            # W30-8: scheme was missing — every other call site uses http://.
+            store = EdgeStore(qdrant_url=f"http://{_HOST}:{_PORT}", collection=self._collection)
         except Exception as exc:
             logger.warning("EdgeStore init failed: %s", exc)
         try:
