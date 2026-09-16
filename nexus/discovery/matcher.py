@@ -75,6 +75,11 @@ def scroll_facts(
 
         data = r.json().get("result", {})
         batch = data.get("points", [])
+        # W27: normalize point IDs to str — search_similar_facts() also
+        # returns str ids; mixed int/str broke self-match guards and
+        # crashed sorted() on integer-ID collections.
+        for p in batch:
+            p["id"] = str(p.get("id", ""))
         if not batch:
             break
 

@@ -402,9 +402,12 @@ class GroundingScorer:
         Low dominance (0.0–0.4) = even distribution
         → good for synthesizing answers.
         """
-        if not chunk_scores or sum(chunk_scores) == 0:
+        if not chunk_scores or sum(chunk_scores) <= 0:
             return 0.0
         ratio = chunk_scores[0] / sum(chunk_scores)
+        # W27: clamp to [0,1] — cosine scores can be negative and
+        # top-score is not guaranteed to be the max; sqrt() would raise otherwise.
+        ratio = max(0.0, min(ratio, 1.0))
         # Square root — prevents moderate dominance from being penalised too harshly
         return math.sqrt(ratio)
 

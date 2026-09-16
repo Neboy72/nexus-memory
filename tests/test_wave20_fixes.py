@@ -317,7 +317,11 @@ class TestNr347LeastPrivilegeConfig:
     def test_config_defaults(self):
         src = _read("plugins/openclaw/scripts/install_openclaw_plugin.sh")
         assert "allowPromptInjection\\\": false" in src or "\"allowPromptInjection\": false" in src
-        assert '"accessLevel": \\"default\\"' in src or '"accessLevel": "default"' in src
+        # W27-10 superseded "default": that value is not in lib/config.ts's
+        # enum (public|trusted|private) and made the printed snippet throw.
+        # "private" is the valid least-privilege default now.
+        assert '"accessLevel": "private"' in src
+        assert '"accessLevel": "default"' not in src
 
 
 # ── Nr 348/349/350: release_gate.sh ─────────────────────────────────────────

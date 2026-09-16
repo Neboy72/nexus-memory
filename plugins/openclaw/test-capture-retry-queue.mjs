@@ -7,8 +7,8 @@
  * 3. Queue-Datei leer danach
  */
 import assert from "node:assert"
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs"
-import { homedir } from "node:os"
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 // H3/H4: Direkt-Import der lokalen Quelle (Node type-stripping, kein Build nötig).
@@ -22,10 +22,14 @@ if (!existsSync(DIST_ENTRY)) {
   process.exit(1)
 }
 
-// T4: EXAKT derselbe Pfad wie die Produktion (homedir()-Ableitung statt hardcoded User).
-// Die Produktion liest kein ENV → kein TEST-QUEUE-ENV: der Test nutzt den echten Pfad
-// und räumt vor+nach dem Lauf auf (Cleanup before AND after).
-const QUEUE = join(homedir(), ".openclaw", "workspace", "data", "capture-retry-queue.jsonl")
+// T4/W27: Sandbox-Queue — der Test setzt NEXUS_CAPTURE_QUEUE_FILE, bevor
+// irgendeine Queue-Funktion läuft (queueFile() löst zur Call-Zeit auf).
+// Die PRODUKTIONS-Queue (~/.openclaw/workspace/data/capture-retry-queue.jsonl)
+// wird nie mehr angefasst: unlinkSync auf dem echten Pfad konnte bei einem
+// Lauf ohne Sandbox echte, noch nicht restaurierte Captures löschen.
+const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "nexus-queue-test-"))
+process.env.NEXUS_CAPTURE_QUEUE_FILE = join(SANDBOX_DIR, "capture-retry-queue.jsonl")
+const QUEUE = process.env.NEXUS_CAPTURE_QUEUE_FILE
 try { unlinkSync(QUEUE) } catch {}
 
 // Qdrant-Zustand: down bis "up" gesetzt wird
@@ -163,8 +167,9 @@ try {
 } finally {
   // T3: Mock IMMER restaurieren (läuft vor dem finalen process.exit).
   globalThis.fetch = originalFetch
-  // T4: Cleanup NACH dem Lauf (before AND after) — keine Queue-Reste für den nächsten Test.
+  // T4/W27: Cleanup NACH dem Lauf — Sandbox-Queue + -Dir weg (Produktions-Queue unberührt).
   try { unlinkSync(QUEUE) } catch {}
+  try { rmSync(SANDBOX_DIR, { recursive: true }) } catch {}
 }
 
 process.exit(failed ? 1 : 0)

@@ -136,10 +136,10 @@ def nexus_update(
     # as "not found" (or the wrong point was picked up). The broad scan is
     # only a fallback for a missing id filter (i.e. no id at all).
     if point_id:
-        scroll_body = {"limit": 1, "with_payload": True,
+        scroll_body = {"limit": 1, "with_payload": True, "with_vector": True,
                        "filter": {"must": [{"key": "id", "match": {"value": point_id}}]}}
     else:
-        scroll_body = {"limit": 100, "with_payload": True}
+        scroll_body = {"limit": 100, "with_payload": True, "with_vector": True}
     r = _req.post(url, json=scroll_body, timeout=10)
     if not is_success(r.status_code):
         raise RuntimeError(
@@ -201,12 +201,19 @@ def nexus_update(
         if modified_by:
             prov["modified_by"] = modified_by
 
+    # W27-1: an empty vector would destroy the stored embedding — fail loudly instead.
+    if not vector:
+        raise RuntimeError(
+            f"nexus_update: point {point_id!r} has no vector — refusing to overwrite "
+            f"(would destroy the embedding)"
+        )
+
     # Override point with merged payload
     update_url = f"http://{qdrant_host}:{qdrant_port}/collections/{collection_name}/points"
     update_data = {
         "points": [{
             "id": target["id"],
-            "vector": vector if vector else [],
+            "vector": vector,
             "payload": payload,
         }]
     }

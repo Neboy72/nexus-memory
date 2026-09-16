@@ -353,7 +353,11 @@ class TestNr373WriteQueueGuarded:
 class TestNr374DrainCountBeforePersist:
     def test_count_before_persist(self):
         src = _read("plugins/openclaw/hooks/capture-retry-queue.ts")
-        assert "entries.length - kept.length" in src
+        # W27-11 superseded the old expression: restored now comes from
+        # restoredIds.size (proven identical — the set only collects ids from
+        # the same entries loop). The count-before-persist semantics are
+        # preserved: the restored line still sits before the writeQueue try.
+        assert "const restored = restoredIds.size" in src
         assert "return restored" in src
 
 

@@ -23,6 +23,15 @@ import { log } from "../logger.ts"
 const QUEUE_FILE = join(
   homedir(), ".openclaw", "workspace", "data", "capture-retry-queue.jsonl"
 )
+
+/**
+ * W27: test/CI override — resolved at call time so tests can point
+ * the queue at a temp dir via env BEFORE any enqueue/read call.
+ */
+export function queueFile(): string {
+  return process.env.NEXUS_CAPTURE_QUEUE_FILE || QUEUE_FILE
+}
+
 const MAX_QUEUE = 200 // Ring-Größe: älteste Einträge fallen bei Überlauf raus
 
 export interface QueuedCapture {
@@ -40,9 +49,9 @@ export interface QueuedCapture {
 export function enqueueCapture(entry: QueuedCapture): void {
   try {
     // Queue-Dir bei Neuanlage mit restriktiven Rechten (0o700).
-    mkdirSync(dirname(QUEUE_FILE), { recursive: true, mode: 0o700 })
+    mkdirSync(dirname(queueFile()), { recursive: true, mode: 0o700 })
     // mode wirkt nur bei Neuanlage — bestehende Dateien bleiben unangetastet.
-    appendFileSync(QUEUE_FILE, JSON.stringify(entry) + "\n", {
+    appendFileSync(queueFile(), JSON.stringify(entry) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     })
@@ -55,8 +64,8 @@ export function enqueueCapture(entry: QueuedCapture): void {
 
 export function readQueue(): QueuedCapture[] {
   try {
-    if (!existsSync(QUEUE_FILE)) return []
-    const lines = readFileSync(QUEUE_FILE, "utf8").split("\n").filter(Boolean)
+    if (!existsSync(queueFile())) return []
+    const lines = readFileSync(queueFile(), "utf8").split("\n").filter(Boolean)
     // Zeilenweise parsen: EINE korrupte Zeile (abgeschnittener Crash-Write) darf
     // nicht die ganze Queue als "leer" erscheinen lassen → Datenverlust.
     // Die korrupte Zeile wird beim nächsten writeQueue automatisch weggeschrieben
@@ -96,15 +105,15 @@ export function trimQueue(): void {
 export function writeQueue(entries: QueuedCapture[]): void {
   // Guard: the queue dir may not exist yet (fresh install) — create it with
   // restrictive perms before the temp file is written.
-  mkdirSync(dirname(QUEUE_FILE), { recursive: true, mode: 0o700 })
-  const tmp = QUEUE_FILE + ".tmp"
+  mkdirSync(dirname(queueFile()), { recursive: true, mode: 0o700 })
+  const tmp = queueFile() + ".tmp"
   try {
     writeFileSync(
       tmp,
       entries.map((e) => JSON.stringify(e)).join("\n") + (entries.length ? "\n" : ""),
       { encoding: "utf8", mode: 0o600 },
     )
-    renameSync(tmp, QUEUE_FILE)
+    renameSync(tmp, queueFile())
   } catch (err) {
     log.warn("capture-retry: writeQueue fehlgeschlagen", err)
     throw err
@@ -148,10 +157,13 @@ export async function drainQueue(
       continue
     }
   }
-  const kept = entries.filter((e) => !restoredIds.has(e.id))
-  // Count BEFORE the persist attempt: even if the queue rewrite fails, the
-  // restored entries WERE restored — report them truthfully.
-  const restored = entries.length - kept.length
+  // W27: re-read before rewrite — entries appended while the slow
+  // embed/upsert loop ran are not in the stale `entries` snapshot;
+  // rebuilding `kept` from a fresh read keeps them (restoredIds only
+  // contains ids from the snapshot, so appends survive).
+  const fresh = readQueue()
+  const kept = fresh.filter((e) => !restoredIds.has(e.id))
+  const restored = restoredIds.size
   try {
     writeQueue(kept)
   } catch (err) {

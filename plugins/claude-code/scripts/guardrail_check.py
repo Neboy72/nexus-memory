@@ -5,7 +5,8 @@ Fires on PreToolExecution. Checks if the tool command is destructive
 and if so, queries Qdrant for protection rules. Blocks the action
 if a protected target is matched.
 
-Output JSON with "allow: false" blocks the tool call.
+Deny output uses Claude Code's PreToolUse hook contract:
+hookSpecificOutput.permissionDecision = "deny" (+ permissionDecisionReason).
 """
 
 import sys
@@ -65,11 +66,15 @@ PROTECTION_KEYWORDS = ["never delete", "never remove", "do not delete", "do not 
                        "protected", "niemals", "nicht löschen", "nicht entfernen",
                        "verboten", "forbidden", "tabu", "sacred"]
 
-# Path extraction patterns
+# H124 + W27: bare ~, / and . are matched explicitly — they are the
+# catastrophic targets (rm -rf /, rm -rf ~) and the old +1-char patterns
+# silently dropped them. Mirrors plugins/openclaw/tools/guardrail_check.ts.
 PATH_PATTERNS = [
-    re.compile(r"~[\w./-]+"),
-    re.compile(r"/[\w./-]+"),
-    re.compile(r"\w:[\\/][\w\\./-]+"),
+    re.compile(r"\w:[\\/][\w\\./-]+"),   # C:\path or C:/path
+    re.compile(r"~(?:/[\w./-]+)?"),      # ~ or ~/foo/bar (bare ~ included)
+    re.compile(r"(?:^|\s)/(?=\s|$)"),    # bare / (filesystem root)
+    re.compile(r"/[\w./-]+"),            # /abs/path
+    re.compile(r"(?:^|\s)\.(?=\s|$)"),   # bare . (current directory)
 ]
 
 
@@ -103,13 +108,13 @@ def classify_action(command: str) -> str | None:
 
 def extract_targets(command: str) -> list[str]:
     """Extract potential protected resource targets from a command."""
-    import os
     targets = []
     for pattern in PATH_PATTERNS:
         for match in pattern.finditer(command):
             target = match.group(0).strip().strip("'\"")
-            if target and len(target) > 2 and target not in ("~", "/", "."):
-                target = os.path.expanduser(target)
+            # W27: keep the raw token — the old `length > 2` / classic-path
+            # guard dropped exactly the catastrophic bare targets (~, /, .).
+            if target:
                 targets.append(target)
     return targets
 
@@ -117,7 +122,9 @@ def extract_targets(command: str) -> list[str]:
 def normalize_path(path: str) -> str:
     """Normalize a path for comparison."""
     import os
-    p = os.path.normpath(path).lower()
+    # W27: expand `~` here (not in extract_targets) so bare `~` survives
+    # extraction while tilde paths still compare against home-anchored rules.
+    p = os.path.normpath(os.path.expanduser(path)).lower()
     if p.endswith("/") and len(p) > 1:
         p = p[:-1]
     return p
@@ -283,11 +290,16 @@ def main():
         if result["verdict"] == "block":
             # Block the action
             print(json.dumps({
-                "allow": False,
-                "message": f"🛡️ Nexus Guardrail BLOCKED: {result['reason']}\n\n"
-                           f"Matched rules: {json.dumps(result.get('matched_rules', []), indent=2)}\n\n"
-                           f"If this action is explicitly authorized, call nexus_guardrail_override "
-                           f"with explicit reasoning (min 10 chars) to proceed with audit trail.",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        f"Nexus Guardrail BLOCKED: {result['reason']}\n\n"
+                        f"Matched rules: {json.dumps(result.get('matched_rules', []), indent=2)}\n\n"
+                        f"If this action is explicitly authorized, call nexus_guardrail_override "
+                        f"with explicit reasoning (min 10 chars) to proceed with audit trail."
+                    ),
+                }
             }, indent=2))
         else:
             print(json.dumps({"allow": True}))
@@ -295,7 +307,16 @@ def main():
     except Exception as exc:
         print(f"guardrail_check: inner error (fail-open): {exc}", file=sys.stderr)
         if fail_closed_enabled():
-            print(json.dumps({"allow": False, "message": f"🛡️ Nexus Guardrail: internal error (fail-closed): {exc}"}))
+            # W27-9: deny via the PreToolUse contract; "allow": False is kept
+            # for the existing fail-closed callers/tests that parse it.
+            print(json.dumps({
+                "allow": False,
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": f"Nexus Guardrail: internal error (fail-closed): {exc}",
+                },
+            }))
         else:
             # Fail-open on any error (availability default)
             print(json.dumps({"allow": True}))

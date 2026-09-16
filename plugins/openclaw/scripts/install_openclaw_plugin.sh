@@ -93,7 +93,7 @@ echo "Add the following to your OpenClaw config"
 echo "(~/.openclaw/openclaw.json):"
 echo ""
 echo "Least-privilege defaults are used below (prompt injection and conversation"
-echo "access disabled, accessLevel \"default\"). Raise them only for an isolated/"
+echo "access disabled, accessLevel \"private\"). Raise them only for an isolated/"
 echo "trusted backend."
 echo ""
 echo "NOTE: embedding config below is a Voyage EXAMPLE - adjust provider/"
@@ -123,7 +123,7 @@ echo '          },'
 echo '          "autoRecall": true,'
 echo '          "autoCapture": true,'
 echo '          "maxRecallResults": 10,'
-echo '          "accessLevel": "default"'
+echo '          "accessLevel": "private"'
 echo '        }'
 echo '      }'
 echo '    }'

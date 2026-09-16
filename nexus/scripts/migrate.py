@@ -184,6 +184,10 @@ def migrate(
             )
 
             if scroll_result[0]:
+                # W27: use the real point id — the scroll matched on the
+                # payload field fact_id, which is not necessarily the
+                # Qdrant point id (set_payload would hit the wrong point).
+                point_id = scroll_result[0][0].id
                 existing_payload = scroll_result[0][0].payload or {}
                 existing_edges = existing_payload.get("edges")
                 if not isinstance(existing_edges, list):
@@ -210,7 +214,7 @@ def migrate(
                 client.set_payload(
                     collection_name=collection,
                     payload={"edges": merged_edges},
-                    points=[source_id],
+                    points=[point_id],
                 )
                 updated += 1
                 if updated % 10 == 0:
