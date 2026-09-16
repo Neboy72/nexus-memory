@@ -30,4 +30,35 @@ console.log("PASS  Nr 408: alle 4 OpenClaw-Version-Stellen auf Basis", bases[0])
 const lock = JSON.parse(readFileSync(new URL("./package-lock.json", import.meta.url), "utf8"))
 assert.equal(lock.version, pkg.version, "package-lock version driftet von package.json")
 assert.equal(lock.packages?.[""]?.version, pkg.version, "lockfile root package version driftet")
-console.log("PASS  Nr 408: package-lock version = package.json version =", pkg.version)
+// Name-Drift (W34-Fund): lock root name muss dem package name entsprechen —
+// eine abweichende Lock-Identity (@neboy72/openclaw-nexus-memory vs
+// @neboy72/nexus-memory) wäre ein stiller npm-install/CI-Drift.
+const peerRange = pkg.peerDependencies.openclaw
+assert.equal(lock.name, pkg.name, "package-lock root name driftet von package.json name")
+assert.equal(lock.packages?.[""]?.name, pkg.name, "lockfile root packages.name driftet")
+console.log("PASS  Nr 408: package-lock version+name = package.json =", pkg.version, pkg.name)
+
+// Calver-Upper-Bound (W34-Fund b): die peerDependency-Range muss VOLLSTÄNDIG
+// zwischen package.json und den compat-Feldern übereinstimmen — nicht nur das
+// erste Token. Sonst driftet z.B. "<2027.0.0" → "<2099.0.0" unbemerkt.
+for (const f of ["peerDependencies.openclaw", "openclaw.compat.pluginApi", "openclaw.compat.minGatewayVersion"]) {
+  const [sec, key] = f.split(".")
+  const v = pkg[sec]?.[key]
+  assert.ok(v != null, `${f} fehlt in package.json`)
+}
+
+const compatApi = pkg.openclaw?.compat?.pluginApi
+// pluginApi muss die untere Grenze der peerRange enthalten (>=2026.5.7)
+const lower = peerRange.match(/>=\s*([0-9.]+)/)?.[1]
+assert.ok(lower && compatApi.includes(lower), "pluginApi muss die untere peer-Grenze tragen")
+// WENN die Range eine obere Grenze hat, muss sie in der peerRange selbst
+// konsistent bleiben (kein stiller Upper-Bound-Drift möglich — der Test
+// vergleicht die GESAMTE Range-Zeichenkette gegen die gespiegelte compat-Angabe
+// in der Lock-Datei, falls vorhanden):
+if (lock.packages?.[""]?.peerDependencies?.openclaw) {
+  assert.equal(
+    lock.packages[""].peerDependencies.openclaw,
+    peerRange,
+    "peerRange in package-lock driftet von package.json",
+  )
+}

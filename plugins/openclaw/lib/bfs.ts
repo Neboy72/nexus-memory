@@ -91,6 +91,18 @@ export async function bfsEdges(
 
       const source = path.length > 0 ? path[path.length - 1] : factId
 
+      // Filter by target_type BEFORE the visited/enqueue decision. A
+      // non-matching node must neither be enqueued (its descendants would
+      // leak into the result) nor recorded as an edge endpoint that was never
+      // added to `nodes`/`nodeSet` — both broke the subgraph invariant. Doing
+      // this first also makes the revisited branch below consistent for free:
+      // only targets that already passed the filter are ever marked visited.
+      if (targetType) {
+        const targetPoint = await qdrantClient.scrollPoint(targetId)
+        const entityType = targetPoint?.payload?.entity_type
+        if (entityType !== targetType) continue
+      }
+
       if (visited.has(targetId)) {
         // traverse: a revisited target yields nothing. subgraph: still record
         // the edge, because its endpoints are already in the node set.
@@ -105,16 +117,6 @@ export async function bfsEdges(
         depth: depth + 1,
         relation: edgeRelation,
         path: [...path, targetId],
-      }
-
-      // Filter by target_type if specified
-      if (targetType) {
-        const targetPoint = await qdrantClient.scrollPoint(targetId)
-        const entityType = targetPoint?.payload?.entity_type
-        if (entityType !== targetType) {
-          queue.push({ id: targetId, depth: depth + 1, path: step.path })
-          continue
-        }
       }
 
       if (collectEdges) {

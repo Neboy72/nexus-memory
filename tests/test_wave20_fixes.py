@@ -344,8 +344,13 @@ class TestNr349GateOutputEveryPath:
 
 class TestNr350NormalizationAndHeadWarn:
     def test_suffix_strip(self):
+        # W34-11 superseded normalization: pre-release tags are now EXCLUDED
+        # from the latest-tag comparison entirely (sort -V ranks rc-suffixes
+        # above the final tag, which produced false GATE-GRUEN). The strip
+        # line must be GONE, and the exclusion filter must be present.
         src = _read("scripts/release_gate.sh")
-        assert 'REMOTE_TAG_VER%%[-+]*' in src
+        assert "REMOTE_TAG_VER%%[-+]*" not in src
+        assert 'grep -E \'^v?[0-9]+\\.[0-9]+\\.[0-9]+$\'' in src
 
     def test_head_tagged_warning_alarm_only(self):
         src = _read("scripts/release_gate.sh")
@@ -372,7 +377,11 @@ class TestNr352HealthProbeTimeout:
 # ── Verhalten: release_gate Normalisierung (echter bash-Lauf) ───────────────
 
 class TestNr350BehavioralGate:
-    def test_gate_tolerates_rc_tag(self, tmp_path, monkeypatch):
+    def test_gate_rejects_rc_only(self, tmp_path, monkeypatch):
+        # W34-11 superseded tolerance: pre-release tags are EXCLUDED from the
+        # latest-tag filter (sort -V ranks v0.19.1-rc1 above v0.19.1, the old
+        # normalize could produce false GATE-GRUEN without a final release).
+        # With only an rc tag present the gate must now fail (GATE-ROT).
         import subprocess
         pyproj = tmp_path / "pyproject.toml"
         pyproj.write_text('version = "0.19.1"\n')
@@ -381,7 +390,7 @@ class TestNr350BehavioralGate:
         (repo_dir / "pyproject.toml").write_text('version = "0.19.1"\n')
         env = dict(os.environ)
         env["NEXUS_REPO_DIR"] = str(tmp_path)
-        # fake gh via PATH shim
+        # fake gh via PATH shim: rc tag + non-version tag, NO final tag
         shim = tmp_path / "bin"
         shim.mkdir()
         gh = shim / "gh"
@@ -392,5 +401,5 @@ class TestNr350BehavioralGate:
         r = subprocess.run(
             ["bash", str(_ROOT / "scripts" / "release_gate.sh")],
             capture_output=True, text=True, env=env, timeout=30)
-        assert "GATE-GRUEN" in r.stdout
-        assert "0.19.1-rc1" in r.stdout  # rc tag tolerated, normalized
+        assert "GATE-GRUEN" not in r.stdout
+        assert "GATE-ROT" in r.stdout  # no final X.Y.Z tag → gate stays red

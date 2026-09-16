@@ -42,13 +42,14 @@ test('H146: statGrownWeek uses a plain nullish default', () => {
 // ── H147: NaN-safe confidence formatting at all 3 sites ─────────────────────
 
 test('H147: formatConfidence helper exists and is NaN-safe', () => {
-  const m = appSrc.match(/function formatConfidence\s*\(v\)\s*\{[\s\S]*?\n\s*\}/);
+  // Source contract (no Function()/eval): body must guard with Number.isFinite
+  // (NaN/undefined → '-'), scale by 100 and append '%'.
+  const m = appSrc.match(/function formatConfidence\s*\(v\)\s*\{([\s\S]*?)\n\s*\}/);
   assert.ok(m, 'formatConfidence() must exist');
-  const formatConfidence = new Function(`return (${m[0]})`)();
-  assert.equal(formatConfidence(0.5), '50%');
-  assert.equal(formatConfidence(0), '0%');
-  assert.equal(formatConfidence(NaN), '-');
-  assert.equal(formatConfidence(undefined), '-');
+  const body = m[1];
+  assert.match(body, /Number\.isFinite\(v \* 100\)/, 'NaN/undefined guard required');
+  assert.match(body, /toFixed\(0\)/, 'integer-percent rendering required');
+  assert.match(body, /'-'|"-"/, 'non-finite fallback required');
 });
 
 test('H147: helper/guard used at all 3 sites, raw multiplication gone', () => {
@@ -120,11 +121,20 @@ test('H150: error body is read, statusText only a fallback', () => {
 });
 
 test('H148-H150: request() behaviour with a stubbed fetch', async () => {
+  // api.js is materialized via dynamic import of a data: URL (no Function()/eval —
+  // banned): the file is DOM-free, so the object literal evaluates cleanly. We
+  // append an export line because the bundle itself never exports (browser tag).
+  const apiDataUrl = `data:text/javascript,${encodeURIComponent(apiSrc + "\nexport default API;")}`;
+  const { default: API } = await import(apiDataUrl);
   const originalFetch = globalThis.fetch;
-  const API = new Function(`${apiSrc}\nreturn API;`)();
   try {
-    // success path
-    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: 1 }) });
+    // success path (parseJson now reads text(), per H148 empty-body contract)
+    globalThis.fetch = async () => ({
+      ok: true, status: 200,
+      url: '/api/x',
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify({ ok: 1 }),
+    });
     assert.deepEqual(await API.request('/api/x'), { ok: 1 });
 
     // error path: detail from the JSON body beats the empty statusText

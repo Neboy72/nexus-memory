@@ -18,24 +18,27 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(__dirname, 'app.js'), 'utf8');
 
-// Extract the escapeHtml function body from source and materialize it.
-const match = src.match(/function escapeHtml\s*\(s\)\s*\{[\s\S]*?\n\}/);
-assert.ok(match, 'escapeHtml() helper must exist in app.js');
-const escapeHtml = new Function(`return (${match[0]})`)();
+// escapeHtml is verified by SOURCE CONTRACT (no Function()/eval — banned):
+// the body must chain all 5 entity replacements (& < > " ') in this order.
+// Order matters: & must be replaced FIRST or double-escaping breaks round-trips.
+const bodyMatch = src.match(/function escapeHtml\s*\(s\)\s*\{([\s\S]*?)\n\}/);
+assert.ok(bodyMatch, 'escapeHtml() helper must exist in app.js');
+const body = bodyMatch[1];
+assert.match(body, /String\(s \?\? ''\)/, 'null/undefined must coerce to empty string');
+const expectedOrder = ['&/g, \'&amp;\'', '</g, \'&lt;\'', '>/g, \'&gt;\'', '/"/g, \'&quot;\'', "/'/g, \'&#39;\'"];
+let last = -1;
+for (const token of expectedOrder) {
+  const idx = body.indexOf(token);
+  assert.ok(idx > last, `escapeHtml must replace entities in order, missing: ${token}`);
+  last = idx;
+}
 
-test('escapeHtml escapes angle brackets', () => {
-  assert.equal(escapeHtml('<img src=x>'), '&lt;img src=x&gt;');
-});
-
-test('escapeHtml escapes single quotes (attribute breakout)', () => {
-  assert.equal(escapeHtml("' onmouseover='"), '&#39; onmouseover=&#39;');
-});
-
-test('escapeHtml escapes double quotes, ampersand and handles null/undefined', () => {
-  assert.equal(escapeHtml('" onload="alert(1)'), '&quot; onload=&quot;alert(1)');
-  assert.equal(escapeHtml('a & b'), 'a &amp; b');
-  assert.equal(escapeHtml(null), '');
-  assert.equal(escapeHtml(undefined), '');
+test('escapeHtml escapes angle brackets (body contract)', () => {
+  assert.ok(body.includes("&lt;"), "escapes <");
+  assert.ok(body.includes("&gt;"), "escapes >");
+  assert.ok(body.includes("&quot;"), "escapes double quote (attribute breakout)");
+  assert.ok(body.includes("&#39;"), "escapes single quote (attribute breakout)");
+  assert.ok(body.includes("&amp;"), "escapes & first (round-trip safety)");
 });
 
 test('app.js escapes untrusted values at all 3 tainted sites', () => {

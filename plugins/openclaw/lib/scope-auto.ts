@@ -181,7 +181,16 @@ function closestScope(
   let best: string | null = null
   let bestSim = -Infinity
   let second = -Infinity
+  let skippedDim = 0
   for (const [scope, c] of Object.entries(cents)) {
+    // A centroid built from a different embedding model/dimension (model
+    // swap, mixed-dimension collection) is not comparable. Skip it rather
+    // than letting dot() throw out of inferScope/prefetchFilterScopes — the
+    // module contract is "fail-open everywhere".
+    if (c.length !== norm.length) {
+      skippedDim++
+      continue
+    }
     const sim = dot(norm, c)
     if (sim > bestSim) {
       second = bestSim
@@ -190,6 +199,12 @@ function closestScope(
     } else if (sim > second) {
       second = sim
     }
+  }
+  if (skippedDim > 0) {
+    console.warn(
+      `scope_auto: skipped ${skippedDim} centroid(s) with mismatched dimension ` +
+        `(query=${norm.length}) — no scope boost from those`,
+    )
   }
   if (!best) return null
   return { scope: best, margin: bestSim - second, sim: bestSim }

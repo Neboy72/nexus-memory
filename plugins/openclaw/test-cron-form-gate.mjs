@@ -175,8 +175,10 @@ try {
   process.exitCode = 1
   failed++
 } finally {
-  // T3: Mock IMMER restaurieren (vor dem deterministischen Exit).
+  // T3: Mock IMMER restaurieren.
   globalThis.fetch = originalFetch
-  // T6: EIN deterministischer Exit-Punkt — kein process.exit IM try.
-  process.exit(failed === 0 ? 0 : 1)
+  // T6/W34-Fund: exitCode statt process.exit — ein Hard-Exit im finally
+  // kappt gepufferte stdout-Ausgabe (PASS/FAIL-Zeilen) bei gepipestem stdout
+  // (CI) und killt laufende Promises. Exit-Code bleibt deterministisch.
+  process.exitCode = failed === 0 ? 0 : 1
 }

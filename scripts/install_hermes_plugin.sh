@@ -48,12 +48,50 @@ fi
 # --- Link the plugin ---
 
 # Collision-free backup path: an existing .bak is never overwritten.
+# The timestamp alone has 1-second resolution, so two installs in the same
+# second (interactive retry, CI matrix, parallel runs) would collide; PID plus
+# an existence-checked counter keeps the "never clobbers an earlier backup"
+# guarantee.
 backup_path() {
-    if [ -e "${PLUGIN_DST}.bak" ]; then
-        echo "${PLUGIN_DST}.bak.$(date +%Y%m%d%H%M%S)"
-    else
-        echo "${PLUGIN_DST}.bak"
+    local base="${PLUGIN_DST}.bak"
+    local candidate="${base}"
+    if [ -e "${candidate}" ]; then
+        candidate="${base}.$(date +%Y%m%d%H%M%S).$$"
+        local n=1
+        while [ -e "${candidate}" ]; do
+            candidate="${base}.$(date +%Y%m%d%H%M%S).$$.${n}"
+            n=$((n + 1))
+        done
     fi
+    echo "${candidate}"
+}
+
+# Atomically point ${2} at ${1} and verify the result.
+# `ln -s` into a temp name plus `mv -T` swaps in a single rename(2): there is
+# no window where the target path is missing, and a failed `ln` leaves the old
+# link untouched. `-T` (GNU) makes mv replace the destination instead of
+# moving INTO a symlinked directory; BSD/macOS mv lacks it, so fall back to an
+# unlink+recreate there — still verified below.
+atomic_symlink() {
+    local target="$1" dst="$2" dir tmp got
+    dir="$(dirname "${dst}")"
+    tmp="$(mktemp -u "${dir}/.nexus-link.XXXXXX")" || return 1
+    if ! ln -s "${target}" "${tmp}"; then
+        echo -e "${RED}✗${NC} ln -s ${tmp} failed — old link left untouched." >&2
+        return 1
+    fi
+    if mv -T "${tmp}" "${dst}" 2>/dev/null; then
+        : # GNU mv: single atomic rename
+    else
+        rm -f "${tmp}"
+        ln -sfn "${target}" "${dst}" || return 1
+    fi
+    got="$(readlink "${dst}" 2>/dev/null || true)"
+    if [ "${got}" != "${target}" ]; then
+        echo -e "${RED}✗${NC} Symlink verification failed: ${dst} → ${got:-<none>}" >&2
+        return 1
+    fi
+    return 0
 }
 
 # Move an existing target to a collision-free backup path and confirm the
@@ -82,15 +120,14 @@ if [ -L "${PLUGIN_DST}" ]; then
         echo -e "${GREEN}✓${NC} Plugin already linked: ${PLUGIN_DST} → ${PLUGIN_SRC}"
     else
         echo -e "${YELLOW}⚠${NC} Existing symlink points elsewhere (${current_target}). Replacing..."
-        rm "${PLUGIN_DST}"
-        ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
+        atomic_symlink "${PLUGIN_SRC}" "${PLUGIN_DST}"
         echo -e "${GREEN}✓${NC} Plugin linked: ${PLUGIN_DST} → ${PLUGIN_SRC}"
     fi
 elif [ -d "${PLUGIN_DST}" ]; then
     echo -e "${YELLOW}⚠${NC} ${PLUGIN_DST} exists as a directory (not a symlink)."
     echo "  Backing up and replacing with symlink."
     BACKUP_DST="$(backup_and_remove "${PLUGIN_DST}")"
-    ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
+    atomic_symlink "${PLUGIN_SRC}" "${PLUGIN_DST}"
     echo -e "${GREEN}✓${NC} Plugin linked (backup at ${BACKUP_DST})"
 elif [ -e "${PLUGIN_DST}" ]; then
     # Regular file (or other non-dir) at the target path: back it up rather
@@ -98,10 +135,10 @@ elif [ -e "${PLUGIN_DST}" ]; then
     echo -e "${YELLOW}⚠${NC} ${PLUGIN_DST} exists as a regular file (not a symlink)."
     echo "  Backing up and replacing with symlink."
     BACKUP_DST="$(backup_and_remove "${PLUGIN_DST}")"
-    ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
+    atomic_symlink "${PLUGIN_SRC}" "${PLUGIN_DST}"
     echo -e "${GREEN}✓${NC} Plugin linked (backup at ${BACKUP_DST})"
 else
-    ln -s "${PLUGIN_SRC}" "${PLUGIN_DST}"
+    atomic_symlink "${PLUGIN_SRC}" "${PLUGIN_DST}"
     echo -e "${GREEN}✓${NC} Plugin linked: ${PLUGIN_DST} → ${PLUGIN_SRC}"
 fi
 

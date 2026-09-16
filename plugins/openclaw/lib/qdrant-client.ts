@@ -385,6 +385,39 @@ export class QdrantClient {
   }
 
   /**
+   * Like scrollPoint(), but distinguishes "absent" from "failed".
+   *
+   * scrollPoint() fail-opens to null for BOTH a 404 (the point does not exist)
+   * and a transient failure (500/403/network), so a caller cannot tell
+   * "nothing to do" from "could not check". This variant returns null only
+   * when Qdrant confirms the point is absent and THROWS on any other failure,
+   * letting callers fail closed (e.g. skip a destructive delete) and surface
+   * an honest error instead of a misleading "not found".
+   */
+  async scrollPointStrict(
+    id: string,
+  ): Promise<{ id: string; payload?: Record<string, unknown> } | null> {
+    log.debugRequest("scrollPointStrict", { id })
+    const resp = await fetchWithTimeout(
+      `${this.qdrantUrl}/collections/${this.collection}/points/${encodeURIComponent(id)}?with_payload=true`,
+      { method: "GET" },
+    )
+    if (resp.status === 404) return null
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "")
+      throw new Error(
+        `Qdrant point lookup failed: ${resp.status}${text ? ` ${text}` : ""}`,
+      )
+    }
+    const data = (await resp.json()) as {
+      result?: { id?: string | number; payload?: Record<string, unknown> } | null
+    }
+    const point = data.result
+    if (!point || point.id === undefined || point.id === null) return null
+    return { id: String(point.id), payload: point.payload }
+  }
+
+  /**
    * Scroll points with a Qdrant filter — returns points with payload.
    *
    * PAGINATED: `limit` is the PER-PAGE limit. The call follows

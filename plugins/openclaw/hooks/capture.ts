@@ -152,6 +152,12 @@ export function buildCaptureHandler(
       text: content,
       access_level: cfg.accessLevel,
       category: "session",
+      // fetchCentroids() (lib/scope-auto.ts) scrolls with a
+      // lifecycle_status == "canonical" filter; a point without the field is
+      // invisible to the centroid computation, which would break the
+      // self-organizing feedback loop for OpenClaw captures. Set the canonical
+      // status explicitly at capture time.
+      lifecycle_status: "canonical",
       source: "openclaw",
       source_url: "",
       confidence: 0.7,

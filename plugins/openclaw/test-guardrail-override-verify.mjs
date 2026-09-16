@@ -132,6 +132,35 @@ await t("agent_id leer → reject", async () => {
   assert.match(parse(res).error, /agent_id/)
 })
 
+await t("matched_rules mit erfundener source_memory_id → reject (Server-Verify schlägt Caller-Payload)", async () => {
+  // W34-Fund: Der Erfolg-Test nutzte eine Byte-identische Kopie der Mock-Regel —
+  // ein gefälschtes matched_rules war vom Server-Verify nicht unterscheidbar.
+  // Eine ID, die der Mock-Store NICHT liefert, muss abgelehnt werden.
+  const { tool, captured } = makeTool()
+  const FORGED = { ...GOOD_RULE, source_memory_id: "rule-999" }
+  const res = await tool.execute("id", {
+    command: `rm -rf ${PROTECTED}`,
+    reasoning: REASONING,
+    matched_rules: [FORGED],
+    agent_id: "agent-7",
+  })
+  assert.strictEqual(res.isError, true, "gefälschte rule-id darf nicht durchgehen")
+  assert.strictEqual(captured.length, 0, "kein Audit-Record mit ungeprüfter Regel")
+})
+
+await t("matched_rules mit driftendem rule_text → reject", async () => {
+  const { tool, captured } = makeTool()
+  const DRIFT = { ...GOOD_RULE, rule_text: "etwas anderes: /home/tester" }
+  const res = await tool.execute("id", {
+    command: `rm -rf ${PROTECTED}`,
+    reasoning: REASONING,
+    matched_rules: [DRIFT],
+    agent_id: "agent-7",
+  })
+  assert.strictEqual(res.isError, true)
+  assert.strictEqual(captured.length, 0)
+})
+
 await t("Command, der nicht (mehr) blockt → reject mit Re-check-Begründung", async () => {
   const { tool, captured } = makeTool()
   const res = await tool.execute("id", {

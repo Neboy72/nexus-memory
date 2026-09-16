@@ -31,16 +31,24 @@ const MemoryGraph = {
     // A previous simulation keeps ticking (and mutating detached nodes)
     // unless it is stopped explicitly.
     if (this.sim) this.sim.stop();
-    const idSet = new Set(memories.map(m => m.id));
+    // A missing/partial API response (memData.memories undefined) must not
+    // throw where the edges list is already defaulted. Both inputs get the
+    // same treatment so a memoryless response renders an empty graph.
+    const mems = Array.isArray(memories) ? memories : [];
+    const edgeList = Array.isArray(edges) ? edges : [];
+    // load() is reachable before/without a successful init(); without `this.g`
+    // there is no SVG to draw into.
+    if (!this.g) return;
+    const idSet = new Set(mems.map(m => m.id));
     const seen = new Set();
     const links = [];
-    (edges||[]).forEach(e => {
+    edgeList.forEach(e => {
       if (!idSet.has(e.source)||!idSet.has(e.target)) return;
       const k = [e.source,e.target].sort().join('|');
       if (!seen.has(k)) { seen.add(k); links.push({source: e.source, target: e.target}); }
     });
 
-    const nodes = memories.map(m => {
+    const nodes = mems.map(m => {
       const fullText = (m.text || '');
       return {
         id: m.id, text: (m.text || '').slice(0, 80),
@@ -96,6 +104,9 @@ const MemoryGraph = {
 
   updateFilters(f) {
     if (!f) return;
+    // Reachable before a successful load() (e.g. a filter change after a failed
+    // fetch); without bound selections there is nothing to filter.
+    if (!this.node || !this.link) return;
     const q = (f.search || '').toLowerCase();
     const visible = {};
     this.node.attr('opacity', d => {
@@ -112,6 +123,9 @@ const MemoryGraph = {
   },
 
   resetZoom() {
+    // `this.svg`/`this._zoom` only exist after a successful init(); the button
+    // that calls this is reachable regardless.
+    if (!this.svg || !this._zoom) return;
     this.svg.transition().duration(500).call(
       this._zoom.transform, d3.zoomIdentity
     );

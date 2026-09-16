@@ -187,8 +187,13 @@ entry = entries.get("nexus-memory", {})
 entry["enabled"] = entry.get("enabled", True)
 
 hooks = entry.setdefault("hooks", {})
-hooks.setdefault("allowPromptInjection", True)
-hooks.setdefault("allowConversationAccess", True)
+# Least-privilege defaults, matching the sibling installer
+# (plugins/openclaw/scripts/install_openclaw_plugin.sh): the two most
+# privileged hooks must never be enabled without an explicit decision. An
+# existing value is preserved; raise them by hand only for an isolated/
+# trusted backend.
+hooks.setdefault("allowPromptInjection", False)
+hooks.setdefault("allowConversationAccess", False)
 
 cfg = entry.setdefault("config", {})
 cfg.setdefault("qdrantUrl", "http://localhost:6333")

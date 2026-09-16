@@ -51,16 +51,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ─── Header Scroll Effect ───
+  // graph.html loads this file but has no `.header` element — skip the
+  // listener entirely rather than throwing on the first scroll event.
   const header = document.querySelector('.header');
 
-  window.addEventListener('scroll', () => {
-    const scrollY = window.scrollY;
-    if (scrollY > 50) {
-      header.classList.add('header--scrolled');
-    } else {
-      header.classList.remove('header--scrolled');
-    }
-  }, { passive: true });
+  if (header) {
+    window.addEventListener('scroll', () => {
+      const scrollY = window.scrollY;
+      if (scrollY > 50) {
+        header.classList.add('header--scrolled');
+      } else {
+        header.classList.remove('header--scrolled');
+      }
+    }, { passive: true });
+  }
 
   // ─── Mobile Menu ───
   const menuToggle = document.getElementById('menuToggle');
@@ -127,7 +131,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // ─── Load Data ───
+  // Monotonic request id: overlapping loadData() calls (debounced search,
+  // rapid filter changes) must not let an older response overwrite a newer
+  // one. Only the latest-started request is allowed to commit state.
+  let loadSeq = 0;
+
   async function loadData() {
+    const seq = ++loadSeq;
     try {
       graphLoading.style.display = 'flex';
 
@@ -136,8 +146,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         API.getStats(),
       ]);
 
-      state.memories = memData.memories;
-      state.edges = memData.edges;
+      // A newer request superseded this one while it was in flight.
+      if (seq !== loadSeq) return;
+
+      state.memories = memData.memories || [];
+      state.edges = memData.edges || [];
 
       MemoryGraph.load(state.memories, state.edges, memData.category_counts || {});
 
@@ -145,6 +158,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       graphLoading.style.display = 'none';
 
     } catch (err) {
+      if (seq !== loadSeq) return;
       console.error('Failed to load data:', err);
       graphLoading.innerHTML = `
         <p style="color:var(--color-drift-drifted)">⚠️ Failed to load graph data</p>

@@ -174,12 +174,15 @@ export function buildRecallHandler(
     // Group-context privacy cap (Astra-R2 critical finding, 08.09.2026):
     // in group/channel turns the effective access level is capped to "public"
     // regardless of cfg — the agent must never surface private memories into
-    // a shared context. Fail-closed: unknown ctx → cap active only when
-    // groupId is present; DM turns keep the configured level.
+    // a shared context. Fail-closed: ANY present groupId — including "", a
+    // whitespace-only string or 0 — counts as a group turn, mirroring
+    // capture.ts. A truthiness check treated those as a DM and skipped the
+    // cap, leaking private memories into a shared context. Only a truly
+    // ABSENT group (null/undefined) keeps the configured level.
+    const rawGroupId = ctx?.groupId
+    const isGroupTurn = rawGroupId !== null && rawGroupId !== undefined
     const effectiveAccessLevel =
-      ctx?.groupId && cfg.accessLevel !== "public"
-        ? "public"
-        : cfg.accessLevel
+      isGroupTurn && cfg.accessLevel !== "public" ? "public" : cfg.accessLevel
 
     const rawPrompt = event.prompt as string | undefined
     if (!rawPrompt || rawPrompt.length < 5) return
@@ -187,7 +190,7 @@ export function buildRecallHandler(
     const query = stripNexusContextBlock(rawPrompt)
     if (query.length < 5) return
 
-    log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${effectiveAccessLevel}${ctx?.groupId ? ", GROUP-CAP active" : ""})`)
+    log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${effectiveAccessLevel}${isGroupTurn ? ", GROUP-CAP active" : ""})`)
 
     try {
       // Embed the query

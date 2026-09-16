@@ -130,7 +130,12 @@ class SelectiveForgettingAuditor:
         if ts is None:
             return None
         age_days = (now - ts) / 86400.0
-        age_s = 1.0 / (1.0 + math.exp(-(age_days - AGE_MIDPOINT_DAYS) / AGE_SCALE_DAYS))
+        # Nr 470: math.exp raises OverflowError once the exponent exceeds ~709,
+        # which a far-future timestamp (e.g. a µs/ns epoch misread as seconds)
+        # easily produces. exp saturates there, so capping the exponent yields
+        # the identical result (~0.0) without raising.
+        exponent = -(age_days - AGE_MIDPOINT_DAYS) / AGE_SCALE_DAYS
+        age_s = 1.0 / (1.0 + math.exp(min(exponent, 709.0)))
         return min(1.0, age_s * CATEGORY_WEIGHTS.get(cat, CATEGORY_DEFAULT_WEIGHT))
 
     def run(self) -> Dict[str, Any]:

@@ -29,6 +29,29 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("nexus.retrieval_watch")
 
 
+def _env_float(name: str, default: float, minimum: float) -> float:
+    """Parse a float env var, falling back to *default* when it is missing,
+    unparsable or below *minimum*.
+
+    Mirrors _env_int: a malformed value (e.g. ``NEXUS_WATCH_MIN_SCORE="0,5"``
+    or ``"abc"``) must not raise ValueError at import time — that would turn a
+    bad config value into a startup crash of the whole package.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        log.warning("%s=%r is not a number — using default %s", name, raw, default)
+        return default
+    if val < minimum:
+        log.warning("%s=%s out of range (min %s) — using default %s",
+                    name, val, minimum, default)
+        return default
+    return val
+
+
 def _env_int(name: str, default: int, minimum: int) -> int:
     """Parse an int env var, falling back to *default* when it is missing,
     unparsable or below *minimum* (a negative start delay raises in
@@ -52,7 +75,8 @@ RETRIEVAL_START_DELAY_SECONDS = _env_int("NEXUS_RETRIEVAL_START_DELAY", 120, 0)
 RETRIEVAL_INTERVAL_SECONDS = _env_int("NEXUS_RETRIEVAL_INTERVAL_SEC", 24 * 3600, 1)
 # Configurable minimum score: results below it count as retrieval failures
 # (a hit is worthless when the similarity is too low to be meaningful).
-MIN_SCORE = float(os.environ.get("NEXUS_WATCH_MIN_SCORE", "0.5"))
+DEFAULT_MIN_SCORE = 0.5
+MIN_SCORE = _env_float("NEXUS_WATCH_MIN_SCORE", DEFAULT_MIN_SCORE, 0.0)
 
 DEFAULT_QUERIES: List[Tuple[str, str]] = [
     ("Bose SoundLink Audio-Ausgabe Bluetooth", "Bose"),

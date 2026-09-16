@@ -158,8 +158,19 @@ def _budget_lock():
 
 def _damaged_state() -> Dict[str, Any]:
     """State for a month whose ledger is unreadable/corrupt: treated as
-    over-budget so paid stations stay locked (fail-closed)."""
-    return {"year_month": _current_month(), "spent_usd": math.inf}
+    over-budget so paid stations stay locked (fail-closed).
+
+    Nr 308: the current month is also latched as already-notified. Without
+    this, a state read while damaged (spent=inf) returns notified_month=False,
+    and once the ledger is repaired within the same month the budget notice
+    fires a second time. Marking it here follows the same month-keyed
+    reset convention as the ordinary state.
+    """
+    return {
+        "year_month": _current_month(),
+        "spent_usd": math.inf,
+        "notified_month": _current_month(),
+    }
 
 
 def _load_state_unlocked() -> Dict[str, Any]:
