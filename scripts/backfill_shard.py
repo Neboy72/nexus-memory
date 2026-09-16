@@ -19,9 +19,30 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 os.environ["NEXUS_CONSOLIDATION"] = "0"  # no daemon thread inside workers
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+def _iso_date(value) -> "str | None":
+    """Coerce a payload ``created_at`` into a ``YYYY-MM-DD`` string or None.
+
+    W32-5: the payload is free-form. A legacy point may carry an epoch int,
+    in which case the old ``src_date[:10]`` raised ``TypeError`` OUTSIDE the
+    per-point try/except and killed the whole shard run. Anything that is not
+    a string and not a number is treated as "no date" (None).
+    """
+    if isinstance(value, str):
+        return value[:10] or None
+    # bool is an int subclass — a boolean timestamp is meaningless, skip it.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            # timezone.utc variant: utcfromtimestamp() is deprecated in 3.12+.
+            return datetime.fromtimestamp(value, timezone.utc).strftime("%Y-%m-%d")
+        except (OverflowError, OSError, ValueError):
+            return None
+    return None
 
 
 def main() -> int:
@@ -59,8 +80,9 @@ def main() -> int:
         for p in batch:
             pid = str(p.id)
             if zlib.crc32(pid.encode()) % args.num_shards == args.shard:
-                src_date = (p.payload or {}).get("created_at") or ""
-                my_points.append((pid, (p.payload or {}).get("content", ""), src_date[:10] or None))
+                # W32-5: tolerate non-string created_at (epoch int/float).
+                src_date = _iso_date((p.payload or {}).get("created_at"))
+                my_points.append((pid, (p.payload or {}).get("content", ""), src_date))
         if offset is None:
             break
 

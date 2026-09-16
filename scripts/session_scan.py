@@ -1,10 +1,19 @@
+import os
 import sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-berlin = timezone(timedelta(hours=2))
+# W32-11(a): Europe/Berlin via zoneinfo. A fixed UTC+2 offset was an hour off
+# all winter (CET), silently shifting the 24h cutoff window and the displayed
+# times.
+berlin = ZoneInfo("Europe/Berlin")
 now = datetime.now(berlin)
 cutoff = (now - timedelta(hours=24)).timestamp()
-con = sqlite3.connect('/Users/miosha/.hermes/state.db')
+# W32-11(b): no hard-coded /Users/... path in the repo (PII + not portable).
+# Override via NEXUS_SESSION_DB, default to ~/.hermes/state.db.
+db_path = os.environ.get("NEXUS_SESSION_DB", str(Path.home() / ".hermes" / "state.db"))
+con = sqlite3.connect(db_path)
 con.row_factory = sqlite3.Row
 rows = con.execute(
     "SELECT id, source, started_at, ended_at, end_reason, message_count, tool_call_count,"

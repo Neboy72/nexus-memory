@@ -263,6 +263,8 @@ class FactVersion:
                 restores — otherwise the bad fact keeps no canonical entry
                 while foreign content is written under the wrong identity
                 (silent integrity break in the append-only store).
+            ValueError: If either version is already ``rolled_back`` — see
+                W32-1 below.
         """
         # H231: identity guard. Without it a caller could pass a version of
         # another fact and the restored canonical would be rebuilt from
@@ -273,6 +275,27 @@ class FactVersion:
                 "rollback requires both versions to belong to the same fact: "
                 f"bad_version.fact_id={bad_version.fact_id!r} != "
                 f"restore_version.fact_id={restore_version.fact_id!r}"
+            )
+
+        # W32-1: status validation. ``promote`` (rejects non-PENDING) and
+        # ``deprecate`` (rejects terminal states) both guard their source
+        # version; ``rollback`` checked no status at all. An already
+        # rolled_back bad_version could therefore be "rolled back" again —
+        # emitting a second rolled_back marker for the same version and
+        # corrupting the supersedes chain with duplicate decision events —
+        # and a rolled_back version could be resurrected as the canonical.
+        # Both are terminal, so refuse them here in the same style as the
+        # sibling factories.
+        if bad_version.status == FactStatus.ROLLED_BACK.value:
+            raise ValueError(
+                "rollback refuses an already rolled_back bad_version "
+                f"(status={bad_version.status!r}): rolled_back is terminal"
+            )
+        if restore_version.status == FactStatus.ROLLED_BACK.value:
+            raise ValueError(
+                "rollback refuses to restore a rolled_back restore_version "
+                f"(status={restore_version.status!r}) as canonical: "
+                "rolled_back is terminal"
             )
 
         now = datetime.now(timezone.utc).isoformat()
