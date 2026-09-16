@@ -48,20 +48,19 @@ if [ -z "$TAGS_LIST" ]; then
     echo "GATE-ROT: keine Tags in $REPO gefunden (Repository hat noch kein Release)"
     exit 1
 fi
-# Only version-shaped tags (X.Y.Z, optional "v" prefix and an optional
-# -pre-release/+build suffix) take part — a stray non-version tag must not
-# become the "latest release". The suffix is allowed here so the
-# normalization below can actually tolerate pre-release/build metadata.
-VERSION_TAGS=$(printf '%s\n' "$TAGS_LIST" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' || true)
+# Only FINAL release tags (X.Y.Z, optional "v" prefix) take part — a stray
+# non-version tag must not become the "latest release". Pre-release/build
+# suffixed tags are deliberately excluded: `sort -V` ranks them *after* the
+# plain release (1.0-rc1 > 1.0), so allowing them let e.g. v0.20.0-rc1 win
+# the comparison while the normalized version below stripped the suffix —
+# a false GATE-GRUEN although no final 0.20.0 release exists.
+VERSION_TAGS=$(printf '%s\n' "$TAGS_LIST" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' || true)
 REMOTE_TAG=$(printf '%s\n' "$VERSION_TAGS" | sort -V | tail -1 || true)
 if [ -z "$REMOTE_TAG" ]; then
-    echo "GATE-ROT: keine version-shaped Tags in $REPO gefunden (erwartet X.Y.Z)"
+    echo "GATE-ROT: kein finaler Release-Tag (X.Y.Z ohne Pre-Release-Suffix) in $REPO gefunden"
     exit 1
 fi
-# Normalize only a single optional "-<suffix>" / "+<build>" tail off the tag
-# before comparing (pre-release / build metadata must not fail the gate).
 REMOTE_TAG_VER="${REMOTE_TAG#v}"
-REMOTE_TAG_VER="${REMOTE_TAG_VER%%[-+]*}"
 
 if [ "$LOCAL_VER" = "$REMOTE_TAG_VER" ]; then
     echo "GATE-GRUEN: pyproject=$LOCAL_VER == Tag=$REMOTE_TAG"

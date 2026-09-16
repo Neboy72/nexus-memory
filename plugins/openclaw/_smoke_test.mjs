@@ -27,10 +27,14 @@ const api = {
 const cfg = { collection: "nexus", embedding: { provider: "voyage", model: "voyage-4" }, accessLevel: "trusted" };
 
 const entry = plugin.default ?? plugin;
+// W34-4: register(api) reads the config from api.pluginConfig (single-arg
+// contract, matches index.ts). The old second-argument call left api.pluginConfig
+// unset, so register() ran against defaults instead of the smoke cfg.
+api.pluginConfig = cfg;
 let initError = null;
 try {
-  if (typeof entry.register === "function") await entry.register(api, cfg);
-  else if (typeof entry === "function") await entry(api, cfg);
+  if (typeof entry.register === "function") await entry.register(api);
+  else if (typeof entry === "function") await entry(api);
   else console.log("ENTRY_KEYS:", Object.keys(entry).join(","));
 } catch (e) { initError = String(e); }
 

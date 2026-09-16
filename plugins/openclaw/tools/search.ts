@@ -39,12 +39,30 @@ export function registerSearchTool(
         // H123: never hand a raw host value to Qdrant — clamp to [1, 50].
         const limit = clampInt(params.limit, SEARCH_LIMIT_DEFAULT, 1, SEARCH_LIMIT_MAX)
 
+        // Tool params come from an untrusted host and can bypass the TypeBox
+        // schema (the same assumption is guarded in lib/num.ts and
+        // tools/store.ts). Validate BEFORE dereferencing: `params.query.length`
+        // on a missing/null/non-string query throws a TypeError that escapes
+        // execute() entirely — no error result is returned to the caller.
+        if (typeof params?.query !== "string" || params.query.trim().length === 0) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: "Missing or invalid 'query' — a non-empty string is required.",
+              },
+            ],
+          }
+        }
+        const query = params.query
+
         // Never log the query text itself — it is user content and can hold
         // secrets. Length is enough for diagnostics.
-        log.debug(`search tool: queryLen=${params.query.length} limit=${limit}`)
+        log.debug(`search tool: queryLen=${query.length} limit=${limit}`)
 
         try {
-          const queryVector = await embedder.embed(params.query)
+          const queryVector = await embedder.embed(query)
           const results = await qdrantClient.search(queryVector, limit, cfg.accessLevel)
 
           if (results.length === 0) {

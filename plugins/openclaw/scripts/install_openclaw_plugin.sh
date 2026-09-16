@@ -10,18 +10,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Discover OpenClaw state directory
+# Discover OpenClaw state directory. OPENCLAW_STATE_DIR is externally
+# supplied, so validate it BEFORE deriving any path from it: a relative,
+# root-ish or trailing-slash value would silently relocate TARGET_DIR.
 OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+case "$OPENCLAW_STATE_DIR" in
+  /*) ;;
+  *) echo "❌ ERROR: OPENCLAW_STATE_DIR must be an absolute path (got '$OPENCLAW_STATE_DIR') — refusing to install"; exit 1;;
+esac
+# Normalize a trailing slash so PLUGINS_DIR/TARGET_DIR cannot end up doubled
+# ("//plugins") and the guards below compare against the real seat path.
+OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR%/}"
+case "$OPENCLAW_STATE_DIR" in
+  ""|"/") echo "❌ ERROR: refusing to use '$OPENCLAW_STATE_DIR' as OPENCLAW_STATE_DIR"; exit 1;;
+esac
+
 PLUGINS_DIR="$OPENCLAW_STATE_DIR/plugins"
 TARGET_DIR="$PLUGINS_DIR/nexus-memory"
 
-# Safety guards for the destructive rm -rf further down: never operate on a
-# root/empty plugins dir and never remove a target that is not exactly the
-# dedicated nexus-memory seat inside it.
-case "$PLUGINS_DIR" in
-  "/"|""|"//"*) echo "❌ ERROR: root PLUGINS_DIR '$PLUGINS_DIR' — refusing to install"; exit 1;;
-esac
-if [ "$TARGET_DIR" != "$PLUGINS_DIR/nexus-memory" ] || [ "$(basename "$TARGET_DIR")" != "nexus-memory" ]; then
+# Safety guards for the destructive rm -rf further down: the target must be
+# exactly the dedicated nexus-memory seat inside the plugins dir. (The
+# OPENCLAW_STATE_DIR validation above is what actually constrains this; these
+# assertions stay as defense in depth if the derivation ever changes.)
+if [ "$(basename "$TARGET_DIR")" != "nexus-memory" ]; then
   echo "❌ ERROR: unexpected target directory '$TARGET_DIR' — refusing to install"; exit 1
 fi
 case "$TARGET_DIR" in
@@ -60,11 +71,24 @@ fi
 # Create plugins directory if it doesn't exist
 mkdir -p "$PLUGINS_DIR"
 
+# A directory may only be removed when it really is a previous install of
+# THIS plugin — rm -rf on an unrecognized directory would destroy unrelated
+# user data sitting at the seat path.
+is_previous_install() {
+  [ -f "$1/openclaw.plugin.json" ] || return 1
+  grep -q '"id":[[:space:]]*"nexus-memory"' "$1/openclaw.plugin.json"
+}
+
 # Remove existing target if present
 if [ -L "$TARGET_DIR" ]; then
   echo "Removing existing symlink at $TARGET_DIR"
   rm "$TARGET_DIR"
 elif [ -d "$TARGET_DIR" ]; then
+  if ! is_previous_install "$TARGET_DIR"; then
+    echo "❌ ERROR: $TARGET_DIR is a directory but not a Nexus Memory plugin install"
+    echo "   (no openclaw.plugin.json declaring \"id\": \"nexus-memory\") — refusing to remove it"
+    exit 1
+  fi
   echo "Removing existing plugin directory at $TARGET_DIR"
   rm -rf "$TARGET_DIR"
 fi

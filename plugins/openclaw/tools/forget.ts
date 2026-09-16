@@ -65,11 +65,16 @@ export function registerForgetTool(
             // Verify the point exists BEFORE deleting: Qdrant's delete is a
             // no-op for an unknown id, so the tool used to report "Memory
             // forgotten." for ids that were never there.
+            // scrollPointStrict (not scrollPoint) is used so a transient
+            // Qdrant failure throws instead of returning null — otherwise a
+            // 500/403/network error was indistinguishable from a 404 and the
+            // caller was told "id does not exist" (unrecoverable-looking) for
+            // what is actually a retryable outage.
             let existing: { id: string; payload?: Record<string, unknown> } | null = null
             try {
-              existing = await qdrantClient.scrollPoint(memoryId)
+              existing = await qdrantClient.scrollPointStrict(memoryId)
             } catch (err) {
-              // Fail-open on a lookup error: do NOT delete (deleting on an
+              // Fail-closed on a lookup error: do NOT delete (deleting on an
               // unverified id is the unsafe direction). Not an isError — the
               // caller can retry.
               log.error("forget tool (by ID) lookup failed", err)
@@ -77,7 +82,7 @@ export function registerForgetTool(
                 content: [
                   {
                     type: "text" as const,
-                    text: "Memory not found (lookup failed, delete skipped).",
+                    text: "Memory lookup failed (Qdrant error), delete skipped. Retry shortly.",
                   },
                 ],
               }

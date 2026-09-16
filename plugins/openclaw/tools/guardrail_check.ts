@@ -468,7 +468,23 @@ export function registerGuardrailOverrideTool(
         const recheckPaths = new Set(
           recheckMatches.map((m) => normalizePath(String(m.protected_path ?? ""))),
         )
-        const confirmed = cited.filter((c) => recheckPaths.has(normalizePath(c.protected_path)))
+        // W34-Fund: the caller-supplied payload was previously confirmed by
+        // protected_path alone — a fabricated matched_rules entry (real path,
+        // invented source_memory_id/rule_text) was indistinguishable from a
+        // server-verified rule. Confirm by ID (and rule_text) against the
+        // re-check's own matches, not the caller's word.
+        const recheckByIdText = new Map(
+          recheckMatches.map((m) => [
+            `${normalizePath(String(m.protected_path ?? ""))}\u0000${String(m.source_memory_id ?? "")}\u0000${String(m.rule_text ?? "")}`,
+            m,
+          ]),
+        )
+        const confirmed = cited.filter(
+          (c) =>
+            recheckByIdText.has(
+              `${normalizePath(c.protected_path)}\u0000${c.source_memory_id}\u0000${c.rule_text}`,
+            ),
+        )
 
         if (recheck.verdict !== "block" || confirmed.length === 0) {
           return fail(

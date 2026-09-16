@@ -23,10 +23,16 @@ Two modes:
 
 Run standalone:
     python3 chat_wizard.py scan
-    python3 chat_wizard.py apply voyage vo-xxx
+    python3 chat_wizard.py apply voyage          # key via VOYAGE_API_KEY or stdin
+    echo "vo-xxx" | python3 chat_wizard.py apply voyage
     python3 chat_wizard.py trust
     python3 chat_wizard.py save_trust trusted
     python3 chat_wizard.py status
+
+The API key is deliberately NOT accepted as a command-line argument: argv is
+visible to every local user via ``ps``/``/proc/<pid>/cmdline`` and is kept in
+shell history. It is read from the provider's env var (or NEXUS_API_KEY) or
+from one line on stdin instead.
 """
 
 from __future__ import annotations
@@ -438,6 +444,33 @@ def get_qdrant_filter_for_trust_level(level_id: str) -> dict:
 
 # ── CLI Entry Point ──────────────────────────────────────────────────────
 
+def _resolve_api_key(provider_id: str) -> Optional[str]:
+    """Resolve an API key without exposing it on the command line.
+
+    Nr 287: a key passed as ``argv`` is visible to any local user via
+    ``ps``/``/proc/<pid>/cmdline`` and persists in shell history. Read it from
+    the provider's env var (or the generic ``NEXUS_API_KEY``), else from one
+    line on stdin (piped or interactive). Returns ``None`` when nothing is
+    supplied — the caller decides whether a key is required.
+    """
+    provider = next((p for p in PROVIDERS if p["id"] == provider_id), None)
+    key_env = provider.get("key_env") if provider else None
+    for var in (key_env, "NEXUS_API_KEY"):
+        if not var:
+            continue
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value
+    try:
+        if not sys.stdin.isatty():
+            line = sys.stdin.readline()
+            if line and line.strip():
+                return line.strip()
+    except Exception:
+        pass
+    return None
+
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Usage: chat_wizard.py [scan|apply|trust|save_trust|status] [args...]"}))
@@ -449,10 +482,21 @@ def main():
         result = scan_providers()
     elif command == "apply":
         if len(sys.argv) < 3:
-            print(json.dumps({"error": "Usage: chat_wizard.py apply <provider_id> [api_key]"}))
+            print(json.dumps({"error": (
+                "Usage: chat_wizard.py apply <provider_id>  "
+                "(API key via the provider's *_API_KEY env var or stdin — "
+                "never as a command-line argument)")}))
+            sys.exit(1)
+        if len(sys.argv) > 3:
+            # Refuse rather than silently ignore argv[3]: the key would appear
+            # in ps/shell history and, worse, never reach apply_choice().
+            print(json.dumps({"error": (
+                "API key must NOT be passed as an argument (visible via ps and "
+                "shell history). Use the provider's *_API_KEY env var, e.g. "
+                "'echo \"$KEY\" | chat_wizard.py apply <provider_id>'")}))
             sys.exit(1)
         provider_id = sys.argv[2]
-        api_key = sys.argv[3] if len(sys.argv) > 3 else None
+        api_key = _resolve_api_key(provider_id)
         result = apply_choice(provider_id, api_key)
     elif command == "trust":
         result = get_trust_levels()

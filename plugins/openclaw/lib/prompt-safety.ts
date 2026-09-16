@@ -13,10 +13,16 @@
  * Both are handled here so recall.ts and capture.ts share one implementation.
  */
 
-/** Remove every "</nexus-context>" (case-insensitive) from stored text. */
+/**
+ * Remove every "</nexus-context>" (case-insensitive) from stored text.
+ *
+ * `\s*` before `>`: variants such as `</nexus-context >` or
+ * `</nexus-context\t>` close the wrapper just as well in HTML and must not
+ * survive neutralization.
+ */
 export function neutralizeContextClose(text: string): string {
   if (!text) return text
-  return text.replace(/<\/nexus-context>/gi, "")
+  return text.replace(/<\/nexus-context\s*>/gi, "")
 }
 
 /**
@@ -30,8 +36,11 @@ export function neutralizeContextClose(text: string): string {
  */
 export function stripNexusContextBlock(text: string): string {
   if (!text) return text
+  // `\s*` before `>`: without it a whitespace variant (`</nexus-context >`)
+  // never completed a block here, so the text instead fell through to the
+  // unterminated-tag rule below and the whole prompt was truncated.
   const withoutComplete = text.replace(
-    /<nexus-context[^>]*>[\s\S]*?<\/nexus-context>\s*/gi,
+    /<nexus-context[^>]*>[\s\S]*?<\/nexus-context\s*>\s*/gi,
     "",
   )
   const withoutTail = withoutComplete.replace(/<nexus-context[^>]*>[\s\S]*$/i, "")

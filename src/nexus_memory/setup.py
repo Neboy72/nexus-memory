@@ -342,7 +342,10 @@ def step_welcome() -> dict:
     qdrant_running = False
     try:
         import urllib.request
-        req = urllib.request.Request("http://localhost:6333/health", headers={"Content-Type": "application/json"})
+        # Qdrant's health endpoint is /healthz (matches chat_wizard.get_status,
+        # setup.sh and the README). /health returns 404, which the broad except
+        # below swallows — qdrant_running would then always be False.
+        req = urllib.request.Request("http://localhost:6333/healthz", headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=2) as resp:
             qdrant_running = resp.status == 200
     except Exception:

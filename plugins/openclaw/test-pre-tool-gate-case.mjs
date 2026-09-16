@@ -10,6 +10,7 @@
  * das Verhalten am echten Handler — kein Build nötig.
  */
 import assert from "node:assert"
+import os from "node:os"
 import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
 
 let failed = 0
@@ -30,8 +31,12 @@ const handler = buildPreToolGateHandler(
 
 const exec = (command) => handler({ toolName: "exec", params: { command } }, {})
 
+// PROTECTED_PATHS expandiert ~ gegen os.homedir() — der Test nutzt denselben
+// Pfad, damit die Regression auf jeder Maschine (CI inklusive) greift.
+const HOME = os.homedir()
+
 await t("uppercase RM -RF auf geschütztem Pfad → BLOCK (Guardrail, nicht Plan-Gate)", async () => {
-  const res = await exec("RM -RF /Users/miosha/.hermes")
+  const res = await exec(`RM -RF ${HOME}/.hermes`)
   assert.ok(res && res.block === true, "uppercase rm -rf muss geblockt werden")
   assert.match(res.blockReason, /verboten|BLOCKED.*rm/i, `Guardrail-Grund erwartet, bekam: ${res.blockReason}`)
 })
@@ -43,7 +48,7 @@ await t("uppercase KILL ollama → BLOCK (Guardrail)", async () => {
 })
 
 await t("kleingeschriebenes rm -rf bleibt geblockt", async () => {
-  const res = await exec("rm -rf /Users/miosha/.hermes")
+  const res = await exec(`rm -rf ${HOME}/.hermes`)
   assert.ok(res && res.block === true, "rm -rf auf geschütztem Pfad muss geblockt werden")
 })
 
