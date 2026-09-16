@@ -23,10 +23,9 @@ Usage:
 from __future__ import annotations
 
 import copy
-import json
 import re
 import logging
-from datetime import datetime, date
+from datetime import datetime
 from typing import Any, Optional
 
 from nexus.config import get_collection, is_success
@@ -133,47 +132,50 @@ def scan_provenance(qdrant_host: str = "localhost", qdrant_port: int = 6333,
         params: dict[str, Any] = {"limit": 100, "with_payload": True}
         if offset:
             params["offset"] = offset
+        # W37: the guarded block is now ONLY the transport + decode step. The
+        # whole pagination/aggregation body used to sit inside it, so any
+        # non-fatal error (malformed payload, a decoding hiccup) was logged as
+        # "Qdrant scroll failed" and `break`-ed — returning silently truncated
+        # statistics that callers could not tell apart from a complete scan.
         try:
             r = _req.post(url, json=params, timeout=10)
-            data = r.json().get("result", {})
-            points = data.get("points", [])
-            if not points:
-                break
-            for p in points:
-                payload = p.get("payload", {}) or {}
-                total += 1
-                prov = payload.get("provenance") or {}
-                if not prov:
-                    no_provenance += 1
-                    continue
-                source = prov.get("source", {})
-                st = source.get("source_type", "unknown")
-                sources[st] = sources.get(st, 0) + 1
-                by = source.get("created_by", "?")
-                creators[by] = creators.get(by, 0) + 1
-                conf = prov.get("confidence")
-                if conf is not None:
-                    # H226: `float(conf)` used to sit inside the broad scroll
-                    # try/except, whose handler logged "Qdrant scroll failed"
-                    # and `break`-ed — so a single non-numeric confidence
-                    # ("high", a list, …) aborted the whole scan and silently
-                    # truncated the results. Skip the bad entry instead.
-                    try:
-                        confidences.append(float(conf))
-                    except (TypeError, ValueError):
-                        _logger.debug(
-                            "Skipping non-numeric confidence %r (entry %s)",
-                            conf, p.get("id"),
-                        )
-                # Check for criticality marker in payload
-                crit = payload.get("criticality") or payload.get("_criticality")
-                if crit:
-                    criticality_count += 1
-            offset = data.get("next_page_offset")
-            if offset is None or (limit > 0 and total >= limit):
-                break
+            data = r.json().get("result") or {}
         except Exception as e:
             _logger.warning("Qdrant scroll failed: %s", e)
+            break
+
+        points = data.get("points") or []
+        if not points:
+            break
+        for p in points:
+            payload = p.get("payload", {}) or {}
+            total += 1
+            prov = payload.get("provenance") or {}
+            if not prov:
+                no_provenance += 1
+                continue
+            source = prov.get("source", {})
+            st = source.get("source_type", "unknown")
+            sources[st] = sources.get(st, 0) + 1
+            by = source.get("created_by", "?")
+            creators[by] = creators.get(by, 0) + 1
+            conf = prov.get("confidence")
+            if conf is not None:
+                # H226: a single non-numeric confidence ("high", a list, …)
+                # used to abort the whole scan — skip the bad entry instead.
+                try:
+                    confidences.append(float(conf))
+                except (TypeError, ValueError):
+                    _logger.debug(
+                        "Skipping non-numeric confidence %r (entry %s)",
+                        conf, p.get("id"),
+                    )
+            # Check for criticality marker in payload
+            crit = payload.get("criticality") or payload.get("_criticality")
+            if crit:
+                criticality_count += 1
+        offset = data.get("next_page_offset")
+        if offset is None or (limit > 0 and total >= limit):
             break
 
     return {
@@ -771,6 +773,15 @@ def build_dependency_graph(
 
     total_affected = len(upstream) + len(downstream) - 1  # -1 for root counted twice
 
+    # W37: `criticality` is documented as "how many entries break if this fact
+    # is wrong" — that is the DOWNSTREAM tree only. Upstream dependencies do
+    # not break when this fact is wrong, so adding len(upstream) inflated the
+    # number for any entry that has dependencies. `downstream` is a
+    # de-duplicated traversal (shared `visited`), so counting it directly also
+    # removes the double-count of nodes reachable in both directions.
+    # ``-1`` excludes the root, which _traverse_down records itself.
+    criticality = len(downstream) - 1
+
     return {
         "root": {
             "id": point_id,
@@ -778,6 +789,6 @@ def build_dependency_graph(
         },
         "upstream_dependencies": upstream,
         "downstream_dependents": downstream,
-        "criticality": total_affected,
+        "criticality": criticality,
         "total_entries_in_graph": total_affected + 1,
     }

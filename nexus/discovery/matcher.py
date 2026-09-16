@@ -24,8 +24,9 @@ except ImportError:
 
 # ── Default embed provider settings ─────────────────────────────────────────
 
-EMBEDDING_FIELD = "embedding"  # Default Qdrant vector field name
-DEFAULT_LIMIT = 5              # How many candidates per fact
+# W37: how many candidates per fact. Used as the ``top_k`` default below —
+# before this the constant was dead and every function hardcoded its own 5.
+DEFAULT_LIMIT = 5
 
 
 def scroll_facts(
@@ -73,18 +74,32 @@ def scroll_facts(
             _logger.error("Qdrant scroll failed: %s", e)
             raise RuntimeError(f"Qdrant scroll failed: {e}") from e
 
-        data = r.json().get("result", {})
-        batch = data.get("points", [])
+        try:
+            data = r.json().get("result") or {}
+        except ValueError as e:
+            # W37: a 2xx response with a non-JSON body (e.g. a proxy/gateway
+            # error page) raised a raw ValueError/JSONDecodeError — not the
+            # RuntimeError this module promises callers.
+            _logger.error("Qdrant scroll returned invalid JSON: %s", e)
+            raise RuntimeError(f"Qdrant scroll returned invalid JSON: {e}") from e
+        batch = data.get("points") or []
+        # W37: read the continuation token BEFORE deciding on termination. The
+        # previous `if not batch: break` ended pagination even when the server
+        # still had pages left (empty-but-not-final page) — the same silent
+        # truncation Review #46 removed for the error path.
+        next_offset = data.get("next_page_offset")
         # W27: normalize point IDs to str — search_similar_facts() also
         # returns str ids; mixed int/str broke self-match guards and
         # crashed sorted() on integer-ID collections.
         for p in batch:
             p["id"] = str(p.get("id", ""))
-        if not batch:
+        if batch:
+            points.extend(batch)
+        elif next_offset is None or next_offset == offset:
+            # Only a final (None) — or non-advancing — offset ends the scan.
             break
 
-        points.extend(batch)
-        offset = data.get("next_page_offset")
+        offset = next_offset
         # H218: Qdrant point IDs can be 0, so `if not offset` treated a valid
         # next_page_offset of 0 as the end of pagination. `is None` is correct.
         if offset is None:
@@ -98,7 +113,7 @@ def search_similar_facts(
     query_vector: list[float],
     qdrant_url: str = "http://localhost:6333",
     collection: Optional[str] = None,
-    top_k: int = 5,
+    top_k: int = DEFAULT_LIMIT,
 ) -> list[dict]:
     """Search Qdrant for facts similar to a given query vector.
 
@@ -129,7 +144,13 @@ def search_similar_facts(
         _logger.error("Qdrant search failed: %s", e)
         raise RuntimeError(f"Qdrant search failed: {e}") from e
 
-    results = r.json().get("result", [])
+    try:
+        results = r.json().get("result") or []
+    except ValueError as e:
+        # W37: same gap as in scroll_facts — a non-JSON 2xx body must surface
+        # as the RuntimeError callers catch, not a raw JSONDecodeError.
+        _logger.error("Qdrant search returned invalid JSON: %s", e)
+        raise RuntimeError(f"Qdrant search returned invalid JSON: {e}") from e
     return [
         {
             "id": str(point.get("id", "")),
@@ -144,7 +165,7 @@ def match_facts_against_each_other(
     facts: list[dict],
     qdrant_url: str = "http://localhost:6333",
     collection: Optional[str] = None,
-    top_k: int = 5,
+    top_k: int = DEFAULT_LIMIT,
     threshold: float = 0.85,
 ) -> list[dict]:
     """For each fact, find similar facts from Qdrant using its own vector.
@@ -170,6 +191,13 @@ def match_facts_against_each_other(
     results are consumed in the original fact order (``executor.map``), so the
     output is deterministic and identical to a sequential run.
 
+    The self-hit is dropped by id after over-fetching one extra result
+    (``top_k + 1``). That assumes the fact's *stored* vector still ranks it
+    first; when a caller supplies a vector that differs from the stored one,
+    the self-hit can fall outside the window and a real candidate just inside
+    it is lost. A failure of an individual search is logged and skipped (one
+    fact cannot abort the batch).
+
     Unordered pair dedup: candidates are keyed by ``frozenset({source, target})``.
     If both A→B and B→A are discovered, only the FIRST one (in fact order)
     survives — the reverse direction is dropped as a duplicate pair.
@@ -180,20 +208,38 @@ def match_facts_against_each_other(
     # hit ids, while scroll_facts() returns raw JSON ids (int for integer
     # point ids). Without this, `hit_id not in fact_ids` was always True and
     # every candidate was silently discarded.
-    fact_ids = {str(f.get("id", "")) for f in facts}
+    # W37: `f.get("id", "")` only substitutes the default when the key is
+    # absent — an id that is present but None became the truthy literal "None"
+    # and was admitted to fact_ids / the queryable filter. `or ""` normalizes
+    # both cases.
+    fact_ids = {str(f.get("id") or "") for f in facts}
 
     # Only facts carrying both an id and a vector can be queried at all.
-    queryable = [f for f in facts if f.get("vector") and str(f.get("id", ""))]
+    queryable = [f for f in facts if f.get("vector") and str(f.get("id") or "")]
     if not queryable:
+        # W37: an empty result here is otherwise indistinguishable from "no
+        # similar facts found" for the caller.
+        _logger.warning(
+            "Matcher: none of the %d facts carry an id and a vector — "
+            "similarity matching skipped", len(facts),
+        )
         return candidates
 
     def _search(fact: dict) -> list[dict]:
-        return search_similar_facts(
-            query_vector=fact["vector"],
-            qdrant_url=qdrant_url,
-            collection=collection,
-            top_k=top_k + 1,  # +1 because the fact itself will be #1
-        )
+        # W37: one failing per-fact search must not abort the whole batch —
+        # executor.map re-raises the first RuntimeError and discards every hit
+        # list already produced. Mirrors the per-fact error isolation in
+        # AutoDiscovery.discover_all.
+        try:
+            return search_similar_facts(
+                query_vector=fact["vector"],
+                qdrant_url=qdrant_url,
+                collection=collection,
+                top_k=top_k + 1,  # +1 because the fact itself will be #1
+            )
+        except RuntimeError as e:
+            _logger.warning("Matcher: search failed for fact %s: %s", fact.get("id"), e)
+            return []
 
     # Parallelise the per-fact Qdrant round trips (was one blocking request
     # per fact). executor.map preserves input order, so the hit lists line up
@@ -203,7 +249,7 @@ def match_facts_against_each_other(
 
     seen_pairs: set[frozenset] = set()
     for fact, hits in zip(queryable, hit_lists):
-        fact_id = str(fact.get("id", ""))
+        fact_id = str(fact.get("id") or "")
         payload = fact.get("payload", {})
 
         for hit in hits:

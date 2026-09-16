@@ -54,13 +54,21 @@ class _Embedder:
             self._impl = EmbeddingProvider()
             logger.info("Nexus plugin embedder: %s (%dd)", self._impl.model_name, self._impl.dim)
         except Exception as exc:
-            raise RuntimeError(f"Could not init embedding provider: {exc}")
+            # W37: keep the underlying provider error (import error, missing
+            # API key, network failure) visible in the traceback.
+            raise RuntimeError(f"Could not init embedding provider: {exc}") from exc
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str, is_query: bool = True) -> List[float]:
+        """Embed one text; ``is_query=False`` for stored documents.
+
+        W37: mirrors ``EmbeddingProvider.embed`` — instruction-aware backends
+        (qwen3-embedding via Ollama) prepend a query Instruct prefix when
+        ``is_query`` is true, which must not be baked into stored memories.
+        """
         import asyncio
         loop = asyncio.new_event_loop()
         try:
-            return loop.run_until_complete(self._impl.embed(text))
+            return loop.run_until_complete(self._impl.embed(text, is_query=is_query))
         finally:
             loop.close()
 
@@ -122,8 +130,9 @@ class NexusMemoryProvider:
 
     def _start_auto_backup(self) -> None:
         """Start automatic daily backup of all memories."""
-        import threading, time, json, os
-        from datetime import datetime
+        # W37: only threading/time are used here — json/os/datetime were dead
+        # local imports (json and os are already imported at module level).
+        import threading, time
 
         def _backup_loop():
             # Wait 60s after startup before first backup
@@ -161,7 +170,6 @@ class NexusMemoryProvider:
         all_points = []
         offset = None
         while True:
-            from qdrant_client import models as qm
             results, offset = self._qdrant.scroll(
                 collection_name=self._collection,
                 limit=100,
@@ -485,7 +493,9 @@ class NexusMemoryProvider:
                 **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        vector = self._embedder.embed(text)
+        # W37: stored memories are documents — the query Instruct prefix of
+        # instruction-aware backends must not leak into them.
+        vector = self._embedder.embed(text, is_query=False)
         # H208: `source_url` was never accepted here (payload hardcoded "") even
         # though REMEMBER_SCHEMA advertises it — the tool lied about two of its
         # documented parameters (confidence was silently dropped by **_ too).
@@ -566,11 +576,18 @@ class NexusMemoryProvider:
         # Review fix B1 (blocker): graph-boosted neighbors count as accessed -
         # ohne Bump stuft autonomous purge aktiv genutzte Nachbarn als
         # "never accessed" ein und loescht sie (Datenverlust).
-        for gpid in list(graph_pids)[:3]:
+        # W37: queue the neighbour's CURRENT counter, not a hardcoded 0 —
+        # _flywheel_bump writes count+1, so a 0 baseline reset a heavily
+        # recalled neighbour (access_count 12) down to 1, destroying exactly
+        # the trust signal the bump exists to protect.
+        _graph_pids = list(graph_pids)[:3]
+        _graph_counts = self._current_access_counts(_graph_pids)
+        for gpid in _graph_pids:
             if len(flywheel) < 6:
-                flywheel.append((gpid, 0, "canonical"))
+                flywheel.append((gpid, _graph_counts.get(gpid, 0), "canonical"))
         # Roadmap 4.9: fire-and-forget access bump for the top recall hits
-        # (payloads carried inline - no extra retrieve roundtrips, review fix)
+        # (payloads carried inline - no extra retrieve roundtrips, review fix;
+        # graph-boosted neighbours are the exception, see above)
         if flywheel and self._qdrant:
             threading.Thread(target=self._flywheel_bump, args=(flywheel,),
                              name="nexus-flywheel", daemon=True).start()
@@ -586,6 +603,31 @@ class NexusMemoryProvider:
                             "category": "graph", "confidence": None,
                             "created_at": ""})
         return vector_results
+
+    def _current_access_counts(self, pids: List[str]) -> Dict[str, int]:
+        """Current ``access_count`` per point id (missing/unreadable → absent).
+
+        W37: graph-boosted neighbours are not part of the vector result set, so
+        their payload has to be read before queueing the flywheel bump —
+        queueing a hardcoded 0 made _flywheel_bump write ``access_count: 1``,
+        resetting an actively used neighbour to 1. One batched retrieve, and a
+        failed lookup simply falls back to the caller's default.
+        """
+        if not self._qdrant or not pids:
+            return {}
+        try:
+            pts = self._qdrant.retrieve(
+                collection_name=self._collection, ids=list(pids),
+                with_payload=True, with_vectors=False)
+        except Exception:
+            return {}
+        counts: Dict[str, int] = {}
+        for pt in pts:
+            try:
+                counts[str(pt.id)] = int((pt.payload or {}).get("access_count", 0) or 0)
+            except (TypeError, ValueError):
+                counts[str(pt.id)] = 0
+        return counts
 
     def _flywheel_bump(self, entries: List[tuple]) -> None:
         """Roadmap 4.9: increment access_count on recalled points.
@@ -626,7 +668,16 @@ class NexusMemoryProvider:
 
     def _guardrail_check(self, command: str, tool_name: str = "",
                          tool_input: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Check if an action is safe before executing it."""
+        """Check if an action is safe before executing it.
+
+        W37: fail-CLOSED, mirroring plugins/memory/nexus. A guardrail-engine
+        error (transient Qdrant/embedding failure) used to collapse to
+        ``verdict: "allow"`` — the destructive action the user asked to verify
+        was silently authorised exactly when the guardrail was broken. Only a
+        real engine answer may allow; an infrastructure error denies, flagged
+        with ``guardrail_status: "infra-error"`` so the caller sees why. An
+        empty command stays allow (no destructive action to gate).
+        """
         if not command:
             return {"verdict": "allow", "reason": "Empty command"}
         try:
@@ -637,8 +688,12 @@ class NexusMemoryProvider:
             result = engine.check_action(command, tool_name, tool_input or {})
             return result.to_dict()
         except Exception as exc:
-            logger.warning("Guardrail check failed (fail-open): %s", exc)
-            return {"verdict": "allow", "reason": f"Guardrail check failed (fail-open): {exc}"}
+            logger.warning("Guardrail check unavailable (fail-closed): %s", exc)
+            return {
+                "verdict": "deny",
+                "reason": f"guardrail unavailable (fail-closed): {exc}",
+                "guardrail_status": "infra-error",
+            }
 
     def _guardrail_override(self, command: str, matched_rules: List[Dict[str, Any]],
                             reasoning: str, agent_id: str = "unknown") -> Dict[str, Any]:
@@ -663,6 +718,7 @@ class NexusMemoryProvider:
                         relation: Optional[str] = None,
                         target_type: Optional[str] = None) -> Dict[str, Any]:
         """Multi-hop graph traversal from a starting fact."""
+        sg = None
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
@@ -674,15 +730,20 @@ class NexusMemoryProvider:
             sg.initialize()
             gt = GraphTraversal(sg)
             results = gt.traverse(fact_id, max_depth=max_depth, relation=relation, target_type=target_type)
-            sg.store.close()
             return {"results": results}
         except Exception as exc:
             logger.warning("Graph traverse failed: %s", exc)
             return {"status": "error", "error": str(exc)}
+        finally:
+            # W37: close on every path — a raising traverse() leaked the store.
+            if sg is not None:
+                try: sg.store.close()
+                except Exception: pass
 
     def _find_entities(self, entity_type: Optional[str] = None,
                        limit: int = 50) -> Dict[str, Any]:
         """Find all entity-typed memories in Qdrant."""
+        sg = None
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
@@ -694,14 +755,19 @@ class NexusMemoryProvider:
             sg.initialize()
             gt = GraphTraversal(sg)
             results = gt.find_entities(entity_type=entity_type, limit=limit)
-            sg.store.close()
             return {"entities": results}
         except Exception as exc:
             logger.warning("Find entities failed: %s", exc)
             return {"status": "error", "error": str(exc)}
+        finally:
+            # W37: close on every path — a raising call leaked the store.
+            if sg is not None:
+                try: sg.store.close()
+                except Exception: pass
 
     def _get_subgraph(self, fact_id: str, max_depth: int = 2) -> Dict[str, Any]:
         """Get a subgraph centered on a fact."""
+        sg = None
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
@@ -713,14 +779,19 @@ class NexusMemoryProvider:
             sg.initialize()
             gt = GraphTraversal(sg)
             result = gt.get_subgraph(fact_id, max_depth=max_depth)
-            sg.store.close()
             return result
         except Exception as exc:
             logger.warning("Get subgraph failed: %s", exc)
             return {"status": "error", "error": str(exc)}
+        finally:
+            # W37: close on every path — a raising call leaked the store.
+            if sg is not None:
+                try: sg.store.close()
+                except Exception: pass
 
     def _get_related(self, fact_id: str, relation: Optional[str] = None) -> Dict[str, Any]:
         """Get directly related facts (1-hop)."""
+        sg = None
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
@@ -732,11 +803,15 @@ class NexusMemoryProvider:
             sg.initialize()
             gt = GraphTraversal(sg)
             results = gt.get_related(fact_id, relation=relation)
-            sg.store.close()
             return {"results": results}
         except Exception as exc:
             logger.warning("Get related failed: %s", exc)
             return {"status": "error", "error": str(exc)}
+        finally:
+            # W37: close on every path — a raising call leaked the store.
+            if sg is not None:
+                try: sg.store.close()
+                except Exception: pass
 
     def _cost_routing_stats(self) -> Dict[str, Any]:
         """Get cost-aware routing statistics."""
@@ -863,10 +938,32 @@ class NexusMemoryProvider:
         ]
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
+        """Persist config values, MERGING into the existing file.
+
+        W37: the previous wholesale rewrite kept only ``qdrant_url`` +
+        ``collection_name`` and silently destroyed every other key — notably
+        the ``voyage_api_key`` advertised by :meth:`get_config_schema` and the
+        ``access_level`` privacy default that
+        :meth:`_load_default_access_level` reads back (so every save reset the
+        privacy default).
+        """
         d = os.path.join(hermes_home, "nexus"); os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "config.json"), "w") as f:
-            json.dump({"qdrant_url": values.get("qdrant_url", ""),
-                        "collection_name": values.get("collection_name", _COLLECTION)}, f, indent=2)
+        path = os.path.join(d, "config.json")
+        existing: Dict[str, Any] = {}
+        try:
+            with open(path) as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                existing = loaded
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        existing["qdrant_url"] = values.get("qdrant_url", "")
+        existing["collection_name"] = values.get("collection_name", _COLLECTION)
+        for key in ("voyage_api_key", "access_level"):
+            if key in values:
+                existing[key] = values[key]
+        with open(path, "w") as f:
+            json.dump(existing, f, indent=2)
         logger.info("Nexus config saved to %s/nexus/config.json", hermes_home)
 
     def _enqueue_entity_extraction(self, text: str, source: str = "nexus_remember") -> None:
