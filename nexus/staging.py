@@ -709,7 +709,10 @@ def rollback(
         return None
 
     # Find the last canonical version from the chain
-    restore_target = _find_last_canonical(previous_version, host, port)
+    try:
+        restore_target = _find_last_canonical(previous_version, host, port)
+    except ValueError as exc:
+        raise ValueError(f"Rollback aborted: {exc}") from exc
 
     rolled_back, restored = FactVersion.rollback(
         bad_version=bad_version,
@@ -747,12 +750,20 @@ def _get_current_canonical(
         raise RuntimeError(
             f"Qdrant unreachable while reading canonical fact {fact_id}: {exc}"
         ) from exc
-    if is_success(r.status_code):
-        result = r.json().get("result")
-        if result:
-            payload = result.get("payload", {})
-            if payload.get("status") == FactStatus.CANONICAL.value:
-                return FactVersion.from_dict(payload)
+    if r.status_code == 404:
+        return None
+    if not is_success(r.status_code):
+        # W27: any other non-2xx (e.g. transient 5xx) is NOT "no canonical
+        # exists" — fail loudly so promote()'s fork guard stays honest.
+        raise RuntimeError(
+            f"Qdrant returned HTTP {r.status_code} while reading canonical "
+            f"fact {fact_id} — cannot decide promote safety"
+        )
+    result = r.json().get("result")
+    if result:
+        payload = result.get("payload", {})
+        if payload.get("status") == FactStatus.CANONICAL.value:
+            return FactVersion.from_dict(payload)
     return None
 
 
@@ -790,6 +801,15 @@ def _find_last_canonical(
             break
         current = next_version
         depth += 1
+    if current.status != FactStatus.CANONICAL.value:
+        # W27: the chain ended on a never-reviewed version (e.g. the
+        # PENDING staging draft) — returning it would let rollback()
+        # promote an unreviewed draft into nexus-canonical.
+        raise ValueError(
+            f"No canonical version found in supersedes chain of "
+            f"{start.version_id} (stopped at {current.version_id}, "
+            f"status={current.status})"
+        )
     return current
 
 

@@ -14,9 +14,11 @@ Design principles:
 - **Heuristic fallback always.** If the LLM is unavailable, SICA runs
   purely on deterministic heuristics (stale date detection, confidence
   threshold checks, contradiction pattern matching).
-- **Non-destructive by default.** Automatic patches only change metadata
-  (category, confidence, status). Content changes always require user
-  confirmation.
+- **Deletions are explicit issue types.** auto_patch (default True)
+  applies non-destructive metadata patches AND deletion-type issues
+  (retention_expired, low_confidence purge, stale_temp) that the
+  detectors emit deliberately. All other content changes become
+  suggestions for user review.
 - **Stateless recovery.** Each SICA run is independent - no persistent
   state between runs. The "memory" of past SICA runs lives in the
   ``sica_session`` memories stored in Qdrant itself.
@@ -524,11 +526,12 @@ def _detect_entity_duplicates(points: List[Dict]) -> List[Dict[str, Any]]:
 
 
 def _apply_auto_patch(client: Any, collection: str, issue: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Apply a non-destructive automatic patch for an issue.
+    """Apply an automatic patch for an issue.
 
-    Currently handles deletion-type issues (stale_temp for backwards
-    compatibility, retention_expired from roadmap 2.2 policies). All
-    other issues generate suggestions for user review.
+    Handles deletion-type issues (stale_temp legacy, retention_expired
+    roadmap 2.2, low_confidence 4.8 purge rule) — these deletions are
+    the deliberate auto_patch behavior, not accidents. All other
+    issues generate suggestions for user review.
 
     Returns the patch dict on success, None on failure.
     """
