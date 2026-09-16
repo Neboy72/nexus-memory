@@ -132,15 +132,19 @@ def analyze() -> dict:
         return _error_report(f"Qdrant HTTP {health.status_code}")
 
     # W31-1: downstream request failures are collected instead of aborting the
-    # run — every count that could not be answered degrades to 0 and is named
+    # run — every count that could not be answered stays None and is named
     # in the report's "errors" field.
+    # W40-scan (high): the old form degraded a FAILED count to 0, which is
+    # indistinguishable from a genuine "no matching points" — the report then
+    # reassured the operator ("Alle Beliefs stabil") DURING a Qdrant outage.
+    # Branches must distinguish "zero" from "unknown".
     errors: list[str] = []
 
-    def _count(filter_cond: dict | None, label: str) -> int:
+    def _count(filter_cond: dict | None, label: str) -> int | None:
         cnt = _count_memories(QDRANT_HOST, QDRANT_PORT, COLLECTION, filter_cond)
         if cnt is None:
             errors.append(f"count failed: {label}")
-            return 0
+            return None
         return cnt
 
     # Zählungen
@@ -167,29 +171,35 @@ def analyze() -> dict:
     # FULL result — `affected_ids` drives the review agent, so truncating it
     # silently under-reported the real scope (low_conf_count).
     affected_ids: list[Any] = []
-    if low_conf_count > 0:
+    # W40-scan (high): a FAILED scroll must not read as "no ids" either —
+    # affected_ids=None marks the degraded state explicitly.
+    if low_conf_count is None:
+        affected_ids = None  # type: ignore[assignment]
+    elif low_conf_count > 0:
         points = _scroll_all(QDRANT_HOST, QDRANT_PORT, COLLECTION, low_conf_filter)
         if points is None:
             errors.append("scroll failed: low_confidence_beliefs")
+            affected_ids = None  # type: ignore[assignment]
             points = []
-        for p in points:
-            payload = p.get("payload") or {}  # W31-2: explicit null → {}
-            if not isinstance(payload, dict):
-                payload = {}
-            # W31-2: `provenance` may be present but null → `.get` would crash.
-            prov = payload.get("provenance") or {}
-            if not isinstance(prov, dict):
-                prov = {}
-            content = payload.get("content") or ""
-            affected_ids.append(p.get("id"))
-            if len(low_conf_beliefs) >= 20:
-                continue
-            low_conf_beliefs.append({
-                "id": p.get("id"),
-                "content": str(content)[:120],
-                "confidence": prov.get("confidence", 1.0),
-                "timestamp": payload.get("timestamp") or "",
-            })
+        if points:
+            for p in points:
+                payload = p.get("payload") or {}  # W31-2: explicit null → {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                # W31-2: `provenance` may be present but null → `.get` would crash.
+                prov = payload.get("provenance") or {}
+                if not isinstance(prov, dict):
+                    prov = {}
+                content = payload.get("content") or ""
+                affected_ids.append(p.get("id"))
+                if len(low_conf_beliefs) >= 20:
+                    continue
+                low_conf_beliefs.append({
+                    "id": p.get("id"),
+                    "content": str(content)[:120],
+                    "confidence": prov.get("confidence", 1.0),
+                    "timestamp": payload.get("timestamp") or "",
+                })
 
     # Kategorien-Verteilung
     cat_counts = {}
@@ -197,13 +207,13 @@ def analyze() -> dict:
         cnt = _count(
             {"must": [{"key": "category", "match": {"value": cat}}]}, f"category:{cat}"
         )
-        if cnt > 0:
+        if cnt is not None and cnt > 0:
             cat_counts[cat] = cnt
 
     # Suggestions generieren
     suggestions = []
 
-    if low_conf_count > 0:
+    if low_conf_count is not None and low_conf_count > 0:
         suggestions.append({
             "type": "skill_draft",
             "priority": "high" if low_conf_count > 5 else "medium",
@@ -217,7 +227,9 @@ def analyze() -> dict:
             "affected_ids": affected_ids,
         })
 
-    if session_count > 3 and belief_count == 0:
+    # W40-scan: both suggestion branches gate on the count having SUCCEEDED —
+    # None (failed count) never claims "keine Beliefs" or "alle stabil".
+    if session_count is not None and session_count > 3 and belief_count == 0:
         suggestions.append({
             "type": "info",
             "priority": "low",
@@ -230,7 +242,7 @@ def analyze() -> dict:
             "action": "check_pipeline",
         })
 
-    if low_conf_count == 0 and belief_count > 0:
+    if low_conf_count == 0 and belief_count is not None and belief_count > 0:
         suggestions.append({
             "type": "all_clear",
             "priority": "none",

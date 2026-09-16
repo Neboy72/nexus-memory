@@ -33,8 +33,18 @@ export function clampInt(
   // bound or an inverted interval (min > max) made the clamp math return NaN
   // for *every* input — including the fallback (Math.trunc(NaN) → NaN) —
   // instead of a bounded integer. Normalize to a finite, ordered interval.
-  const hi = Number.isFinite(max) ? max : Number.isFinite(min) ? min : 0
-  const lo = Number.isFinite(min) ? min : hi
+  // W40-scan: fractional bounds are truncated like values, so the clamp can
+  // never widen a declared integer interval ("max: 4.5" behaves as 4).
+  // DEGENERATE BOUNDS (non-finite or inverted) FAIL CLOSED BY DESIGN: a host
+  // that bypasses the schema is misconfigured, and a silently unbounded
+  // clamp ("max: Infinity" → every input passes) is the unsafe direction for
+  // a loop/limit parameter. Collapsing to the finite bound (or 0 when both
+  // are non-finite) is documented here on purpose — production callsites all
+  // pass finite constants (1..5 / 1..500 / 1..50), so this path only fires
+  // for schema-bypassing hosts, and fail-closed (tiny) beats fail-open
+  // (unbounded).
+  const hi = Number.isFinite(max) ? Math.trunc(max) : Number.isFinite(min) ? Math.trunc(min) : 0
+  const lo = Number.isFinite(min) ? Math.trunc(min) : hi
   const lower = Math.min(lo, hi)
   const upper = Math.max(lo, hi)
 
