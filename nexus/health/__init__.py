@@ -329,7 +329,18 @@ class DriftDetector:
         if isinstance(content, dict):
             content = content.get("content", "")
         if not content:
-            content = f"{payload.get('user_content', '')} -> {payload.get('assistant_content', '')}"
+            # OCR-5 (bug high): the previous fallback fabricated the constant
+            # " -> " when both transcript fields were missing — a truthy
+            # placeholder that made every textless memory byte-identical
+            # (cosine 1.0) and reported them all as near_duplicates. Return
+            # "" when there is no transcript so these entries get skipped.
+            user_content = payload.get("user_content") or ""
+            assistant_content = payload.get("assistant_content") or ""
+            content = (
+                f"{user_content} -> {assistant_content}"
+                if (user_content or assistant_content)
+                else ""
+            )
         return content
 
     @staticmethod
@@ -802,6 +813,18 @@ class DriftDetector:
             # would raise TypeError, disabling contradiction detection for the
             # current payload format.
             content = self._extract_text(payload)
+            # OCR-5 (bug medium): when the entry carries BOTH a top-level
+            # `content` and a `payload` dict (the documented run_from_texts
+            # input shape), payload = m.get("payload", m) selected the inner
+            # dict — and if that payload has no `content` key the real text
+            # was silently dropped and the entry ran as a placeholder (now ""
+            # → skipped) instead of its actual text. Fall back to the
+            # top-level content when the payload yields nothing (str content
+            # and dict {content: "…"} both route through _extract_text via a
+            # wrapping dict).
+            if not content and isinstance(m, dict) and m.get("content") is not None:
+                top = m["content"]
+                content = self._extract_text(top if isinstance(top, dict) else {"content": top})
             if content:
                 texts.append(content)
                 if isinstance(m, dict) and "id" in m:
@@ -1047,13 +1070,18 @@ def find_wikilink_orphans(workspace: str | None = None) -> list[dict]:
     memory_file = os.path.join(workspace, "MEMORY.md")
     if os.path.exists(memory_file):
         try:
-            with open(memory_file) as f:
+            with open(memory_file, encoding="utf-8") as f:
                 for line in f:
                     m = re.match(r"^(#{1,6})\s+(.+)", line)
                     if m:
                         memory_headings.add(m.group(2).strip().lower())
-        except Exception:
-            pass
+        except OSError as exc:
+            # OCR-5 (maintainability low): swallow but LOG — a silently
+            # dropped source produced an incomplete orphan report with no
+            # signal. Locale-dependent default encoding → explicit utf-8.
+            _logger.warning("health: cannot read %s: %s", memory_file, exc)
+        except UnicodeDecodeError as exc:
+            _logger.warning("health: cannot decode %s: %s", memory_file, exc)
 
     memory_dates: set[str] = set()
     memory_dir = os.path.join(workspace, "memory")
@@ -1077,18 +1105,23 @@ def find_wikilink_orphans(workspace: str | None = None) -> list[dict]:
     texts: dict[str, str] = {}
     if os.path.exists(memory_file):
         try:
-            with open(memory_file) as f:
+            with open(memory_file, encoding="utf-8") as f:
                 texts["MEMORY.md"] = f.read()
-        except Exception:
-            pass
+        except OSError as exc:
+            # OCR-5 (maintainability low): log instead of silently dropping.
+            _logger.warning("health: cannot read %s: %s", memory_file, exc)
+        except UnicodeDecodeError as exc:
+            _logger.warning("health: cannot decode %s: %s", memory_file, exc)
     if os.path.isdir(memory_dir):
         for fn in sorted(os.listdir(memory_dir)):
             if fn.endswith(".md"):
                 try:
-                    with open(os.path.join(memory_dir, fn)) as f:
+                    with open(os.path.join(memory_dir, fn), encoding="utf-8") as f:
                         texts[fn] = f.read()
-                except Exception:
-                    pass
+                except OSError as exc:
+                    _logger.warning("health: cannot read %s: %s", fn, exc)
+                except UnicodeDecodeError as exc:
+                    _logger.warning("health: cannot decode %s: %s", fn, exc)
 
     for fname, content in texts.items():
         for line_num, line in enumerate(content.splitlines(), 1):

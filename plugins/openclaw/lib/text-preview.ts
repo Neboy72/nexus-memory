@@ -17,6 +17,21 @@ export const PREVIEW_MAX = 100
 /** Suffix appended when the text was truncated. */
 export const ELLIPSIS = "…"
 
+// OCR-5 (bug low + perf medium): the Segmenter was constructed on every
+// limitText call AND used unguarded — a runtime without Intl.Segmenter
+// threw TypeError instead of degrading to code-point splitting. Memoize
+// the instance; return null when unsupported (limitText falls back).
+let segmenterInstance: Intl.Segmenter | null | undefined
+function ensureSegmenter(): Intl.Segmenter | null {
+  if (segmenterInstance !== undefined) return segmenterInstance
+  try {
+    segmenterInstance = new Intl.Segmenter("und", { granularity: "grapheme" })
+  } catch {
+    segmenterInstance = null
+  }
+  return segmenterInstance
+}
+
 /**
  * Truncate text to `max` grapheme clusters with an ellipsis when longer.
  *
@@ -31,12 +46,23 @@ export const ELLIPSIS = "…"
  * partial budget.
  */
 export function limitText(text: string, max: number = PREVIEW_MAX): string {
+  // OCR-5 (bug low): positive Infinity meant "no limit" for callers but
+  // silently fell back to PREVIEW_MAX (100), truncating text the caller
+  // expected to keep in full. Infinity now means "no truncation" (NaN still
+  // documented → falls back to PREVIEW_MAX).
+  if (max === Infinity) return text
   const limit = Number.isFinite(max) ? Math.max(0, Math.trunc(max)) : PREVIEW_MAX
   // W40-scan: a short-enough string can never be truncated — skip the
   // grapheme materialization entirely (UTF-16 length <= cluster count,
   // so this fast path is always safe).
   if (text.length <= limit) return text
-  const segmenter = new Intl.Segmenter("und", { granularity: "grapheme" })
-  const chars = [...segmenter.segment(text)].map((s) => s.segment)
+  // OCR-5 (bug low + performance medium): Intl.Segmenter was constructed on
+  // EVERY call (perf) and used UNGUARDED (a runtime without it would throw
+  // TypeError instead of degrading). Module-level memoized instance plus a
+  // code-point fallback: a preview helper must never hard-fail recall.
+  const segmenter = ensureSegmenter()
+  const chars = segmenter
+    ? [...segmenter.segment(text)].map((s) => s.segment)
+    : [...text]
   return chars.length > limit ? `${chars.slice(0, limit).join("")}${ELLIPSIS}` : text
 }

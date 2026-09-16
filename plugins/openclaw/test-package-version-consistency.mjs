@@ -5,7 +5,7 @@
 // W40-Härtung: (1) read+parse beider Files in Helper mit klarem File-Label
 // statt nackter ENOENT/SyntaxError; (2) Calver-Extraction über ALLE
 // Vorkommen (Anchoring gegen Substring-Funde), Unter-/Obergrenze getrennt
-// geprüft; (3) Operator-Pin: pluginApi muss exakt die Unter-Crenze der
+// geprüft; (3) Operator-Pin: pluginApi muss exakt die Untergrenze der
 // peerRange inklusive ">="-Operator spiegeln; (4) Lock-Root fehlt =>
 // actionable Meldung statt "undefined !== 1.19.11".
 import { readFileSync } from "node:fs"
@@ -48,14 +48,24 @@ for (const [k, list] of calvers) {
   assert.ok(list.length > 0, `${k} enthaelt keine calver-Version: ${spots.find(([kk]) => kk === k)?.[1]}`)
 }
 
-const lower = calvers.get("peerDependencies.openclaw")[0]
+// OCR-5 (bug medium): list[0]/list[1] nahmen die Calver-Range als
+// "lower-first" an ("<2027.0.0 >=2026.5.7" machte [0] zur Obergrenze —
+// lower falsch, W23-Loop flaggt jeden anderen Spot als Drift, Ordering
+// vergleicht upper-vs-upper). Ableitung jetzt über den OPERATOR statt
+// der Token-Position: >= (oder ^/~) → Unter-, < → Obergrenze.
+const peerRangeStr = spots.find(([k]) => k === "peerDependencies.openclaw")?.[1] ?? ""
+const lowerMatch = String(peerRangeStr).match(/(?:\^|~|>=?)\s*(\d{4}\.\d+\.\d+)/)
+assert.ok(lowerMatch, `peerRange trägt keine Untergrenze (${peerRangeStr})`)
+const lower = lowerMatch[1]
+const upperMatch = String(peerRangeStr).match(/<\s*(\d{4}\.\d+\.\d+)/)
+const upper = upperMatch ? upperMatch[1] : calvers.get("peerDependencies.openclaw")[1]
 // Untergrenze: identisch ueber alle vier Stellen (die W23-Invariante)
 for (const [k, list] of calvers) {
-  assert.strictEqual(list[0], lower, `${k} Unter-Crenze driftet von peerDependencies (${lower})`)
+  assert.strictEqual(list[0], lower, `${k} Untergrenze driftet von peerDependencies (${lower})`)
 }
 console.log("PASS  Nr 408: alle 4 OpenClaw-Version-Stellen auf Basis", lower)
 
-// Operator-Pin: compat.pluginApi muss exakt die Unter-Crenze MIT Operator
+// Operator-Pin: compat.pluginApi muss exakt die Untergrenze MIT Operator
 // spiegeln ("gte 2026.5.7" als ">=" + version) — eine Range-vs-Pin-Differenz
 // wird so sichtbar statt vom calver-only-Vergleich verschluckt.
 const pluginApi = pkg.openclaw.compat.pluginApi
@@ -68,14 +78,14 @@ assert.ok(
   `pluginApi muss die untere peer-Grenze (>=${lower}) exakt tragen`,
 )
 
-// Obergrenze der peerRange (wenn vorhanden): muss NACH der Untergrenze
-// liegen — eine vertippte/geschrumpfte Upper-Bound (<2026.5.7) wuerde eine
-// leere Range bedeuten und ist hier ein harter Fehler.
+// Obergrenze der peerRange: muss NACH der Untergrenze liegen — eine
+// vertippte/geschrumpfte Upper-Bound (<2026.5.7) wuerde eine leere Range
+// bedeuten und ist hier ein harter Fehler. (OCR-5: upper kommt jetzt aus
+// der Operator-Ableitung oben statt aus list[1] — Redeclaration entfernt.)
 // W40-scan (high): lexikalischer String-Vergleich war falsch ("2026.9.0" >
 // "2026.10.0" lexikalisch, aber numerisch kleiner). Segmentweise numerisch
 // vergleichen — ein 2-stelliges Minor-Segment (2026.10.0) darf den Test nicht
 // fälschlich rot machen.
-const upper = calvers.get("peerDependencies.openclaw")[1]
 const segNum = (v) => v.split(".").map((s) => parseInt(s, 10))
 if (upper !== undefined) {
   const uSeg = segNum(upper)
@@ -101,12 +111,12 @@ const lock = loadJson(new URL("./package-lock.json", import.meta.url), "plugins/
 const lockRoot = lock.packages?.[""]
 // Fund: fehlender Lock-Root lieferte "undefined !== 1.19.11" ohne Hinweis
 assert.ok(lockRoot, "package-lock.json hat keinen packages['']-Root-Eintrag (Format/Generation pruefen)")
-assert.equal(lock.version, pkg.version, "package-lock version driftet von package.json")
-assert.equal(lockRoot.version, pkg.version, "lockfile root package version driftet")
+assert.strictEqual(lock.version, pkg.version, "package-lock version driftet von package.json")
+assert.strictEqual(lockRoot.version, pkg.version, "lockfile root package version driftet")
 // Name-Drift (W34-Fund): lock root name muss dem package name entsprechen —
 // eine abweichende Lock-Identity waere ein stiller npm-install/CI-Drift.
-assert.equal(lock.name, pkg.name, "package-lock root name driftet von package.json name")
-assert.equal(lockRoot.name, pkg.name, "lockfile root packages.name driftet")
+assert.strictEqual(lock.name, pkg.name, "package-lock root name driftet von package.json name")
+assert.strictEqual(lockRoot.name, pkg.name, "lockfile root packages.name driftet")
 console.log("PASS  Nr 408: package-lock version+name = package.json =", pkg.version, pkg.name)
 
 // peerRange-Upper-Bound (W34-Fund b): die peerDependency-Range muss
@@ -116,5 +126,5 @@ console.log("PASS  Nr 408: package-lock version+name = package.json =", pkg.vers
 // Mirror — fehlt die Spiegelung, ist das ein harter Fehler.
 const peerRange = pkg.peerDependencies.openclaw
 assert.ok(lockRoot.peerDependencies?.openclaw, "package-lock root spiegelt peerDependencies.openclaw nicht (Drift oder Format)")
-assert.equal(lockRoot.peerDependencies.openclaw, peerRange, "peerRange in package-lock driftet von package.json")
+assert.strictEqual(lockRoot.peerDependencies.openclaw, peerRange, "peerRange in package-lock driftet von package.json")
 console.log("PASS  Nr 408: package-lock peerRange gespiegelt:", peerRange)
