@@ -55,8 +55,10 @@ except ImportError:
 
 HAS_SKLEARN = False
 try:
+    # W37: no `import numpy as np` here — it was never referenced (the
+    # vectorized path below uses the separate, optional `_np` alias) and it
+    # wrongly coupled sklearn availability to a numpy ImportError.
     from sklearn.metrics.pairwise import cosine_similarity
-    import numpy as np
     HAS_SKLEARN = True
 except ImportError:
     pass
@@ -532,12 +534,14 @@ class DriftDetector:
                     "content_preview": (text_content or "")[:150],
                 })
 
-        # Drift score: weighted combination
+        # Drift score: weighted combination.
+        # W37: the `len(report.mismatches) * 0.3` term was dropped — nothing
+        # in this module ever populates `mismatches`, so it always contributed
+        # 0 and only suggested a scoring input that does not exist.
         report.score = min(
             len(report.stale) * 0.4 +
             len(report.old) * 0.1 +
-            len(report.expired) * 0.5 +
-            len(report.mismatches) * 0.3,
+            len(report.expired) * 0.5,
             10.0,
         )
 
@@ -552,8 +556,12 @@ class DriftDetector:
                 ]
                 if active_points:
                     report.contradictions = self.detect_contradictions(active_points)
-            except Exception:
-                pass
+            except Exception as exc:
+                # W37: a bare `pass` made a broken embedding backend
+                # indistinguishable from a healthy memory with no
+                # contradictions — log it instead of silently dropping the
+                # whole feature.
+                _logger.warning("Contradiction detection failed: %s", exc)
 
         # ── Advisory suggestions (v1.8.0+ — NEVER auto-apply) ─────────────
         # Expired entries -> suggest deprecation
@@ -594,7 +602,10 @@ class DriftDetector:
         now = datetime.now(timezone.utc)
 
         for entry in entries:
-            payload = entry.get("payload", {})
+            # W37: `entry.get('payload', {})` yields None (not {}) when the key
+            # is present but explicitly None — the very next .get() raised
+            # AttributeError and aborted the whole offline run.
+            payload = entry.get("payload") or {}
             # Ensure timestamp is available in payload for expiry check
             if payload.get("timestamp") is None:
                 payload = {**payload, "timestamp": entry.get("timestamp")}
@@ -645,9 +656,10 @@ class DriftDetector:
                     "content_preview": (text_content or "")[:150],
                 })
 
+        # W37: dead `mismatches` term dropped — see DriftDetector.run().
         report.score = min(
             len(report.stale) * 0.4 + len(report.old) * 0.1 +
-            len(report.expired) * 0.5 + len(report.mismatches) * 0.3,
+            len(report.expired) * 0.5,
             10.0,
         )
 
@@ -659,8 +671,9 @@ class DriftDetector:
         if active_entries:
             try:
                 report.contradictions = self.detect_contradictions(active_entries)
-            except Exception:
-                pass
+            except Exception as exc:
+                # W37: see DriftDetector.run — log instead of swallowing.
+                _logger.warning("Contradiction detection failed: %s", exc)
 
         return report
 
@@ -705,8 +718,11 @@ class DriftDetector:
                 - ``sentiment_diff``: Absolute sentiment polarity difference
                 - ``score``: Overall contradiction confidence
 
-        Raises:
-            RuntimeError: If no embedding provider is available.
+        Note:
+            W37: this degrades gracefully — it returns an empty list when no
+            embedding provider is available (and on embedder/scroll failures),
+            it does not raise. The previous docstring advertised a
+            ``RuntimeError`` that no code path could trigger.
         """
         embed_fn = self._get_embedder()
         if embed_fn is None:
@@ -723,7 +739,10 @@ class DriftDetector:
                     m for m in memories
                     if not self._is_excluded(m.get("payload", {}))
                 ]
-            except Exception:
+            except Exception as exc:
+                # W37: log the failure — returning [] silently made an
+                # unreachable Qdrant look like "no contradictions".
+                _logger.warning("Contradiction scroll failed: %s", exc)
                 return []
 
         if len(memories) < 2:
@@ -745,7 +764,13 @@ class DriftDetector:
                 texts.append(m)
                 ids.append(str(len(ids)))
                 continue
+            # W37: `m.get("payload", m)` returned None when the key exists but
+            # is explicitly None (the documented ``payload: dict | None``
+            # shape) — _extract_text(None) then raised AttributeError, which
+            # disabled contradiction detection for that entry.
             payload = m.get("payload", m) if isinstance(m, dict) else {"content": str(m)}
+            if payload is None:
+                payload = m
             # H222: reuse the shared v1.8.0 normalization. A dict `content` used
             # to be appended verbatim (it is truthy) → the embedder received
             # dicts (raising, silently swallowed to []) and texts[i][:200]
@@ -767,10 +792,18 @@ class DriftDetector:
         # Compute embeddings
         try:
             embeddings = embed_fn(texts)
-        except Exception:
+        except Exception as exc:
+            # W37: a misconfigured/unavailable embedding provider (bad API
+            # key, network error, missing model) used to be indistinguishable
+            # from a healthy memory with no contradictions.
+            _logger.warning("Contradiction embedding failed: %s", exc)
             return []
 
         if len(embeddings) != len(texts):
+            _logger.warning(
+                "Contradiction embedding count mismatch (%d embeddings for "
+                "%d texts) — skipping detection", len(embeddings), len(texts),
+            )
             return []
 
         contradictions = []
@@ -789,6 +822,11 @@ class DriftDetector:
             except Exception:
                 sim_matrix = None
 
+        # W37: sentiment is invariant per text but was recomputed for every
+        # pair (up to ~40k calls plus ~80k set constructions for the
+        # 200-candidate cap). Compute it once and index into the result.
+        sentiments = [self._parse_sentiment(t) for t in texts]
+
         for i in range(len(texts)):
             for j in range(i + 1, len(texts)):
                 if sim_matrix is not None:
@@ -796,9 +834,7 @@ class DriftDetector:
                 else:
                     sim = self._compute_similarity(embeddings[i], embeddings[j])
 
-                sent_a = self._parse_sentiment(texts[i])
-                sent_b = self._parse_sentiment(texts[j])
-                sent_diff = abs(sent_a - sent_b)
+                sent_diff = abs(sentiments[i] - sentiments[j])
 
                 # H224: sentiment-opposition is evaluated BEFORE the near-dup
                 # short-circuit. Genuine contradictions are typically
@@ -851,9 +887,18 @@ class DriftDetector:
 
     @staticmethod
     def _save_usage(usage: dict[str, str]) -> None:
-        """Save usage tracking data to disk."""
+        """Save usage tracking data to disk (atomic replace).
+
+        W37: ``write_text`` truncates the file in place, so a crash mid-write
+        (or two concurrent callers) corrupted it — and :meth:`_load_usage`
+        then swallowed the JSONDecodeError and returned ``{}``, permanently
+        losing all tracking history. Write a temp file in the same directory
+        and ``os.replace()`` it.
+        """
         USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        USAGE_FILE.write_text(json.dumps(usage, indent=2))
+        tmp_path = USAGE_FILE.with_name(USAGE_FILE.name + ".tmp")
+        tmp_path.write_text(json.dumps(usage, indent=2))
+        os.replace(tmp_path, USAGE_FILE)
 
     def track_usage(self, memory_id: str) -> dict:
         """Record that a memory was accessed at the current time.

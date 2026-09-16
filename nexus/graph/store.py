@@ -16,12 +16,11 @@ Single Source of Truth: Qdrant. Kein SQLite, kein Sync.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from qdrant_client import QdrantClient, models
 
@@ -52,7 +51,14 @@ def _default_vector_size() -> int:
     try:
         from nexus.staging import _detect_vector_size
         return int(_detect_vector_size())
-    except Exception:
+    except Exception as e:
+        # W37: don't swallow silently — initialize() creates the collection
+        # with this guessed dimension, and a wrong guess makes every later
+        # upsert fail with a dimension mismatch and no hint at the cause.
+        _logger.warning(
+            "Vector-size detection failed (%s) — falling back to 1024d; "
+            "verify it matches the embedding provider", e,
+        )
         return 1024
 
 
@@ -171,6 +177,19 @@ class EdgeStore:
                     self._collection, size,
                 )
             except Exception as e:
+                # W37: this check-then-create is racy — if another process
+                # created the collection in between, Qdrant answers "already
+                # exists" and the caller was told initialization failed even
+                # though the collection is present and usable.
+                try:
+                    if self.client.collection_exists(self._collection):
+                        _logger.info(
+                            "Collection '%s' was created concurrently",
+                            self._collection,
+                        )
+                        return True
+                except Exception:
+                    pass
                 _logger.error(
                     "Failed to create collection '%s': %s", self._collection, e,
                 )
@@ -350,32 +369,24 @@ class EdgeStore:
             now = datetime.now(timezone.utc).isoformat()
             edge_id = str(uuid.uuid4())
 
-            entry = {
-                "edge_id": edge_id,
-                "target_fact_id": target_fact_id,
-                "relation": relation,
-                "status": EdgeStatus.PROPOSED.value,
-                "created_at": now,
-                "updated_at": now,
-                "deprecated_at": None,
-                "reason": reason,
-                "metadata": meta,
-            }
+            # W37: build the Edge first and reuse the single serializer —
+            # hand-building the payload entry duplicated the persisted schema,
+            # so a field added to Edge.to_payload_entry() would silently drift
+            # between add_edge() and add_proposed_edge().
+            edge = Edge(
+                edge_id=edge_id,
+                source_fact_id=source_fact_id,
+                target_fact_id=target_fact_id,
+                relation=relation,
+                status=EdgeStatus.PROPOSED.value,
+                created_at=now,
+                updated_at=now,
+                reason=reason,
+                metadata=meta,
+            )
 
-            existing_edges.append(entry)
+            existing_edges.append(edge.to_payload_entry())
             self._write_edges_back(source_fact_id, existing_edges)
-
-        edge = Edge(
-            edge_id=edge_id,
-            source_fact_id=source_fact_id,
-            target_fact_id=target_fact_id,
-            relation=relation,
-            status=EdgeStatus.PROPOSED.value,
-            created_at=now,
-            updated_at=now,
-            reason=reason,
-            metadata=meta,
-        )
 
         _logger.info(
             "Proposed edge added: %s (%s) --[%s]--> %s (confidence=%s)",
@@ -384,21 +395,32 @@ class EdgeStore:
         return edge
 
     def get_edge(self, edge_id: str) -> Edge | None:
-        """Fetch a single edge by ID, scanning all points with edges.
+        """Fetch a single edge by ID via a nested ``edges[].edge_id`` filter.
 
         Returns ``None`` if not found.
         """
-        # We need to find which point holds this edge
-        # Strategy: scroll through the collection looking for edge_id
-        # Limited: Qdrant has no direct nested-scroll-filter on edge_id
+        # W37: the previous comment claimed Qdrant cannot filter on edge_id —
+        # but _find_incoming_edges() already builds a nested filter on
+        # edges[].target_fact_id in this same file, so the analogous
+        # `edges[].edge_id` condition turns an O(collection) payload scan into
+        # one filtered scroll. The Python-side match below stays as the guard.
         next_offset: Any = None
         while True:
             points, next_offset = self.client.scroll(
                 collection_name=self._collection,
                 limit=MAX_PAGE_SIZE,
-                offset=next_offset or None,
+                # W37: pass the offset through unchanged — `next_offset or None`
+                # turned a legitimate falsy offset (0) into None and restarted
+                # the scan from page 1.
+                offset=next_offset,
                 with_payload=True,
                 with_vectors=False,
+                scroll_filter=models.Filter(
+                    must=[models.FieldCondition(
+                        key=f"{EDGES_PAYLOAD_KEY}[].edge_id",
+                        match=models.MatchValue(value=edge_id),
+                    )],
+                ),
             )
             for pt in points:
                 edges = self._get_edges_from_payload(pt.payload or {})
@@ -468,7 +490,7 @@ class EdgeStore:
             points, next_offset = self.client.scroll(
                 collection_name=self._collection,
                 limit=MAX_PAGE_SIZE,
-                offset=next_offset or None,
+                offset=next_offset,
                 with_payload=True,
                 with_vectors=False,
             )
@@ -507,7 +529,7 @@ class EdgeStore:
             points, next_offset = self.client.scroll(
                 collection_name=self._collection,
                 limit=MAX_PAGE_SIZE,
-                offset=next_offset or None,
+                offset=next_offset,
                 with_payload=True,
                 with_vectors=False,
                 scroll_filter=filter_,
@@ -609,7 +631,7 @@ class EdgeStore:
                 points, next_offset = self.client.scroll(
                     collection_name=self._collection,
                     limit=MAX_PAGE_SIZE,
-                    offset=next_offset or None,
+                    offset=next_offset,
                     with_payload=True,
                     with_vectors=False,
                 )
@@ -635,8 +657,15 @@ class EdgeStore:
                             edges[i]["reason"] = reason
                         self._write_edges_back(str(pt.id), edges)
 
-                        entry["source_fact_id"] = str(pt.id)
-                        return Edge.from_dict(entry)
+                        # W37: `entry` IS edges[i] — mutating it after
+                        # _write_edges_back() injected a `source_fact_id` key
+                        # into the payload entry (a field
+                        # Edge.to_payload_entry() deliberately excludes), which
+                        # an in-memory/local client can end up persisting. Work
+                        # on a copy.
+                        result_entry = dict(entry)
+                        result_entry["source_fact_id"] = str(pt.id)
+                        return Edge.from_dict(result_entry)
 
                 if next_offset is None:
                     break
@@ -682,7 +711,7 @@ class EdgeStore:
                 points, next_offset = self.client.scroll(
                     collection_name=self._collection,
                     limit=MAX_PAGE_SIZE,
-                    offset=next_offset or None,
+                    offset=next_offset,
                     with_payload=True,
                     with_vectors=False,
                 )
@@ -715,10 +744,13 @@ class EdgeStore:
                             edges[i]["reason"] = reason
                         self._write_edges_back(str(pt.id), edges)
 
-                        entry["source_fact_id"] = str(pt.id)
-                        entry["status"] = EdgeStatus.ACTIVE.value
+                        # W37: copy before adding the non-persisted
+                        # `source_fact_id` key — see _update_edge_status().
+                        result_entry = dict(entry)
+                        result_entry["source_fact_id"] = str(pt.id)
+                        result_entry["status"] = EdgeStatus.ACTIVE.value
                         _logger.info("Edge promoted to active: %s", edge_id)
-                        return Edge.from_dict(entry)
+                        return Edge.from_dict(result_entry)
 
                 if next_offset is None:
                     break
@@ -737,7 +769,7 @@ class EdgeStore:
             points, next_offset = self.client.scroll(
                 collection_name=self._collection,
                 limit=MAX_PAGE_SIZE,
-                offset=next_offset or None,
+                offset=next_offset,
                 with_payload=True,
                 with_vectors=False,
             )
