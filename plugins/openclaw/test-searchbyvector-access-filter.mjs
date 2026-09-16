@@ -50,9 +50,10 @@ await t("accessLevel 'private' → KEIN Filter (sieht alles)", async () => {
   assert.strictEqual(body.filter, undefined)
 })
 
-await t("unbekannter accessLevel → Filter any [] (fail-closed)", async () => {
+await t("unbekannter accessLevel → kein Qdrant-Call (fail-closed, W31-16)", async () => {
   const body = await captureBody("geheim")
-  assert.deepStrictEqual(body.filter.must[0].match.any, [])
+  // W31-16: empty levels return EARLY — no fetch, no filter semantics bet.
+  assert.strictEqual(body, undefined, "unbekannter Level darf NICHTS sehen")
 })
 
 globalThis.fetch = realFetch

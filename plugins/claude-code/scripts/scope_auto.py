@@ -25,12 +25,26 @@ COLLECTION = "nexus"
 
 _SCOPE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var without crashing at import time (W31-10).
+
+    ``float(os.getenv(...))`` at module scope raised ValueError on a malformed
+    value (proven: '0.65x') and killed the short-lived hook on import instead
+    of failing open to the default.
+    """
+    try:
+        return float(os.getenv(name) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 # Inference thresholds — read from the SAME env vars with the SAME defaults as
 # src/nexus_memory/scope_auto.py (SCOPE_MATCH_THRESHOLD / SCOPE_MARGIN). H255:
 # the hook used to hardcode 0.72 while the MCP server defaulted to 0.65, so
 # the same memory could be tagged on one path and filtered out on the other.
-SIM_THRESHOLD = float(os.getenv("NEXUS_SCOPE_AUTO_THRESHOLD", "0.65"))
-MARGIN = float(os.getenv("NEXUS_SCOPE_AUTO_MARGIN", "0.05"))
+SIM_THRESHOLD = _env_float("NEXUS_SCOPE_AUTO_THRESHOLD", 0.65)
+MARGIN = _env_float("NEXUS_SCOPE_AUTO_MARGIN", 0.05)
 
 
 def _cosine(a, b):
@@ -143,24 +157,6 @@ def fetch_centroids(qdrant_url: str = QDRANT_URL, collection: str = COLLECTION,
         return {}
 
 
-def infer_scope(vector, centroids: dict) -> str:
-    """Clear-closest area for a vector, else 'default'. Pure math, fail-open."""
-    try:
-        if not vector or not centroids:
-            return "default"
-        scored = sorted(
-            ((scope, _cosine(vector, c)) for scope, c in centroids.items()),
-            key=lambda kv: kv[1], reverse=True,
-        )
-        top_scope, top = scored[0]
-        runner_up = scored[1][1] if len(scored) > 1 else 0.0
-        if top >= SIM_THRESHOLD and top - runner_up >= MARGIN:
-            return top_scope
-    except Exception as exc:
-        logging.info("scope_auto: inference failed (%s) — fail-open", exc)
-    return "default"
-
-
 def prefetch_allowed_scopes(vector, centroids: dict, manual_scope: str):
     """Allowed scope set for auto-prefetch filtering.
 
@@ -178,12 +174,18 @@ def prefetch_allowed_scopes(vector, centroids: dict, manual_scope: str):
     ``manual_scope``, contradicting the "override always wins" docstring; the
     caller had to compensate. The override is now genuinely always included —
     a None return means neither a clear match NOR a manual scope exists.
+
+    W31-11: on the no-match path the returned set must include 'default' (like
+    every other path and like the OpenClaw TS port). The old code returned
+    ``{manual_scope}`` and dropped it.
     """
     try:
         inferred = infer_scope(vector, centroids)
         if inferred == "default":
-            # No clear match: still honor an explicit override.
-            return {manual_scope} if manual_scope else None
+            # No clear match: still honor an explicit override — and always
+            # include 'default' like every other path (W31-11; the TS port
+            # does the same). None is kept for the no-override case.
+            return {manual_scope, "default"} if manual_scope else None
         allowed = {"default", inferred}
         if manual_scope:
             allowed.add(manual_scope)
@@ -191,3 +193,21 @@ def prefetch_allowed_scopes(vector, centroids: dict, manual_scope: str):
     except Exception as exc:
         logging.info("scope_auto: prefetch inference failed (%s) — fail-open", exc)
         return None
+
+
+def infer_scope(vector, centroids: dict) -> str:
+    """Clear-closest area for a vector, else 'default'. Pure math, fail-open."""
+    try:
+        if not vector or not centroids:
+            return "default"
+        scored = sorted(
+            ((scope, _cosine(vector, c)) for scope, c in centroids.items()),
+            key=lambda kv: kv[1], reverse=True,
+        )
+        top_scope, top = scored[0]
+        runner_up = scored[1][1] if len(scored) > 1 else 0.0
+        if top >= SIM_THRESHOLD and top - runner_up >= MARGIN:
+            return top_scope
+    except Exception as exc:
+        logging.info("scope_auto: inference failed (%s) — fail-open", exc)
+    return "default"
