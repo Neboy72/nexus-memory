@@ -17,6 +17,17 @@ const PROTECTION_KEYWORDS = ["never delete", "never remove", "do not delete", "d
   "protected", "niemals", "verboten", "forbidden", "tabu", "sacred"]
 
 /**
+ * W29-2: destructive tools that carry their target in a dedicated path field
+ * instead of `command`. The TS mirror of the Python PATH_CARRYING_TOOLS map.
+ */
+const PATH_CARRYING_TOOLS: Record<string, string> = {
+  Write: "file_path",
+  Edit: "file_path",
+  MultiEdit: "file_path",
+  NotebookEdit: "notebook_path",
+}
+
+/**
  * Path-ish tokens inside a command or rule text.
  *
  * H124: the bare classic targets `~`, `/` and `.` are matched explicitly.
@@ -124,7 +135,11 @@ function pathMatches(target: string, protectedPath: string): boolean {
   const p = normalizePath(protectedPath)
 
   if (t === p) return true // rule 1
-  if (isPathInside(p, t)) return true // rule 2 (parent deletion)
+  // rule 2 (parent deletion) — W29-1: this IS the reverse-containment check
+  // the Python mirror (path_matches) was missing. `isPathInside(p, t)` is
+  // exactly `p.startsWith(t + "/")`, including the bare-root case (`t === "/"`
+  // matches every protected path). Kept as the TS-side W29-1 implementation.
+  if (isPathInside(p, t)) return true // rule 2 (parent deletion / ancestor wipe)
   if (isPathInside(t, p)) return true // rule 3 (child deletion, segment-exact)
 
   if (p.endsWith("*")) {
@@ -139,6 +154,34 @@ interface ProtectionRule {
   path: string
   ruleText: string
   sourceId: string
+}
+
+/**
+ * Build the matched_rules entries for targets that hit a rule.
+ *
+ * Shared by the normal destructive path and the W29-2 direct path check so
+ * both produce the identical matched_rules shape.
+ */
+function collectMatches(
+  targets: string[],
+  rules: ProtectionRule[],
+  action: string,
+): Array<Record<string, unknown>> {
+  const matched: Array<Record<string, unknown>> = []
+  for (const target of targets) {
+    for (const rule of rules) {
+      if (pathMatches(target, rule.path)) {
+        matched.push({
+          target,
+          protected_path: rule.path,
+          rule_text: rule.ruleText,
+          source_memory_id: rule.sourceId,
+          action,
+        })
+      }
+    }
+  }
+  return matched
 }
 
 /**
@@ -205,8 +248,40 @@ async function evaluateGuardrail(
   command: string,
   toolInput: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  if (!command) {
+  // W29-2: path-carrying tools (Write/Edit/MultiEdit/NotebookEdit) name their
+  // target in file_path/notebook_path, NOT in `command`. Check that path
+  // directly against the protection rules BEFORE the empty-command shortcut —
+  // otherwise an empty `command` returns "allow" and the write slips through.
+  const directPathField = PATH_CARRYING_TOOLS[checkedToolName]
+  const directPath =
+    directPathField && typeof toolInput[directPathField] === "string"
+      ? String(toolInput[directPathField])
+      : ""
+
+  if (!command && !directPath) {
     return { verdict: "allow", reason: "Empty command" }
+  }
+
+  if (directPath) {
+    const directTargets = extractTargets(directPath)
+    if (directTargets.length > 0) {
+      const rules = await loadProtectionRules(qdrantClient)
+      if (rules === null) {
+        // Fail-closed: rule store unavailable, cannot prove safety.
+        return {
+          verdict: "block",
+          reason: "Destructive action (overwrite) but protection rules unavailable — fail-closed",
+        }
+      }
+      const matched = collectMatches(directTargets, rules, "overwrite")
+      if (matched.length > 0) {
+        return {
+          verdict: "block",
+          reason: "Destructive action (overwrite) on protected target",
+          matched_rules: matched,
+        }
+      }
+    }
   }
 
   const fullInput = `${checkedToolName} ${command} ${JSON.stringify(toolInput)}`
@@ -244,20 +319,7 @@ async function evaluateGuardrail(
     return { verdict: "allow", reason: `Destructive action (${action}) but no protection rules` }
   }
 
-  const matched: Array<Record<string, unknown>> = []
-  for (const target of targets) {
-    for (const rule of rules) {
-      if (pathMatches(target, rule.path)) {
-        matched.push({
-          target,
-          protected_path: rule.path,
-          rule_text: rule.ruleText,
-          source_memory_id: rule.sourceId,
-          action,
-        })
-      }
-    }
-  }
+  const matched = collectMatches(targets, rules, action)
 
   if (matched.length > 0) {
     return {

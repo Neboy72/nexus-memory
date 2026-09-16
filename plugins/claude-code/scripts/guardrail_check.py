@@ -77,6 +77,17 @@ PATH_PATTERNS = [
     re.compile(r"(?:^|\s)\.(?=\s|$)"),   # bare . (current directory)
 ]
 
+# W29-2: destructive tools that carry their target in a dedicated PATH field
+# instead of `command`. Without this map the command extracted in main() stays
+# "" and classify_action("") returns None — a Write/Edit to a protected file
+# was silently allowed.
+PATH_CARRYING_TOOLS = {
+    "Write": "file_path",
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+}
+
 
 def fail_closed_enabled() -> bool:
     """Whether errors should block (fail-closed) instead of allow (fail-open).
@@ -142,6 +153,12 @@ def path_matches(target: str, protected: str) -> bool:
             return True
     if t.startswith(p + "/"):
         return True
+    # W29-1: reverse containment — deleting an ANCESTOR of a protected path
+    # destroys the protected content too. Bare "/" (root) covers every path.
+    # normalize_path already strips trailing slashes (except root), so the
+    # rstrip here is harmless bookkeeping.
+    if t == "/" or p.startswith(t.rstrip("/") + "/"):
+        return True
     return False
 
 
@@ -196,6 +213,26 @@ def load_protection_rules() -> list[dict] | None:
         return []
 
 
+def _match_rules(targets: list[str], rules: list[dict], action: str) -> list[dict]:
+    """Build matched_rules entries for targets that hit a protection rule.
+
+    Shared by the normal destructive path and the W29-2 direct path check so
+    both produce the identical matched_rules shape.
+    """
+    matched = []
+    for target in targets:
+        for rule in rules:
+            if path_matches(target, rule["path"]):
+                matched.append({
+                    "target": target,
+                    "protected_path": rule["path"],
+                    "rule_text": rule["rule_text"],
+                    "source_memory_id": rule["source_id"],
+                    "action": action,
+                })
+    return matched
+
+
 def check_action(command: str, tool_name: str = "", tool_input: dict = None) -> dict:
     """Check if an action is safe.
 
@@ -205,6 +242,33 @@ def check_action(command: str, tool_name: str = "", tool_input: dict = None) -> 
     ``tool_input`` is used solely to collect path-like targets.
     """
     tool_input = tool_input or {}
+
+    # W29-2: path-carrying tools (Write/Edit/MultiEdit/NotebookEdit) name their
+    # target in file_path/notebook_path, NOT in `command`. A write to a
+    # protected file is destructive even without any rm-style pattern, so it is
+    # checked directly against the protection rules — independent of
+    # classify_action(). No match → fall through to the normal logic below.
+    path_field = PATH_CARRYING_TOOLS.get(tool_name)
+    if path_field:
+        path_value = tool_input.get(path_field, "")
+        if isinstance(path_value, str) and path_value:
+            direct_targets = extract_targets(path_value)
+            if direct_targets:
+                rules = load_protection_rules()
+                if rules is None:
+                    # Fail-closed: rule store unavailable, cannot prove safety.
+                    return {
+                        "verdict": "block",
+                        "reason": f"Destructive action (overwrite) but protection rules are unavailable (fail-closed)",
+                        "matched_rules": [],
+                    }
+                matched = _match_rules(direct_targets, rules, "overwrite")
+                if matched:
+                    return {
+                        "verdict": "block",
+                        "reason": "Destructive action (overwrite) on protected target",
+                        "matched_rules": matched,
+                    }
 
     action = classify_action(command)
     if not action:
@@ -240,17 +304,7 @@ def check_action(command: str, tool_name: str = "", tool_input: dict = None) -> 
         # Genuinely no rules configured — fast allow (not an outage).
         return {"verdict": "allow", "reason": f"Destructive action ({action}) but no protection rules"}
 
-    matched = []
-    for target in targets:
-        for rule in rules:
-            if path_matches(target, rule["path"]):
-                matched.append({
-                    "target": target,
-                    "protected_path": rule["path"],
-                    "rule_text": rule["rule_text"],
-                    "source_memory_id": rule["source_id"],
-                    "action": action,
-                })
+    matched = _match_rules(targets, rules, action)
 
     if matched:
         return {
@@ -274,10 +328,17 @@ def main():
         tool_name = data.get("tool_name", "")
         tool_input = data.get("tool_input", {})
 
-        # Extract command from tool_input
+        # Extract command from tool_input.
+        # W29-2: Write/Edit/MultiEdit/NotebookEdit carry their target in
+        # file_path/notebook_path — read the right field per tool instead of
+        # only command/path, otherwise the command stays "" and the guardrail
+        # allows the write.
         command = ""
         if isinstance(tool_input, dict):
-            command = tool_input.get("command", tool_input.get("path", ""))
+            if tool_name in PATH_CARRYING_TOOLS:
+                command = tool_input.get(PATH_CARRYING_TOOLS[tool_name], "")
+            else:
+                command = tool_input.get("command", tool_input.get("path", ""))
 
         # Only check destructive tools
         destructive_tools = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"]

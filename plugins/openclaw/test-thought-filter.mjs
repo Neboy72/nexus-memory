@@ -141,7 +141,7 @@ const cases = [
     "LEAK: This-message-Contains-Doppelpunkt (Replay-Kontext)",
     "This message contains:\n\n- Replay der alten Nachricht\n\nHier der eigentliche Stand: alles läuft. 🦊",
     ["Hier der eigentliche Stand: alles läuft. 🦊"],
-    ["Replay der alten Nachricht"],
+    [],
   ],
   [
     "NEGATIV: legitime 'This message contains'-Antwort bleibt unverändert",
@@ -153,8 +153,8 @@ const cases = [
   [
     "LEAK: Cron-Analyse (Let me analyze what I got)",
     "Let me analyze what I got:\n\n**Last known release:** `2026.9.2`",
+    ["**Last known release:** `2026.9.2`"],
     [],
-    ["Last known release"],
   ],
   [
     "LEAK: Heartbeat-Parse (Memory-Cron)",

@@ -15,7 +15,7 @@
  * Aktionen ausführt. Sie ist 5 Minuten gültig. Das zwingt ihn zu denken bevor er handelt.
  */
 
-import { statSync, unlinkSync } from "node:fs"
+import { lstatSync, readFileSync, realpathSync, unlinkSync } from "node:fs"
 import os from "node:os"
 import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
@@ -83,18 +83,88 @@ for (const p of ["~/.openclaw", "~/.hermes", "~/nexus-memory"]) {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+/**
+ * W29-3: `rm` with recursive+force flags, tolerant of flag order and the long
+ * forms. The old `command.includes("rm") && command.includes("-rf")` check
+ * missed `rm -fr`, `rm -Rf`, `rm --recursive --force`.
+ */
+function looksLikeRecursiveRm(command: string): boolean {
+  return /(?:^|[\s;&(])rm\s+(?:-{1,2}[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|--recursive(?:\s+(?:-{1,2}force)?)?|--force\s+--recursive)\b/i.test(
+    command,
+  )
+}
+
+/**
+ * W29-3: resolve `$HOME` / `${HOME}` / `~/` literals for the path COMPARISON
+ * only (never for execution). `isProtectedPath` is a substring check, so an
+ * unexpanded `$HOME/.openclaw` never matched the concrete home-anchored
+ * entries in PROTECTED_PATHS.
+ */
+function expandHomeLiterals(command: string): string {
+  const home = os.homedir()
+  return command
+    .replace(/\$\{?HOME\}?/gi, home)
+    .replace(/(^|[\s;&(=])~(?=\/|$)/g, (_m, prefix: string) => `${prefix}${home}`)
+}
+
+/**
+ * W29-4: commands do not only arrive in `params.command`. Exec-style tools
+ * also pass `input`/`script`/`patch`/`cmd`; concatenate every present string
+ * field (fixed order, join " ") so needsPlan and checkGuardrails see the same
+ * text. extractRecallQuery already scanned this broader field set.
+ */
+function firstCommand(params: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const field of ["command", "input", "script", "patch", "cmd"]) {
+    const val = params[field]
+    if (typeof val === "string" && val) parts.push(val)
+  }
+  return parts.join(" ")
+}
+
 function hasValidPlan(): boolean {
   try {
     // Fix 27.08.2026: direkter node:fs-Import statt Deno/require-Shim.
     // Der alte Shim ((globalThis as any).Deno?.statSync ?? (globalThis as any).require?.("fs")?.statSync)
     // resolvierte im OpenClaw-Gateway (Node, ESM) zu undefined —
     // hasValidPlan() war dadurch IMMER false, der Plan-Lock wurde nie erkannt.
-    const statResult = statSync(PLAN_LOCK_PATH) // wirft, wenn Datei fehlt
-    const age = Date.now() - statResult.mtimeMs
+    //
+    // W29-5: the old check was mtime-only, so an empty/touched file passed and
+    // a symlink swap between stat and unlink was possible. Hardened:
+    //  - lstatSync: a symlink (or non-regular file) is invalid — never follow
+    //    it, just drop the link and reject;
+    //  - the lock is a CONTRACT (written by the agent via write_file): its
+    //    content MUST start with `plan:`;
+    //  - unlink only after the realpath comparison shows the file we read is
+    //    still the one at the path (no TOCTOU delete of a swapped file).
+    const lst = lstatSync(PLAN_LOCK_PATH) // wirft, wenn Datei fehlt
+    if (lst.isSymbolicLink() || !lst.isFile()) {
+      try {
+        unlinkSync(PLAN_LOCK_PATH)
+      } catch {}
+      return false
+    }
+
+    const realPathBefore = realpathSync(PLAN_LOCK_PATH)
+    const content = readFileSync(PLAN_LOCK_PATH, "utf8")
+    const realPathAfter = realpathSync(PLAN_LOCK_PATH)
+    if (realPathBefore !== realPathAfter) {
+      // TOCTOU: the file we read is not the one currently at the path.
+      return false
+    }
+
+    if (!content.startsWith("plan:")) {
+      try {
+        unlinkSync(realPathAfter)
+      } catch {}
+      return false
+    }
+
+    const age = Date.now() - lst.mtimeMs
     if (age > PLAN_MAX_AGE_MS) {
       // Plan expired — clean up
       try {
-        unlinkSync(PLAN_LOCK_PATH)
+        unlinkSync(realPathAfter)
       } catch {}
       return false
     }
@@ -123,10 +193,15 @@ function needsPlan(toolName: string, params: Record<string, unknown>): boolean {
   if (ALWAYS_ALLOW_TOOLS.has(toolName)) return false
 
   // Terminal/exec commands: check for system-level commands
-  const command = String(params.command ?? "").toLowerCase()
+  // W29-4: concatenate all command-carrying fields (command/input/script/...).
+  const command = firstCommand(params).toLowerCase()
   for (const trigger of PLAN_REQUIRED_COMMANDS) {
     if (command.includes(trigger)) return true
   }
+
+  // W29-3: PLAN_REQUIRED_COMMANDS matches literally ("rm -r"), so the
+  // flag-order variants (`rm -fr`, `rm --recursive --force`) slipped through.
+  if (looksLikeRecursiveRm(command)) return true
 
   // Write/edit to config files
   const path = String(params.path ?? "")
@@ -163,11 +238,19 @@ function checkGuardrails(toolName: string, params: Record<string, unknown>): Gua
     // Normalize case: the keyword checks below are lowercase, so `RM -RF /x`
     // or `KILL ollama` must be lowercased here too — otherwise uppercase
     // commands bypass the guardrail entirely.
-    const command = String(params.command ?? "").toLowerCase()
-    if (command.includes("rm") && command.includes("-rf") && isProtectedPath(command)) {
-      return {
-        block: true,
-        reason: "BLOCKED: rm -rf auf einen geschützten Pfad ist verboten. Nie kritische Pfade löschen.",
+    // W29-4: read all command-carrying fields, not only params.command.
+    const command = firstCommand(params).toLowerCase()
+    if (looksLikeRecursiveRm(command)) {
+      // W29-3: expand $HOME/${HOME}/~/ literals for the path COMPARISON so
+      // `rm -rf $HOME/.openclaw` resolves to the real protected path. The raw
+      // `command` stays as the cheap literal fast-path (isProtectedPath is a
+      // substring check on the concrete PROTECTED_PATHS entries).
+      const expanded = expandHomeLiterals(command)
+      if (isProtectedPath(command) || isProtectedPath(expanded)) {
+        return {
+          block: true,
+          reason: "BLOCKED: rm -rf auf einen geschützten Pfad ist verboten. Nie kritische Pfade löschen.",
+        }
       }
     }
 
