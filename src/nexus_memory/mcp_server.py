@@ -13,7 +13,15 @@ Integrates all nexus v2.8.0 features:
 
 import asyncio
 import contextlib
-import fcntl
+
+# W32-14(a): fcntl is POSIX-only. A module-scope ``import fcntl`` made the
+# whole MCP server unimportable on Windows; guard it and degrade to
+# create-only locking below.
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+
 import ipaddress
 import json
 import logging
@@ -135,11 +143,17 @@ class WebhookStore:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_file = open(lock_path, "a+")
         try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            # W32-14(a): without fcntl (Windows) we still create/open the
+            # sidecar lock file, but cross-process serialization degrades to
+            # none — the asyncio.Lock above still serializes coroutines in
+            # THIS process.
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 yield
             finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         finally:
             lock_file.close()
 
@@ -1864,8 +1878,12 @@ async def _do_update(confirm: bool = False) -> dict:
 
     repo = NEXUS_REPO_PATH
     if not os.path.isdir(repo):
+        # W32-14(b): error returns carry BOTH "status" and "error" (+ human
+        # "message") so generic error-detection on the "error" key works here
+        # like it does for the other tool handlers.
         return {
             "status": "error",
+            "error": f"Repository not found at {repo}. Set NEXUS_REPO_PATH env var.",
             "message": f"Repository not found at {repo}. Set NEXUS_REPO_PATH env var.",
         }
 
@@ -1875,7 +1893,10 @@ async def _do_update(confirm: bool = False) -> dict:
         # Pre-update backup: always backup before updating
         try:
             store = get_store()
-            backup_path = store._do_backup()
+            # W32-14(c): _do_backup scrolls the ENTIRE collection synchronously
+            # — running it inline here blocked the event loop for the whole
+            # dump. Hand it to a worker thread.
+            backup_path = await asyncio.to_thread(store._do_backup)
             logging.info(f"💾 Pre-update backup: {backup_path}")
         except Exception as e:
             logging.warning(f"Pre-update backup failed (continuing): {e}")
@@ -1885,10 +1906,9 @@ async def _do_update(confirm: bool = False) -> dict:
             ["git", "pull", "--ff-only"], cwd=repo, capture_output=True, text=True, timeout=30
         ))
         if pull.returncode != 0:
-            return {
-                "status": "error",
-                "message": f"git pull failed: {pull.stderr.strip() or pull.stdout.strip()}. Local changes might conflict.",
-            }
+            _msg = f"git pull failed: {pull.stderr.strip() or pull.stdout.strip()}. Local changes might conflict."
+            # W32-14(b): dual error key (see repository-not-found above).
+            return {"status": "error", "error": _msg, "message": _msg}
 
         # pip install
         pip = await loop.run_in_executor(None, lambda: subprocess.run(
@@ -1896,10 +1916,9 @@ async def _do_update(confirm: bool = False) -> dict:
             capture_output=True, text=True, timeout=120,
         ))
         if pip.returncode != 0:
-            return {
-                "status": "error",
-                "message": f"pip install failed: {pip.stderr.strip() or pip.stdout.strip()}",
-            }
+            _msg = f"pip install failed: {pip.stderr.strip() or pip.stdout.strip()}"
+            # W32-14(b): dual error key.
+            return {"status": "error", "error": _msg, "message": _msg}
 
         # Reload the module to get the updated version cleanly
         import importlib
@@ -1920,7 +1939,8 @@ async def _do_update(confirm: bool = False) -> dict:
         }
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        # W32-14(b): dual error key.
+        return {"status": "error", "error": str(e), "message": str(e)}
 
 
 server = Server("nexus-memory")
@@ -2878,7 +2898,9 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
     elif name == "backup":
         try:
-            backup_path = store._do_backup()
+            # W32-14(c): the full-collection scroll is blocking CPU/IO work —
+            # keep the async handler responsive by running it in a thread.
+            backup_path = await asyncio.to_thread(store._do_backup)
             return [types.TextContent(
                 type="text",
                 text=json.dumps({

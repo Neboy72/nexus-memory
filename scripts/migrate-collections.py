@@ -54,7 +54,10 @@ def iter_scroll_batches(collection: str):
     total = 0
     while True:
         body = {"limit": SCROLL_LIMIT, "with_payload": True, "with_vector": True}
-        if offset:
+        # W32-3(b): Qdrant point IDs may legitimately be the integer 0 (or the
+        # empty string) — truthiness treated both as "no offset" and silently
+        # restarted pagination from the beginning. Check against None/"" only.
+        if offset is not None and offset != "":
             body["offset"] = offset
         result = qdrant_request("POST", f"/collections/{collection}/points/scroll", body)
         batch = result.get("points", [])
@@ -66,15 +69,24 @@ def iter_scroll_batches(collection: str):
             break
 
 
-def deduplicate(points: list[dict]) -> dict:
+def deduplicate(points: list[dict], seen: Optional[dict] = None) -> dict:
     """Deduplicate by content hash (sha256 of text in payload).
-    Returns: {key: point} mapping.
+    Returns: {key: point} mapping of the points NEW to this batch.
 
     Points WITHOUT text/content are never deduplicated: hashing the empty
     string would collapse every textless point onto sha256("") and silently
     keep just one. Each such point gets its own unique key instead.
+
+    W32-4: ``seen`` is the content-hash set accumulated across ALL scroll
+    pages (and source collections) — pass the same dict on every call. The
+    old signature created a batch-local ``seen``, so two identical points
+    that landed on different pages both survived and were migrated as
+    duplicates. Omitting the argument keeps the old per-call behaviour for
+    single-batch callers.
     """
-    seen = {}
+    if seen is None:
+        seen = {}
+    new_points = {}
     dupes = 0
     for pt in points:
         payload = pt.get("payload", {})
@@ -93,9 +105,10 @@ def deduplicate(points: list[dict]) -> dict:
             dupes += 1
             continue
         seen[h] = pt
+        new_points[h] = pt
     if dupes:
         print(f"  Removed {dupes} duplicates", file=sys.stderr)
-    return seen
+    return new_points
 
 
 def merge_points(all_points: dict, deduped: dict) -> int:
@@ -108,6 +121,12 @@ def merge_points(all_points: dict, deduped: dict) -> int:
     provenance in ``_migrated_from``.
 
     Returns the number of points added.
+
+    W32-3(a): the docstring's "without silent overwrites" promise only held
+    for ID collisions. Two different point IDs can carry identical content
+    and therefore the same content-hash key — the final ``all_points[key] =
+    pt`` then silently replaced the first point. Collisions on the key are
+    now a logged skip (first point wins), matching the documented semantics.
     """
     added = 0
     seen_ids = {str(pt.get("id")): key for key, pt in all_points.items()}
@@ -124,8 +143,19 @@ def merge_points(all_points: dict, deduped: dict) -> int:
             suffix = hashlib.sha256(f"{src_new}:{pid}".encode("utf-8")).hexdigest()[:8]
             new_key = f"{key}:{suffix}"
             pt.setdefault("payload", {})["_migrated_from"] = src_new
+            if new_key in all_points:
+                continue  # W32-3(a): never silently overwrite an existing slot
             all_points[new_key] = pt
             added += 1
+            continue
+        if key in all_points:
+            # W32-3(a): hash-key collision across different point IDs — keep
+            # the first point ("first point wins") instead of overwriting it.
+            print(
+                f"  Skipping content-hash collision {key[:12]}… "
+                f"(first point wins, id={pid})",
+                file=sys.stderr,
+            )
             continue
         all_points[key] = pt
         seen_ids[pid] = key
@@ -179,6 +209,10 @@ def main():
 
     # Collect all points from all source collections
     all_points = {}
+    # W32-4: shared content-hash set for the WHOLE migration. Deduping per
+    # scroll page alone let identical points on different pages (or in
+    # different source collections) both survive into the target.
+    seen_hashes: dict = {}
     for col in SOURCE_COLLECTIONS:
         info = get_collection_info(col)
         cnt = info.get("points_count", 0)
@@ -193,7 +227,7 @@ def main():
             for pt in batch:
                 if "payload" in pt:
                     pt["payload"]["_source_collection"] = col
-            deduped = deduplicate(batch)
+            deduped = deduplicate(batch, seen_hashes)
             merged_here += merge_points(all_points, deduped)
         print(f"  → {merged_here} new points merged from {col}", file=sys.stderr)
 

@@ -8,6 +8,7 @@ memories from Qdrant to give Claude immediate context.
 import sys
 import json
 import os
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -43,25 +44,40 @@ def _resolve_trust_level() -> str:
         return "public"
 
 def get_embedding(text: str) -> list:
-    if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
-        req_data = json.dumps({
-            "input": [text],
-            "model": EMBEDDING_MODEL,
-            # Voyage is asymmetric: this embeds the session QUERY, so it must
-            # use input_type="query" (H182), not "document".
-            "input_type": "query"
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.voyageai.com/v1/embeddings",
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {VOYAGE_API_KEY}"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            return data["data"][0]["embedding"]
+    """Embed the session query. W32-7: fail-soft.
+
+    A Voyage timeout / non-2xx / malformed body previously escaped as an
+    unhandled exception and crashed the SessionStart hook — search_qdrant is
+    fail-soft, the embed call was not. Any transport or shape failure now
+    returns None, and the caller treats that exactly like today (no recall).
+
+    NB: this hook uses urllib (not requests), so the caught network errors
+    are ``urllib.error.URLError`` (HTTPError is a subclass) plus the generic
+    OSError and the body-shape errors (KeyError/IndexError/ValueError).
+    """
+    try:
+        if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
+            req_data = json.dumps({
+                "input": [text],
+                "model": EMBEDDING_MODEL,
+                # Voyage is asymmetric: this embeds the session QUERY, so it must
+                # use input_type="query" (H182), not "document".
+                "input_type": "query"
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.voyageai.com/v1/embeddings",
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {VOYAGE_API_KEY}"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                return data["data"][0]["embedding"]
+    except (urllib.error.URLError, OSError, KeyError, IndexError, ValueError) as exc:
+        print(f"[nexus session-start] embedding failed: {exc}", file=sys.stderr)
+        return None
     return None
 
 def _get_trust_filter() -> dict:

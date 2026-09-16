@@ -116,7 +116,8 @@ def write_env_key(env_path: Path, key_env: str, api_key: str) -> None:
     - leaves the final file at mode 0600 (also fixes pre-existing files
       that were created with wider permissions).
 
-    Raises ``ValueError`` if the key value fails ``validate_api_key``.
+    Raises ``ValueError`` if the key value fails ``validate_api_key`` and
+    ``RuntimeError`` if an existing ``.env`` cannot be read (see W32-13).
     """
     ok, reason = validate_api_key(key_env, api_key)
     if not ok:
@@ -128,10 +129,31 @@ def write_env_key(env_path: Path, key_env: str, api_key: str) -> None:
 
     existing: Dict[str, str] = {}
     if env_path.exists():
+        # W32-13: an existing but UNREADABLE .env must abort. The old code
+        # folded the OSError into ``existing = {}`` and then os.replace'd a
+        # file holding only the new key — silently destroying every other
+        # secret in it. A missing file is a fresh install (fine); an
+        # unreadable one is a data-loss trap (not fine).
         try:
-            existing = _parse_env_text(env_path.read_text())
-        except OSError:
-            existing = {}
+            text = env_path.read_text()
+        except FileNotFoundError:
+            text = ""
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot read existing .env at {env_path} — refusing to overwrite "
+                f"(would drop existing keys): {exc}"
+            ) from exc
+        # A parse problem (not an OS error) is not fatal: warn and keep
+        # whatever was parseable rather than dropping the whole file.
+        try:
+            existing = _parse_env_text(text)
+        except Exception as exc:  # pragma: no cover - defensive
+            warnings.warn(
+                f"could not fully parse existing .env at {env_path}: {exc} "
+                "— continuing with the parseable entries",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     existing[key_env] = api_key
 
     body = "\n".join(f"{k}={serialize_env_value(v)}" for k, v in existing.items())
