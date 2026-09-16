@@ -11,7 +11,7 @@
  * same visited-set, same queue order (FIFO), same path semantics, and the
  * same edge-emission rule (traverse skips an already-visited target, subgraph
  * still records the edge). H123 depth clamping stays in the tools — maxDepth
- * arrives here already bounded.
+ * arrives here already bounded and is defensively re-bounded (W40-4).
  */
 
 import type { QdrantClient } from "./qdrant-client.ts"
@@ -57,24 +57,49 @@ export async function bfsEdges(
 ): Promise<BfsResult> {
   const { relation, targetType, collectEdges = false } = opts
 
+  // W40-4: maxDepth arrives here already clamped (H123), but it is a shared
+  // entry point parameter — a non-finite value made `depth >= maxDepth` always
+  // false and expanded the entire reachable graph.
+  const depthLimit = Number.isFinite(maxDepth)
+    ? Math.max(0, Math.trunc(maxDepth))
+    : 0
+
   const visited = new Set<string>([factId])
   const queue: Array<{ id: string; depth: number; path: string[] }> = [
     { id: factId, depth: 0, path: [] },
   ]
   const steps: BfsStep[] = []
   const nodes: BfsNode[] = collectEdges ? [{ id: factId, depth: 0 }] : []
-  const nodeSet = new Set<string>([factId])
   const edges: BfsEdge[] = []
 
-  while (queue.length > 0) {
-    const { id, depth, path } = queue.shift()!
-    if (depth >= maxDepth) continue
+  // W40-4: one scrollPoint per node. The target_type check used to fetch a
+  // newly discovered target and the dequeue then fetched the very same point
+  // again — two HTTP calls per node plus N+1 latency on a wide fan-out.
+  const pointCache = new Map<
+    string,
+    Awaited<ReturnType<QdrantClient["scrollPoint"]>>
+  >()
+  const loadPoint = async (id: string) => {
+    if (!pointCache.has(id)) {
+      pointCache.set(id, await qdrantClient.scrollPoint(id))
+    }
+    return pointCache.get(id) ?? null
+  }
 
-    const pt = await qdrantClient.scrollPoint(id)
+  // W40-4: head index instead of queue.shift() — shift() re-indexes the whole
+  // frontier (O(n)) and made the BFS quadratic on large graphs.
+  for (let head = 0; head < queue.length; head++) {
+    const { id, depth, path } = queue[head]
+    if (depth >= depthLimit) continue
+
+    const pt = await loadPoint(id)
     if (!pt) continue
 
-    const ptEdges = (pt.payload?.edges ?? []) as Array<Record<string, unknown>>
-    for (const edge of ptEdges) {
+    // W40-4: `edges` is untyped JSON from arbitrary writers — a non-iterable
+    // value (e.g. an object) made `for...of` throw out of the whole traversal.
+    const rawEdges = pt.payload?.edges
+    if (!Array.isArray(rawEdges)) continue
+    for (const edge of rawEdges as Array<Record<string, unknown>>) {
       if (!isActiveEdge(edge)) continue
 
       // H125: validate before the id enters visited/queue/results — an
@@ -98,7 +123,7 @@ export async function bfsEdges(
       // this first also makes the revisited branch below consistent for free:
       // only targets that already passed the filter are ever marked visited.
       if (targetType) {
-        const targetPoint = await qdrantClient.scrollPoint(targetId)
+        const targetPoint = await loadPoint(targetId)
         const entityType = targetPoint?.payload?.entity_type
         if (entityType !== targetType) continue
       }
@@ -120,10 +145,10 @@ export async function bfsEdges(
       }
 
       if (collectEdges) {
-        if (!nodeSet.has(targetId)) {
-          nodes.push({ id: targetId, depth: depth + 1 })
-          nodeSet.add(targetId)
-        }
+        // W40-4: nodeSet was redundant bookkeeping — this branch is only
+        // reached when `visited.has(targetId)` was false, and every id in
+        // nodeSet is also in visited, so a duplicate node was impossible.
+        nodes.push({ id: targetId, depth: depth + 1 })
         edges.push({ source, target: targetId, relation: edgeRelation })
       } else {
         steps.push(step)

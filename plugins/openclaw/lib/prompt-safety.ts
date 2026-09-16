@@ -30,9 +30,12 @@ export function neutralizeContextClose(text: string): string {
  *
  * - Complete `<nexus-context …>…</nexus-context>` blocks (incl. multiline and
  *   attribute variants) are removed.
- * - An UNTERMINATED `<nexus-context …>` (no closing tag) removes everything
- *   from the tag onward — a stored memory must not be able to open a wrapper
- *   that swallows the rest of the prompt.
+ * - A tag that never gets its closing tag (an UNTERMINATED
+ *   `<nexus-context …>`, or a stray `</nexus-context>`) is neutralized: the
+ *   tag itself is removed and the surrounding text is kept. Removing the tag
+ *   is what stops a wrapper from being opened — deleting everything after it
+ *   (W40-12) protected nothing extra and silently discarded a prompt that
+ *   merely mentioned the tag.
  */
 export function stripNexusContextBlock(text: string): string {
   if (!text) return text
@@ -43,6 +46,6 @@ export function stripNexusContextBlock(text: string): string {
     /<nexus-context[^>]*>[\s\S]*?<\/nexus-context\s*>\s*/gi,
     "",
   )
-  const withoutTail = withoutComplete.replace(/<nexus-context[^>]*>[\s\S]*$/i, "")
-  return withoutTail.trim()
+  const withoutTags = withoutComplete.replace(/<\/?nexus-context[^>]*>/gi, "")
+  return withoutTags.trim()
 }

@@ -7,12 +7,25 @@
  * their own limits.
  */
 
-/** Default preview length (forget.ts); store.ts passes its own (80). */
+/**
+ * Default preview length. Matches the literal forget.ts passes (100); both
+ * tools intentionally keep their own limit (store.ts passes 80).
+ */
 export const PREVIEW_MAX = 100
 /** Suffix appended when the text was truncated. */
 export const ELLIPSIS = "…"
 
-/** Truncate text to `max` chars with an ellipsis when longer. */
+/**
+ * Truncate text to `max` code points with an ellipsis when longer.
+ *
+ * W40-8: slicing by UTF-16 code units could split a surrogate pair
+ * (e.g. an emoji) and return a replacement char in the preview, so the limit
+ * counts code points via Array.from(). `max` is normalized to a non-negative
+ * integer first — a negative/fractional/NaN budget would otherwise slice from
+ * the end or produce a partial budget.
+ */
 export function limitText(text: string, max: number = PREVIEW_MAX): string {
-  return text.length > max ? `${text.slice(0, max)}${ELLIPSIS}` : text
+  const limit = Number.isFinite(max) ? Math.max(0, Math.trunc(max)) : PREVIEW_MAX
+  const chars = Array.from(text)
+  return chars.length > limit ? `${chars.slice(0, limit).join("")}${ELLIPSIS}` : text
 }
