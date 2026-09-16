@@ -271,6 +271,8 @@ class DriftDetector:
         self.collection = collection_name
         self.stale_patterns = stale_patterns or DEFAULT_STALE_PATTERNS
         self.old_threshold = timedelta(days=old_threshold_days)
+        # OCR-4: cached embedder (see _get_embedder) — None means "not built yet"
+        self._embedder_fn = None
         # Expiry is stateless — uses compute_expires_at() directly
 
     # ── Private helpers ─────────────────────────────────────────────────────
@@ -427,16 +429,29 @@ class DriftDetector:
         """Return an embedding function or ``None`` if no embedder is available.
 
         Priority: Voyage (best quality) → sentence-transformers (local).
+
+        OCR-4 (bug + performance): construction is wrapped in try/except — a
+        Voyage client without an API key raises, and that must degrade to
+        ``None`` (no embedder) instead of crashing the health check. The
+        constructed embedder is cached on the instance: SentenceTransformer
+        loads a ~100 MB model, so re-instantiating it on every health run
+        wasted seconds and memory.
         """
-        if HAS_VOYAGE:
-            client = voyageai.Client()
-            return lambda texts: client.embed(
-                texts, model="voyage-3", input_type="document"
-            ).embeddings
-        if HAS_SENTENCE_TRANSFORMERS:
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            return lambda texts: model.encode(texts).tolist()
-        return None
+        if self._embedder_fn is not None:
+            return self._embedder_fn
+        try:
+            if HAS_VOYAGE:
+                client = voyageai.Client()
+                self._embedder_fn = lambda texts: client.embed(
+                    texts, model="voyage-3", input_type="document"
+                ).embeddings
+            elif HAS_SENTENCE_TRANSFORMERS:
+                model = SentenceTransformer("all-MiniLM-L6-v2")
+                self._embedder_fn = lambda texts: model.encode(texts).tolist()
+        except Exception as exc:
+            _logger.warning("Embedder construction failed, degrading to None: %s", exc)
+            self._embedder_fn = None
+        return self._embedder_fn
 
     def _compute_similarity(self, emb_a: list[float], emb_b: list[float]) -> float:
         """Compute cosine similarity between two embedding vectors."""
@@ -491,7 +506,7 @@ class DriftDetector:
         now = datetime.now(timezone.utc)
 
         for p in points:
-            payload = p.get("payload", {})
+            payload = p.get("payload") or {}
 
             # Skip historical / resolved / archived entries
             if self._is_excluded(payload):
@@ -562,7 +577,7 @@ class DriftDetector:
                 # Filter out excluded entries before contradiction detection
                 active_points = [
                     p for p in points
-                    if not self._is_excluded(p.get("payload", {}))
+                    if not self._is_excluded(p.get("payload") or {})
                 ]
                 if active_points:
                     report.contradictions = self.detect_contradictions(active_points)
@@ -676,7 +691,7 @@ class DriftDetector:
         # Run contradiction detection on active entries only
         active_entries = [
             e for e in entries
-            if not self._is_excluded(e.get("payload", {}))
+            if not self._is_excluded(e.get("payload") or {})
         ]
         if active_entries:
             try:
@@ -747,7 +762,7 @@ class DriftDetector:
                 # Filter out excluded entries (historical / resolved / archived)
                 memories = [
                     m for m in memories
-                    if not self._is_excluded(m.get("payload", {}))
+                    if not self._is_excluded(m.get("payload") or {})
                 ]
             except Exception as exc:
                 # W37: log the failure — returning [] silently made an

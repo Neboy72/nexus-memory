@@ -29,11 +29,16 @@ const BUILDERS = new Set([${BUILDERS.map((b) => JSON.stringify(b)).join(",")}]);
 // Node's util.inspect — throwing on them broke consumers that never call a
 // builder at all. The strictness guarantee stays: an unknown FUNCTION-style
 // name (a real typo like Type.Ojbect) still throws.
-const INTEROP_KEYS = new Set(["default", "__esModule", "toJSON", "inspect", "valueOf", "toString"]);
+const INTEROP_KEYS = new Set(["default", "__esModule", "toJSON", "inspect"]);
 export const Type = new Proxy({}, {
   get(_target, prop) {
     if (typeof prop === "symbol") return undefined;
     if (prop === "then") return undefined;
+    // OCR-4: valueOf/toString must be CALLABLE stringifiers — returning
+    // undefined made String(Type) throw "Cannot convert object to primitive
+    // value" (opaque crash instead of a clean passthrough). Returning a
+    // callable stringifier makes template-literal/REPL coercion harmless.
+    if (prop === "valueOf" || prop === "toString") return () => "[typebox-test-stub]";
     if (INTEROP_KEYS.has(prop)) return undefined;
     if (!BUILDERS.has(prop)) {
       throw new Error("Unknown Type." + String(prop) + " - typo or missing from the typebox test stub (_typebox-test-loader.mjs)");

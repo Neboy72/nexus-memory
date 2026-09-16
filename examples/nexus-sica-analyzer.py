@@ -82,7 +82,14 @@ def _count_memories(host: str, port: int, collection: str,
     try:
         resp = _req.post(url, json=body, timeout=10)
         resp.raise_for_status()
-        return resp.json().get("result", {}).get("count", 0)
+        # OCR-4: a 2xx with an unexpected shape must NOT read as 0 — result:null
+        # crashes the chained .get, a missing/null count is a FAILED count, not
+        # "zero points". Degrade to None so callers treat it as unknown.
+        result = resp.json().get("result")
+        if not isinstance(result, dict):
+            return None
+        count = result.get("count")
+        return count if isinstance(count, int) else None
     except Exception as exc:  # W31-1
         _logger.warning("SICA analyzer: count failed: %s", exc)
         return None
@@ -297,9 +304,19 @@ if __name__ == "__main__":
         )
 
     # Stille wenn keine Aktion nötig — Watchdog-Pattern
+    # OCR-4 (bug high): silence required TWO conditions — no actionable
+    # suggestion AND no recorded error. A degraded run (failed count/scroll,
+    # errors non-empty) with only "all_clear"-style suggestions exited 0 and
+    # the partial outage stayed invisible. Errors are always surfaced.
     actions_needed = [s for s in report.get("suggestions", []) if s["action"] != "none"]
-    if not actions_needed:
+    errors_present = bool(report.get("errors"))
+    if not actions_needed and not errors_present:
         sys.exit(0)
+    if not actions_needed and errors_present:
+        print(f"⚠️ SICA: 0 Aktionen, aber {len(report['errors'])} Fehler bei der Analyse (degraded):")
+        for e in report["errors"]:
+            print(f"  • {e}")
+        sys.exit(1)
 
     # Bei Vorschlägen: Output für Cron-Delivery
     print(f"🔔 SICA: {len(actions_needed)} Verbesserungsvorschlag/-vorschläge")
