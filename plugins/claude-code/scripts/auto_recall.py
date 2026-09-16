@@ -133,18 +133,25 @@ def get_embedding(text: str, input_type: str = "query") -> list:
                 data = json.loads(resp.read())
                 return data["data"][0]["embedding"]
         elif EMBEDDING_PROVIDER == "ollama":
+            # W33-10: same endpoint/field mismatch auto_capture fixed in
+            # W32-9. The legacy /api/embeddings endpoint reads "prompt" and
+            # returns a single "embedding"; the current /api/embed reads
+            # "input" and returns "embeddings". This branch called the legacy
+            # URL with the NEW field, so Ollama received no prompt and
+            # returned no vector (recall silently skipped). Migrated.
             req_data = json.dumps({
                 "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
                 "input": text
             }).encode()
             req = urllib.request.Request(
-                f"http://localhost:11434/api/embeddings",
+                "http://localhost:11434/api/embed",
                 data=req_data,
                 headers={"Content-Type": "application/json"}
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
-                return data["embedding"]
+            embeddings = data.get("embeddings") or []
+            return embeddings[0] if embeddings else None
     except Exception as exc:
         print(f"[nexus auto-recall] embedding failed: {exc}", file=sys.stderr)
         return None

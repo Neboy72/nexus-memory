@@ -110,6 +110,22 @@ TYPE_ORDER = {"cloud": 0, "local": 1}
 # _setup_local; _install_pip_package honours it instead of installing anyway.
 _LOCAL_ST_SKIP_INSTALL = False
 
+# W33-8: outcome of the last _install_pip_package call. The bool return keeps
+# its meaning (False = "package not installed", relied upon by test_wave20
+# Nr 330), but the REASON is recorded here so the wizard can tell a
+# deliberate user skip — which _setup_local documents as "not a hard
+# failure" — from a real install error. Both used to look identical (False),
+# so the wizard aborted on a choice the user was entitled to make.
+PIP_INSTALL_OK = "ok"
+PIP_INSTALL_SKIPPED = "skipped"
+PIP_INSTALL_FAILED = "failed"
+_LAST_PIP_STATUS = PIP_INSTALL_OK
+
+# W33-9: set when the bge-m3 HuggingFace fallback took over from Ollama.
+# _run_wizard step 7 records and verifies the provider that is ACTUALLY
+# serving embeddings instead of the (unavailable) Ollama selection.
+_HF_BGE3_ACTIVE = False
+
 
 @dataclass
 class ProviderStatus:
@@ -588,6 +604,7 @@ def _setup_cloud_provider(ps: ProviderStatus) -> str | None:
 
 def _setup_ollama(ps: ProviderStatus) -> bool:
     """Set up Ollama. Prompt to install an embed model if needed."""
+    global _HF_BGE3_ACTIVE
     if ps.available:
         _print(f"\n  {GREEN}✓{RESET} Ollama is running with embed model: {ps.ollama_model}")
         return True
@@ -649,6 +666,11 @@ def _setup_ollama(ps: ProviderStatus) -> bool:
                 )
                 if ret == 0:
                     _save_api_key("NEXUS_HF_BGE3", "1")  # activate HF route in .env
+                    # W33-9: persisting to .env is not enough — the flag must
+                    # also be live in THIS process, otherwise the verification
+                    # right after this step still takes the Ollama path.
+                    os.environ["NEXUS_HF_BGE3"] = "1"
+                    _HF_BGE3_ACTIVE = True
                     _print(f"  {GREEN}✓{RESET} bge-m3 (HuggingFace) ready and activated (NEXUS_HF_BGE3=1 in .env).")
                     return True
                 _print(f"  {RED}✗{RESET} HuggingFace download failed: {err[:200] if err else out[:200]}")
@@ -685,24 +707,35 @@ def _setup_local(ps: ProviderStatus) -> bool:
 
 
 def _install_pip_package(ps: ProviderStatus) -> bool:
-    """Install the required pip package for the provider."""
+    """Install the required pip package for the provider.
+
+    W33-8: the bool says whether the package IS installed — False no longer
+    implies failure. _LAST_PIP_STATUS records why, so a deliberate user skip
+    ('skipped', the same "not a hard failure" semantics _setup_local uses)
+    is distinguishable from a real install error ('failed').
+    """
+    global _LAST_PIP_STATUS
     pkg = ps.provider.get("pip_package")
     if pkg is None:
+        _LAST_PIP_STATUS = PIP_INSTALL_OK
         return True  # No extra package needed
 
     if _check_pip_package(pkg):
         _print(f"\n  {GREEN}✓{RESET} {pkg} is already installed.")
+        _LAST_PIP_STATUS = PIP_INSTALL_OK
         return True
 
     if pkg == "sentence-transformers" and _LOCAL_ST_SKIP_INSTALL:
         # User explicitly declined the install in _setup_local — do not
-        # silently install anyway.
+        # silently install anyway: a conscious skip, not an install failure.
         _print(f"\n  {YELLOW}⚠{RESET} '{pkg}' was declined during setup — not installing.")
         _print(f"  {YELLOW}  Install manually later: pip install {pkg}{RESET}")
+        _LAST_PIP_STATUS = PIP_INSTALL_SKIPPED
         return False
 
     _print(f"\n  {YELLOW}⚠{RESET} Required package '{pkg}' is not installed.")
-    return _run_pip(pkg)
+    _LAST_PIP_STATUS = PIP_INSTALL_OK if _run_pip(pkg) else PIP_INSTALL_FAILED
+    return _LAST_PIP_STATUS == PIP_INSTALL_OK
 
 
 def _show_next_steps() -> None:
@@ -763,21 +796,32 @@ def _run_wizard() -> None:
             _print(f"  {RED}Failed to set up sentence-transformers. Exiting.{RESET}")
             sys.exit(1)
 
-    # 6. Install pip package
-    if not _install_pip_package(selected):
+    # 6. Install pip package — a DECLINED install (W33-8: status 'skipped',
+    # same "not a hard failure" outcome _setup_local reports) must not abort
+    # the wizard; only a real install error does.
+    if not _install_pip_package(selected) and _LAST_PIP_STATUS != PIP_INSTALL_SKIPPED:
         _print(f"  {RED}Failed to install required package. Exiting.{RESET}")
         sys.exit(1)
 
     # 7. Save config (record the concrete local model for the drift guard)
+    # W33-9: record the provider that is ACTUALLY active. After a successful
+    # bge-m3 HuggingFace fallback, Ollama is NOT the backend anymore.
+    active_provider = provider_id
+    active_name = provider_name
     _embedding_model = ""
-    if provider_id == "ollama":
+    if _HF_BGE3_ACTIVE:
+        active_provider = "huggingface"
+        active_name = "bge-m3 (HuggingFace)"
+        dims = 1024
+        _embedding_model = "BAAI/bge-m3"
+    elif provider_id == "ollama":
         ok, _embedding_model = _check_ollama()
         if not ok:
             _embedding_model = ""
-    _save_config(provider_id, _embedding_model)
+    _save_config(active_provider, _embedding_model)
 
-    # 8. Verify
-    verified = _verify_embedding(provider_id, provider_name, dims, quality)
+    # 8. Verify (the ACTIVE provider, never a backend we know is unavailable)
+    verified = _verify_embedding(active_provider, active_name, dims, quality)
 
     if verified:
         _show_next_steps()
