@@ -155,6 +155,15 @@ class Edge:
         reason: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> "Edge":
+        # H19: the deserializers (from_payload_entry/from_dict) validate
+        # relation against _VALID_RELATIONS (Nr-438). Without the same check
+        # here an invalid relation was persisted verbatim and only blew up on
+        # the later read — validate on write for parity.
+        if relation not in _VALID_RELATIONS:
+            raise EdgeSchemaError(
+                f"Edge.new: invalid relation {relation!r} "
+                f"(valid: {sorted(_VALID_RELATIONS)})"
+            )
         now = datetime.now(timezone.utc).isoformat()
         return cls(
             edge_id=str(uuid.uuid4()),

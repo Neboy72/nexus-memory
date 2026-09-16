@@ -70,6 +70,20 @@ def _default_provenance() -> dict:
     """
     return copy.deepcopy(DEFAULT_PROVENANCE)
 
+
+class _FetchError:
+    """H68 sentinel: the storage request itself failed.
+
+    Distinguished from ``None``, which means "the request went through and the
+    point does not exist". Swallowing both as ``None`` made a transient Qdrant
+    error indistinguishable from an absent point, and the cycle check then
+    reported "no cycle" without ever having verified anything (fail-open).
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+
 # Source types in order of trust
 SOURCE_TYPES = {
     "chat":      {"trust": 1.0, "desc": "Direct conversation with user"},
@@ -413,18 +427,28 @@ def corroborate_entry(
 
     base_url = f"http://{qdrant_host}:{qdrant_port}"
 
-    def _fetch(pid: str) -> dict | None:
+    def _fetch(pid: str):
+        """Fetch a point. ``None`` = absent, :class:`_FetchError` = request failed.
+
+        H68: same contract as in add_dependency() — a failed request must not
+        be reported as an absent point.
+        """
         try:
             r = _req.get(f"{base_url}/collections/{collection_name}/points/{pid}", timeout=10)
-            if is_success(r.status_code):
-                return r.json().get("result")
-        except Exception:
-            pass
-        return None
+        except Exception as e:
+            return _FetchError(f"storage error: {e}")
+        if is_success(r.status_code):
+            return r.json().get("result")
+        if r.status_code == 404:
+            # Answered request, no such point — not an error.
+            return None
+        return _FetchError(f"storage error: HTTP {r.status_code}")
 
     def _update(pid: str, provenance: dict) -> dict:
         try:
             point = _fetch(pid)
+            if isinstance(point, _FetchError):
+                return {"error": point.message}
             if not point:
                 return {"error": f"Point {pid} not found"}
             # H229: targeted set_payload on the `provenance` sub-field instead
@@ -520,18 +544,29 @@ def add_dependency(
 
     base_url = f"http://{qdrant_host}:{qdrant_port}"
 
-    def _fetch(pid: str) -> dict | None:
+    def _fetch(pid: str):
+        """Fetch a point. ``None`` = absent, :class:`_FetchError` = request failed.
+
+        H68: the two cases must stay distinguishable. "The request was answered
+        and the point does not exist" is a regular result; a transport or HTTP
+        error is not, and the cycle check must not read it as an absent point.
+        """
         try:
             r = _req.get(f"{base_url}/collections/{collection_name}/points/{pid}", timeout=10)
-            if is_success(r.status_code):
-                return r.json().get("result")
-        except Exception:
-            pass
-        return None
+        except Exception as e:
+            return _FetchError(f"storage error: {e}")
+        if is_success(r.status_code):
+            return r.json().get("result")
+        if r.status_code == 404:
+            # Answered request, no such point — not an error.
+            return None
+        return _FetchError(f"storage error: HTTP {r.status_code}")
 
     def _update(pid: str, provenance: dict) -> dict:
         try:
             point = _fetch(pid)
+            if isinstance(point, _FetchError):
+                return {"error": point.message}
             if not point:
                 return {"error": f"Point {pid} not found"}
             # H229: targeted set_payload on the `provenance` sub-field (merge)
@@ -548,14 +583,25 @@ def add_dependency(
         except Exception as e:
             return {"error": str(e)}
 
+    # H68: set when the DFS could not reach storage at all. The caller reports
+    # that case distinctly — "unverified" must not be sold as "no cycle".
+    cycle_check_unreachable = False
+
     def _has_cycle(start: str, target: str, visited: set | None = None) -> bool:
         """DFS cycle check: can we reach *target* from *start* via depends_on?"""
+        nonlocal cycle_check_unreachable
         if visited is None:
             visited = set()
         if start in visited:
             return False
         visited.add(start)
         point = _fetch(start)
+        if isinstance(point, _FetchError):
+            # H68: fail-closed instead of fail-open. An unreachable storage
+            # makes cycle freedom unverifiable, so we treat it as a possible
+            # cycle and refuse the link rather than creating an unverified one.
+            cycle_check_unreachable = True
+            return True
         if not point:
             return False
         prov = point.get("payload", {}).get("provenance", {})
@@ -570,11 +616,24 @@ def add_dependency(
     # Cycle detection: would adding this link create a cycle?
     # Check if depends_on_id can reach point_id via existing depends_on edges
     if _has_cycle(depends_on_id, point_id):
+        if cycle_check_unreachable:
+            return {
+                "linked": False,
+                "had_cycle": True,
+                "error": "Cycle check unreachable (storage error)",
+            }
         return {"linked": False, "had_cycle": True, "error": "Cycle detected — would create circular dependency"}
 
     # Fetch both points
     point_a = _fetch(point_id)
     point_b = _fetch(depends_on_id)
+    # H68: a failed request must not be reported as "point not found"; no link
+    # is created either way (fail-closed).
+    fetch_error = next(
+        (p for p in (point_a, point_b) if isinstance(p, _FetchError)), None,
+    )
+    if fetch_error is not None:
+        return {"linked": False, "had_cycle": False, "error": fetch_error.message}
     if not point_a or not point_b:
         return {"linked": False, "had_cycle": False, "error": "One or both points not found"}
 
