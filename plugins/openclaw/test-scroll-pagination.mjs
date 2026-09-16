@@ -16,17 +16,44 @@ const t = (name, fn) =>
     .then(() => console.log("PASS ", name))
     .catch((e) => {
       failed++
-      console.log("FAIL ", name, "—", e.message)
+      console.log("FAIL ", name, "—", e?.message, "\n", e?.stack ?? "(kein stack — non-Error throw)")
     })
 
 const realFetch = globalThis.fetch
-const MAX_SCROLL_PAGES = 5 // mirrors the constant in qdrant-client.ts
+// W38 (medium/low): fetch-Restore auch bei Crash außerhalb der t()-Hülle — process.on
+// 'beforeExit'+'uncaughtException' sichern den Restore prozessweit ab (t()-Cases
+// reichen nicht: ein Throw zwischen zwei awaits ließe sonst den Mock drin).
+process.on("beforeExit", () => { globalThis.fetch = realFetch })
+process.on("uncaughtException", (e) => {
+  globalThis.fetch = realFetch
+  console.log("FAIL  uncaughtException —", e?.message, "\n", e?.stack)
+  process.exitCode = 1
+})
+const qcSrc = (await import("node:fs")).readFileSync(new URL("./lib/qdrant-client.ts", import.meta.url), "utf8")
+const saSrc = (await import("node:fs")).readFileSync(new URL("./lib/scope-auto.ts", import.meta.url), "utf8")
+function parseCap(srcText, label) {
+  const m = srcText.match(/MAX_SCROLL_PAGES\s*=\s*(\d+)/)
+  if (!m) throw new Error(`${label}: MAX_SCROLL_PAGES nicht gefunden — Konstante umbenannt? Test-Anker ziehen.`)
+  return Number(m[1])
+}
+const MAX_SCROLL_PAGES = parseCap(qcSrc, "qdrant-client.ts")
+const SA_CAP = parseCap(saSrc, "scope-auto.ts")
+if (SA_CAP !== MAX_SCROLL_PAGES) {
+  throw new Error(`Cap-Drift: qdrant-client.ts=${MAX_SCROLL_PAGES}, scope-auto.ts=${SA_CAP} — die beiden Kopien sind auseinander!`)
+}
 
 /** Stub, der pro Aufruf die nächste Page liefert; protokolliert Bodies. */
-function mockPages(pages) {
+function mockPages(pages, methods = []) {
   const bodies = []
   globalThis.fetch = async (_url, opts = {}) => {
-    const body = JSON.parse(opts.body)
+    if (typeof opts.body !== "string") {
+      throw new Error(`scroll-Stub erhielt bodylosen Request (method=${opts.method ?? "GET"}) — Pagination-Regression: scrollFiltered muss POST mit body schicken`)
+    }
+    let body
+    try { body = JSON.parse(opts.body) } catch (e) {
+      throw new Error(`scroll-Stub konnte body nicht parsen (${e.message}) — body war: ${String(opts.body).slice(0, 120)}`)
+    }
+    methods.push(opts.method ?? "GET")
     bodies.push(body)
     const page = pages[Math.min(bodies.length - 1, pages.length - 1)]
     return { ok: true, status: 200, json: async () => ({ result: page }), text: async () => "" }
@@ -72,7 +99,7 @@ await t("fetchCentroids summiert beide Seiten", async () => {
   assert.deepStrictEqual(Object.keys(cents).sort(), ["proj-a", "proj-b"])
 })
 
-await t("fetchCentroids: Cap terminiert ebenfalls", async () => {
+await t("fetchCentroids: Cap terminiert ebenfalls (offset-Kette bewiesen)", async () => {
   const bodies = mockPages([
     {
       points: [{ vector: [1, 0], payload: { scope: "proj-a" } }],
@@ -81,7 +108,12 @@ await t("fetchCentroids: Cap terminiert ebenfalls", async () => {
   ])
   await fetchCentroids("http://localhost:6333", "nexus")
   assert.strictEqual(bodies.length, MAX_SCROLL_PAGES)
+  // W38 (medium): nicht nur Call-Count — die Offset-Kette muss bewiesen sein:
+  assert.strictEqual(bodies[0].offset, undefined, "Seite 1 ohne offset")
+  for (let i = 1; i < bodies.length; i++) {
+    assert.strictEqual(bodies[i].offset, "always", `Seite ${i + 1} folgt next_page_offset`)
+  }
 })
 
 globalThis.fetch = realFetch
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

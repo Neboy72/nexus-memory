@@ -88,11 +88,10 @@ class _Embedder:
 
     def embed(self, text: str, is_query: bool = True) -> List[float]:
         import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(self._impl.embed(text, is_query))
-        finally:
-            loop.close()
+        # asyncio.run owns the loop lifecycle (creation, pending-task cleanup,
+        # close) instead of a hand-rolled new_event_loop/close pair on the hot
+        # embedding path.
+        return asyncio.run(self._impl.embed(text, is_query))
 
     @property
     def dim(self) -> int: return self._impl.dim

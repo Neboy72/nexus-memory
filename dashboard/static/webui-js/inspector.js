@@ -1,6 +1,13 @@
 /* nexus-memory Dashboard — Memory Inspector v2 (echte Designsprache) */
 /* Eigenständig: keine Abhängigkeit vom API-Global (dashboard.js überschreibt const API='') */
 
+// Endpoints and caps live next to the module definition so the list and
+// detail paths cannot drift apart.
+const INSP_API = '/api/memories';
+const INSP_FETCH_LIMIT = 2000;   // server-side fetch limit
+const INSP_RENDER_CAP = 300;     // max rows rendered (subset of the fetch)
+const INSP_TEXT_PREVIEW = 220;   // list-row text excerpt length
+
 const Inspector = {
   items: [], filter: '', cat: 'all', view: 'list', current: null,
 
@@ -8,12 +15,6 @@ const Inspector = {
   // response may only render if it is still the latest request. Without it a
   // slow earlier request would overwrite the newer view (out-of-order writes).
   _reqSeq: 0,
-
-  async _get(url) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  },
 
   async open() {
     const overlay = document.getElementById('inspectorOverlay');
@@ -31,9 +32,14 @@ const Inspector = {
   async load() {
     const body = document.getElementById('inspectorBody');
     const token = ++this._reqSeq;
+    // The toolbar below is (re)rendered with its defaults (empty search,
+    // "All"), so reset the state it reflects — otherwise _renderList() would
+    // filter by a stale category/term no longer visible in the UI.
+    this.filter = '';
+    this.cat = 'all';
     try {
       body.innerHTML = this._toolbarHTML() + '<div class="insp-error" style="display:none"></div><div id="inspList"></div>';
-      const res = await fetch('/api/memories?limit=2000');
+      const res = await fetch(`${INSP_API}?limit=${INSP_FETCH_LIMIT}`);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       if (token !== this._reqSeq) return;
@@ -68,11 +74,11 @@ const Inspector = {
     const rows = this.items
       .filter(m => (this.cat === 'all' || m.category === this.cat) &&
                    (!f || (m.text || '').toLowerCase().includes(f)))
-      .slice(0, 300);
+      .slice(0, INSP_RENDER_CAP);
     el.innerHTML = rows.map(m => `
       <div class="insp-row" data-mem-id="${this._esc(m.id)}">
         <span class="insp-badge insp-badge--${this._esc(m.category || 'fact')}">${this._esc(m.category || 'fact')}</span>
-        <span class="insp-row__text">${this._esc((m.text || '').slice(0, 220))}</span>
+        <span class="insp-row__text">${this._esc((m.text || '').slice(0, INSP_TEXT_PREVIEW))}</span>
         <span style="font-size:11px;color:#636e72;flex:0 0 auto">${this._esc(m.access_level || '')}</span>
       </div>`).join('') || '<div class="insp-error">No memories match.</div>';
   },
@@ -81,9 +87,13 @@ const Inspector = {
 
   async why(id) {
     const el = document.getElementById('inspList');
+    // Guard: why() can be invoked before load() rendered the list (or after
+    // the body was replaced by an error) — a null el would otherwise throw
+    // inside the catch block and mask the real error.
+    if (!el) return;
     const token = ++this._reqSeq;
     try {
-      const res = await fetch(`/api/memories/${encodeURIComponent(id)}/why`);
+      const res = await fetch(`${INSP_API}/${encodeURIComponent(id)}/why`);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const d = await res.json();
       if (token !== this._reqSeq) return;
@@ -118,52 +128,80 @@ const Inspector = {
 
   async edit(id) {
     const el = document.getElementById('inspList');
-    this.view = 'edit';
+    if (!el) return;
+    // Same request-token protocol as load()/why(): a slow, stale edit
+    // response must not repaint over a newer view.
+    const token = ++this._reqSeq;
     try {
-      const res = await fetch(`/api/memories/${encodeURIComponent(id)}/why`);
+      const res = await fetch(`${INSP_API}/${encodeURIComponent(id)}/why`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
       const d = await res.json();
+      if (token !== this._reqSeq) return;
+      this.view = 'edit';
       el.innerHTML = `
         <button class="insp-back" data-insp-action="back">← Back</button>
         <textarea class="insp-textarea" id="inspTextarea">${this._esc(d.text || '')}</textarea>
         <div class="insp-actions">
           <button class="insp-btn" data-insp-action="save" data-mem-id="${this._esc(id)}">Save</button>
           <button class="insp-btn" data-insp-action="back">Cancel</button>
-        </div>`;
-    } catch (err) { el.innerHTML = `<div class="insp-error">${this._esc(String(err))}</div>`; }
+        </div>
+        <div id="inspMsg" style="margin-top:10px;font-size:12.5px;color:#00b894"></div>`;
+    } catch (err) {
+      if (token !== this._reqSeq) return;
+      el.innerHTML = `<div class="insp-error">${this._esc(String(err))}</div>`;
+    }
   },
 
   async save(id) {
     const text = document.getElementById('inspTextarea').value.trim();
     const msg = document.getElementById('inspMsg');
     try {
-      const res = await fetch(`/api/memories/${encodeURIComponent(id)}/text`, {
+      const res = await fetch(`${INSP_API}/${encodeURIComponent(id)}/text`, {
         // W30-3: mutating routes require the dashboard guard header.
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'X-Nexus-Dashboard': '1' },
         body: JSON.stringify({ text }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      if (msg) msg.textContent = 'Saved ✓';
-      this.load();
+      // Reload the list, then reopen the detail view so the confirmation is
+      // actually visible (this.load() alone wipes the edit view's #inspMsg).
+      await this.load();
+      await this.why(id);
+      const m = document.getElementById('inspMsg');
+      if (m) m.textContent = 'Saved ✓';
     } catch (err) {
       if (msg) { msg.style.color = '#e74c3c'; msg.textContent = 'Save failed: ' + err; }
+      else this._showError('Save failed: ' + err);
     }
   },
 
   async deprecate(id) {
     // W30-3: mutating routes require the dashboard guard header.
-    await fetch(`/api/memories/${encodeURIComponent(id)}/deprecate`, {
+    const res = await fetch(`${INSP_API}/${encodeURIComponent(id)}/deprecate`, {
       method: 'POST', headers: { 'X-Nexus-Dashboard': '1' },
     });
+    if (!res.ok) { this._showError('Roll back failed: HTTP ' + res.status); return; }
     this.why(id);
   },
 
   async restore(id) {
     // W30-3: mutating routes require the dashboard guard header.
-    await fetch(`/api/memories/${encodeURIComponent(id)}/restore`, {
+    const res = await fetch(`${INSP_API}/${encodeURIComponent(id)}/restore`, {
       method: 'POST', headers: { 'X-Nexus-Dashboard': '1' },
     });
+    if (!res.ok) { this._showError('Restore failed: HTTP ' + res.status); return; }
     this.why(id);
+  },
+
+  _showError(message) {
+    const msg = document.getElementById('inspMsg');
+    if (msg) { msg.style.color = '#e74c3c'; msg.textContent = message; return; }
+    const el = document.getElementById('inspList');
+    if (!el) return;
+    const div = document.createElement('div');
+    div.className = 'insp-error';
+    div.textContent = message;
+    el.prepend(div);
   },
 
   _esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); },

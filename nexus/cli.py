@@ -60,7 +60,7 @@ def main():
     )
 
     # verify
-    p_verify = sub.add_parser("verify", help="Collection-Status")
+    sub.add_parser("verify", help="Collection-Status")
 
     args = parser.parse_args()
 
@@ -115,7 +115,11 @@ def cmd_events(args):
 
     for e in events:
         delta = e.get("delta", {})
-        print(f"  {e.get('event_type',''):20s} | {e.get('status','?'):12s} | {str(delta)[:60]}")
+        # `dict.get(k, default)` only defaults when the key is ABSENT; a
+        # present-but-null payload field would make the format spec raise.
+        event_type = e.get("event_type") or ""
+        status = e.get("status") or "?"
+        print(f"  {event_type:20s} | {status:12s} | {str(delta)[:60]}")
         print(f"  {'':20s}   Zeit: {(e.get('event_time') or '')[:19]}")
 
 
@@ -150,6 +154,9 @@ def cmd_ingest(args):
             )
             if r.get("error"):
                 errors += 1
+                # Surface which item failed and why — an aggregate count alone
+                # leaves ingest errors undiagnosable.
+                print(f"  ❌ {r.get('message', 'Fehler')}")
             elif r.get("created"):
                 created += 1
             else:
@@ -158,7 +165,11 @@ def cmd_ingest(args):
             errors += 1
             print(f"  ❌ Fehler: {e}")
 
-    print(f"✅ Ingest abgeschlossen: {created} neu, {exists} vorhanden, {errors} Fehler")
+    if errors:
+        # Partial failures must not be masked by a green success banner.
+        print(f"⚠️ Ingest beendet mit Fehlern: {created} neu, {exists} vorhanden, {errors} Fehler")
+    else:
+        print(f"✅ Ingest abgeschlossen: {created} neu, {exists} vorhanden, {errors} Fehler")
 
 
 def cmd_scan(args):
@@ -185,7 +196,17 @@ def cmd_scan(args):
         print("  Trust unverändert — Neuberechnung mit: nexus scan --recompute")
         return
 
-    stats = recompute_all()
+    # recompute_all() issues raw requests.post/r.json() calls — an outage,
+    # timeout or non-JSON error body must degrade to the friendly error path
+    # used elsewhere in this file, not an unhandled traceback.
+    try:
+        stats = recompute_all()
+    except requests.RequestException as e:
+        print(f"\n❌ Qdrant nicht erreichbar: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Recompute fehlgeschlagen: {e}")
+        sys.exit(1)
     print(f"\n📊 Ergebnis:")
     print(f"  Gesamt:  {stats['total']}")
     print(f"  Geändert: {stats['changed']}")
@@ -224,16 +245,26 @@ def cmd_verify():
     from nexus.config import is_success
     from nexus.events import verify_collection as verify_events
     from nexus.apply import ensure_beliefs_collection, QDRANT_URL, BELIEFS_COLLECTION
+    import requests
 
-    # nexus_events
-    ev = verify_events()
-    print(f"📦 nexus_events ({'✅' if ev['exists'] else '❌'}):")
-    print(f"  Points:  {ev['points']}")
-    print(f"  Indizes: {ev['indexes']}")
+    # nexus_events — verify_collection() performs an unguarded requests.get,
+    # so an unreachable Qdrant would abort with a raw ConnectionError before
+    # the (already guarded) beliefs probe runs.
+    try:
+        ev = verify_events()
+    except requests.RequestException as e:
+        print(f"📦 nexus_events (❌): Qdrant nicht erreichbar — {e}")
+    else:
+        print(f"📦 nexus_events ({'✅' if ev['exists'] else '❌'}):")
+        print(f"  Points:  {ev['points']}")
+        print(f"  Indizes: {ev['indexes']}")
 
     # nexus_beliefs — ensure collection exists (side effect only, return unused)
-    ensure_beliefs_collection()
-    import requests
+    try:
+        ensure_beliefs_collection()
+    except requests.RequestException as e:
+        print(f"\n📦 nexus_beliefs (❌): Qdrant nicht erreichbar — {e}")
+        return
     # H183/H184: configurable base URL + guarded GET with defensive .get() chain.
     try:
         r = requests.get(f"{QDRANT_URL}/collections/{BELIEFS_COLLECTION}", timeout=5)

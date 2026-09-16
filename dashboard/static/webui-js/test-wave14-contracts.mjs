@@ -26,10 +26,12 @@ test('H145: no bare applyFilters() call remains', () => {
   assert.doesNotMatch(appSrc, /^\s*applyFilters\(\);\s*$/m);
 });
 
-test('H145: all 4 handler sites use the guarded wrapper', () => {
+test('H145: handler sites use the guarded wrapper (no bare calls, sites >= 4)', () => {
   assert.match(appSrc, /void applyFilters\(\)\.catch\(/);
   const calls = appSrc.match(/queueApplyFilters\(\);/g) || [];
-  assert.equal(calls.length, 4, 'change x3 + debounced input = 4 call sites');
+  // W38 (medium): exakte Zählung bricht bei legitimen Refactors. Unter-Grenze:
+  // die 3 change-Handler + debounced input müssen da sein; MEHR Sites sind kein Fehler.
+  assert.ok(calls.length >= 4, `erwartet >= 4 queueApplyFilters-Sites, gefunden: ${calls.length}`);
 });
 
 // ── H146: dead ternary removed ──────────────────────────────────────────────
@@ -95,7 +97,10 @@ test('H404: graph.html loads colors.js before graph.js', () => {
   const colorsAt = html.indexOf('webui-js/colors.js');
   const graphAt = html.indexOf('webui-js/graph.js');
   const appAt = html.indexOf('webui-js/app.js');
-  assert.ok(colorsAt !== -1, 'colors.js must be included');
+  // W38 (low): fehlende Scripts liefern sonst eine irreführende "load order"-Meldung.
+  assert.ok(colorsAt !== -1, 'colors.js fehlt in graph.html (script-tag umbenannt?)');
+  assert.ok(graphAt !== -1, 'graph.js fehlt in graph.html (script-tag umbenannt?)');
+  assert.ok(appAt !== -1, 'app.js fehlt in graph.html (script-tag umbenannt?)');
   assert.ok(colorsAt < graphAt && graphAt < appAt, 'load order: colors → graph → app');
 });
 
@@ -144,11 +149,19 @@ test('H148-H150: request() behaviour with a stubbed fetch', async () => {
     });
     await assert.rejects(() => API.request('/api/x'), /HTTP 503: qdrant unreachable/);
 
-    // abort path: a clear timeout message instead of "The operation was aborted"
-    const abortErr = new Error('aborted');
-    abortErr.name = 'AbortError';
-    globalThis.fetch = () => Promise.reject(abortErr);
+    // abort path (W38, medium): ECHTER AbortController — der Stub prüft, dass das
+    // Signal der Produktion überhaupt mitgegeben wurde, und lehnt dann real ab.
+    // Ein Regression, die controller.signal nicht an fetch durchreicht, wird so sichtbar.
+    const seenSignals = [];
+    globalThis.fetch = (_url, opts = {}) => {
+      seenSignals.push(opts.signal ?? null);
+      const abortErr = new Error('aborted');
+      abortErr.name = 'AbortError';
+      return Promise.reject(abortErr);
+    };
     await assert.rejects(() => API.request('/api/x'), /Request timed out after 15000ms: \/api\/x/);
+    assert.ok(seenSignals.length === 1, `request() muss genau 1 fetch rufen, waren ${seenSignals.length}`);
+    assert.ok(seenSignals[0] instanceof AbortSignal, 'request() muss controller.signal an fetch übergeben (H149)');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -158,10 +171,15 @@ test('H148-H150: request() behaviour with a stubbed fetch', async () => {
 
 test('H151: load() and why() both use the request token', () => {
   assert.match(inspSrc, /_reqSeq: 0/);
+  // W38 (medium): strukturelle Proxy-Counts (starts===2, checks>=4) brechen bei
+  // harmlosen Refactors. Semantik bleibt: JEDER load/why-Einstieg erzeugt einen
+  // Token, jede Rückkehr prüft ihn — mindestens je 2/4, aber keine Obergrenze.
   const starts = inspSrc.match(/const token = \+\+this\._reqSeq;/g) || [];
-  assert.equal(starts.length, 2, 'load() + why()');
+  assert.ok(starts.length >= 2, `erwartet >= 2 Token-Starts (load + why), gefunden: ${starts.length}`);
   const checks = inspSrc.match(/if \(token !== this\._reqSeq\) return;/g) || [];
   assert.ok(checks.length >= 4, 'success + catch in each method');
+  // Jeder Start hat mindestens eine zugehörige Prüfung (Paarungs-Beweis):
+  assert.ok(checks.length >= starts.length, 'jeder Token-Start braucht mindestens eine Token-Prüfung');
 });
 
 // ── H152/H153/H406: graph.js ────────────────────────────────────────────────
