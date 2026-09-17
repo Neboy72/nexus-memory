@@ -300,11 +300,16 @@ class TestNr484WebhookSsrfGuard:
 
     def test_source_blocks_private_ranges(self):
         src = _read("src/nexus_memory/mcp_server.py")
-        seg = src[src.index("async def subscribe"):]
-        seg = seg[:seg.index("\n    async def ", 10)]
+        # v0.20.2: checks moved into canonical _assert_ssrf_safe (DNS +
+        # numeric-form coverage); subscribe() calls it for webhook_url.
+        seg = src[src.index("def _assert_ssrf_safe"):]
+        seg = seg[:seg.index("\n\nasync def ") if "\n\nasync def " in seg else seg.index("\n\nclass ")]
         assert "ipaddress" in src
-        for needle in ("is_loopback", "is_link_local", "is_private", "localhost"):
+        for needle in ("is_loopback", "is_link_local", "is_private", "localhost", "getaddrinfo", "inet_aton"):
             assert needle in seg, needle
+        sub_seg = src[src.index("async def subscribe"):]
+        sub_seg = sub_seg[:sub_seg.index("\n    async def ", 10)]
+        assert "_assert_ssrf_safe" in sub_seg
 
     def test_behavior_loopback_rejected(self):
         with __import__("pytest").raises(ValueError):

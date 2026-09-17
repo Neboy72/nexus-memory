@@ -1,3 +1,30 @@
+## [0.20.2] - 2026-09-17
+
+### Security hardening (independent audit round)
+
+- **SSRF guard consolidated + bypass closed (F2a).** A canonical
+  `_assert_ssrf_safe()` now gates every outbound sink: `subscribe()`,
+  `_post_webhook()` (defense-in-depth at delivery time), and
+  `_check_sources()`. The guard resolves hostnames via
+  `socket.getaddrinfo`, which covers numeric-form tricks such as
+  `http://127.1/` or `http://2130706433/` that `ipaddress.ip_address`
+  previously rejected as non-IPs and let through. Proven 9/9 attack
+  vectors blocked, 2/2 benign hosts pass.
+- **`source_url` fetch guard (F2b).** Provenance HEAD/curl checks now run
+  through the same SSRF gate — internal targets report `unreachable`
+  instead of leaking reachability to prompt-injectable URLs.
+- **Untrusted-content marking (F3).** Auto-recall context blocks
+  (Claude-Code hook and Hermes prefetch) now open with an explicit
+  data-not-instructions banner, so injected memory content is framed as
+  untrusted by construction.
+- **Test alignment.** `test_source_blocks_private_ranges` now asserts the
+  canonical guard's coverage (getaddrinfo + inet_aton) and that
+  `subscribe()` calls it.
+
+Beweis-Kranz: full suite 1945/1946 green (1 pre-existing env-dependent
+failure, proven by stash), throwaway-container counter-probe 159/159
+green, gitleaks clean.
+
 ## [0.20.1] - 2026-09-16
 
 ### Fixed
