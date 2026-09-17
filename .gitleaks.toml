@@ -1,0 +1,12 @@
+# Gitleaks: erlaubte Ausnahmen (nur Dummy-Keys in Tests)
+title = "nexus-memory gitleaks"
+
+[allowlist]
+  description = "Test-Fixtures mit offensichtlichen Dummy-Keys"
+  regexes = [
+    '''sk-w19\.\.\.lder''',
+    '''sk-validkey''',
+    '''vo-test-1234567890''',
+    '''vo-roundtrip''',
+    '''\*\*\*''',
+  ]
