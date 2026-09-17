@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import socket
 import stat as stat_module
 import sys
 import threading
@@ -95,6 +96,42 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 # feature has zero new dependencies and no impact on the Qdrant collection.
 WEBHOOK_EVENTS = ("memory.remember", "memory.update", "memory.forget", "fuel.exhausted")
 WEBHOOK_STORE_PATH = Path.home() / ".nexus-webhooks.json"
+
+
+def _assert_ssrf_safe(url: str, *, what: str = "url") -> None:
+    """Raise ValueError if ``url`` targets loopback/link-local/private/reserved
+    space. Canonical SSRF gate (v0.20.2 hardening): hostname resolution via
+    socket.getaddrinfo (covers decimal-IP, octal and zero-padded tricks like
+    ``http://127.1/`` or ``http://2130706433/`` that ``ipaddress.ip_address``
+    rejects as non-IPs), plus the original literal-IP check. Every resolved
+    address must be safe.
+    """
+    host = urlsplit(url).hostname
+    if not host:
+        raise ValueError(f"{what} has no hostname: {url!r}")
+    h = host.lower().rstrip(".")
+    if h == "localhost" or h.endswith(".local") or h == "metadata.google.internal":
+        raise ValueError(f"{what} must not target localhost/internal names")
+    candidates: list[str] = []
+    try:
+        candidates.append(ipaddress.ip_address(h))
+    except ValueError:
+        try:
+            candidates.append(ipaddress.ip_address(socket.inet_aton(h)))
+        except (OSError, ValueError):
+            pass
+        try:
+            for info in socket.getaddrinfo(h, None):
+                try:
+                    candidates.append(ipaddress.ip_address(info[4][0]))
+                except ValueError:
+                    pass
+        except socket.gaierror:
+            return
+    for ip in candidates:
+        if (ip.is_loopback or ip.is_link_local or ip.is_private
+                or ip.is_unspecified or ip.is_reserved or ip.is_multicast):
+            raise ValueError(f"{what} must not target a loopback/private/reserved IP")
 
 
 class WebhookStore:
@@ -236,28 +273,9 @@ class WebhookStore:
                 "webhook_url must be a non-empty http:// or https:// URL"
             )
 
-        # SSRF guard. Webhooks are an owner feature, but webhook_url is
-        # prompt-injectable, so block loopback/link-local/private targets.
-        # 192.168/10/172 are blocked DELIBERATELY: inward Home-Assistant
-        # webhooks are not the use-case, and 169.254 (metadata) always is.
-        host = urlsplit(webhook_url).hostname
-        if host:
-            h = host.lower()
-            if h == "localhost" or h.endswith(".local"):
-                raise ValueError(
-                    "webhook_url must not target localhost or a .local host"
-                )
-            try:
-                ip = ipaddress.ip_address(h)
-            except ValueError:
-                ip = None
-            if ip is not None and (
-                ip.is_loopback or ip.is_link_local
-                or ip.is_private or ip.is_unspecified
-            ):
-                raise ValueError(
-                    "webhook_url must not target a loopback/private IP"
-                )
+        # SSRF guard (v0.20.2 hardening): canonical gate with DNS +
+        # numeric-form resolution (blocks http://127.1/, http://2130706433/).
+        _assert_ssrf_safe(webhook_url, what="webhook_url")
 
         sub = {
             "id": str(uuid.uuid4()),
@@ -375,6 +393,10 @@ async def _post_webhook(url: str, payload: dict) -> None:
     """
     body = json.dumps(payload).encode("utf-8")
     try:
+        # Defense-in-depth (v0.20.2): re-check at the sink — DNS may have
+        # been poisoned between subscribe-time check and delivery, and
+        # stored URLs predate the hardening.
+        _assert_ssrf_safe(url, what="webhook_url")
         try:
             import httpx  # type: ignore
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -880,6 +902,19 @@ class MemoryStore:
         if not unique_urls:
             return {}
         results = {}
+        # v0.20.2 SSRF hardening: provenance URLs come from stored content
+        # (prompt-injectable) — internal targets are never fetched and
+        # report as "unreachable" instead of leaking reachability.
+        safe_urls: list[str] = []
+        for u in unique_urls:
+            try:
+                _assert_ssrf_safe(u, what="source_url")
+                safe_urls.append(u)
+            except ValueError:
+                results[u] = "unreachable"
+        unique_urls = safe_urls
+        if not unique_urls:
+            return {}
 
         async def _check(url: str):
             try:
