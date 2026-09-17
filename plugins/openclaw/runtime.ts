@@ -201,16 +201,32 @@ export function setUpdateCheckResult(result: UpdateCheckResult): void {
  * This is the only mutation of the nudge state; `buildPromptSection` itself is
  * pure, which makes the once-per-process behavior deterministically testable.
  */
-export function consumeUpdateNudge(): { text: string | null } {
-  if (updateNudged || !updateInfo?.available) return { text: null }
+/** Shared tool-name constants — single source of truth. OCR-6 (L941):
+ *  the names used to be hardcoded in buildPromptSection, index.ts's
+ *  availableTools checks, AND the tools' defaults; a rename in one place
+ *  silently disabled the prompt section + update nudge for that tool. */
+export const NEXUS_SEARCH_TOOL = "nexus_search"
+export const NEXUS_STORE_TOOL = "nexus_store"
+
+export function consumeUpdateNudge(): { text: string | null; lines: string[] } {
+  // OCR-6 (maintainability low, L953): the lines are returned alongside the
+  // text so the caller hands the SAME derivation to buildPromptSection —
+  // previously promptBuilder and buildPromptSection each re-derived the nudge
+  // lines from updateInfo through two independent boolean checks that could
+  // drift apart (once-per-process state depending on two derivations agreeing).
+  if (updateNudged || !updateInfo?.available) return { text: null, lines: [] }
   const { lines } = buildUpdateNudgeLines(updateInfo, false)
-  if (lines.length === 0) return { text: null }
+  if (lines.length === 0) return { text: null, lines: [] }
   updateNudged = true
-  return { text: lines.join("\n").trim() }
+  return { text: lines.join("\n").trim(), lines }
 }
 
 export function buildPromptSection(params: {
   availableTools: Set<string>
+  /** OCR-6 (L953): pre-computed nudge lines from consumeUpdateNudge() — the
+   *  single derivation shared between the caller and this function. When
+   *  omitted the fallback re-derives from updateInfo (nudged flag). */
+  nudgeLines?: string[]
   /**
    * True when this process has already emitted the update nudge. The caller
    * owns that decision (consumeUpdateNudge); this function never mutates it,
@@ -218,8 +234,8 @@ export function buildPromptSection(params: {
    */
   nudged?: boolean
 }): string[] {
-  const hasSearch = params.availableTools.has("nexus_search")
-  const hasStore = params.availableTools.has("nexus_store")
+  const hasSearch = params.availableTools.has(NEXUS_SEARCH_TOOL)
+  const hasStore = params.availableTools.has(NEXUS_STORE_TOOL)
   if (!hasSearch && !hasStore) return []
 
   const lines: string[] = [
@@ -232,12 +248,12 @@ export function buildPromptSection(params: {
 
   if (hasSearch) {
     lines.push(
-      "Use nexus_search to look up prior conversations, preferences, and facts.",
+      `Use ${NEXUS_SEARCH_TOOL} to look up prior conversations, preferences, and facts.`,
     )
   }
   if (hasStore) {
     lines.push(
-      "Use nexus_store to save important information the user asks you to remember.",
+      `Use ${NEXUS_STORE_TOOL} to save important information the user asks you to remember.`,
     )
   }
 
@@ -245,7 +261,12 @@ export function buildPromptSection(params: {
   // H138: reuses buildUpdateNudgeLines (single source of the nudge string) and
   // reads `updateInfo` read-only — the old version mutated a module global
   // here, which made the second prompt section nondeterministic.
-  if (updateInfo) {
+  // OCR-6 (L953): nudge lines come from the CALLER (the same consumeUpdateNudge
+  // derivation, single source of truth) when provided; the re-derivation from
+  // module-global updateInfo remains as the fallback for direct callers.
+  if (params.nudgeLines && params.nudgeLines.length > 0) {
+    lines.push(...params.nudgeLines)
+  } else if (updateInfo) {
     const { lines: nudgeLines } = buildUpdateNudgeLines(updateInfo, params.nudged === true)
     lines.push(...nudgeLines)
   }

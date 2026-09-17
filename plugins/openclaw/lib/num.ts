@@ -18,6 +18,12 @@
  *  - Fractions are truncated toward zero (Math.trunc).
  *  - The result is clamped into [min, max]. `dflt` is clamped the same way, so
  *    a misconfigured default can never escape the declared bounds.
+ *    OCR-6 (documentation medium, L795): DEGENERATE bounds are the exception —
+ *    if the interval contains no integer (min=0.5, max=0.9) or is inverted
+ *    (min=5, max=3.5), the collapse (Math.floor of the lower bound) can land
+ *    BELOW `min` (0 or 3). The comment inside documents why the clamp
+ *    direction is fail-closed; callers must not assume result >= min holds
+ *    for such bounds.
  *  - Negative inputs are NOT treated as "missing": they clamp up to `min`.
  *  - String parsing is `Number()` semantics: "0x1f" (31), "1e5" and
  *    surrounding whitespace are accepted on purpose. Note that "1e999"
@@ -49,7 +55,13 @@ export function clampInt(
   // for schema-bypassing hosts, and fail-closed (tiny) beats fail-open
   // (unbounded).
   const hiRaw = Number.isFinite(max) ? max : Number.isFinite(min) ? min : 0
-  const loRaw = Number.isFinite(min) ? min : hiRaw
+  // OCR-6 (bug high): the old `loRaw = finite min ? min : hiRaw` collapsed a
+  // non-finite MIN onto the finite MAX — clampInt(x, 1, NaN, 1000) returned
+  // 1000 for every input: the fail-OPEN direction, contradicting the
+  // fail-closed contract above. A non-finite min declares no lower bound, so
+  // the safe collapse is the SMALLEST value: 0 when it fits under the upper
+  // bound, else the (negative) upper bound itself.
+  const loRaw = Number.isFinite(min) ? min : Math.min(0, hiRaw)
   // OCR-5 (bug medium): the old Math.min/Math.max swap silently REORDERED an
   // inverted interval (min=5, max=3 → [3,5]) and clampInt(4,…) returned 4 —
   // above the declared max AND below the declared min, i.e. fail-open,

@@ -13,6 +13,8 @@ import {
   buildMemoryRuntime,
   buildPromptSection,
   consumeUpdateNudge,
+  NEXUS_SEARCH_TOOL,
+  NEXUS_STORE_TOOL,
   setUpdateCheckResult,
 } from "./runtime.ts"
 import { checkForUpdate } from "./lib/update-check.ts"
@@ -101,15 +103,21 @@ export default {
     // buildPromptSection returns [] and the consumed nudge would be thrown
     // away forever (no reset), so no session would ever see the update hint.
     const promptBuilder = (params: { availableTools: Set<string> }) => {
-      const hasSearch = params.availableTools.has("nexus_search")
-      const hasStore = params.availableTools.has("nexus_store")
+      const hasSearch = params.availableTools.has(NEXUS_SEARCH_TOOL)
+      const hasStore = params.availableTools.has(NEXUS_STORE_TOOL)
       // OCR-5 (bug low): the flag name hid the semantics — `nudged: text ===
       // null` was true EXACTLY when nothing fresh was consumed (no update OR
       // already shown). Explicit named flag + comment so a future change of
       // consumeUpdateNudge() semantics cannot silently invert this.
-      const nudge = hasSearch || hasStore ? consumeUpdateNudge() : { text: null }
+      const nudge = hasSearch || hasStore ? consumeUpdateNudge() : { text: null, lines: [] }
       const nudgeConsumed = nudge.text !== null // fresh nudge handed out THIS build
-      return buildPromptSection({ availableTools: params.availableTools, nudged: !nudgeConsumed })
+      // OCR-6 (L953): hand the SAME derivation to buildPromptSection instead
+      // of letting it re-derive from updateInfo (single source of truth).
+      return buildPromptSection({
+        availableTools: params.availableTools,
+        nudged: !nudgeConsumed,
+        nudgeLines: nudge.lines,
+      })
     }
 
     let memoryCapabilityRegistered = false
@@ -134,7 +142,7 @@ export default {
 
     // Register tools
     registerSearchTool(api, embedder, qdrantClient, cfg)
-    registerStoreTool(api, embedder, qdrantClient, cfg, "nexus_store", centroidCache)
+    registerStoreTool(api, embedder, qdrantClient, cfg, NEXUS_STORE_TOOL, centroidCache)
     registerForgetTool(api, embedder, qdrantClient, cfg)
     registerGuardrailCheckTool(api, qdrantClient, cfg)
     registerGuardrailOverrideTool(api, qdrantClient, cfg, embedder)

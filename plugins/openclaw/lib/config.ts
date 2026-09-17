@@ -19,6 +19,10 @@ export type NexusConfig = {
   autoCapture: boolean
   thoughtFilter: boolean
   maxRecallResults: number
+  /** OCR-6 (maintainability low, L655): minimum similarity score the forget
+   *  tool requires before deleting a query match (deployment-tunable).
+   *  Default 0.8. */
+  forgetMinScore: number
   accessLevel: AccessLevel
   /** Project/agent area label (unreleased): auto-recall surfaces only
    *  'default'-scoped memories plus this agent's own scope. Explicit
@@ -35,6 +39,7 @@ const ALLOWED_KEYS = [
   "autoCapture",
   "thoughtFilter",
   "maxRecallResults",
+  "forgetMinScore",
   "accessLevel",
   "scope",
   "debug",
@@ -211,6 +216,12 @@ export function parseConfig(raw: unknown): NexusConfig {
     autoCapture: toBool(cfg.autoCapture, true),
     thoughtFilter: toBool(cfg.thoughtFilter, true),
     maxRecallResults: toClampedInt(cfg.maxRecallResults, 10, 1, 20),
+    // OCR-6 (maintainability low, L655): forget-tool confidence threshold is
+    // deployment-tunable — clamped into [0, 1] like the contract below.
+    forgetMinScore:
+      typeof cfg.forgetMinScore === "number" && Number.isFinite(cfg.forgetMinScore)
+        ? Math.min(1, Math.max(0, cfg.forgetMinScore))
+        : 0.8,
     accessLevel,
     scope,
     debug: toBool(cfg.debug, false),
@@ -238,6 +249,7 @@ export const nexusConfigSchema = {
       autoCapture: { type: "boolean" },
       thoughtFilter: { type: "boolean" },
       maxRecallResults: { type: "number", minimum: 1, maximum: 20 },
+      forgetMinScore: { type: "number", minimum: 0, maximum: 1 },
       accessLevel: { type: "string", enum: VALID_ACCESS_LEVELS },
       scope: { type: "string" },
       debug: { type: "boolean" },

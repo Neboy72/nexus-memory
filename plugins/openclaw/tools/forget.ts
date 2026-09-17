@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
+import { visibleAccessLevels } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { limitText, PREVIEW_MAX } from "../lib/text-preview.ts"
 import { log } from "../logger.ts"
@@ -11,7 +12,27 @@ import { log } from "../logger.ts"
  * ALWAYS returns the nearest hits, however bad — without this threshold an
  * unrelated memory would be silently deleted.
  */
-const FORGET_MIN_SCORE = 0.8
+// OCR-6 (maintainability low, L655): the confidence threshold is now a
+// deployment-tunable config field (forgetMinScore, default 0.8) instead of a
+// hardcoded literal.
+
+/**
+ * OCR-6 (maintainability low, L664): the lookup-failure envelope was
+ * duplicated across the by-id and by-query paths (and a later fix to one copy
+ * could drift from the others). One shared error envelope instead.
+ */
+function lookupFailedEnvelope(logPrefix: string, err: unknown) {
+  log.error(`${logPrefix} lookup failed`, err)
+  return {
+    isError: true as const,
+    content: [
+      {
+        type: "text" as const,
+        text: "Memory lookup failed (Qdrant error), delete skipped. Retry shortly.",
+      },
+    ],
+  }
+}
 
 export function registerForgetTool(
   api: OpenClawPluginApi,
@@ -44,8 +65,15 @@ export function registerForgetTool(
         // and hit the lookup/delete path with a meaningless id/query. Trim
         // before the emptiness check so a blank string is "missing" like it
         // should be.
-        const hasMemoryId = typeof memoryId === "string" && memoryId.trim().length > 0
-        const hasQuery = typeof query === "string" && query.trim().length > 0
+        // OCR-6 (bug medium): the guards trimmed, but the DISPATCH used the raw
+        // values — `"   "` with a real query passed hasMemoryId===false yet was
+        // truthy in `if (memoryId)`, silently taking the direct-delete path and
+        // ignoring the query; a padded id/query went verbatim to
+        // scrollPointStrict/delete/embed. Normalize once, use everywhere.
+        const normMemoryId = typeof memoryId === "string" ? memoryId.trim() : undefined
+        const normQuery = typeof query === "string" ? query.trim() : undefined
+        const hasMemoryId = typeof normMemoryId === "string" && normMemoryId.length > 0
+        const hasQuery = typeof normQuery === "string" && normQuery.length > 0
 
         // Ambiguous input must never silently pick one of the two paths:
         // `memoryId` takes precedence today, so a stray query would be ignored.
@@ -62,8 +90,8 @@ export function registerForgetTool(
         }
 
         // Direct delete by ID
-        if (memoryId) {
-          log.debug(`forget tool: direct delete id="${memoryId}"`)
+        if (normMemoryId) {
+          log.debug(`forget tool: direct delete id="${normMemoryId}"`)
 
           try {
             // Verify the point exists BEFORE deleting: Qdrant's delete is a
@@ -76,7 +104,7 @@ export function registerForgetTool(
             // what is actually a retryable outage.
             let existing: { id: string; payload?: Record<string, unknown> } | null = null
             try {
-              existing = await qdrantClient.scrollPointStrict(memoryId)
+              existing = await qdrantClient.scrollPointStrict(normMemoryId)
             } catch (err) {
               // Fail-closed on a lookup error: do NOT delete (deleting on an
               // unverified id is the unsafe direction). The caller can retry.
@@ -84,16 +112,7 @@ export function registerForgetTool(
               // MCP clients that only inspect isError treated a failed,
               // skipped delete as a successful outcome (the only signal was
               // prose). A skipped delete is a FAILURE: mark it.
-              log.error("forget tool (by ID) lookup failed", err)
-              return {
-                isError: true,
-                content: [
-                  {
-                    type: "text" as const,
-                    text: "Memory lookup failed (Qdrant error), delete skipped. Retry shortly.",
-                  },
-                ],
-              }
+              return lookupFailedEnvelope("forget tool (by ID)", err)
             }
 
             if (existing === null) {
@@ -104,7 +123,31 @@ export function registerForgetTool(
               }
             }
 
-            await qdrantClient.delete(memoryId)
+            // OCR-6 (security high): the direct-id path performed NO
+            // access-level check — anyone who knew or guessed an id could
+            // delete memories outside its visibility scope, while the query
+            // path always constrains via cfg.accessLevel. The point payload
+            // carries access_level: fail closed (skip) when the memory's
+            // level is not visible to this agent.
+            const memoryLevel = String(
+              (existing.payload as Record<string, unknown> | undefined)?.access_level ?? "",
+            )
+            if (!visibleAccessLevels(cfg.accessLevel).includes(memoryLevel)) {
+              log.warn(
+                `forget tool: delete refused — memory access_level "${memoryLevel}" not visible at agent level "${cfg.accessLevel}"`,
+              )
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Delete refused: this memory is outside your access level.",
+                  },
+                ],
+              }
+            }
+
+            await qdrantClient.delete(normMemoryId)
             return {
               content: [{ type: "text" as const, text: "Memory forgotten." }],
             }
@@ -123,11 +166,11 @@ export function registerForgetTool(
         }
 
         // Search-then-delete by query
-        if (query) {
-          log.debug(`forget tool: search-then-delete query="${query}"`)
+        if (normQuery) {
+          log.debug(`forget tool: search-then-delete query="${normQuery}"`)
 
           try {
-            const queryVector = await embedder.embed(query)
+            const queryVector = await embedder.embed(normQuery)
             const results = await qdrantClient.searchByVector(queryVector, 5, cfg.accessLevel)
 
             if (results.length === 0) {
@@ -143,14 +186,18 @@ export function registerForgetTool(
             // Guard against a low-confidence match: refuse to delete when the
             // best hit is below the threshold, and ask for a precise query or
             // a direct memory_id instead.
-            if (target.score < FORGET_MIN_SCORE) {
+            if (target.score < cfg.forgetMinScore) {
+              // OCR-6 (bug medium): a refused deletion is a non-performed
+              // deletion — consistent isError signalling with the other
+              // skipped-delete branches.
               return {
+                isError: true,
                 content: [
                   {
                     type: "text" as const,
                     text:
                       `Unsicher (Score ${target.score.toFixed(3)} unter Threshold ` +
-                      `${FORGET_MIN_SCORE}) — bitte mit memory_id löschen oder ` +
+                      `${cfg.forgetMinScore}) — bitte mit memory_id löschen oder ` +
                       `präziser formulieren.`,
                   },
                 ],
@@ -166,7 +213,12 @@ export function registerForgetTool(
             try {
               const stillThere = await qdrantClient.scrollPointStrict(target.id)
               if (stillThere === null) {
+                // OCR-6 (bug medium): a vanished target is a non-performed
+                // deletion — clients that only inspect isError must not read
+                // it as a successful forget (same signalling as the other
+                // skipped-delete branches).
                 return {
+                  isError: true,
                   content: [
                     {
                       type: "text" as const,
@@ -176,16 +228,7 @@ export function registerForgetTool(
                 }
               }
             } catch (verifyErr) {
-              log.error("forget tool (by query) existence verify failed", verifyErr)
-              return {
-                isError: true,
-                content: [
-                  {
-                    type: "text" as const,
-                    text: "Memory lookup failed (Qdrant error), delete skipped. Retry shortly.",
-                  },
-                ],
-              }
+              return lookupFailedEnvelope("forget tool (by query)", verifyErr)
             }
             await qdrantClient.delete(target.id)
 

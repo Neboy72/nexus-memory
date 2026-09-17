@@ -32,7 +32,7 @@ const ACCESS_LEVEL_ORDER: Record<string, number> = {
  * Returns the list of access levels that are visible to an agent with the
  * given access level. An agent can see memories at its own level or below.
  */
-function visibleAccessLevels(level: string): string[] {
+export function visibleAccessLevels(level: string): string[] {
   // Fail-closed: an unknown level must NOT degrade to public (0), which made
   // every memory visible. An unrecognized level sees nothing at all.
   const agentOrder = ACCESS_LEVEL_ORDER[level]
@@ -61,9 +61,15 @@ export class QdrantClient {
   // first-writes share ONE create instead of racing two PUTs (loser 409s).
   private ensurePromise: Promise<void> | undefined = undefined
 
+  /** OCR-6 (maintainability low, L898): store the configured dimensions —
+   *  the lazy ensure in upsert() previously fell back to vector.length, so a
+   *  single wrong-length vector could create the collection at the wrong
+   *  size and brick every later (correct) upsert until manual intervention. */
+  private configuredDimensions: number
   constructor(qdrantUrl: string, collection: string, dimensions: number) {
     this.qdrantUrl = qdrantUrl.replace(/\/+$/, "")
     this.collection = collection
+    this.configuredDimensions = dimensions
     log.info(`Qdrant client initialized (url=${this.qdrantUrl}, collection=${collection}, dims=${dimensions})`)
   }
 
@@ -79,7 +85,31 @@ export class QdrantClient {
    *   provided may an existing mismatch be deleted and recreated.
    * @param backupPath   Path to a verified backup — required for recreate.
    */
+  /**
+   * OCR-6 (bug medium, Z872): memoized entry point. Every caller — the
+   * fire-and-forget startup call in index.ts, the lazy ensure in upsert(),
+   * direct callers — shares ONE in-flight create; before, only the upsert()
+   * path was memoized and the startup ensure could still race it into the
+   * 409/400 "loser" create the OCR-5 comment claims is fixed. Explicit
+   * recreate calls (allowRecreate=true) bypass the memo: they are deliberate,
+   * one-shot administrative operations.
+   */
   async ensureCollection(
+    dimensions: number,
+    allowRecreate: boolean = false,
+    backupPath?: string,
+  ): Promise<void> {
+    if (!allowRecreate) {
+      if (this.ensurePromise) return this.ensurePromise
+      this.ensurePromise = this.ensureCollectionOnce(dimensions).finally(() => {
+        this.ensurePromise = undefined
+      })
+      return this.ensurePromise
+    }
+    return this.ensureCollectionOnce(dimensions, allowRecreate, backupPath)
+  }
+
+  private async ensureCollectionOnce(
     dimensions: number,
     allowRecreate: boolean = false,
     backupPath?: string,
@@ -144,14 +174,27 @@ export class QdrantClient {
         // the irreversible DELETE runs. A stale/typo'd path now throws
         // instead of wiping every stored point against a dead backup.
         let backupSize = 0
+        // OCR-6 (security high): statSync on a DIRECTORY returns a non-zero
+        // size (4096 on Linux) — a folder path satisfied the gate and the
+        // irreversible DELETE ran against a backup that was never a backup.
+        // The isFile() check must happen OUTSIDE the catch below: throwing
+        // inside the try would be swallowed and mislabelled "does not exist".
+        let backupStat: ReturnType<typeof statSync>
         try {
-          backupSize = statSync(backupPath).size
+          backupStat = statSync(backupPath)
         } catch {
           throw new Error(
             `refusing recreate: backupPath \"${backupPath}\" does not exist or is not readable ` +
             `(collection \"${this.collection}\" is NOT deleted)`,
           )
         }
+        if (!backupStat.isFile()) {
+          throw new Error(
+            `refusing recreate: backupPath \"${backupPath}\" is not a regular file — ` +
+            `no verified backup, collection \"${this.collection}\" is NOT deleted`,
+          )
+        }
+        backupSize = backupStat.size
         if (backupSize === 0) {
           throw new Error(
             `refusing recreate: backup \"${backupPath}\" is empty (0 bytes) — ` +
@@ -168,10 +211,15 @@ export class QdrantClient {
         // collection in place, so the recreate-branch below either failed
         // confusingly or upserted into a wrong-dimension collection. Refuse
         // to continue on any non-2xx, and bound the request with a timeout.
-        const deleteResp = await fetch(url, {
-          method: "DELETE",
-          signal: AbortSignal.timeout(10000),
-        })
+        // OCR-6 (maintainability low, L909): route through the shared
+        // fetchWithTimeout helper — same 10s bound (destructive path is
+        // deliberately shorter than the default), but the abort/signal
+        // merging now lives in ONE place like every other request.
+        const deleteResp = await fetchWithTimeout(
+          url,
+          { method: "DELETE" },
+          10_000,
+        )
         if (!deleteResp.ok) {
           throw new Error(
             `DELETE failed HTTP ${deleteResp.status} — refusing recreate ` +
@@ -254,6 +302,29 @@ export class QdrantClient {
    * POST /collections/{collection}/points/search
    * { vector, limit, with_payload: true, filter: { must: [{ key: "access_level", match: { any: [...] } }] } }
    */
+  /**
+   * OCR-6 (bug medium): map one Qdrant hit to a SearchResult. The mapping
+   * used to be duplicated in search() and searchByVector() and had already
+   * drifted — searchByVector dropped the `scope` field, so forget-by-query
+   * lost scope for every hit. One helper, both callers.
+   */
+  private mapHit(r: {
+    id: string | number
+    score: number
+    payload?: Record<string, unknown>
+  }): SearchResult {
+    return {
+      id: String(r.id),
+      text: (r.payload?.text as string) ?? "",
+      score: r.score,
+      access_level: (r.payload?.access_level as string) ?? "public",
+      category: (r.payload?.category as string) ?? "fact",
+      source: (r.payload?.source as string) ?? "conversation",
+      created_at: (r.payload?.created_at as string) ?? "",
+      scope: (r.payload?.scope as string) ?? undefined,
+    }
+  }
+
   async search(queryVector: number[], limit: number, accessLevel: string): Promise<SearchResult[]> {
     const levels = visibleAccessLevels(accessLevel)
 
@@ -269,9 +340,13 @@ export class QdrantClient {
     }
 
     const filter =
-      levels.length < 3
+      // OCR-6 (bug medium): the literal `3` hardcoded ACCESS_LEVEL_ORDER's
+      // size — adding a level above private silently DROPPED the filter for
+      // private agents (leaking the new higher-privilege memories). Compare
+      // against the hierarchy size instead.
+      levels.length < Object.keys(ACCESS_LEVEL_ORDER).length
         ? { must: [{ key: "access_level", match: { any: levels } }] }
-        : undefined // private sees everything — no filter needed
+        : undefined // agent sees every level — no filter needed
 
     const body: Record<string, unknown> = {
       vector: queryVector,
@@ -304,16 +379,7 @@ export class QdrantClient {
       }>
     }
 
-    const results: SearchResult[] = (data.result ?? []).map((r) => ({
-      id: String(r.id),
-      text: (r.payload?.text as string) ?? "",
-      score: r.score,
-      access_level: (r.payload?.access_level as string) ?? "public",
-      category: (r.payload?.category as string) ?? "fact",
-      source: (r.payload?.source as string) ?? "conversation",
-      created_at: (r.payload?.created_at as string) ?? "",
-      scope: (r.payload?.scope as string) ?? undefined,
-    }))
+    const results: SearchResult[] = (data.result ?? []).map((r) => this.mapHit(r))
 
     log.debugResponse("search", { count: results.length })
     return results
@@ -349,10 +415,21 @@ export class QdrantClient {
     // loser fails with 409/400 even though the collection now exists. The
     // in-flight ensure is memoized as a shared promise (cleared on failure),
     // so concurrent callers await ONE create.
+    if (resp.status === 404 && this.collectionReady) {
+      // OCR-6 (bug medium, Z872): collectionReady was set-once and never
+      // invalidated — after an external drop/recreate (or lost Qdrant data)
+      // every later upsert skipped this retry path and failed with a hard
+      // 404. Reset the flag so the lazy ensure runs again.
+      log.warn(`upsert got 404 despite collectionReady — invalidating collectionReady, re-ensuring`)
+      this.collectionReady = false
+    }
     if (resp.status === 404 && !this.collectionReady) {
       log.info(`upsert: collection "${this.collection}" not found — ensuring collection, retrying once`)
       try {
-        this.ensurePromise ??= this.ensureCollection(vector.length)
+        // OCR-6 (L898): create at the CONFIGURED dimensions, never at
+        // vector.length — a single wrong-length vector must not define the
+        // collection's schema and brick every later (correct) upsert.
+        this.ensurePromise ??= this.ensureCollection(this.configuredDimensions)
         await this.ensurePromise
       } catch (err) {
         this.ensurePromise = undefined
@@ -523,19 +600,17 @@ export class QdrantClient {
           // OCR-5 (security medium): a first-page failure must not resolve to
           // an empty array — security consumers (guardrail_check) treat [] as
           // "no protection rules" and ALLOW destructive actions (fail-open).
-          // Page 0 with nothing collected → throw, so callers with a
-          // fail-closed contract (loadProtectionRules catch → null) see the
-          // outage. A mid-walk failure still returns the partial result
-          // (log stays), because those points are genuinely there.
-          if (collected.length === 0) {
-            throw new Error(
-              `scrollFiltered: Qdrant returned ${resp.status} for collection="${this.collection}" on the FIRST page — no points, failing loud (fail-closed for security consumers)`,
-            )
-          }
-          log.error(
-            `scrollFiltered: Qdrant returned ${resp.status} for collection="${this.collection}" (returning ${collected.length} points collected so far)`,
+          // OCR-6 (security high): the old "mid-walk failure returns the
+          // partial result" had the SAME fail-open hole on page 2+ —
+          // loadProtectionRules() treats ANY non-throwing return as the
+          // complete rule set, so an outage mid-walk (or MAX_SCROLL_PAGES
+          // truncation) yielded an incomplete rule list. ALL scroll failures
+          // now throw: security consumers fail closed, best-effort consumers
+          // (findIncomingEdges) get the error loud instead of silently
+          // missing edges.
+          throw new Error(
+            `scrollFiltered: Qdrant returned ${resp.status} for collection="${this.collection}" (fail-closed — a partial walk is indistinguishable from a complete one for security consumers)`,
           )
-          return collected
         }
         const data = await resp.json() as {
           result?: {
@@ -600,7 +675,18 @@ export class QdrantClient {
       const incoming: Array<{ source_id: string; relation: string; edge_id: string }> = []
 
       for (const pt of points) {
-        const edges = (pt.payload?.edges ?? []) as Array<Record<string, unknown>>
+        // OCR-6 (bug medium, Z884): the payload cast was unchecked — a
+        // malformed `edges` (object, number, non-iterable) threw inside the
+        // loop, the outer catch swallowed it, and the WHOLE traversal
+        // reported "no related facts" although other points had valid edges.
+        // Validate the shape; skip a single malformed payload, keep the rest.
+        const rawEdges = pt.payload?.edges
+        const edges: Array<Record<string, unknown>> = Array.isArray(rawEdges)
+          ? (rawEdges as Array<Record<string, unknown>>)
+          : []
+        if (rawEdges !== undefined && !Array.isArray(rawEdges)) {
+          log.warn(`findIncomingEdges: malformed edges payload on point ${pt.id} — skipped`)
+        }
         for (const edge of edges) {
           if (edge.target_fact_id === factId) {
             const edgeStatus = edge.status as string
@@ -649,9 +735,13 @@ export class QdrantClient {
     }
 
     const filter =
-      levels.length < 3
+      // OCR-6 (bug medium): the literal `3` hardcoded ACCESS_LEVEL_ORDER's
+      // size — adding a level above private silently DROPPED the filter for
+      // private agents (leaking the new higher-privilege memories). Compare
+      // against the hierarchy size instead.
+      levels.length < Object.keys(ACCESS_LEVEL_ORDER).length
         ? { must: [{ key: "access_level", match: { any: levels } }] }
-        : undefined // private sees everything — no filter needed
+        : undefined // agent sees every level — no filter needed
 
     const body: Record<string, unknown> = {
       vector: queryVector,
@@ -682,14 +772,6 @@ export class QdrantClient {
       }>
     }
 
-    return (data.result ?? []).map((r) => ({
-      id: String(r.id),
-      text: (r.payload?.text as string) ?? "",
-      score: r.score,
-      access_level: (r.payload?.access_level as string) ?? "public",
-      category: (r.payload?.category as string) ?? "fact",
-      source: (r.payload?.source as string) ?? "conversation",
-      created_at: (r.payload?.created_at as string) ?? "",
-    }))
+    return (data.result ?? []).map((r) => this.mapHit(r))
   }
 }

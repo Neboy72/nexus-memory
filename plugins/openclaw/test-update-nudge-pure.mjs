@@ -41,7 +41,12 @@ await t("consumeUpdateNudge konsumiert NICHT, wenn kein Update vorliegt (state b
   const first = consumeUpdateNudge()
   assert.ok(first?.text, "erster echter Consume nach leerem Consume muss den Nudge liefern")
   assert.match(first.text, /9\.9\.9/)
-  assert.deepStrictEqual(consumeUpdateNudge(), { text: null }, "zweiter Consume → null")
+  // OCR-6 (L953): pin the text field (lines is an implementation detail).
+  assert.deepStrictEqual(
+    { text: consumeUpdateNudge().text },
+    { text: null },
+    "zweiter Consume → null",
+  )
 })
 
 await t("buildPromptSection ist pure: 2 identische Calls → identische Ausgabe", () => {
@@ -72,7 +77,14 @@ await t("consumeUpdateNudge ist einmal-pro-Prozess: nach konsumiertem Nudge blei
   setUpdateCheckResult({ available: true, latest: "9.9.9", url: "https://example.invalid" })
   const a = consumeUpdateNudge()
   const b = consumeUpdateNudge()
-  assert.deepStrictEqual(b, { text: null }, "zweiter Consume → null (einmal-pro-Prozess)")
+  // OCR-6 (L953): consumeUpdateNudge returns { text, lines } now — the
+  // once-per-process contract pins the TEXT field (lines is an implementation
+  // detail handed to buildPromptSection).
+  assert.deepStrictEqual(
+    { text: b.text },
+    { text: null },
+    "zweiter Consume → null (einmal-pro-Prozess)",
+  )
   if (a?.text) assert.match(a.text, /9\.9\.9/, "falls dieser Prozess noch nicht konsumiert hat, ist a der Nudge")
 })
 

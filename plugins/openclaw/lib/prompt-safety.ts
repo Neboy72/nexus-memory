@@ -14,8 +14,15 @@
  */
 
 /**
- * Remove every "<nexus-context …>" and "</nexus-context>" (case-insensitive,
- * self-closing and whitespace variants included) from stored text.
+ * Remove every CLOSING "</nexus-context>" variant (case-insensitive,
+ * self-closing, whitespace and attribute variants included) from stored text.
+ * OPENING "<nexus-context …>" tags are deliberately NOT removed here — the
+ * block stripper (stripNexusContextBlock) owns those; callers must run both
+ * when both directions are needed.
+ * OCR-6 (documentation medium, Z686): the old JSDoc claimed opening tags are
+ * removed too, which the implementation does not do — readers could wrongly
+ * assume capture/recall are already protected against opening tags and skip
+ * the block stripper.
  *
  * `\\s*` and `/` before `>`: variants such as `</nexus-context >`,
  * `</nexus-context\\t>` or `</nexus-context/>` close the wrapper just as well
@@ -35,10 +42,39 @@ export function neutralizeContextClose(text: string): string {
   if (!text) return text
   let out = text
   let prev: string
+  // OCR-6 (performance medium, Z716): the until-stable loop is quadratic on
+  // adversarial input (k nested splices need k full-rescan passes). Every
+  // productive pass removes at least one closing tag, so the number of
+  // REQUIRED passes is bounded by the number of closing-tag openings in the
+  // input; cap the loop there (+1 for the final no-op pass that proves the
+  // fixed point). Bounded passes make the loop provably terminating even
+  // without the length-decrease condition.
+  // Every productive pass removes ≥1 tag (length strictly decreases), and
+  // the input length bounds the number of removable fragments — text.length
+  // is therefore a safe upper bound on required passes (quadratic worst case
+  // capped per-call, loop provably terminating). The length-decrease
+  // condition below still stops the loop early in all non-adversarial cases.
+  let pass = 0
+  const maxPasses = text.length
   do {
     prev = out
-    out = out.replace(/<\/nexus-context\s*\/?\s*>/gi, "")
-  } while (out !== prev && out.length < prev.length)
+    // OCR-6 (security high): the closing-tag shape must match the strip
+    // helper exactly — HTML-aware consumers ignore attributes on end tags,
+    // so `</nexus-context foo>` (e.g. from splice stabilization) must be
+    // removed here too, not just the bare form. [^>]* keeps both security
+    // paths in lockstep.
+    // OCR-6 (bug medium, Z705): `[^>]*` prefix-matched any token that merely
+    // STARTED with the tag name (`<nexus-contextual>`, `</nexus-context foo>`
+    // was intended, but `<nexus-context-block>` too) and silently discarded
+    // legitimate prompt text mentioning the name. Require a tag boundary
+    // (whitespace, `/`, or `>`) right after the name.
+    out = out.replace(/<\/nexus-context(?=[\s/>])[^>]*>/gi, "")
+    pass++
+    // OCR-6 (maintainability low, L694): the old length-decrease clause was
+    // redundant — String.replace with "" only ever deletes characters, so
+    // out !== prev already implies a strictly shorter string. The pass bound
+    // above carries the termination guarantee.
+  } while (out !== prev && pass < maxPasses)
   return out
 }
 
@@ -75,8 +111,14 @@ export function stripNexusContextBlock(text: string): string {
     // end tags, so `</nexus-context foo>` closes the wrapper for HTML-aware
     // consumers — widen to the same `[^>]*` shape used by the stray rule
     // (over-stripping is the safe direction for stored memory text).
-    out = out.replace(/<nexus-context[^>]*>[\s\S]*?<\/nexus-context[^>]*>\s*/gi, "")
-    out = out.replace(/<\/?nexus-context[^>]*>/gi, "")
+    // Z705: same tag-boundary requirement as neutralizeContextClose — both
+    // block and stray shapes only match real tags, not name-prefix tokens.
+    // The closing side needs the boundary too: `</nexus-context foo>` is a
+    // valid end tag for HTML-aware consumers, but `</nexus-contextual>` is
+    // NOT ours and must not trigger block deletion of the span between two
+    // mere mentions.
+    out = out.replace(/<nexus-context(?=[\s/>])[^>]*>[\s\S]*?<\/nexus-context(?=[\s/>])[^>]*>\s*/gi, "")
+    out = out.replace(/<\/?nexus-context(?=[\s/>])[^>]*>/gi, "")
   }
   return out.trim()
 }

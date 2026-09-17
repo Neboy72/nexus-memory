@@ -22,7 +22,10 @@ Usage:
 """
 
 from __future__ import annotations
-import json, re, os
+import json
+import threading
+import tempfile
+import contextlib, re, os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -494,7 +497,12 @@ class DriftDetector:
             "unsupported", "not_recommended", "issue", "bug", "error",
             "inactive", "stopped", "discontinued",
         }
-        words = set(text.lower().split())
+        # OCR-6 (bug high): text.lower().split() kept punctuation attached —
+        # "X is enabled." produced the token "enabled." which never matched
+        # the sentiment sets, so _parse_sentiment returned 0.0 for most prose
+        # and the contradiction branch was silently dead. A word regex keeps
+        # underscore tokens (not_recommended) intact and strips punctuation.
+        words = set(re.findall(r"[a-z0-9_]+", text.lower()))
         pos = len(words & positive_words)
         neg = len(words & negative_words)
         total = pos + neg
@@ -710,6 +718,32 @@ class DriftDetector:
             except Exception as exc:
                 # W37: see DriftDetector.run — log instead of swallowing.
                 _logger.warning("Contradiction detection failed: %s", exc)
+
+        # OCR-6 (bug medium): run_from_texts returned a structurally different
+        # DriftReport than run() — the advisory suggestion lists
+        # (deprecate/rollback) stayed empty, so offline/test callers mirroring
+        # the run() flow couldn't validate the suggestion logic. Mirror the
+        # suggestion-building block from run().
+        for exp in report.expired:
+            report.deprecate_suggestions.append({
+                "fact_id": exp.get("id", ""),
+                "reason": f"Entry expired ({exp.get('policy', 'unknown')} policy, "
+                          f"reason: {exp.get('expiry_reason', 'unknown')})",
+                "content_preview": exp.get("content_preview", "")[:100],
+            })
+        for st in report.stale:
+            report.deprecate_suggestions.append({
+                "fact_id": st.get("id", ""),
+                "reason": f"Stale pattern match: {'; '.join(st.get('issues', []))}",
+                "category": st.get("category", "unknown"),
+            })
+        for c in report.contradictions:
+            report.rollback_suggestions.append({
+                "id_a": c.get("id_a", ""),
+                "id_b": c.get("id_b", ""),
+                "reason": f"Contradiction detected: {c.get('type', 'semantic')} "
+                          f"(similarity: {c.get('similarity', 0):.2f})",
+            })
 
         return report
 
@@ -933,8 +967,15 @@ class DriftDetector:
                 return {}
         return {}
 
-    @staticmethod
-    def _save_usage(usage: dict[str, str]) -> None:
+    # OCR-6 (bug medium): the read-modify-write in track_usage was lock-free —
+    # two concurrent callers lost each other's updates (last writer wins), and
+    # the FIXED temp name clobbered concurrent writers. A module-level lock
+    # serializes in-process RMW; the unique mkstemp temp name makes even a
+    # concurrent write crash-safe (atomic rename still replaces the whole file).
+    _usage_lock = threading.Lock()
+
+    @classmethod
+    def _save_usage(cls, usage: dict[str, str]) -> None:
         """Save usage tracking data to disk (atomic replace).
 
         W37: ``write_text`` truncates the file in place, so a crash mid-write
@@ -942,11 +983,21 @@ class DriftDetector:
         then swallowed the JSONDecodeError and returned ``{}``, permanently
         losing all tracking history. Write a temp file in the same directory
         and ``os.replace()`` it.
+        OCR-6: unique temp name (mkstemp, same dir) — a fixed ``.tmp`` name
+        let two concurrent writers clobber each other's temp file.
         """
         USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = USAGE_FILE.with_name(USAGE_FILE.name + ".tmp")
-        tmp_path.write_text(json.dumps(usage, indent=2))
-        os.replace(tmp_path, USAGE_FILE)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=USAGE_FILE.name + ".", suffix=".tmp", dir=str(USAGE_FILE.parent)
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(usage, indent=2))
+            os.replace(tmp_name, USAGE_FILE)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+            raise
 
     def track_usage(self, memory_id: str) -> dict:
         """Record that a memory was accessed at the current time.
@@ -961,10 +1012,11 @@ class DriftDetector:
             >>> detector.track_usage("abc-123")
             {"memory_id": "abc-123", "last_accessed": "2026-05-18T16:00:00"}
         """
-        usage = self._load_usage()
-        now = datetime.now(timezone.utc).isoformat()
-        usage[memory_id] = now
-        self._save_usage(usage)
+        with self._usage_lock:
+            usage = self._load_usage()
+            now = datetime.now(timezone.utc).isoformat()
+            usage[memory_id] = now
+            self._save_usage(usage)
         return {"memory_id": memory_id, "last_accessed": now}
 
     def prune_unused(self, days: int = 90) -> list[str]:
@@ -1054,7 +1106,11 @@ def find_wikilink_orphans(workspace: str | None = None) -> list[dict]:
 
     wikilink_re = re.compile(r"\[\[([^|#\]]+)(?:[|#][^\]]*)?\]\]")
     orphans: list[dict] = []
-    reported_targets: set[str] = set()
+    # OCR-6 (bug low, L597): the reported set was GLOBAL across files, so an
+    # unresolved [[target]] referenced in several files was only reported for
+    # the first file (iteration order) — later references looked resolvable.
+    # Dedupe per (file, target) instead: every file's orphan ref is surfaced.
+    reported_targets: set[tuple[str, str]] = set()
 
     # Collect all resolvable targets
     wiki_dir = os.path.join(workspace, "wiki")
@@ -1130,9 +1186,10 @@ def find_wikilink_orphans(workspace: str | None = None) -> list[dict]:
             for match in wikilink_re.finditer(clean_line):
                 target = match.group(1).strip()
                 target_key = target.lower()
-                if not target or target_key in reported_targets:
+                seen_key = (fname, target_key)
+                if not target or seen_key in reported_targets:
                     continue
-                reported_targets.add(target_key)
+                reported_targets.add(seen_key)
 
                 target_path = os.path.join(workspace, target)
                 target_wiki_path = os.path.join(wiki_dir, f"{target}.md")

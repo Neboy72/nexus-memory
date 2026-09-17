@@ -93,8 +93,17 @@ export function buildCronFormGateHandler() {
       const raw = [payload.content, payload.message, payload.text].find(
         (candidate): candidate is string => typeof candidate === "string",
       )
-      // Kein Text → kein Formular-Verstoß (fail-open, nichts zu blocken).
-      if (typeof raw !== "string") return { cancel: false }
+      // Kein Text → kein Formular-Verstoß.
+      // OCR-6 (bug medium, Z923): this handler returned `{ cancel: false }` —
+      // a CONCRETE verdict object. In the fully-suppressed-leak chain
+      // (thought-filter already returned { message: undefined }) the gate ran
+      // on the transformed payload, found no string, and its object REPLACED
+      // the filter's verdict ("last returned content wins") — the drop was
+      // erased and the raw reasoning text went out unattended. Return
+      // undefined instead: no opinion of our own, the previous verdict
+      // survives. Fail-open only for OUR check (nothing to inspect), never
+      // at the cost of erasing another hook's verdict.
+      if (typeof raw !== "string") return
       const trimmed = raw.trim()
       if (trimmed.length === 0) return // leer/whitespace
       if (SHORT_TOKENS.has(trimmed)) return // explizite Steuersignale (NO_REPLY etc.)

@@ -29,9 +29,14 @@ const { registerForgetTool } = forget
 // ohne Export den Quelltext parsen (test-only, keine API-Änderung nötig).
 // Ein Constant-Drift oder ein < → <= Flip bricht diesen Test sofort.
 const src = readFileSync(new URL("./tools/forget.ts", import.meta.url), "utf8")
-const threshSrc = Number(src.match(/FORGET_MIN_SCORE\s*=\s*([\d.]+)/)?.[1])
-const cmpSrc = src.match(/target\.score\s*(<|<=)\s*FORGET_MIN_SCORE/)?.[1]
-assert.ok(Number.isFinite(threshSrc), "FORGET_MIN_SCORE fehlt/driftet in tools/forget.ts")
+// OCR-6 (L655): FORGET_MIN_SCORE is no longer a module constant — the
+// threshold moved to a deployment-tunable config field (forgetMinScore,
+// default 0.8, clamped [0,1]). The contract test now pins BOTH sides: the
+// config default in lib/config.ts AND the strict < comparison in forget.ts.
+const { parseConfig } = await import("./lib/config.ts")
+const threshSrc = parseConfig({}).forgetMinScore
+const cmpSrc = src.match(/target\.score\s*(<|<=)\s*cfg\.forgetMinScore/)?.[1]
+assert.ok(Number.isFinite(threshSrc) && threshSrc > 0 && threshSrc <= 1, "forgetMinScore-Default (0.8) fehlt/driftet in lib/config.ts")
 assert.strictEqual(cmpSrc, "<", "Vergleich muss strikt < sein (score === Threshold löschbar)")
 const THRESH = threshSrc
 
@@ -84,8 +89,11 @@ function makeTool(results, overrides = {}) {
         deleted.push(id) // nur erfolgreiche Löschungen
       },
     },
-    // 4. Argument: cfg (mit accessLevel) — Signatur api, embedder, qdrant, cfg
-    { accessLevel: "trusted" },
+    // 4. Argument: cfg (mit accessLevel) — Signatur api, embedder, qdrant, cfg.
+    // OCR-6 (L655): the threshold is a config field now — production cfgs come
+    // through parseConfig (forgetMinScore always present, clamped). The mock
+    // mirrors that contract with the parsed default.
+    { accessLevel: "trusted", forgetMinScore: THRESH },
   )
   return { tool, deleted, calls }
 }

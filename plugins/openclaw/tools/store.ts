@@ -7,6 +7,7 @@ import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { limitText } from "../lib/text-preview.ts"
 import { log } from "../logger.ts"
+import { NEXUS_STORE_TOOL } from "../runtime.ts"
 
 const MEMORY_CATEGORIES = ["fact", "belief", "session", "rule", "preference", "temp"] as const
 const ACCESS_LEVELS = ["public", "trusted", "private"] as const
@@ -20,7 +21,7 @@ export function registerStoreTool(
   embedder: Embedder,
   qdrantClient: QdrantClient,
   cfg: NexusConfig,
-  toolName = "nexus_store",
+  toolName = NEXUS_STORE_TOOL,
   centroidCache?: ScopeCentroidCache,
 ): void {
   api.registerTool(

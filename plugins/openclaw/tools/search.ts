@@ -5,6 +5,7 @@ import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { clampInt } from "../lib/num.ts"
 import { log } from "../logger.ts"
+import { NEXUS_SEARCH_TOOL } from "../runtime.ts"
 
 /** Hard bound on search fan-out; mirrored by the schema below. */
 const SEARCH_LIMIT_MAX = 50
@@ -15,7 +16,7 @@ export function registerSearchTool(
   embedder: Embedder,
   qdrantClient: QdrantClient,
   cfg: NexusConfig,
-  toolName = "nexus_search",
+  toolName = NEXUS_SEARCH_TOOL,
 ): void {
   api.registerTool(
     {

@@ -60,40 +60,51 @@ def _scroll_all(host: str, port: int, collection: str,
     # W40-2: offset is a Qdrant point id (unsigned 64-bit) — the numeric 0 is a
     # legitimate offset, so pagination must test against None, never truthiness.
     offset: Any = None
+    # OCR-6 (bug medium): pagination guards — page cap + loop detection (a
+    # server repeating the same offset must not spin the cron job forever).
+    page_count = 0
+    MAX_SCROLL_PAGES = 50
+    seen_offsets: set = set()
 
-    try:
-        while True:
-            body: dict[str, Any] = {"limit": 100}
-            if offset is not None:
-                body["offset"] = offset
-            if filter_cond:
-                body["filter"] = filter_cond
+    while True:
+        body: dict[str, Any] = {"limit": 100}
+        if offset is not None:
+            body["offset"] = offset
+        if filter_cond:
+            body["filter"] = filter_cond
 
+        # OCR-6 (maintainability low, L538): the try used to wrap the WHOLE
+        # pagination loop (request, JSON decode, validation, accumulation), so
+        # a genuine logic bug inside the loop was logged as "scroll failed" —
+        # a bug indistinguishable from an outage. Guard ONLY the network call
+        # and the JSON decode; the shape validation below runs unguarded so a
+        # defect there surfaces as itself.
+        try:
             resp = _req.post(url, json=body, timeout=15)
             resp.raise_for_status()
             data = resp.json()
+        except Exception as exc:  # W31-1: RequestException/HTTP error → structured result
+            _logger.warning("SICA analyzer: scroll failed: %s", exc)
+            return None
 
-            # OCR-5 (bug medium): the payload was dereferenced before its shape
-            # was validated — a 2xx response with "result": null (or a non-dict
-            # result) raised AttributeError inside the guard, and the broad
-            # handler below mislabelled it as a network/scroll failure. Validate
-            # the shape explicitly: a malformed payload is a DEGRADED scroll
-            # (None), a genuine bug stays distinguishable from an outage.
-            result = data.get("result") if isinstance(data, dict) else None
-            if not isinstance(result, dict):
-                _logger.warning("SICA analyzer: unexpected scroll payload: %r", data)
-                return None
-            batch = result.get("points", [])
-            if not isinstance(batch, list):
-                _logger.warning("SICA analyzer: unexpected points shape: %r", result)
-                return None
-            points.extend(batch)
-            offset = result.get("next_page_offset")
-            if offset is None:
-                break
-    except Exception as exc:  # W31-1: RequestException/HTTP error → structured result
-        _logger.warning("SICA analyzer: scroll failed: %s", exc)
-        return None
+        # OCR-5 (bug medium): the payload was dereferenced before its shape
+        # was validated — a 2xx response with "result": null (or a non-dict
+        # result) raised AttributeError inside the guard, and the broad
+        # handler below mislabelled it as a network/scroll failure. Validate
+        # the shape explicitly: a malformed payload is a DEGRADED scroll
+        # (None), a genuine bug stays distinguishable from an outage.
+        result = data.get("result") if isinstance(data, dict) else None
+        if not isinstance(result, dict):
+            _logger.warning("SICA analyzer: unexpected scroll payload: %r", data)
+            return None
+        batch = result.get("points", [])
+        if not isinstance(batch, list):
+            _logger.warning("SICA analyzer: unexpected points shape: %r", result)
+            return None
+        points.extend(batch)
+        offset = result.get("next_page_offset")
+        if offset is None:
+            break
 
     return points
 
@@ -118,7 +129,15 @@ def _count_memories(host: str, port: int, collection: str,
         # OCR-4: a 2xx with an unexpected shape must NOT read as 0 — result:null
         # crashes the chained .get, a missing/null count is a FAILED count, not
         # "zero points". Degrade to None so callers treat it as unknown.
-        result = resp.json().get("result")
+        # OCR-6 (bug low, L510): resp.json() itself may be a list/str/number —
+        # chaining .get directly raised AttributeError that the broad handler
+        # below mislabelled as an HTTP failure. Guard the shape first (still
+        # returns None, but the failure is a shape problem, not a network one).
+        data = resp.json()
+        if not isinstance(data, dict):
+            _logger.warning("SICA analyzer: count payload is not an object: %r", data)
+            return None
+        result = data.get("result")
         if not isinstance(result, dict):
             return None
         count = result.get("count")
@@ -223,6 +242,13 @@ def analyze() -> dict:
             points = []
         if points:
             for p in points:
+                # OCR-6 (bug low, L548): _scroll_all validates the batch is a
+                # list but not each ELEMENT — a scalar/string entry crashed
+                # .get with AttributeError that escaped analyze() entirely.
+                # Skip non-dict entries defensively.
+                if not isinstance(p, dict):
+                    _logger.warning("SICA analyzer: non-dict point skipped: %r", p)
+                    continue
                 payload = p.get("payload") or {}  # W31-2: explicit null → {}
                 if not isinstance(payload, dict):
                     payload = {}
@@ -358,13 +384,17 @@ if __name__ == "__main__":
     # suggestions were printed and the process exited 0 — a partial outage
     # (counts failed, one review suggestion) stayed invisible to the cron
     # watchdog. Surface the errors here too, degraded exit.
-    if errors_present:
-        print(f"⚠️ SICA: zusätzlich {len(report['errors'])} Fehler bei der Analyse (degraded):")
-        for e in report["errors"]:
-            print(f"  • {e}")
-        sys.exit(1)
+    # OCR-6 (bug medium): the mixed case announced the suggestions in the
+    # header and then exited BEFORE printing them — the announced suggestions
+    # were invisible. Print the suggestions FIRST, then surface the errors
+    # and degrade.
     for s in actions_needed[:3]:
         affected = ""
         if s.get("affected_ids"):
             affected = f" ({len(s['affected_ids'])} Einträge)"
         print(f"  • [{s['priority']}] {s['title']}{affected}")
+    if errors_present:
+        print(f"⚠️ SICA: zusätzlich {len(report['errors'])} Fehler bei der Analyse (degraded):")
+        for e in report["errors"]:
+            print(f"  • {e}")
+        sys.exit(1)
