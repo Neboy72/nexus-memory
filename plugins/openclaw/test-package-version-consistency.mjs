@@ -15,7 +15,7 @@ import assert from "node:assert/strict"
 // matched as "2026.5.7" and a version embedded in another number
 // ("1.2026.5.7") was extracted as a bare calver. The lookarounds reject a
 // leading word/dot character and a trailing ".<digit>" continuation.
-const CALVER = /(?<![\w.])\d{4}\.\d+\.\d+(?!\.\d)(?![\w])/g
+const CALVER = /(?<![\w.])\d{4}\.\d+\.\d+(?!\.\d)(?!\.)(?![\w])/g
 
 function loadJson(url, label) {
   try {
@@ -58,10 +58,33 @@ const lowerMatch = String(peerRangeStr).match(/(?:\^|~|>=?)\s*(\d{4}\.\d+\.\d+)/
 assert.ok(lowerMatch, `peerRange trägt keine Untergrenze (${peerRangeStr})`)
 const lower = lowerMatch[1]
 const upperMatch = String(peerRangeStr).match(/<\s*(\d{4}\.\d+\.\d+)/)
+// OCR-6 (bug low, L236): the fallback to the second calver token re-introduced
+// the positional assumption and returned undefined for malformed uppers
+// (`<2026.5`), which silently SKIPPED the empty-range ordering assertion
+// below — contrary to the file's fail-loudly policy. If the range carries a
+// `<` but no parseable upper, fail with a named assert instead.
+if (!upperMatch) {
+  assert.ok(
+    !/<\s*\d/.test(String(peerRangeStr)),
+    `peerRange traegt '<' aber keine gueltige calver-Obergrenze (${peerRangeStr})`,
+  )
+}
 const upper = upperMatch ? upperMatch[1] : calvers.get("peerDependencies.openclaw")[1]
-// Untergrenze: identisch ueber alle vier Stellen (die W23-Invariante)
+// Untergrenze: identisch ueber alle vier Stellen (die W23-Invariante).
+// OCR-6 (bug medium): der Loop verglich noch list[0] positional — dieselbe
+// Annahme, die der Operator-Fix oben beseitigte. Upper-first-Ranges
+// ("<2027.0.0 >=2026.5.7") faelschten den Drift-Bericht. Jetzt pro Spot:
+// jede calver mit vorangestelltem < ist eine Obergrenze, alles andere zählt
+// als Untergrenze (>=/^/~ oder plain pin).
 for (const [k, list] of calvers) {
-  assert.strictEqual(list[0], lower, `${k} Untergrenze driftet von peerDependencies (${lower})`)
+  const spotVal = String(spots.find(([kk]) => kk === k)?.[1] ?? "")
+  const lowers = []
+  for (let i = 0; i < list.length; i++) {
+    const before = spotVal.slice(0, spotVal.indexOf(list[i])).match(/<\s*$/)
+    if (!before) lowers.push(list[i])
+  }
+  assert.ok(lowers.length > 0, `${k} trägt keine Untergrenze`)
+  assert.strictEqual(lowers[0], lower, `${k} Untergrenze driftet von peerDependencies (${lower})`)
 }
 console.log("PASS  Nr 408: alle 4 OpenClaw-Version-Stellen auf Basis", lower)
 
@@ -73,8 +96,12 @@ assert.match(pluginApi, /^>=/, "compat.pluginApi muss die peer-Untergrenze als >
 // OCR-4: plain includes(lower) can never fail here (the W23 loop already
 // asserted pluginApi's calver === lower) AND it accepts substrings like
 // ">=2026.5.70" for "2026.5.7". Anchor as a whole token instead.
+// OCR-6 (bug low, L224): `lower` interpolated into a RegExp unescaped — the
+// dots matched any character, so `>=2026x5x7` satisfied the whole-token
+// check. Escape the dots so the check pins the exact version token.
+const escapedLower = lower.replace(/\./g, "\\.")
 assert.ok(
-  new RegExp(`^>=${lower}(?:\\s|$)`).test(pluginApi),
+  new RegExp(`^>=${escapedLower}(?:\\s|$)`).test(pluginApi),
   `pluginApi muss die untere peer-Grenze (>=${lower}) exakt tragen`,
 )
 

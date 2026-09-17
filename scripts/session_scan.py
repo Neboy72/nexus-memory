@@ -2,6 +2,7 @@ import contextlib
 import os
 import sqlite3
 import sys
+import urllib.parse
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -24,20 +25,30 @@ if not os.path.exists(db_path):
 # W40-13: closing the connection only on the success path leaked the handle
 # whenever the query or a print() raised. `with sqlite3.connect(...)` would
 # only scope commit/rollback, so contextlib.closing is the right wrapper.
-with contextlib.closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as con:
-    # OCR-5 (maintainability low): the report is read-only — the old
-    # read-write connect could take a write lock and mutate the state DB by
-    # accident. mode=ro also fails fast when the path does not exist.
+# OCR-5 (maintainability low): the report is read-only — mode=ro can't take a
+# write lock and fails fast when the path does not exist.
+# OCR-6 (bug medium): a raw path in a SQLite URI — "?" started the query
+# string, "#" a fragment, truncating/overriding parameters. Percent-encode
+# the path (quote leaves "/" intact, escapes ? and #).
+uri = f"file:{urllib.parse.quote(str(db_path))}?mode=ro"
+# OCR-6 (bug medium): only a MISSING db got the friendly exit — an
+# existing-but-invalid file escaped as a raw traceback. Clear message instead.
+try:
+    con = sqlite3.connect(uri, uri=True)
     con.row_factory = sqlite3.Row
-    # W40-scan (medium): a still-RUNNING session started >24h ago has
-    # ended_at IS NULL and fell out of the started_at-only window — the
-    # long-runner vanished from the report. Keep it explicitly.
-    # OCR-5 (bug high, /tmp/z352-proof.py): the previous COALESCE predicate
-    # collapsed to `started_at >= ?` for a running row (ended_at NULL →
-    # COALESCE = started_at), so the long-runner was STILL filtered out and
-    # the first OR-branch was redundant. Honest window: recently started OR
-    # still running OR recently finished. (Old-but-finished rows that ended
-    # before the cutoff stay out — activity window is the ended_at bound.)
+except sqlite3.Error as exc:
+    print(f"Session-DB nicht lesbar ({db_path}): {exc}", file=sys.stderr)
+    sys.exit(1)
+# W40-scan (medium): a still-RUNNING session started >24h ago has
+# ended_at IS NULL and fell out of the started_at-only window — the
+# long-runner vanished from the report. Keep it explicitly.
+# OCR-5 (bug high, /tmp/z352-proof.py): the previous COALESCE predicate
+# collapsed to `started_at >= ?` for a running row (ended_at NULL →
+# COALESCE = started_at), so the long-runner was STILL filtered out and
+# the first OR-branch was redundant. Honest window: recently started OR
+# still running OR recently finished. (Old-but-finished rows that ended
+# before the cutoff stay out — activity window is the ended_at bound.)
+try:
     rows = con.execute(
         "SELECT id, source, started_at, ended_at, end_reason, message_count, tool_call_count,"
         " output_tokens, title, last_activity_description"
@@ -45,14 +56,29 @@ with contextlib.closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as
         " AND archived=0 AND hidden=0 ORDER BY started_at DESC",
         (cutoff, cutoff),
     ).fetchall()
-    print(f"Sessions letzte 24h: {len(rows)}")
-    for r in rows:
+except sqlite3.Error as exc:
+    # OCR-6 (bug medium): a schema without the expected columns surfaced
+    # as a raw traceback — clear message instead.
+    print(f"Session-DB Schema-Fehler ({exc})", file=sys.stderr)
+    con.close()
+    sys.exit(1)
+print(f"Sessions letzte 24h: {len(rows)}")
+for r in rows:
+    # OCR-6 (bug medium): the ended_at-IS-NULL branch admits rows with a
+    # NULL/non-numeric started_at — fromtimestamp raised and killed the
+    # whole report. Guard the conversion, mark unparseable rows.
+    try:
         st = datetime.fromtimestamp(r['started_at'], berlin).strftime('%d.%m %H:%M')
-        # W40-scan (low): truthiness dropped a legitimate 0 epoch (and NULL);
-        # `IS NOT NULL` is the honest test.
-        en = datetime.fromtimestamp(r['ended_at'], berlin).strftime('%H:%M') if r['ended_at'] is not None else 'LAEUFT'
-        print(f"  {r['id']} | {st}-{en} | src={r['source']} | msgs={r['message_count']} tools={r['tool_call_count']} | out={r['output_tokens']} | end={r['end_reason']}")
-        t = (r['title'] or '')[:110]
-        lad = (r['last_activity_description'] or '')[:110]
-        print(f"      title: {t}")
-        print(f"      last:  {lad}")
+    except (TypeError, ValueError, OSError, OverflowError):
+        st = 'START?'
+    # W40-scan (low): truthiness dropped a legitimate 0 epoch (and NULL);
+    # `IS NOT NULL` is the honest test.
+    en = datetime.fromtimestamp(r['ended_at'], berlin).strftime('%H:%M') if r['ended_at'] is not None else 'LAEUFT'
+    print(f"  {r['id']} | {st}-{en} | src={r['source']} | msgs={r['message_count']} tools={r['tool_call_count']} | out={r['output_tokens']} | end={r['end_reason']}")
+    t = (r['title'] or '')[:110]
+    lad = (r['last_activity_description'] or '')[:110]
+    print(f"      title: {t}")
+    print(f"      last:  {lad}")
+# W40-13: close the handle on EVERY path (contextlib.closing replaced by an
+# explicit close after the read-only report is complete).
+con.close()

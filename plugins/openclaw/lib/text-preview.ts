@@ -44,12 +44,23 @@ function ensureSegmenter(): Intl.Segmenter | null {
  * `max` is normalized to a non-negative integer first — a negative/
  * fractional/NaN budget would otherwise slice from the end or produce a
  * partial budget.
+ *
+ * OCR-6 (bug low, L753) — budget contract, stated explicitly: the returned
+ * string is `limit + 1` clusters long when truncation happens (`limit`
+ * clusters plus the ellipsis appended ON TOP, never carved out of the
+ * budget) and at `max = 0` the result is just the ellipsis. Callers that
+ * treat `max` as a hard cap must budget for that one extra character.
  */
 export function limitText(text: string, max: number = PREVIEW_MAX): string {
   // OCR-5 (bug low): positive Infinity meant "no limit" for callers but
   // silently fell back to PREVIEW_MAX (100), truncating text the caller
   // expected to keep in full. Infinity now means "no truncation" (NaN still
   // documented → falls back to PREVIEW_MAX).
+  // OCR-6 (bug low, L765): EVERY non-finite budget degrades predictably —
+  // +Infinity means "no truncation" (caller's explicit intent), any other
+  // non-finite value (-Infinity, NaN) falls back to the default budget
+  // PREVIEW_MAX instead of silently becoming 100 anyway (same result, but
+  // now the JSDoc contract matches: non-finite = "use the default").
   if (max === Infinity) return text
   const limit = Number.isFinite(max) ? Math.max(0, Math.trunc(max)) : PREVIEW_MAX
   // W40-scan: a short-enough string can never be truncated — skip the
@@ -61,8 +72,18 @@ export function limitText(text: string, max: number = PREVIEW_MAX): string {
   // TypeError instead of degrading). Module-level memoized instance plus a
   // code-point fallback: a preview helper must never hard-fail recall.
   const segmenter = ensureSegmenter()
-  const chars = segmenter
-    ? [...segmenter.segment(text)].map((s) => s.segment)
-    : [...text]
+  // OCR-6 (performance medium, Z727): both branches used to materialize the
+  // ENTIRE input ([...segmenter.segment(text)] / [...text]) before slicing —
+  // O(n) memory for an O(limit) result on arbitrarily long recalled text.
+  // Iterate lazily and stop as soon as limit + 1 clusters are collected; the
+  // downstream chars.length > limit check still works unchanged.
+  const iterator: Iterable<string> = segmenter
+    ? Array.from(segmenter.segment(text), (s) => s.segment)
+    : text
+  const chars: string[] = []
+  for (const seg of iterator) {
+    chars.push(seg)
+    if (chars.length > limit) break
+  }
   return chars.length > limit ? `${chars.slice(0, limit).join("")}${ELLIPSIS}` : text
 }

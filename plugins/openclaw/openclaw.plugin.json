@@ -85,6 +85,12 @@
       "label": "Debug Logging",
       "help": "Enable verbose debug logs for Qdrant and embedding API calls",
       "advanced": true
+    },
+    "forgetMinScore": {
+      "label": "Forget Min Score",
+      "placeholder": "0.8",
+      "help": "Minimum similarity score before forget deletes by query (0-1)",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -163,6 +169,11 @@
       "debug": {
         "type": "boolean",
         "default": false
+      },
+      "forgetMinScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
       }
     },
     "required": []
