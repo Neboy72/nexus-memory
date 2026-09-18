@@ -80,6 +80,11 @@ def isolated_env(monkeypatch):
         "JINA_API_KEY",
         "NEXUS_REPO_PATH",
         "NEXUS_ENV_FILE",
+        # Fail-closed tests need the fallback opt-in gone, or _try_voyage
+        # (which reads VOYAGE_API_KEY live from the environment) re-succeeds
+        # on hosts where ~/.hermes/.env exports it and the fallback flag
+        # lets _detect() silently continue into auto-detection.
+        "NEXUS_ALLOWED_CLOUD_FALLBACK",
     ):
         monkeypatch.delenv(var, raising=False)
 
