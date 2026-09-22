@@ -1978,7 +1978,11 @@ async def _do_update(confirm: bool = False) -> dict:
         return {"status": "error", "error": str(e), "message": str(e)}
 
 
-server = Server("nexus-memory")
+# version= is additive: the stdio path still passes server_version
+# explicitly via InitializationOptions in main(), so its handshake is
+# unchanged. The Streamable-HTTP path (manager, mcp 2.x serve_loop) has no
+# InitializationOptions and reports this attribute instead.
+server = Server("nexus-memory", version=nexus_version)
 
 
 async def handle_list_tools() -> list[types.Tool]:
@@ -3191,6 +3195,163 @@ async def main():
             ),
         )
 
+# ── Baustein A: `nexus-memory serve` (Streamable HTTP) ─────────────
+# A SECOND transport next to stdio. The stdio path (main/cli default) is
+# untouched; this only ADDS an HTTP entry point + a health probe.
+# Design: docs/standalone-design-20260922.md §Baustein A.
+
+DEFAULT_SERVE_PORT = 9122
+
+# monotonic() seconds at serve() start; None until then.
+_serve_started_at: Optional[float] = None
+
+
+def _serve_port() -> int:
+    """HTTP port for `serve`: NEXUS_SERVE_PORT, else DEFAULT_SERVE_PORT.
+
+    A malformed env value falls back to the default instead of crashing —
+    a bad port variable should not make the service unstartable.
+    """
+    try:
+        return int(os.environ.get("NEXUS_SERVE_PORT", str(DEFAULT_SERVE_PORT)))
+    except ValueError:
+        logging.warning("NEXUS_SERVE_PORT is not an integer; using %d", DEFAULT_SERVE_PORT)
+        return DEFAULT_SERVE_PORT
+
+
+def _qdrant_reachable(host: Optional[str] = None, port: Optional[int] = None,
+                      timeout: float = 1.0) -> bool:
+    """True when Qdrant answers on host:port.
+
+    A TCP connect, not a full QdrantClient round trip: /healthz must answer
+    fast and must not stall on client construction while Qdrant is down.
+    """
+    host = QDRANT_HOST if host is None else host
+    port = QDRANT_PORT if port is None else port
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def build_serve_app():
+    """Build the Starlette ASGI app served by `serve`.
+
+    Routes:
+      GET /healthz  → JSON health (status, qdrant, version, uptime_s)
+      /mcp          → MCP Streamable HTTP, same `server` object as stdio
+
+    Kept separate from serve() so tests can drive it with an in-process
+    ASGI client instead of binding a real port.
+    """
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+    from mcp.server.streamable_http_manager import (
+        StreamableHTTPASGIApp,
+        StreamableHTTPSessionManager,
+    )
+
+    manager = StreamableHTTPSessionManager(app=server)
+    # The manager itself is not callable; StreamableHTTPASGIApp is the ASGI
+    # adapter that forwards to manager.asgi_app.
+    mcp_asgi = StreamableHTTPASGIApp(manager)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        # Streamable-HTTP sessions only work while this context is entered;
+        # without it every /mcp request would fail (no task group).
+        async with manager.run():
+            yield
+
+    # P2-Fix (K3-Review): sync handler — Starlette führt sync defs im
+    # Threadpool aus. Die alte async-Variante blockierte den Event-Loop bis
+    # 1 s pro Probe, genau wenn Qdrant down ist (worst case: /mcp-Lauf).
+    def healthz(request):
+        reachable = _qdrant_reachable()
+        started = _serve_started_at if _serve_started_at is not None else time.monotonic()
+        return JSONResponse({
+            "status": "ok" if reachable else "degraded",
+            "qdrant": reachable,
+            "version": nexus_version,
+            "uptime_s": round(time.monotonic() - started, 3),
+        })
+
+    return Starlette(
+        routes=[
+            Route("/healthz", healthz, methods=["GET"]),
+            # Mount("/") not Mount("/mcp"): a mount at a subpath makes
+            # Starlette 307-redirect the exact "/mcp" path to "/mcp/", and
+            # real MCP clients POST to "/mcp" without following redirects.
+            Mount("/", app=mcp_asgi),
+        ],
+        lifespan=lifespan,
+    )
+
+
+def _serve_warmup() -> None:
+    """Baustein C: eager store init at serve boot (own fuel chain).
+
+    The stdio path initializes the store lazily on the first tool call —
+    fine when a harness drives the process. A standalone service must run
+    its in-process daemons (consolidation, trust, retrieval-watch) even
+    when no agent is online, so ``serve`` initializes eagerly at boot.
+    Never raises: a warmup failure must not stop the service from serving
+    (it would surface lazily on the first tool call, exactly as today).
+    Kill-switch: NEXUS_SERVE_NO_WARMUP=1 (test/ops opt-out).
+    """
+    if os.environ.get("NEXUS_SERVE_NO_WARMUP", "") == "1":
+        return
+    try:
+        store = get_store()
+        consolidator = getattr(store, "_consolidator", None)
+        logging.info(
+            "Serve warmup: store ready, consolidation %s",
+            "active" if consolidator is not None else "disabled",
+        )
+    except Exception as e:  # noqa: BLE001 - warmup must never block serving
+        logging.warning("Serve warmup failed (retrying lazily on first call): %s", e)
+
+
+def serve(host: str = "127.0.0.1", port: Optional[int] = None) -> int:
+    """Run the MCP server over Streamable HTTP, plus GET /healthz.
+
+    Loopback-only by design: a local house service, not a public endpoint.
+    Auth is a separate roadmap item — do not widen `host` here.
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        print(
+            "Serve dependencies not installed (starlette/uvicorn).\n"
+            "Install with: pip install uvicorn starlette",
+            file=sys.stderr,
+        )
+        return 1
+
+    if port is None:
+        port = _serve_port()
+
+    global _serve_started_at
+    _serve_started_at = time.monotonic()
+
+    app = build_serve_app()
+    # Baustein C: eager daemons at boot (own fuel chain) — before uvicorn
+    # blocks in its event loop. Never raises (see _serve_warmup).
+    _serve_warmup()
+    # stderr: stdout stays reserved for protocol output, matching the
+    # stdio path's rule (see _check_webui_available).
+    print(
+        "  Nexus Memory serve\n"
+        f"  MCP:    http://{host}:{port}/mcp\n"
+        f"  Health: http://{host}:{port}/healthz",
+        file=sys.stderr,
+    )
+    uvicorn.run(app, host=host, port=port, log_level="info")
+    return 0
+
+
 def _check_webui_available():
     try:
         import fastapi  # noqa: F401
@@ -3208,10 +3369,14 @@ def cli():
     """Sync CLI entrypoint (for pyproject.toml scripts)."""
     import argparse
     parser = argparse.ArgumentParser(prog="nexus-memory", description="Nexus Memory - Universal Memory Layer for AI Agents")
-    parser.add_argument("command", nargs="?", default="server", choices=["server", "webui"],
-                        help="server (default): start MCP server | webui: start Web UI dashboard (the current dashboard)")
+    parser.add_argument("command", nargs="?", default="server", choices=["server", "serve", "webui"],
+                        help="server (default): start MCP server over stdio | serve: same MCP server over Streamable HTTP | webui: start Web UI dashboard (the current dashboard)")
 
     args = parser.parse_args()
+
+    if args.command == "serve":
+        # Additive transport: stdio (the default above) is unchanged.
+        return serve()
 
     if args.command == "webui":
         try:
