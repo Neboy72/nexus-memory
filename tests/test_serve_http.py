@@ -214,3 +214,55 @@ class TestServePort:
     def test_malformed_env_falls_back_to_default(self, monkeypatch):
         monkeypatch.setenv("NEXUS_SERVE_PORT", "not-a-port")
         assert mcp._serve_port() == 9122
+
+
+# ===========================================================================
+# 5. Baustein C: serve warmup (eager store init / own fuel chain)
+# ===========================================================================
+
+
+class TestServeWarmup:
+    def test_warmup_initializes_store_and_reports_daemons(self, monkeypatch, caplog):
+        fake_store = type("S", (), {"_consolidator": object()})()
+        calls = []
+        monkeypatch.setattr(mcp, "get_store", lambda: calls.append("init") or fake_store)
+
+        with caplog.at_level("INFO"):  # root logger (module-level logging.*)
+            mcp._serve_warmup()
+
+        assert calls == ["init"]
+        assert "store ready, consolidation active" in caplog.text
+
+    def test_warmup_survives_store_failure(self, monkeypatch, caplog):
+        def boom():
+            raise RuntimeError("qdrant down")
+
+        monkeypatch.setattr(mcp, "get_store", boom)
+
+        with caplog.at_level("WARNING", logger="nexus_memory"):
+            mcp._serve_warmup()  # must not raise
+
+        assert "Serve warmup failed" in caplog.text
+
+    def test_warmup_kill_switch(self, monkeypatch):
+        monkeypatch.setenv("NEXUS_SERVE_NO_WARMUP", "1")
+        called = []
+        monkeypatch.setattr(mcp, "get_store", lambda: called.append(1))
+        mcp._serve_warmup()
+        assert called == []
+
+    def test_serve_runs_warmup_before_uvicorn(self, monkeypatch):
+        order = []
+        monkeypatch.setenv("NEXUS_SERVE_PORT", "0")  # 0: uvicorn binds ephemeral
+        fake_app = object()
+        monkeypatch.setattr(mcp, "build_serve_app", lambda: fake_app)
+        monkeypatch.setattr(mcp, "_serve_warmup", lambda: order.append("warmup"))
+        # No real event loop / port binding: fake uvicorn.run records only.
+        monkeypatch.setattr(
+            "uvicorn.run", lambda *a, **k: order.append("uvicorn")
+        )
+
+        rc = mcp.serve()
+
+        assert rc == 0
+        assert order == ["warmup", "uvicorn"]
