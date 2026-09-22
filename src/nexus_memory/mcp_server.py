@@ -3287,6 +3287,30 @@ def build_serve_app():
     )
 
 
+def _serve_warmup() -> None:
+    """Baustein C: eager store init at serve boot (own fuel chain).
+
+    The stdio path initializes the store lazily on the first tool call —
+    fine when a harness drives the process. A standalone service must run
+    its in-process daemons (consolidation, trust, retrieval-watch) even
+    when no agent is online, so ``serve`` initializes eagerly at boot.
+    Never raises: a warmup failure must not stop the service from serving
+    (it would surface lazily on the first tool call, exactly as today).
+    Kill-switch: NEXUS_SERVE_NO_WARMUP=1 (test/ops opt-out).
+    """
+    if os.environ.get("NEXUS_SERVE_NO_WARMUP", "") == "1":
+        return
+    try:
+        store = get_store()
+        consolidator = getattr(store, "_consolidator", None)
+        logging.info(
+            "Serve warmup: store ready, consolidation %s",
+            "active" if consolidator is not None else "disabled",
+        )
+    except Exception as e:  # noqa: BLE001 - warmup must never block serving
+        logging.warning("Serve warmup failed (retrying lazily on first call): %s", e)
+
+
 def serve(host: str = "127.0.0.1", port: Optional[int] = None) -> int:
     """Run the MCP server over Streamable HTTP, plus GET /healthz.
 
@@ -3310,6 +3334,9 @@ def serve(host: str = "127.0.0.1", port: Optional[int] = None) -> int:
     _serve_started_at = time.monotonic()
 
     app = build_serve_app()
+    # Baustein C: eager daemons at boot (own fuel chain) — before uvicorn
+    # blocks in its event loop. Never raises (see _serve_warmup).
+    _serve_warmup()
     # stderr: stdout stays reserved for protocol output, matching the
     # stdio path's rule (see _check_webui_available).
     print(
