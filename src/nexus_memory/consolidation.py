@@ -28,6 +28,7 @@ import threading
 import time
 import uuid
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger("nexus.consolidation")
@@ -900,7 +901,92 @@ class Consolidator:
             log.info("consolidation disabled via NEXUS_CONSOLIDATION=0")
             return
 
+        # Baustein D guard: cross-process leader election (Bastille #5, 22.09.).
+        # Since standalone serve (v0.21 work) the house can hold TWO nexus
+        # processes (Hermes stdio + launchd serve). Without election both run
+        # consolidation passes → duplicate LLM fuel spend + racing writes.
+        # One advisory flock elects the leader; followers skip their loop and
+        # poll: if the leader's flock disappears, the first follower takes over
+        # (HA behavior, no manual intervention).
+        lock_path = Path(
+            os.environ.get("NEXUS_CONSOLIDATION_LEADER_LOCK",
+                           str(Path.home() / ".nexus-memory" / "consolidation-leader.lock"))
+        )
+        # P0-Fix (K3-Review 22.09.): FS-Seiteneffekte gegaunteted — vor diesem
+        # Patch konnte mkdir/open in einem stdio-Prozess mit ReadOnly-Home
+        # crashen (Vertragsbruch: stdio muss 1:1 bleiben). Fail-open: kann die
+        # Wahl nicht arbeiten, läuft Konsolidierung WIE VORHER ohne Wahl.
+        self._leader_lock_file = None
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            # "a", nicht "w": Lock-Datei niemals truncaten (P0-Nebenfund).
+            self._leader_lock_file = open(lock_path, "a")
+        except OSError as e:
+            log.warning("leader lock unavailable (%s); running WITHOUT election "
+                        "(pre-standalone behavior)", e)
+            elected = True
+        else:
+            import errno
+            try:
+                import fcntl
+            except ImportError:  # Windows: no cross-process election possible
+                fcntl = None
+            if fcntl is None:
+                elected = True  # behave as before on platforms without fcntl
+            else:
+                try:
+                    fcntl.flock(self._leader_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    elected = True
+                except OSError as e:
+                    if e.errno in (errno.EAGAIN, errno.EACCES):
+                        elected = False  # genuine contention → standby
+                    else:
+                        # ENOLCK/ENOTSUP: flock unsupported on this FS —
+                        # election unavailable, aber NICHT jeder-prozess-standby
+                        # (sonst stünde Konsolidierung überall lautlos still).
+                        log.warning("flock unsupported on %s (%s); leader guarantee "
+                                    "OFF, running without election", lock_path, e)
+                        elected = True
+
+        standby = not elected
+        if standby:
+            # Lock held by another process's daemon: stay passive as STANDBY.
+            # The standby loop does NOT run passes; it polls the flock and
+            # takes over when the leader dies (HA failover).
+            log.info("Consolidation leader already running in another process; "
+                     "this instance stays passive (standby).")
+            if self._leader_lock_file is not None:
+                self._leader_lock_file.close()
+            self._leader_lock_file = None
+
         def _loop():
+            if standby:
+                # Standby loop: never consolidate. Re-arm only when the
+                # leader's flock disappears (leader died); first standby
+                # to grab it becomes leader and starts working. Poll
+                # interval is env-tunable (default 30 s) so tests and ops
+                # can speed up failover detection.
+                import fcntl
+                # P1-3-Fix (K3-Review): env defensiv parsen + Minimum-Klammer
+                # (poll=0 wäre 100%-CPU-Busy-Loop mit Truncate-Wiederholung),
+                # Muster wie _serve_port().
+                try:
+                    poll = max(1, int(os.environ.get("NEXUS_CONSOLIDATION_LEADER_POLL", "30")))
+                except (TypeError, ValueError):
+                    log.warning("NEXUS_CONSOLIDATION_LEADER_POLL not an integer; using 30")
+                    poll = 30
+                while True:
+                    time.sleep(poll)
+                    try:
+                        # "a", nicht "w": Poll darf die Lock-Datei nie truncaten.
+                        f = open(lock_path, "a")
+                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except OSError:
+                        continue  # leader still holds it
+                    self._leader_lock_file = f
+                    log.warning("Consolidation leader lost; this instance took "
+                                "over as leader (HA failover).")
+                    break
             time.sleep(CONSOLIDATION_START_DELAY_SECONDS)
             while True:
                 try:
