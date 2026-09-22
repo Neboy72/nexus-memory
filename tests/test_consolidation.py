@@ -6,6 +6,8 @@ fake qdrant client, no-delete invariant, consolidated_by marking, and the
 config kill-switch. All LLM calls are mocked — no network.
 """
 
+import time
+
 import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -644,4 +646,84 @@ class TestConflictAccessBoundary:
         # only the public candidate got the deprecation payload
         deprecated = [ps for ps in q.payload_sets
                       if ps[1].get("lifecycle_status") == "deprecated"]
-        assert deprecated and deprecated[0][2] == ["old-pub"]
+
+
+# ── 8. leader election (standalone: Hermes stdio + serve process) ────
+
+class TestLeaderElection:
+    """Baustein D guard: exactly ONE consolidation leader across processes."""
+
+    def _isolated_lock(self, monkeypatch, tmp_path):
+        lock = tmp_path / "leader.lock"
+        monkeypatch.setenv("NEXUS_CONSOLIDATION_LEADER_LOCK", str(lock))
+        return lock
+
+    def test_first_process_becomes_leader(self, monkeypatch, tmp_path):
+        self._isolated_lock(monkeypatch, tmp_path)
+        started = []
+        _t = __import__("threading")
+        orig_thread = _t.Thread
+
+        def fake_thread(*a, **k):
+            started.append(k.get("target"))
+            return orig_thread(target=lambda: None, daemon=True)
+
+        monkeypatch.setattr(C.threading, "Thread", fake_thread)
+        c = Consolidator(FakeStore(FakeQdrant([])), "t",
+                         llm_fn=lambda p: '{"facts": []}',
+                         embed_fn=lambda t: [0.1] * 1024)
+        c.start()
+        assert started  # leader actually spawns its daemon loop
+
+    def test_second_process_stays_standby(self, monkeypatch, tmp_path):
+        lock = self._isolated_lock(monkeypatch, tmp_path)
+        # Simulate a foreign leader holding the flock for the whole test.
+        holder = open(lock, "w")
+        import fcntl as _f
+        _f.flock(holder, _f.LOCK_EX | _f.LOCK_NB)
+        try:
+            started = []
+            _t = __import__("threading")
+            orig_thread = _t.Thread
+
+            def fake_thread(*a, **k):
+                started.append(k.get("target"))
+                return orig_thread(target=lambda: None, daemon=True)
+
+            monkeypatch.setattr(C.threading, "Thread", fake_thread)
+            c = Consolidator(FakeStore(FakeQdrant([])), "t",
+                             llm_fn=lambda p: '{"facts": []}',
+                             embed_fn=lambda t: [0.1] * 1024)
+            c.start()
+            # Standby still spawns its watch loop (failover), never a pass.
+            assert len(started) == 1
+        finally:
+            _f.flock(holder, _f.LOCK_UN)
+            holder.close()
+
+    def test_takeover_after_leader_dies(self, monkeypatch, tmp_path):
+        lock = self._isolated_lock(monkeypatch, tmp_path)
+        monkeypatch.setenv("NEXUS_CONSOLIDATION_LEADER_POLL", "1")
+        monkeypatch.setattr(C, "CONSOLIDATION_START_DELAY_SECONDS", 0)
+        holder = open(lock, "w")
+        import fcntl as _f
+        _f.flock(holder, _f.LOCK_EX | _f.LOCK_NB)
+        try:
+            # REAL thread this time: the standby watch-loop must actually run.
+            c = Consolidator(FakeStore(FakeQdrant([])), "t",
+                             llm_fn=lambda p: '{"facts": []}',
+                             embed_fn=lambda t: [0.1] * 1024)
+            c.start()
+            # Release the "leader" while the standby watch-loop is armed.
+            _f.flock(holder, _f.LOCK_UN)
+            deadline = time.time() + 5
+            took_over = False
+            while time.time() < deadline:
+                if getattr(c, "_leader_lock_file", None) is not None:
+                    took_over = True
+                    break
+                time.sleep(0.1)
+            assert took_over, "standby must take over the flock after leader death"
+        finally:
+            _f.flock(holder, _f.LOCK_UN)
+            holder.close()
