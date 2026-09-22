@@ -6,6 +6,7 @@ fake qdrant client, no-delete invariant, consolidated_by marking, and the
 config kill-switch. All LLM calls are mocked — no network.
 """
 
+import os
 import time
 
 import pytest
@@ -658,6 +659,10 @@ class TestLeaderElection:
         monkeypatch.setenv("NEXUS_CONSOLIDATION_LEADER_LOCK", str(lock))
         return lock
 
+    # P1-2-Fix (K3-Review): Election-Tests sind POSIX-only (fcntl).
+    POSIX_ONLY = pytest.mark.skipif(os.name != "posix",
+                                    reason="flock/leader election requires POSIX")
+
     def test_first_process_becomes_leader(self, monkeypatch, tmp_path):
         self._isolated_lock(monkeypatch, tmp_path)
         started = []
@@ -674,6 +679,29 @@ class TestLeaderElection:
                          embed_fn=lambda t: [0.1] * 1024)
         c.start()
         assert started  # leader actually spawns its daemon loop
+        # P2-Fix: beweisen, dass der Leader die Sperre WIRKLICH hält.
+        if c._leader_lock_file is not None:
+            import fcntl as _f
+            try:
+                import os as _os
+                rival = open(str(tmp_path / "leader.lock"), "a")
+                try:
+                    _f.flock(rival, _f.LOCK_EX | _f.LOCK_NB)
+                    rival_held = True
+                except OSError:
+                    rival_held = False
+                finally:
+                    import fcntl as _f2
+                    try:
+                        _f2.flock(rival, _f2.LOCK_UN)
+                    except OSError:
+                        pass
+                    rival.close()
+                assert not rival_held, "third-party flock must FAIL while leader holds the lock"
+            finally:
+                if c._leader_lock_file is not None:
+                    c._leader_lock_file.close()
+                    c._leader_lock_file = None
 
     def test_second_process_stays_standby(self, monkeypatch, tmp_path):
         lock = self._isolated_lock(monkeypatch, tmp_path)
