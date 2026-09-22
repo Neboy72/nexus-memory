@@ -28,6 +28,7 @@ import threading
 import time
 import uuid
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger("nexus.consolidation")
@@ -900,7 +901,63 @@ class Consolidator:
             log.info("consolidation disabled via NEXUS_CONSOLIDATION=0")
             return
 
+        # Baustein D guard: cross-process leader election (Bastille #5, 22.09.).
+        # Since standalone serve (v0.21 work) the house can hold TWO nexus
+        # processes (Hermes stdio + launchd serve). Without election both run
+        # consolidation passes → duplicate LLM fuel spend + racing writes.
+        # One advisory flock elects the leader; followers skip their loop and
+        # poll: if the leader's flock disappears, the first follower takes over
+        # (HA behavior, no manual intervention).
+        lock_path = Path(
+            os.environ.get("NEXUS_CONSOLIDATION_LEADER_LOCK",
+                           str(Path.home() / ".nexus-memory" / "consolidation-leader.lock"))
+        )
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._leader_lock_file = open(lock_path, "w")
+        try:
+            import fcntl
+        except ImportError:  # Windows: no cross-process election possible
+            fcntl = None
+        elected = False
+        if fcntl is not None:
+            try:
+                fcntl.flock(self._leader_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elected = True
+            except OSError:
+                elected = False
+        else:
+            elected = True  # behave as before on platforms without fcntl
+
+        standby = not elected
+        if standby:
+            # Lock held by another process's daemon: stay passive as STANDBY.
+            # The standby loop does NOT run passes; it polls the flock and
+            # takes over when the leader dies (HA failover).
+            log.info("Consolidation leader already running in another process; "
+                     "this instance stays passive (standby).")
+            self._leader_lock_file.close()
+            self._leader_lock_file = None
+
         def _loop():
+            if standby:
+                # Standby loop: never consolidate. Re-arm only when the
+                # leader's flock disappears (leader died); first standby
+                # to grab it becomes leader and starts working. Poll
+                # interval is env-tunable (default 30 s) so tests and ops
+                # can speed up failover detection.
+                import fcntl
+                poll = int(os.environ.get("NEXUS_CONSOLIDATION_LEADER_POLL", "30"))
+                while True:
+                    time.sleep(poll)
+                    try:
+                        f = open(lock_path, "w")
+                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except OSError:
+                        continue  # leader still holds it
+                    self._leader_lock_file = f
+                    log.warning("Consolidation leader lost; this instance took "
+                                "over as leader (HA failover).")
+                    break
             time.sleep(CONSOLIDATION_START_DELAY_SECONDS)
             while True:
                 try:
