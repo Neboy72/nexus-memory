@@ -912,21 +912,41 @@ class Consolidator:
             os.environ.get("NEXUS_CONSOLIDATION_LEADER_LOCK",
                            str(Path.home() / ".nexus-memory" / "consolidation-leader.lock"))
         )
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._leader_lock_file = open(lock_path, "w")
+        # P0-Fix (K3-Review 22.09.): FS-Seiteneffekte gegaunteted — vor diesem
+        # Patch konnte mkdir/open in einem stdio-Prozess mit ReadOnly-Home
+        # crashen (Vertragsbruch: stdio muss 1:1 bleiben). Fail-open: kann die
+        # Wahl nicht arbeiten, läuft Konsolidierung WIE VORHER ohne Wahl.
+        self._leader_lock_file = None
         try:
-            import fcntl
-        except ImportError:  # Windows: no cross-process election possible
-            fcntl = None
-        elected = False
-        if fcntl is not None:
-            try:
-                fcntl.flock(self._leader_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                elected = True
-            except OSError:
-                elected = False
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            # "a", nicht "w": Lock-Datei niemals truncaten (P0-Nebenfund).
+            self._leader_lock_file = open(lock_path, "a")
+        except OSError as e:
+            log.warning("leader lock unavailable (%s); running WITHOUT election "
+                        "(pre-standalone behavior)", e)
+            elected = True
         else:
-            elected = True  # behave as before on platforms without fcntl
+            import errno
+            try:
+                import fcntl
+            except ImportError:  # Windows: no cross-process election possible
+                fcntl = None
+            if fcntl is None:
+                elected = True  # behave as before on platforms without fcntl
+            else:
+                try:
+                    fcntl.flock(self._leader_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    elected = True
+                except OSError as e:
+                    if e.errno in (errno.EAGAIN, errno.EACCES):
+                        elected = False  # genuine contention → standby
+                    else:
+                        # ENOLCK/ENOTSUP: flock unsupported on this FS —
+                        # election unavailable, aber NICHT jeder-prozess-standby
+                        # (sonst stünde Konsolidierung überall lautlos still).
+                        log.warning("flock unsupported on %s (%s); leader guarantee "
+                                    "OFF, running without election", lock_path, e)
+                        elected = True
 
         standby = not elected
         if standby:
@@ -935,7 +955,8 @@ class Consolidator:
             # takes over when the leader dies (HA failover).
             log.info("Consolidation leader already running in another process; "
                      "this instance stays passive (standby).")
-            self._leader_lock_file.close()
+            if self._leader_lock_file is not None:
+                self._leader_lock_file.close()
             self._leader_lock_file = None
 
         def _loop():
@@ -946,11 +967,19 @@ class Consolidator:
                 # interval is env-tunable (default 30 s) so tests and ops
                 # can speed up failover detection.
                 import fcntl
-                poll = int(os.environ.get("NEXUS_CONSOLIDATION_LEADER_POLL", "30"))
+                # P1-3-Fix (K3-Review): env defensiv parsen + Minimum-Klammer
+                # (poll=0 wäre 100%-CPU-Busy-Loop mit Truncate-Wiederholung),
+                # Muster wie _serve_port().
+                try:
+                    poll = max(1, int(os.environ.get("NEXUS_CONSOLIDATION_LEADER_POLL", "30")))
+                except (TypeError, ValueError):
+                    log.warning("NEXUS_CONSOLIDATION_LEADER_POLL not an integer; using 30")
+                    poll = 30
                 while True:
                     time.sleep(poll)
                     try:
-                        f = open(lock_path, "w")
+                        # "a", nicht "w": Poll darf die Lock-Datei nie truncaten.
+                        f = open(lock_path, "a")
                         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     except OSError:
                         continue  # leader still holds it

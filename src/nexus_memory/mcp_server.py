@@ -3265,7 +3265,10 @@ def build_serve_app():
         async with manager.run():
             yield
 
-    async def healthz(request):
+    # P2-Fix (K3-Review): sync handler — Starlette führt sync defs im
+    # Threadpool aus. Die alte async-Variante blockierte den Event-Loop bis
+    # 1 s pro Probe, genau wenn Qdrant down ist (worst case: /mcp-Lauf).
+    def healthz(request):
         reachable = _qdrant_reachable()
         started = _serve_started_at if _serve_started_at is not None else time.monotonic()
         return JSONResponse({
