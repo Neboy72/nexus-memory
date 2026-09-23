@@ -20,6 +20,8 @@ Env:
   NEXUS_WATCH_QUERIES       → JSON: [["query","expected-keyword"],...]
                                (default: gerätekritische Queries)
 """
+import asyncio
+import inspect
 import logging
 import os
 import threading
@@ -206,6 +208,16 @@ class RetrievalWatch:
         if embedder is not None:
             try:
                 vector = embedder.embed(query)
+                if inspect.iscoroutine(vector):
+                    # EmbeddingProvider.embed is async; this watchdog runs on a
+                    # plain daemon thread with no event loop. Same pattern as
+                    # consolidation._embed_via_store: run the coroutine to
+                    # completion on a fresh loop here. The old code stored the
+                    # bare coroutine and treated it as truthy, so vector search
+                    # received a coroutine object (reproduced live: "Unsupported
+                    # query type: <class 'coroutine'>", "coroutine ... never
+                    # awaited" in serve.error.log).
+                    vector = asyncio.run(vector)
             except Exception as exc:
                 log.warning("Embedding failed for watch query: %s", exc)
         if vector is None:

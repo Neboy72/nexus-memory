@@ -96,6 +96,39 @@ def test_embedding_failure_visible_in_report(monkeypatch):
     assert rep["failed_embeddings"] == len(w._queries)
 
 
+def test_async_embedder_coroutine_is_awaited_not_passed_as_vector(monkeypatch):
+    """Regression (live repro 23.09., serve.error.log): EmbeddingProvider.embed
+    is async. The watchdog's plain daemon thread must resolve the coroutine
+    (asyncio.run — same pattern as consolidation._embed_via_store) instead of
+    passing the bare coroutine into qdrant as a query vector ("Unsupported
+    query type: <class 'coroutine'>" + "coroutine was never awaited")."""
+    import asyncio
+    calls = {"n": 0}
+    captured = {}
+
+    class _AsyncEmbedder:
+        def embed(self, _q):
+            calls["n"] += 1
+            async def _coro():
+                return [0.1, 0.2, 0.3]
+            return _coro()
+
+    class _AsyncStore:
+        client = SimpleNamespace(
+            query_points=lambda **kw: captured.update(query=kw["query"])
+            or SimpleNamespace(points=[_FakePoint("Bose SoundLink Bluetooth", 0.9)]),
+        )
+        _embedder = _AsyncEmbedder()
+
+    w = _watch([], monkeypatch, min_score=0.5, store=_AsyncStore())
+    rep = w.run()
+    assert calls["n"] == 1
+    assert captured["query"] == [0.1, 0.2, 0.3]  # a REAL vector, not a coroutine
+    assert rep["failures"] == []  # keyword found above min score
+    for f in rep["failures"]:
+        assert "coroutine" not in str(f.get("error", ""))
+
+
 def test_interval_below_one_hour_respected(monkeypatch):
     # The old loop slept 60s per iteration regardless of the configured
     # interval (hidden 1h floor for 86400s: 1440 x 60s sleeps). The fixed
