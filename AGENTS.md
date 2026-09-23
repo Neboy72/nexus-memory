@@ -123,9 +123,18 @@ Restart OpenClaw Gateway. Nexus tools appear as `nexus_search`, `nexus_store`, `
 - **Tools**: `nexus_search`, `nexus_store`, `nexus_forget` available to the agent.
 - **Shared store**: Same Qdrant collection as Hermes plugin and MCP server — one brain, many agents.
 
-## Standalone Serve (Daemon Mode) — optional
+## Standalone Serve (Daemon Mode) — default since v0.21.0
 
-**New in v0.20.2.** `nexus-memory serve` runs the same MCP server as a long-lived HTTP daemon (Streamable HTTP on 127.0.0.1:9122, healthz endpoint included). It is ADDITIVE: stdio and both native plugins work exactly as before. Use it when you want memory alive even with no agent running (launchd/systemd/Windows-service wrapper recommended). Existing installs are not migrated or reconfigured.
+**New in v0.20.2, default since v0.21.0.** `nexus-memory serve` runs the same MCP server as a long-lived HTTP daemon (Streamable HTTP on 127.0.0.1:9122, healthz endpoint included). It is ADDITIVE: stdio and both native plugins work exactly as before. Use it when you want memory alive even with no agent running.
+
+```bash
+./scripts/install_serve.sh             # install as OS service (launchd/systemd/Windows)
+./scripts/install_serve.sh             # idempotent: re-run = upgrade/repair + restart
+NEXUS_SERVE_SKIP_LAUNCHD=1 ./scripts/install_serve.sh   # file-write only (tests)
+```
+
+- Service identity is STABLE: `ai.nexus.serve` (macOS label), `nexus-serve.service` (Linux unit), `NexusServe` (Windows task) — never rename these in patch releases; installed machines match on them.
+- Since v0.21.0 the setup wizard installs the daemon automatically (no user question) and every `do_update` re-asserts the service (fail-open). A failed install never breaks stdio or the plugins.
 
 ```bash
 nexus-memory serve                     # HTTP on 127.0.0.1:9122
@@ -545,7 +554,7 @@ MCP Client ← stdio → nexus-memory (MCP Server)
 
 - **nexus/** — core library (MemoryCategory, HybridRetriever, DriftDetector, Provenance, Lifecycle, Graph, Discovery, Export, ...)
 - **src/nexus_memory/mcp_server.py** — MCP server (5 tools, guardrails, access control)
-- **tests/** — 1091 tests (pytest)
+- **tests/** — 1999 tests (pytest)
 
 ## Testing
 
