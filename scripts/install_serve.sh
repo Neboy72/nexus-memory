@@ -47,6 +47,11 @@ LOG_ERR="${LOG_DIR}/serve.error.log"
 # launchctl domains are per-uid, not per-HOME, so a fake-HOME test run
 # would otherwise stop/reload the REAL service.
 SKIP_SERVICE_CONTROL="${NEXUS_SERVE_SKIP_LAUNCHD:-0}"
+# NEXUS_SERVE_FORCE_OS=darwin|linux|windows: pretend to run on that OS (tests +
+# cross-OS dry checks). Empty = real uname. Service-control calls are only made
+# when it matches the real OS, so a forced OS never touches the host's real
+# service manager.
+FORCE_OS="${NEXUS_SERVE_FORCE_OS:-}"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; CYAN='\033[0;36m'; NC='\033[0m'
 ok()   { echo -e " ${GREEN}✅${NC} $1"; }
@@ -94,9 +99,23 @@ resolve_python() {
     fi
 }
 
+# Effective OS for all `case` branches: forced override wins; a forced OS that
+# differs from the real one also disables service control (hermetic mode).
+DETECTED_OS="$(uname -s)"
+case "${FORCE_OS:-}" in
+    darwin)  EFFECTIVE_OS="Darwin" ;;
+    linux)   EFFECTIVE_OS="Linux" ;;
+    windows) EFFECTIVE_OS="Windows" ;;
+    "")      EFFECTIVE_OS="${DETECTED_OS}" ;;
+    *)       fail "NEXUS_SERVE_FORCE_OS must be darwin|linux|windows (or unset)" ;;
+esac
+if [ -n "${FORCE_OS:-}" ] && [ "${EFFECTIVE_OS}" != "${DETECTED_OS}" ]; then
+    SKIP_SERVICE_CONTROL="1"
+fi
+
 # ── Uninstall ────────────────────────────────────────────────────────
 if [ "${1:-}" = "--uninstall" ]; then
-    case "$(uname -s)" in
+    case "${EFFECTIVE_OS}" in
         Darwin)
             if launchctl print "gui/$(id -u)/${LABEL}" >/dev/null 2>&1; then
                 launchctl bootout "gui/$(id -u)/${LABEL}" >/dev/null 2>&1 || true
@@ -114,7 +133,7 @@ if [ "${1:-}" = "--uninstall" ]; then
             fi
             [ ! -f "$UNIT_PATH" ] && ok "Service removed (${UNIT_PATH} gone)" || warn "Unit still present: $UNIT_PATH"
             ;;
-        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        Windows)
             schtasks //delete //tn "$TASK_NAME" //f >/dev/null 2>&1 || true
             ok "Task ${TASK_NAME} removed"
             ;;
@@ -127,7 +146,7 @@ fi
 
 # ── Status ───────────────────────────────────────────────────────────
 if [ "${1:-}" = "--status" ]; then
-    case "$(uname -s)" in
+    case "${EFFECTIVE_OS}" in
         Darwin)
             if launchctl print "gui/$(id -u)/${LABEL}" >/dev/null 2>&1; then
                 ok "launchd service '${LABEL}' is loaded"
@@ -143,7 +162,7 @@ if [ "${1:-}" = "--status" ]; then
                 warn "systemd not available"
             fi
             ;;
-        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        Windows)
             schtasks //query //tn "$TASK_NAME" 2>/dev/null || warn "Task ${TASK_NAME} not found"
             ;;
         *)
@@ -161,7 +180,7 @@ fi
 ENTRYPOINT="$(resolve_entrypoint)" || fail "nexus-memory entrypoint not found. Install the package first (pip install -e ${REPO_DIR})."
 info "Entrypoint: $ENTRYPOINT"
 
-case "$(uname -s)" in
+case "${EFFECTIVE_OS}" in
     Darwin)
         # ── macOS: launchd ───────────────────────────────────────────
         mkdir -p "${HOME}/Library/LaunchAgents" "$LOG_DIR"
@@ -315,7 +334,7 @@ UNIT
         fi
         ;;
 
-    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+    Windows)
         # ── Windows: Scheduled Task (best-effort, requires Git-Bash) ─
         PYTHON_WIN="$(resolve_python)"
         info "Installing Windows scheduled task '${TASK_NAME}' (logon trigger)"
@@ -353,9 +372,9 @@ fi
 
 echo ""
 info "Done. Serve daemon installed as OS service:"
-case "$(uname -s)" in
+case "${EFFECTIVE_OS}" in
     Darwin)      info "  macOS launchd : ${PLIST_PATH}" ;;
     Linux)       info "  systemd user  : ${UNIT_PATH}" ;;
-    MINGW*|MSYS*|CYGWIN*) info "  Windows task  : ${TASK_NAME}" ;;
+    Windows) info "  Windows task  : ${TASK_NAME}" ;;
 esac
 info "  Log: ${LOG_OUT} / ${LOG_ERR}"

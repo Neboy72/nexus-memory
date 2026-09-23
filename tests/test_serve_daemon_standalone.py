@@ -37,7 +37,8 @@ from nexus_memory import setup as setup_mod  # noqa: E402
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _fake_env(home: Path, port: str = "9122", skip: bool = True) -> dict:
+def _fake_env(home: Path, port: str = "9122", skip: bool = True,
+              force_os: str | None = None) -> dict:
     env = {
         "HOME": str(home),
         "PATH": f"{home}/bin:/usr/bin:/bin",
@@ -45,6 +46,8 @@ def _fake_env(home: Path, port: str = "9122", skip: bool = True) -> dict:
     }
     if skip:
         env["NEXUS_SERVE_SKIP_LAUNCHD"] = "1"
+    if force_os:
+        env["NEXUS_SERVE_FORCE_OS"] = force_os
     return env
 
 
@@ -58,8 +61,9 @@ def _fake_entrypoint(home: Path) -> None:
 
 
 def _run_script(home: Path, port: str = "9122", skip: bool = True,
-                extra_env: dict | None = None) -> subprocess.CompletedProcess:
-    env = _fake_env(home, port=port, skip=skip)
+                extra_env: dict | None = None,
+                force_os: str | None = None) -> subprocess.CompletedProcess:
+    env = _fake_env(home, port=port, skip=skip, force_os=force_os)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -86,7 +90,7 @@ class TestInstallServeScript:
     def test_darwin_plist_written_hermetically(self, tmp_path):
         _fake_entrypoint(tmp_path)
         plist = tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist"
-        r = _run_script(tmp_path)
+        r = _run_script(tmp_path, force_os="darwin")
         assert r.returncode == 0, r.stderr
         assert plist.exists()
 
@@ -104,7 +108,7 @@ class TestInstallServeScript:
 
     def test_plist_keeps_reference_log_paths(self, tmp_path):
         _fake_entrypoint(tmp_path)
-        r = _run_script(tmp_path)
+        r = _run_script(tmp_path, force_os="darwin")
         assert r.returncode == 0, r.stderr
         content = (tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist").read_text()
         assert f"<string>{_REPO_ROOT}/logs/serve.log</string>" in content
@@ -112,9 +116,9 @@ class TestInstallServeScript:
 
     def test_rerun_is_idempotent_no_duplicate_no_failure(self, tmp_path):
         _fake_entrypoint(tmp_path)
-        r1 = _run_script(tmp_path)
+        r1 = _run_script(tmp_path, force_os="darwin")
         assert r1.returncode == 0, r1.stderr
-        r2 = _run_script(tmp_path)
+        r2 = _run_script(tmp_path, force_os="darwin")
         assert r2.returncode == 0, r2.stderr
         # still exactly one plist for the stable label
         plist_dir = tmp_path / "Library" / "LaunchAgents"
@@ -123,7 +127,7 @@ class TestInstallServeScript:
 
     def test_skip_mode_writes_file_without_service_control(self, tmp_path):
         _fake_entrypoint(tmp_path)
-        r = _run_script(tmp_path, skip=True)
+        r = _run_script(tmp_path, skip=True, force_os="darwin")
         assert r.returncode == 0
         assert "skipping service control" in r.stdout
         assert "Post-install healthz check skipped" in r.stdout
@@ -140,7 +144,7 @@ class TestInstallServeScript:
 
     def test_port_override_reaches_plist(self, tmp_path):
         _fake_entrypoint(tmp_path)
-        r = _run_script(tmp_path, port="9300")
+        r = _run_script(tmp_path, port="9300", force_os="darwin")
         assert r.returncode == 0, r.stderr
         content = (tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist").read_text()
         assert "<string>9300</string>" in content
@@ -159,7 +163,7 @@ class TestInstallServeScript:
 
         monkeypatch.setattr(subprocess, "run", spying_run)
         monkeypatch.setattr(sd.subprocess, "run", spying_run)
-        r = _run_script(tmp_path)
+        r = _run_script(tmp_path, force_os="darwin")
         assert r.returncode == 0
         assert calls == []
 
