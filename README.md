@@ -22,8 +22,8 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.20.2-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-1964%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.21.0-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-1999%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -48,7 +48,7 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
 
 ### Standalone Serve (Daemon Mode)
 
-**New in v0.20.2.** Beyond the two integration paths, `nexus-memory serve` runs the same MCP server as a **long-lived HTTP daemon** — your memory layer stays up even when no agent is running.
+**New in v0.20.2, default since v0.21.0.** Beyond the two integration paths, `nexus-memory serve` runs the same MCP server as a **long-lived HTTP daemon** — your memory layer stays up even when no agent is running.
 
 ```bash
 nexus-memory serve        # Streamable HTTP on 127.0.0.1:9122
@@ -59,7 +59,8 @@ curl http://127.0.0.1:9122/healthz   # → {"status":"ok","qdrant":true,...}
 - **Self-healing**: run it as a launchd/Windows service/systemd unit (`RunAtLoad` + `KeepAlive`) and it survives reboots and crashes.
 - **Consolidation leader election**: when multiple serve instances run (or an agent + a daemon coexist), an advisory `flock` elects one leader — the consolidation daemon runs once, followers stand by and take over on failover.
 - **Eager boot**: the daemon initializes its store and fuel chain at startup, so it is warm before the first agent connects.
-- Existing installs are **not** migrated or reconfigured — serve mode is opt-in.
+- **Standalone wird Standard (v0.21.0)**: `scripts/install_serve.sh` installs the daemon as an OS service (launchd / systemd user unit / Windows scheduled task, idempotent), the setup wizard installs it automatically (no user question), and every `do_update` re-asserts the service (fail-open). A failed install never breaks stdio or the plugins — the daemon is additive at runtime.
+- Existing installs are **not** migrated or reconfigured — the service install is idempotent and safe to re-run.
 
 ---
 
@@ -698,6 +699,7 @@ A finished install **and every update** shows the dashboard: after `do_update` s
 | ⛽ **Multi-Station Fuel Chain** | **✅ Auto-discovery + budget cap** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 💾 **Auto-Backup** | **✅ Every 6h** | **✅ Every 6h** | ❌ | ❌ | ❌ | ❌ |
 | 📦 **Update Notifications** | **✅ Auto-check GitHub** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 🖥️ **Serve Daemon as OS Service** | **✅ One command, launchd/systemd/Windows** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Pre-Update Backup** | **✅ Safety first** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 🛡️ **Access Control** | **✅ public/trusted/private** | ✅ Permissions | ❌ | ❌ | ❌ | ❌ |
 | 🔒 **Consolidation Security** | **✅ Access-level inheritance + audit exclusion** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -741,7 +743,8 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlight |
 |---------|------|-----------|
-| **v0.20.2** | 2026-09-22 | Standalone Independence: `nexus-memory serve` (Streamable HTTP + healthz), launchd-Dienst mit Leader-Election + HA-Failover, Consolidation-Daemon läuft aus dem Dienst. Additiv — stdio + Plugins unverändert. 1964 tests. |
+| **v0.21.0** | 2026-09-23 | Standalone wird Standard: `install_serve.sh` (launchd/systemd/Windows, idempotent), setup wizard installs the daemon automatically, `do_update` re-asserts the service fail-open. Additive — stdio + plugins unchanged. 1999 tests. |
+| **v0.20.2** | 2026-09-22 | Standalone Independence: `nexus-memory serve` (Streamable HTTP + healthz), launchd-Dienst mit Leader-Election + HA-Failover, Consolidation-Daemon läuft aus dem Dienst. Additiv — stdio + Plugins unverändert. 1964 tests. | `nexus-memory serve` (Streamable HTTP + healthz), launchd-Dienst mit Leader-Election + HA-Failover, Consolidation-Daemon läuft aus dem Dienst. Additiv — stdio + Plugins unverändert. 1964 tests. |
 | **v0.20.1** | 2026-09-16 | Post-release verification round: proven prompt-injection bypass closed (slash close-tag), missing `_logger` fixed, session-scan/num/clamp hardening, 22 findings from the 3rd scan. 1945 tests. |
 | **v0.20.0** | 2026-09-16 | OCR review campaign complete: all 513 findings closed (15 critical/high dashboard XSS+injection, 258 medium incl. graph-store races + webhook SSRF, 240 low). 26 waves, each with a proof-carrying test file. 1818 tests. |
 | **v0.19.1** | 2026-09-13 | Memory Quality Gates: junk filtered at ingestion (stated/horizon/single-mention rules), salience follows confidence, poisoned entries flagged + demoted |
@@ -842,4 +845,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.19.1 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.21.0 · One memory for all your agents</sub>

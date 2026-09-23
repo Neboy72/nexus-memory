@@ -89,7 +89,7 @@ try:
     from importlib.metadata import version as _pkg_version
     __version__ = _pkg_version("nexus-memory")
 except Exception:  # Paket nicht installiert (z.B. nur git clone) — Legacy-Fallback
-    __version__ = "0.16.0"
+    __version__ = "0.21.0"
 
 _logger = logging.getLogger(__name__)
 
