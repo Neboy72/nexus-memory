@@ -22,8 +22,8 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.20.1-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-1818%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.20.2-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-1964%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -45,6 +45,21 @@ Nexus Memory offers two integration paths: **Native Plugin** (auto-memory) and *
 |------|----------|-------|-------------|
 | **Native Plugin** | Hermes Agent, OpenClaw, Claude Code | `./scripts/install_hermes_plugin.sh`, `./scripts/install_openclaw_plugin.sh`, or `./scripts/install_claude_plugin.sh` | **Automatic**: Auto-Recall + Auto-Capture + Guardrails, no manual tool calls |
 | **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | **Manual**: agent calls `nexus_recall`, `nexus_remember` explicitly |
+
+### Standalone Serve (Daemon Mode)
+
+**New in v0.20.2.** Beyond the two integration paths, `nexus-memory serve` runs the same MCP server as a **long-lived HTTP daemon** — your memory layer stays up even when no agent is running.
+
+```bash
+nexus-memory serve        # Streamable HTTP on 127.0.0.1:9122
+curl http://127.0.0.1:9122/healthz   # → {"status":"ok","qdrant":true,...}
+```
+
+- **Additive, not a replacement**: stdio (`nexus-memory`) and both native plugins work exactly as before.
+- **Self-healing**: run it as a launchd/Windows service/systemd unit (`RunAtLoad` + `KeepAlive`) and it survives reboots and crashes.
+- **Consolidation leader election**: when multiple serve instances run (or an agent + a daemon coexist), an advisory `flock` elects one leader — the consolidation daemon runs once, followers stand by and take over on failover.
+- **Eager boot**: the daemon initializes its store and fuel chain at startup, so it is warm before the first agent connects.
+- Existing installs are **not** migrated or reconfigured — serve mode is opt-in.
 
 ---
 
@@ -726,6 +741,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.20.2** | 2026-09-22 | Standalone Independence: `nexus-memory serve` (Streamable HTTP + healthz), launchd-Dienst mit Leader-Election + HA-Failover, Consolidation-Daemon läuft aus dem Dienst. Additiv — stdio + Plugins unverändert. 1964 tests. |
 | **v0.20.1** | 2026-09-16 | Post-release verification round: proven prompt-injection bypass closed (slash close-tag), missing `_logger` fixed, session-scan/num/clamp hardening, 22 findings from the 3rd scan. 1945 tests. |
 | **v0.20.0** | 2026-09-16 | OCR review campaign complete: all 513 findings closed (15 critical/high dashboard XSS+injection, 258 medium incl. graph-store races + webhook SSRF, 240 low). 26 waves, each with a proof-carrying test file. 1818 tests. |
 | **v0.19.1** | 2026-09-13 | Memory Quality Gates: junk filtered at ingestion (stated/horizon/single-mention rules), salience follows confidence, poisoned entries flagged + demoted |
