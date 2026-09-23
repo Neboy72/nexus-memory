@@ -1,3 +1,41 @@
+## [0.21.0] - 2026-09-23
+
+### Added
+
+- **Standalone wird Standard (serve daemon as OS service).**
+  - **`scripts/install_serve.sh` (Block 1).** Installs `nexus-memory serve`
+    as an OS service: launchd LaunchAgent on macOS, systemd user unit on
+    Linux, Windows scheduled task via `schtasks`. Idempotent — re-running
+    rewrites the service file and restarts the service (upgrade path), never
+    duplicates or fails on an existing service. Stable service identity
+    (`ai.nexus.serve` / `nexus-serve.service` / `NexusServe`), generated
+    files match the reference unit (RunAtLoad + KeepAlive, ThrottleInterval
+    30, ExitTimeOut 25, logs under `<repo>/logs/`, `NEXUS_SERVE_PORT`
+    default 9122). `NEXUS_SERVE_SKIP_LAUNCHD=1` writes the service file
+    without any service-control side effect (hermetic test mode — launchctl
+    domains are per-uid, not per-HOME).
+  - **Setup wizard wiring (Block 2).** `step_complete()` installs the serve
+    daemon with **no user question**; the interactive CLI gained a serve
+    step before completion; new JSON command `setup --json serve_daemon`.
+    A failed install never fails the setup — it degrades to a summary note
+    (stdio MCP keeps working).
+  - **do_update wiring (Block 3).** After `pip install`, `_do_update()`
+    re-asserts the serve daemon via `ensure_serve_daemon()`
+    (`asyncio.to_thread`, fail-open: any failure is logged as a warning and
+    never fails the update). Covers machines that predate the
+    daemon-as-default and re-asserts the service after package changes.
+  - **New module `src/nexus_memory/serve_daemon.py`** (stdlib-only imports;
+    `setup.py` and `mcp_server.py` import it — no circular import by
+    construction). `ensure_serve_daemon()` is idempotent: healthy `/healthz`
+    → `already_installed` no-op; all failure modes (missing script, script
+    rc != 0, timeout, healthz down) return dicts, never raise.
+
+Beweis-Kranz: full suite 1999 passed / 2 skipped, live end-to-end run of
+`install_serve.sh` on the reference macOS host (healthz 200, generated
+plist matches the hand-built reference), idempotent re-run green,
+`ensure_serve_daemon()` full-path `installed` proven after stopping the
+daemon, gitleaks clean.
+
 ## [0.20.2] - 2026-09-17
 
 ### Security hardening (independent audit round)

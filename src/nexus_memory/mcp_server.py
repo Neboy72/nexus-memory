@@ -1960,6 +1960,27 @@ async def _do_update(confirm: bool = False) -> dict:
         importlib.reload(nexus)
         new_version = nexus.__version__
 
+        # v0.21.0 "Standalone wird Standard" — Nachzieh-Anbindung, fail-open:
+        # an update can reach machines that predate the daemon-as-default
+        # (no service installed yet) and must re-assert the service after a
+        # package change. A failure here must NEVER fail the update: the
+        # daemon is optional at runtime (stdio MCP keeps working). Runs in a
+        # worker thread — the script shells out and polls /healthz for up to
+        # ~30s; inline execution would block the MCP event loop.
+        try:
+            from nexus_memory.serve_daemon import ensure_serve_daemon
+            daemon_result = await asyncio.to_thread(ensure_serve_daemon)
+            logging.info("🛠️ Serve daemon check after update: %s", daemon_result.get("status"))
+            if daemon_result.get("status") == "failed":
+                logging.warning(
+                    "Serve daemon re-assert failed (non-fatal): %s",
+                    daemon_result.get("error"),
+                )
+        except Exception as daemon_exc:
+            logging.warning(
+                "Serve daemon re-assert skipped (non-fatal): %s", daemon_exc
+            )
+
         # Success moment (Nebo law 09.09): every update shows the dashboard like
         # a fresh install. Reset the once-marker and boot the dashboard detached;
         # its banner + browser-open are the update's confirmation moment.
