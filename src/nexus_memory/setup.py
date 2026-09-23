@@ -10,6 +10,7 @@ Flow:
     3. Agent auto-detect (agent_detect - 15 agents)
     4. Pro Agent: Trust-Level choose (chat_wizard + agent_detect)
     5. Pro Agent: Plugin or MCP install
+    5b. Serve daemon as OS service (always, no user question — v0.21.0)
     6. Dashboard start + verify
     7. Done - all agents connected
 
@@ -27,6 +28,7 @@ Usage:
     python3 -m nexus_memory.setup --json detect_agents
     python3 -m nexus_memory.setup --json set_trust hermes private
     python3 -m nexus_memory.setup --json install_agent hermes
+    python3 -m nexus_memory.setup --json serve_daemon
     python3 -m nexus_memory.setup --json status
     python3 -m nexus_memory.setup --json complete
 """
@@ -46,6 +48,9 @@ from nexus_memory.chat_wizard import (
 )
 from nexus_memory.agent_detect import (
     detect_all_agents, register_agent, load_agents_registry
+)
+from nexus_memory.serve_daemon import (
+    DEFAULT_SERVE_PORT, step_serve_daemon
 )
 
 
@@ -407,11 +412,20 @@ def step_status() -> dict:
 
 
 def step_complete() -> dict:
-    """Final step: Summary of what was configured."""
+    """Final step: Summary of what was configured.
+
+    v0.21.0 "Standalone wird Standard": before summarizing, make sure the
+    serve daemon runs as an OS service. NO user question — the daemon is
+    always wanted. A failed install never fails the setup: it degrades to a
+    note in the summary (stdio MCP keeps working).
+    """
+    daemon = step_serve_daemon()
+    daemon_status = daemon.get("status")  # installed | already_installed | failed
+
     status = step_status()
     agents = status["agents"]["registered"]
 
-    return {
+    result = {
         "step": "complete",
         "title": "Nexus Memory Setup Complete!",
         "summary": {
@@ -428,9 +442,29 @@ def step_complete() -> dict:
                 for a in agents
             ],
         },
+        "serve_daemon": {
+            "status": daemon_status,
+            "port": daemon.get("port", DEFAULT_SERVE_PORT),
+            "message": daemon.get("message"),
+            "error": daemon.get("error"),
+        },
         "dashboard_url": "http://localhost:9121",
         "message": "Nexus Memory is ready. Start the dashboard with: nexus-memory dashboard",
     }
+
+    port = result["serve_daemon"]["port"]
+    if daemon_status == "installed":
+        result["message"] += f" Serve daemon installed (http://127.0.0.1:{port})."
+    elif daemon_status == "already_installed":
+        result["message"] += f" Serve daemon already running (http://127.0.0.1:{port})."
+    else:
+        error = daemon.get("error") or "install_serve.sh"
+        result["message"] += (
+            " Serve daemon could not be installed — MCP works over stdio; "
+            f"see logs ({error})."
+        )
+
+    return result
 
 
 # ── CLI Interactive Mode ────────────────────────────────────────────────────
@@ -569,7 +603,13 @@ def cli_interactive():
         _cli_print(result, indent=1)
         print()
 
-    # Step 5: Complete
+    # Step 5: Serve daemon (v0.21.0 "Standalone wird Standard": always, no
+    # user question — stdio-only installs lose cross-machine memory access)
+    daemon = step_serve_daemon()
+    _cli_print(daemon)
+    print()
+
+    # Step 6: Complete
     complete = step_complete()
     _cli_print(complete)
 
@@ -606,6 +646,8 @@ def json_mode(args: list[str]):
         result = step_status()
     elif command == "complete":
         result = step_complete()
+    elif command == "serve_daemon":
+        result = step_serve_daemon()
     elif command == "install_agent":
         if len(args) < 2:
             result = {"error": "Usage: setup --json install_agent <agent_id> [trust_level]"}
