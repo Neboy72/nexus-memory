@@ -123,6 +123,15 @@ Restart OpenClaw Gateway. Nexus tools appear as `nexus_search`, `nexus_store`, `
 - **Tools**: `nexus_search`, `nexus_store`, `nexus_forget` available to the agent.
 - **Shared store**: Same Qdrant collection as Hermes plugin and MCP server — one brain, many agents.
 
+## Standalone Serve (Daemon Mode) — optional
+
+**New in v0.20.2.** `nexus-memory serve` runs the same MCP server as a long-lived HTTP daemon (Streamable HTTP on 127.0.0.1:9122, healthz endpoint included). It is ADDITIVE: stdio and both native plugins work exactly as before. Use it when you want memory alive even with no agent running (launchd/systemd/Windows-service wrapper recommended). Existing installs are not migrated or reconfigured.
+
+```bash
+nexus-memory serve                     # HTTP on 127.0.0.1:9122
+curl http://127.0.0.1:9122/healthz     # {"status":"ok","qdrant":true,"version":...}
+```
+
 ## Shared Store: One Qdrant, Two Access Paths
 
 Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. The Hermes native plugin, the OpenClaw native plugin, and the MCP server all read/write the **same store** — same vectors, same metadata, same access levels.
