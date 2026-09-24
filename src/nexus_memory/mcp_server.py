@@ -2994,8 +2994,25 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
             for p in points:
                 pid = _to_point_id(p["id"])
-                payload = p.get("payload", {})
+                payload = p.get("payload") or {}
                 vec = p.get("vector")
+
+                # E-24 (24.09., Nebo-GO): a backup point WITHOUT payload and a
+                # stored vector restores as an empty-payload "ghost" (only the
+                # 1024d vector survives) — 2145 such ghosts accumulated in the
+                # nexus collection and surfaced as empty auto-recall entries.
+                # A point with no content cannot be re-embedded either, so
+                # skip it instead of restoring a vector-only husk.
+                if not payload:
+                    if not reembed and not vec:
+                        skipped += 1
+                        continue
+                    logging.getLogger(__name__).warning(
+                        "restore: point %s has EMPTY payload — skipped (ghost guard)",
+                        pid,
+                    )
+                    skipped += 1
+                    continue
 
                 if reembed or not vec:
                     text = payload.get("content", "")
