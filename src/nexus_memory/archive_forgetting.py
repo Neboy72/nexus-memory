@@ -1,4 +1,4 @@
-"""Archive-forgetting: nightly backup-then-forget of stale session memories (v0.22.0, Nebo-GO 25.09.).
+"""Archive-forgetting: nightly backup-then-forget of stale session memories (v0.22.0).
 
 Brain-equivalent: forgetting as a feature (Ebbinghaus; Richards & Frankland 2017).
 Selects stale points in the `session` category (and optionally `temp`) that
@@ -6,7 +6,7 @@ have not been recalled recently, backs them up to a local JSONL (full points:
 id + vector + payload), and deletes them from Qdrant ONLY after the backup
 is verified line-count-complete. Deletion happens ONLY here, with proof.
 
-Design rules (Nebo's heart-law):
+Design rules:
 - Test-first deployment, backup BEFORE every deletion, GO at push time.
 - Deletion is atomic per point with per-ID verification; numeric IDs as int.
 - Never touches facts/rules/preferences/beliefs — only session (+temp opt-in).

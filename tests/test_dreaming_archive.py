@@ -1,4 +1,4 @@
-"""Tests for dreaming + archive_forgetting (v0.22.0, Nebo-GO 25.09.)."""
+"""Tests for dreaming + archive_forgetting (v0.22.0)."""
 import json
 import sqlite3
 import time
