@@ -1,3 +1,36 @@
+## [0.22.1] - 2026-09-25
+
+### Fixed
+
+- **Self-kill guard (serve daemon).** `ensure_serve_daemon()` refuses to run
+  `install_serve.sh` from inside a launchd-managed daemon: the install script
+  bootouts the running job, which killed the daemon (and the running update)
+  mid-call. The plist now sets `LAUNCHED_BY_LAUNCHD=1`; the guard returns
+  `skipped_self_guard` instead of reinstalling over its own head.
+- **Dreaming marker timing.** The seen-sessions marker is committed only
+  AFTER a successful pass. An LLM fuel failure mid-pass no longer burns the
+  sessions forever (they stay learnable), and dry runs never consume them.
+- **Dreaming verdict stage wired.** The Consolidator daemon now passes its
+  LLM seam into `dream_once()`, so the ja/nein quality gate actually runs in
+  production (was: `llm_fn=None`, raw snippets landed unfiltered).
+- **Honest archive report.** `scanned` reports the real number of points in
+  the filtered scroll (was: hard-coded BATCH size). Dead `_DELETE_URL`
+  constant removed.
+
+### Install script
+
+- Plist/systemd-unit backup before rewrite (`*.bak` rollback path).
+- Linux `systemctl` calls armored with `|| true` — SSH without linger no
+  longer breaks the install under `set -e`; the is-active check stays the
+  verdict.
+
+### Tests
+
+- 6 gap-closing tests: numeric-string ID → int delete path, real backup
+  completeness check (non-serializable payload blocks delete), playbook
+  write + marker commit, LLM failure keeps sessions learnable, ja/nein
+  verdict gate, fact protection with a real fact point present.
+
 ## [0.21.0] - 2026-09-23
 
 ### Added

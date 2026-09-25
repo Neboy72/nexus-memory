@@ -111,6 +111,18 @@ def serve_daemon_status() -> dict:
     }
 
 
+def _launched_by_launchd() -> bool:
+    """True when THIS process itself runs under launchd (review fix v0.22.1).
+
+    CRITICAL review finding: do_update runs inside the HTTP daemon. If that
+    in-daemon healthz probe fails under load, ensure_serve_daemon() used to
+    run install_serve.sh, which bootouts the launchd job — killing the very
+    daemon (and update) mid-call. A launchd-managed process must never
+    reinstall over its own head.
+    """
+    return os.environ.get("LAUNCHED_BY_LAUNCHD") == "1"
+
+
 def ensure_serve_daemon() -> dict:
     """Make sure the serve daemon runs as an OS service — no user question.
 
@@ -126,6 +138,19 @@ def ensure_serve_daemon() -> dict:
         return {
             "status": "already_installed",
             "message": f"Serve daemon already healthy on port {port}",
+            "port": port,
+        }
+
+    if _launched_by_launchd() and sys.platform == "darwin":
+        # Never bootout our own launchd job from inside the daemon (review
+        # fix v0.22.1). A healthy daemon already returned above; reaching
+        # this point means WE are the launchd process and currently unhealthy
+        # — re-installing would suicide mid-update.
+        return {
+            "status": "skipped_self_guard",
+            "message": (
+                "running under launchd; refusing to reinstall from inside "
+                "the daemon (self-kill guard, v0.22.1)"),
             "port": port,
         }
 

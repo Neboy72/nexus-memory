@@ -113,20 +113,31 @@ def _marker_path(base: Path) -> Path:
     return base / ".dreaming-last-run"
 
 
-def _new_session_ids(ids: List[str], base: Path) -> List[str]:
-    """Marker-based idempotency: only ids not seen in the last run."""
-    marker = _marker_path(base)
+def _read_marker(base: Path) -> set:
     try:
-        seen = set(marker.read_text(encoding="utf-8").splitlines())
+        return set(_marker_path(base).read_text(encoding="utf-8").splitlines())
     except Exception:
-        seen = set()
-    fresh = [i for i in ids if i not in seen]
+        return set()
+
+
+def _write_marker(ids: List[str], base: Path) -> None:
     try:
+        marker = _marker_path(base)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("\n".join(ids), encoding="utf-8")
     except Exception as exc:
         log.warning("dreaming: marker write failed (%s)", exc)
-    return fresh
+
+
+def _new_session_ids(ids: List[str], base: Path) -> List[str]:
+    """Pure check, NO side effects: ids not seen in a committed marker.
+
+    v0.22.1 review fix: the marker used to be written HERE, before any
+    learning happened — a failed pass (or a dry_run!) burned the sessions
+    forever. Committing is now the caller's job, after a successful pass.
+    """
+    seen = _read_marker(base)
+    return [i for i in ids if i not in seen]
 
 
 def _extract_hints(session: Dict[str, Any]) -> List[str]:
@@ -205,6 +216,7 @@ class Dreamer:
                 return result
             fresh_set = set(fresh)
             learned: List[Dict[str, str]] = []
+            pass_error: Optional[str] = None
             for s in sessions:
                 if s["id"] not in fresh_set:
                     continue
@@ -212,9 +224,19 @@ class Dreamer:
                     if self._similar_known(hint):
                         continue
                     if self._llm_fn is not None and not dry_run:
-                        verdict = self._llm_fn(
-                            "Wiederkehrendes Muster ja/nein, dann 1 Satz "
-                            "Muster + 1 Satz Aktion. Text: " + hint)
+                        try:
+                            verdict = self._llm_fn(
+                                "Wiederkehrendes Muster ja/nein, dann 1 Satz "
+                                "Muster + 1 Satz Aktion. Text: " + hint)
+                        except Exception as llm_exc:
+                            # LLM fuel down mid-pass → stop WITHOUT committing
+                            # the marker: these sessions stay learnable (review
+                            # fix v0.22.1; old behavior burned them forever).
+                            log.warning("dreaming: llm_fn failed (%s) — "
+                                        "aborting pass, marker NOT committed",
+                                        llm_exc)
+                            pass_error = f"llm_fn failed: {llm_exc}"[:200]
+                            break
                         if not verdict or "nein" in verdict.lower()[:12]:
                             continue
                         playbook = {"pattern": hint,
@@ -226,13 +248,19 @@ class Dreamer:
                     learned.append(playbook)
                     if len(learned) >= 20:
                         break
-                if len(learned) >= 20:
+                if pass_error or len(learned) >= 20:
                     break
+            if pass_error:
+                result["error"] = pass_error
+                return result
             if learned and not dry_run:
                 base.mkdir(parents=True, exist_ok=True)
                 out = base / f"dream-{time.strftime('%Y%m%d-%H%M%S')}.json"
                 out.write_text(json.dumps(learned, ensure_ascii=False,
                                           indent=1), encoding="utf-8")
+            if not dry_run:
+                # Commit AFTER a successful pass only (review fix v0.22.1).
+                _write_marker([s["id"] for s in sessions], base)
             result["patterns"] = len(learned)
             result["playbooks"] = 1 if learned and not dry_run else 0
         except Exception as exc:

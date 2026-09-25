@@ -30,8 +30,11 @@ class FakeStore:
                with_payload, with_vector):
         stale_ts = time.time() - (archive_forgetting.MAX_AGE_DAYS + 5) * 86400
         points = []
-        # Realistic ID mix: one UUID point, one numeric-ID point.
-        specs = [("session", str(uuid.uuid4())), ("session", 42_000_001)]
+        # Realistic ID mix: one UUID point, one numeric-ID point, one
+        # NUMERIC-STRING point (review gap v0.22.1: int(pid) path untested),
+        # and one FACT point that must never be deleted.
+        specs = [("session", str(uuid.uuid4())), ("session", 42_000_001),
+                 ("session", "42_000_003"), ("facts", 42_000_002)]
         for cat, pid in specs:
             if scroll_filter and not any(
                     m["match"]["value"] == cat
@@ -45,7 +48,9 @@ class FakeStore:
         return (points, None)
 
     def delete(self, collection_name, points_selector):
-        self.deleted.append(points_selector.points[0])
+        # PointIdsList may carry several ids per call — record them all
+        # (review fix v0.22.1: points[0] hid multi-point selectors).
+        self.deleted.extend(points_selector.points)
 
 
 class _NoQdrant(FakeStore):
@@ -89,10 +94,12 @@ def test_dream_hermes_source_fresh_and_idempotent(monkeypatch, tmp_path):
     monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
     out = dreaming.dream_once(dry_run=True)
     assert out["sessions_scanned"] == 1
+    # v0.22.1 review fix: dry_run must NOT commit the marker — the second
+    # dry run still sees the session as fresh. (Old test burned the session
+    # on the first dry run: known bug, now fixed.)
     assert out["new_sessions"] == 1
-    # Second run: marker now contains the id → silent.
     out2 = dreaming.dream_once(dry_run=True)
-    assert out2.get("new_sessions", 0) == 0
+    assert out2.get("new_sessions", 0) == 1
 
 
 def test_dream_jsonl_source(monkeypatch, tmp_path):
@@ -178,7 +185,7 @@ def test_archive_never_touches_facts(monkeypatch, tmp_path):
     store = FakeStore()
     archive_forgetting.archive_once(store, "nexus", dry_run=False)
     assert all(d != 42_000_002 for d in store.deleted)  # fact-ID untouched
-    assert len(store.deleted) == 2  # both session points (uuid + numeric)
+    assert len(store.deleted) == 3  # uuid + numeric + numeric-string sessions
 
 
 def test_archive_mixed_id_types_deleted(monkeypatch, tmp_path):
@@ -186,6 +193,141 @@ def test_archive_mixed_id_types_deleted(monkeypatch, tmp_path):
     monkeypatch.setattr(archive_forgetting, "BACKUP_DIR", tmp_path / "bk")
     store = FakeStore()
     out = archive_forgetting.archive_once(store, "nexus", dry_run=False)
-    assert out["deleted"] == 2 and out["errors"] == 0
+    assert out["deleted"] == 3 and out["errors"] == 0
     kinds = {type(d).__name__ for d in store.deleted}
     assert "str" in kinds and "int" in kinds
+
+
+# ── v0.22.1 review fixes: closing the gaps ────────────────────────
+
+def test_archive_numeric_string_id_becomes_int(monkeypatch, tmp_path):
+    # Review gap: "42000003" (numeric string) must be sent to Qdrant as int,
+    # not as string — regression here makes the delete silently miss.
+    monkeypatch.setattr(archive_forgetting, "BACKUP_DIR", tmp_path / "bk")
+    store = FakeStore()
+    archive_forgetting.archive_once(store, "nexus", dry_run=False)
+    assert 42_000_003 in store.deleted
+    assert isinstance([d for d in store.deleted if d == 42_000_003][0], int)
+
+
+def test_archive_real_backup_check_blocks_delete(monkeypatch, tmp_path):
+    # Review gap: the row-count completeness check must actually run — a
+    # non-JSON-serializable payload must abort BEFORE any delete.
+    monkeypatch.setattr(archive_forgetting, "BACKUP_DIR", tmp_path / "bk")
+    store = FakeStore()
+    out = archive_forgetting.archive_once(store, "nexus", dry_run=False)
+    # Poison one candidate payload AFTER selection, via a wrapped backup:
+    orig = archive_forgetting._backup_points
+
+    def poison(points, d):
+        broken = [dict(p) for p in points]
+        if broken:
+            broken[0] = dict(broken[0], payload={"x": object()})
+        return orig(broken, d)
+
+    monkeypatch.setattr(archive_forgetting, "_backup_points", poison)
+    store2 = FakeStore()
+    out2 = archive_forgetting.archive_once(store2, "nexus", dry_run=False)
+    assert out2["deleted"] == 0 and store2.deleted == []
+    assert out2["backed_up"] == 0
+
+
+def test_dream_writes_playbook_and_commits_marker(monkeypatch, tmp_path):
+    # Review gap: the real product (dream-*.json + marker) was never
+    # exercised — every old test ran dry_run=True.
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE sessions (id TEXT, started_at REAL, "
+                 "message_count INT, tool_call_count INT, ended_at REAL)")
+    now = time.time()
+    conn.execute("INSERT INTO sessions VALUES ('20260925_150000_fix99', ?, 9, 6, ?)",
+                 (now - 7200, now - 3600))
+    conn.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
+    conn.execute("INSERT INTO messages VALUES ('20260925_150000_fix99', 'Beim nightly deploy gab es wieder denselben timeout im health-check, fix war ein retry und ein gotcha im cron.')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
+                       json.dumps([{"type": "hermes", "db": str(db)}]))
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+
+    def fake_llm(prompt):
+        return "ja: Nachts immer derselbe Fehler, dann Neustart. Aktion: wachen."
+
+    out = dreaming.dream_once(store=None, llm_fn=fake_llm, dry_run=False)
+    # The snippet regex yields two candidates from the message text.
+    assert out["patterns"] == 2 and out["playbooks"] == 1
+    files = list((tmp_path / "pb").glob("dream-*.json"))
+    assert len(files) == 1
+    body = json.loads(files[0].read_text(encoding="utf-8"))
+    assert body[0]["verdict"].startswith("ja:")
+    assert body[0]["session_id"] == "20260925_150000_fix99"
+    # Marker committed after success → second run is silent.
+    marker = (tmp_path / "pb" / ".dreaming-last-run").read_text(encoding="utf-8")
+    assert "20260925_150000_fix99" in marker
+    out2 = dreaming.dream_once(store=None, llm_fn=fake_llm, dry_run=False)
+    assert out2.get("new_sessions", 0) == 0
+
+
+def test_dream_llm_failure_keeps_sessions_learnable(monkeypatch, tmp_path):
+    # Review fix v0.22.1: LLM down mid-pass → abort WITHOUT marker commit;
+    # sessions must stay learnable for the next pass.
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE sessions (id TEXT, started_at REAL, "
+                 "message_count INT, tool_call_count INT, ended_at REAL)")
+    now = time.time()
+    conn.execute("INSERT INTO sessions VALUES ('20260925_160000_blast', ?, 5, 6, ?)",
+                 (now - 7200, now - 3600))
+    conn.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
+    conn.execute("INSERT INTO messages VALUES ('20260925_160000_blast', 'Beim nightly deploy gab es wieder denselben timeout im health-check, fix war ein retry und ein gotcha im cron.')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
+                       json.dumps([{"type": "hermes", "db": str(db)}]))
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+
+    def boom(prompt):
+        raise RuntimeError("fuel station closed")
+
+    out = dreaming.dream_once(store=None, llm_fn=boom, dry_run=False)
+    assert "error" in out and out["patterns"] == 0
+    assert not list((tmp_path / "pb").glob("dream-*.json"))
+    marker = tmp_path / "pb" / ".dreaming-last-run"
+    assert not marker.exists()
+    # Next pass (LLM back) must see the session as fresh again.
+    out2 = dreaming.dream_once(store=None, llm_fn=lambda p: "ja: Muster. Aktion: wachen.",
+                               dry_run=False)
+    assert out2.get("new_sessions", 0) == 1 and out2["patterns"] == 2
+
+
+def test_dream_llm_verdict_nein_blocks_pattern(monkeypatch, tmp_path):
+    # Review gap: the ja/nein verdict gate had zero coverage — a typo in the
+    # string check would let everything through unnoticed.
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE sessions (id TEXT, started_at REAL, "
+                 "message_count INT, tool_call_count INT, ended_at REAL)")
+    now = time.time()
+    conn.execute("INSERT INTO sessions VALUES ('20260925_170000_nein', ?, 3, 6, ?)",
+                 (now - 7200, now - 3600))
+    conn.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
+    conn.execute("INSERT INTO messages VALUES ('20260925_170000_nein', 'Beim nightly deploy gab es wieder denselben timeout im health-check, fix war ein retry und ein gotcha im cron.')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
+                       json.dumps([{"type": "hermes", "db": str(db)}]))
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    out = dreaming.dream_once(
+        store=None, llm_fn=lambda p: "nein, kein Muster erkennbar", dry_run=False)
+    assert out["patterns"] == 0
+    assert not list((tmp_path / "pb").glob("dream-*.json"))
+
+
+def test_archive_never_touches_facts_with_real_fact_present(monkeypatch, tmp_path):
+    # Review gap: old test had NO fact point in the store (tautology).
+    # FakeStore now carries one; the category filter must protect it.
+    monkeypatch.setattr(archive_forgetting, "BACKUP_DIR", tmp_path / "bk")
+    store = FakeStore()
+    archive_forgetting.archive_once(store, "nexus", dry_run=False)
+    assert all(d != 42_000_002 for d in store.deleted)
+    assert 42_000_003 in store.deleted  # numeric-string session WAS deleted
