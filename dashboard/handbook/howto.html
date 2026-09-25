@@ -64,6 +64,14 @@ Before big experiments or updates: one extra click, zero regrets.</div>
 opens automatically so you can see the new state ("success moment"). Your memories are never
 touched by an update, the brain survives, only the software around it gets better.</p>
 
+<h2>Sleep cycle: what Nexus learns and forgets at night</h2>
+<p>Since v0.22.0, Nexus maintains itself like a brain during sleep, automatically, nothing to configure:</p>
+<ul>
+<li><b>Dreaming (learning):</b> Nexus reads your agent's recent session history and learns recurring patterns (fixes, workarounds, lessons). The result is written to <code>~/.nexus-memory/learned-playbooks/</code> as plain-text playbooks. Nothing is ever deleted by dreaming. Turn it off with <code>NEXUS_DREAMING=0</code>.</li>
+<li><b>Forgetting (archiving):</b> old session memories (default: older than 30 days) are first written to a complete local backup file (<code>~/.nexus-memory/backups/dreaming-archive/</code>), and only then removed. Facts, rules, preferences and beliefs are never removed. Turn it off with <code>NEXUS_ARCHIVE_ENABLED=0</code>.</li>
+<li><b>Want the space back?</b> The archive folder is your undo file: every removed session memory is inside, ready to re-import.</li>
+</ul>
+
 <h2>Something looks wrong</h2>
 <ul>
 <li><b>Health dot is yellow/red:</b> click ❤️ Health for the specific part that isn't answering.</li>
