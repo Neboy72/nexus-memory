@@ -315,6 +315,38 @@ When you search for "Wallbox", you get:
 
 This gives the agent **contextual relationships**, not just text similarity.
 
+## Sleep Cycle: Dreaming + Forgetting
+
+**New in v0.22.0.** Two brain-inspired memory maintenance passes run inside
+the consolidation daemon (no extra service, fail-open, kill-switches):
+
+### Dreaming (hippocampal replay)
+
+After every consolidation pass, Nexus reads your agent's recent session
+history and learns recurring patterns: fixes, workarounds, lessons.
+Learned playbooks are written to `~/.nexus-memory/learned-playbooks/`
+and deduplicated against existing memories via vector similarity.
+
+- Sources: auto-detects the Hermes session DB; custom sources via
+  `NEXUS_DREAMING_SOURCES` (JSON list of `{"type": "hermes", "db": ...}`
+  and/or `{"type": "jsonl", "dir": ...}`).
+- Idempotent: a marker file ensures each session is learned once.
+- Never deletes anything — dreaming is pure learning.
+- Disable: `NEXUS_DREAMING=0`. Lookback: `NEXUS_DREAMING_LOOKBACK_HOURS`
+  (default 24). Playbook dir: `NEXUS_DREAMING_PLAYBOOK_DIR`.
+
+### Archive-forgetting (backup-then-forget)
+
+Stale `session` memories (default older than 30 days, never recalled
+recently) are written to a complete local JSONL backup (id + vector +
+payload, line-count verified) BEFORE any deletion. Deletion is per-point
+and verified; `fact`/`rule`/`preference`/`belief` are never touched.
+
+- Disable: `NEXUS_ARCHIVE_ENABLED=0`. Age: `NEXUS_ARCHIVE_MAX_AGE_DAYS`
+  (default 30). Batch: `NEXUS_ARCHIVE_BATCH` (default 500).
+- Backup dir: `NEXUS_ARCHIVE_BACKUP_DIR`
+  (default `~/.nexus-memory/backups/dreaming-archive/`).
+
 ## SICA Self-Improvement Cycle
 
 **New in v0.9.0.** SICA (Self-Improving Cycle for Agents) automatically scans memories for issues and patches them.

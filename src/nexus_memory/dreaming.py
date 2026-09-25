@@ -1,4 +1,4 @@
-"""Dreaming: nightly pattern-learning from agent session history (v0.22.0, Nebo-GO 25.09.).
+"""Dreaming: nightly pattern-learning from agent session history (v0.22.0).
 
 Brain-equivalent: hippocampal replay during sleep (Rasch & Born 2013).
 Reads agent session stores (Hermes state.db sessions table, or a generic

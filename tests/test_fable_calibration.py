@@ -36,7 +36,7 @@ def _load_plugin_module():
 class TestSingleMentionCap:
     def test_flagged_mention_capped_at_half(self):
         out = _validate_llm_facts([{
-            "text": "Nebo mag Kaffee", "category": "preference",
+            "text": "the user likes coffee", "category": "preference",
             "confidence": 0.9, "single_mention": True,
         }])
         assert out[0]["confidence"] == 0.5
@@ -50,7 +50,7 @@ class TestSingleMentionCap:
 
     def test_missing_flag_defaults_uncapped(self):
         out = _validate_llm_facts([{
-            "text": "Nebo nutzt GLM-5.3-Flash", "category": "fact",
+            "text": "the user uses GLM-5.3-Flash", "category": "fact",
             "confidence": 0.8,
         }])
         assert out[0]["confidence"] == 0.8
@@ -76,7 +76,7 @@ class TestMemoryInjectionScore:
 
     def test_normal_user_fact_not_flagged(self):
         assert self.plugin._memory_injection_score(
-            "Nebo sagte, er mag keine A/B/C-Listen.") == 0
+            "the user said he dislikes ABC lists") == 0
 
     def test_security_discussion_not_flagged(self):
         assert self.plugin._memory_injection_score(
@@ -94,7 +94,7 @@ class TestSalienceFollowsConfidence:
         plugin = _load_plugin_module()
 
         class FakeEmbedder:
-            def embed(self, text, is_query=True):
+            def embed(self, text, is_query=False):
                 return [0.1, 0.2, 0.3]
 
         class FakeQdrant:
@@ -108,7 +108,7 @@ class TestSalienceFollowsConfidence:
         provider._collection = "test-collection"
         os.environ.setdefault("NEXUS_SCOPE", "default")
         result = provider._upsert(
-            text="Nebo sagte: immer kurz antworten", category="rule",
+            text="the user said: always answer briefly", category="rule",
             access_level="public", source="hermes-plugin-session-end",
             confidence=0.45, salience=0.45)
         assert result["status"] == "ok"
