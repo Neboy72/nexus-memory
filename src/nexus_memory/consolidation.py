@@ -993,6 +993,18 @@ class Consolidator:
                     self.run()
                 except Exception as exc:
                     log.warning("Consolidation pass failed: %s", exc)
+                # v0.22.0 (Nebo-GO 25.09.): dreaming + archive-forgetting
+                # piggyback on the consolidation loop (additive, fail-open).
+                try:
+                    from nexus_memory.dreaming import dream_once
+                    dream_once(store=self._store)
+                except Exception as exc:
+                    log.warning("Dreaming pass failed: %s", exc)
+                try:
+                    from nexus_memory.archive_forgetting import archive_once
+                    archive_once(self._store, self._collection)
+                except Exception as exc:
+                    log.warning("Archive pass failed: %s", exc)
                 slept = 0
                 while slept < CONSOLIDATION_INTERVAL_SECONDS:
                     time.sleep(min(60, CONSOLIDATION_INTERVAL_SECONDS - slept))
