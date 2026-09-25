@@ -41,8 +41,6 @@ BACKUP_DIR = Path(os.environ.get(
     "NEXUS_ARCHIVE_BACKUP_DIR",
     str(Path.home() / ".nexus-memory" / "backups" / "dreaming-archive")))
 
-_DELETE_URL = "http://localhost:6333/collections/{coll}/points/delete?wait=true"
-
 
 def _parse_ts(payload: Dict[str, Any]) -> float:
     """Best-effort created-at extraction across both payload schemas.
@@ -71,13 +69,18 @@ def _parse_ts(payload: Dict[str, Any]) -> float:
 
 
 def _stale_candidates(store, collection: str, cutoff: float,
-                      limit: int) -> List[Dict[str, Any]]:
-    """Scroll session-category points, keep stale ones."""
+                      limit: int) -> tuple:
+    """Scroll session-category points, keep stale ones.
+
+    Returns (candidates, scanned_real): scanned_real is the true number of
+    points seen in the filtered scroll (review fix v0.22.1 — the report
+    claimed BATCH even when the category was empty).
+    """
     try:
         client = store.client
     except AttributeError:
         log.warning("archive: store has no qdrant client — fail-open")
-        return []
+        return [], 0
     must = [{"key": "category", "match": {"value": cat}}
             for cat in CATEGORIES]
     flt = {"must": must} if len(must) == 1 else {"should": must,
@@ -91,6 +94,7 @@ def _stale_candidates(store, collection: str, cutoff: float,
             with_payload=True,
             with_vector=True)
         points, _ = res
+        scanned_real = len(points)
         for p in points:
             pl = p.payload or {}
             created = _parse_ts(pl)
@@ -99,7 +103,8 @@ def _stale_candidates(store, collection: str, cutoff: float,
                             "vector": p.vector})
     except Exception as exc:
         log.warning("archive: scroll failed (%s) — fail-open", exc)
-    return out
+        return out, 0
+    return out, scanned_real
 
 
 _parse_ts = _parse_ts  # legacy alias
@@ -172,8 +177,8 @@ def archive_once(store, collection: str,
         return result
     try:
         cutoff = time.time() - MAX_AGE_DAYS * 86400
-        candidates = _stale_candidates(store, collection, cutoff, BATCH)
-        result["scanned"] = BATCH
+        candidates, scanned_real = _stale_candidates(store, collection, cutoff, BATCH)
+        result["scanned"] = scanned_real
         result["stale"] = len(candidates)
         if not candidates:
             return result
