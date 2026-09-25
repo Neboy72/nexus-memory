@@ -205,6 +205,9 @@ case "${EFFECTIVE_OS}" in
         # NOTE: no `bash -c` here — the child shell would neither see the
         # (shell-local) variables nor the heredoc; plain `cat > file` reads
         # the heredoc directly.
+        # Backup the previous service file BEFORE overwriting (review fix
+        # v0.22.1: a broken rewrite after bootout left no rollback path).
+        [ -f "$PLIST_PATH" ] && cp "$PLIST_PATH" "$PLIST_PATH.bak" || true
         cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -230,6 +233,11 @@ case "${EFFECTIVE_OS}" in
         <string>${VIRTUAL_ENV_DIR}</string>
         <key>NEXUS_SERVE_PORT</key>
         <string>${PORT}</string>
+        <!-- Self-kill guard (v0.22.1 review): the daemon must know it runs
+             under launchd, so ensure_serve_daemon() refuses to reinstall
+             (bootout) from inside the daemon itself. -->
+        <key>LAUNCHED_BY_LAUNCHD</key>
+        <string>1</string>
     </dict>
 
     <key>LimitLoadToSessionType</key>
@@ -300,6 +308,8 @@ PLIST
         LOGE="${LOG_ERR}"
         export PORT ENTRY REPO PYBIN LOGO LOGE UNIT_PATH VIRTUAL_ENV_DIR="${VENV_DIR}"
         export ENTRY_BIN_DIR="$(dirname "$ENTRY")"
+        # Backup BEFORE overwrite (review fix v0.22.1, same as plist path).
+        [ -f "$UNIT_PATH" ] && cp "$UNIT_PATH" "$UNIT_PATH.bak" 2>/dev/null || true
         cat > "$UNIT_PATH" <<UNIT
 [Unit]
 Description=Nexus Memory Serve (MCP over Streamable HTTP)
@@ -325,8 +335,12 @@ UNIT
         chmod 644 "$UNIT_PATH"
         ok "Unit written: ${UNIT_PATH}"
 
-        systemctl --user daemon-reload
-        systemctl --user enable --now "$UNIT_NAME"
+        # Review fix v0.22.1: without a user session (SSH without linger),
+        # daemon-reload/enable die hard under set -e even though the unit
+        # file is fine — mirror the macOS || true armor; the is-active check
+        # below is the real verdict.
+        systemctl --user daemon-reload || true
+        systemctl --user enable --now "$UNIT_NAME" || true
         if systemctl --user is-active --quiet "$UNIT_NAME"; then
             ok "Service '${UNIT_NAME}' active"
         else

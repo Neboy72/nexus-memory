@@ -997,7 +997,10 @@ class Consolidator:
                 # piggyback on the consolidation loop (additive, fail-open).
                 try:
                     from nexus_memory.dreaming import dream_once
-                    dream_once(store=self._store)
+                    # v0.22.1 review fix: wire the Consolidator's LLM seam into
+                    # dreaming so the ja/nein verdict stage actually runs in
+                    # production (was: llm_fn=None → raw snippets unfiltered).
+                    dream_once(store=self._store, llm_fn=self._llm)
                 except Exception as exc:
                     log.warning("Dreaming pass failed: %s", exc)
                 try:
