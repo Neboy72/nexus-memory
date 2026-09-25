@@ -27,7 +27,7 @@ BACKUP_INTERVAL_ITERATIONS = 1440  # 24h @ 60s per iteration
 # Content that looks like an embedded INSTRUCTION is stored but flagged
 # and demoted (salience cap 0.4): it must never anchor recall/prefetch
 # or outrank genuinely stated user rules. Deliberately NOT a refusal —
-# Nebo discusses security topics legitimately; the flag is the defense.
+# Users may discuss security topics legitimately; the flag is the defense.
 _MEMORY_INJECTION_PATTERNS = (
     re.compile(r"(?i)\b(?:immer\s+)?(?:ab\s+jetzt|von\s+jetzt\s+an|ab\s+sofort)\b.{0,60}\b(?:merken|speichern|dauerhaft|gilt|regel|dein\s+neuer\s+job)\b"),
     re.compile(r"(?i)\bmerke\s+dir\s+(?:dauerhaft\s+)?(?:immer\s+)?(?:folgende|diese\s+neue)\b"),
@@ -294,7 +294,7 @@ class NexusMemoryProvider:
             self._update_nudged = True
             base += f"\n\n📦 Nexus Memory update available: v{self._update_available['version']}. Tell your user about this update and ask if they want to upgrade."
         # Backup info nudge (once per lifetime): only fire when an external chain
-        # is NOT already configured. Nebo 30.08.2026: the blanket "Shall I help you
+        # is NOT already configured. (2026-08-30): the blanket "Shall I help you
         # set up external backup?" text was wrong for this deployment - Synology
         # chain has existed for weeks and the nudge misled the agent into offering
         # a setup that was already running.
@@ -578,10 +578,10 @@ class NexusMemoryProvider:
             budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
             # Scope filter (project/agent areas): auto-prefetch surfaces only
             # 'default' memories plus the agent's OWN scope. Explicit recall()
-            # is never scope-filtered (core principle, Nebo 07.09.).
+            # is never scope-filtered (core principle, 2026-09-07).
             # Fail-open: no NEXUS_SCOPE set → agent sees everything (old behavior).
             my_scope = os.environ.get("NEXUS_SCOPE", "").strip().lower()
-            # Auto-scoping (self-organizing memory, Nebo law 07.09): the query
+            # Auto-scoping (self-organizing memory, principle 2026-09-07): the query
             # itself can clearly belong to one area → surface only 'default'
             # + that area's memories. Ambiguous/no match → None = no filtering
             # (exactly the old behavior). Zero cost, fail-open per query.
@@ -655,7 +655,7 @@ class NexusMemoryProvider:
                                        "category": "session", "access_level": "public",
                                        "source": "hermes-plugin", "confidence": 0.5})
 
-        # Auto-Entity-Detection (Nebo 30.08.2026): Hardware-Fakten sofort als Entity speichern,
+        # Auto-Entity-Detection (2026-08-30): Hardware-Fakten sofort als Entity speichern,
         # nicht nur bei session_end. Pattern: "Ich habe X" / "Ich nutze X" / "Ich habe X per Y"
         if any(sig in user_content.lower() for sig in ["ich habe ", "ich nutze ", "ich hab ", "ich nutz "]):
             # Extraction is LLM/network-bound: run it in a daemon thread and
@@ -1282,7 +1282,7 @@ class NexusMemoryProvider:
             self._entity_extract_lock.release()
 
     def _maybe_extract_hardware_entities(self, text: str, session_id: str) -> None:
-        """Hardware-Pattern (Nebo 30.08.2026): "ich habe X", "ich nutze Y" sofort extrahieren.
+        """Hardware-Pattern (2026-08-30): "ich habe X", "ich nutze Y" sofort extrahieren.
 
         Triggert NUR auf deklarative Hardware-Sätze, niemals auf Fragen ("Hast du...?").
         Speichert als nexus_remember mit confidence=0.9 (User-deklariert, kein LLM-Guess).
