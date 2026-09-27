@@ -97,6 +97,12 @@
       "placeholder": "",
       "help": "OpenClaw-only: cron/heartbeat sends must match one of the configured titles (maxLines/maxChars limits apply). Default off.",
       "advanced": true
+    },
+    "planGate": {
+      "label": "Plan Gate",
+      "placeholder": "",
+      "help": "Level-3 plan lock: non-trivial commands require a plan lock file. Level-1 guardrails stay active regardless. Default off.",
+      "advanced": true
     }
   },
   "configSchema": {
