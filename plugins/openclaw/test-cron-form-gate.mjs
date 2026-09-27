@@ -26,6 +26,15 @@ if (!existsSync(DIST_ENTRY)) {
 }
 
 const mod = await import(DIST_ENTRY)
+
+// 27.09.2026: Titel + Limits sind Config, nicht mehr Code-Konstanten.
+const GATE_TITLES = [
+  "🚀 OpenClaw Release",
+  "Weekly Skill Check",
+  "⚠️ Balance",
+  "⚠️ Snapshot",
+]
+const GATE_CFG = { enabled: true, titles: GATE_TITLES, maxLines: 6, maxChars: 900 }
 // Strategie: register(api) aus dem echten Bundle liefert den E2E-Handler;
 // die Gate-Helfer (isUnattendedSession) kommen direkt aus der .ts-Quelle
 // (Node type-stripping) — kein tsx/Build nötig.
@@ -56,6 +65,10 @@ const mockApi = {
     autoRecall: false,
     autoCapture: false,
     accessLevel: "private",
+    // 27.09.2026: Gate ist config-getrieben — der E2E-Test konfiguriert die
+    // Bestands-Titel (plus Limits), damit die Blockfälle echte
+    // Gate-Entscheidungen prüfen.
+    cronFormGate: { enabled: true, titles: GATE_TITLES, maxLines: 6, maxChars: 900 },
     embedding: { provider: "voyage", apiKey: "test" },
   },
 }
@@ -138,7 +151,7 @@ try {
   })
 
   // ── H6/H7: Kurz-Token-Whitelist + message/text-Payload (lokale Quelle) ──
-  const gate = buildCronFormGateHandler()
+  const gate = buildCronFormGateHandler(GATE_CFG)
   const cronCtx = { sessionKey: CRON_KEY }
   const shortSpam = "abc def ghi jkl mno pqr" // 23 Zeichen: kein Token, kein Formular
   assert.strictEqual(shortSpam.length, 23, "Fixture muss 23 Zeichen haben")
@@ -201,6 +214,56 @@ try {
     assert.strictEqual(isUnattendedSession(undefined), false, "undefined darf NICHT unbeaufsichtigt sein")
     assert.strictEqual(isUnattendedSession(null), false, "null darf NICHT unbeaufsichtigt sein")
     assert.strictEqual(isUnattendedSession(""), false, "leerer Key darf NICHT unbeaufsichtigt sein")
+  })
+
+  // ── 27.09.2026: Config-getriebenes Gate (neutraler Default = AUS) ──
+  await t("Gate: ohne Config → neutral (freier Text geht durch, kein Stumm-Modus)", async () => {
+    const bare = buildCronFormGateHandler()
+    const free = "Hey Nebo, ich habe heute mal ein paar Gedanken zusammengefasst, die dir vielleicht nützlich erscheinen könnten."
+    const res = await bare({ to: "telegram:5763330319", content: free }, cronCtx)
+    assert.ok(!res || !res.cancel, "ungekonfiguriertes Gate darf NIE blockieren")
+  })
+
+  await t("Gate: enabled=true + leere Titel-Liste → AUS (kein Fehl-Setup-Stumm-Modus)", async () => {
+    const empty = buildCronFormGateHandler({ enabled: true, titles: [], maxLines: 6, maxChars: 900 })
+    const free = "Hey Nebo, ich habe heute mal ein paar Gedanken zusammengefasst, die dir vielleicht nützlich erscheinen könnten."
+    const res = await empty({ to: "telegram:5763330319", content: free }, cronCtx)
+    assert.ok(!res || !res.cancel, "leere Titel-Liste muss AUS bedeuten")
+  })
+
+  await t("Gate: enabled=false trotz Titel → AUS", async () => {
+    const off = buildCronFormGateHandler({ enabled: false, titles: GATE_TITLES, maxLines: 6, maxChars: 900 })
+    const free = "Hey Nebo, ich habe heute mal ein paar Gedanken zusammengefasst, die dir vielleicht nützlich erscheinen könnten."
+    const res = await off({ to: "telegram:5763330319", content: free }, cronCtx)
+    assert.ok(!res || !res.cancel, "enabled=false muss AUS bedeuten")
+  })
+
+  await t("Gate: nicht konfigurierter Titel → BLOCKED", async () => {
+    const onlyRelease = buildCronFormGateHandler({ enabled: true, titles: ["🚀 OpenClaw Release"], maxLines: 6, maxChars: 900 })
+    const otherTitle = "⚠️ Problem\nExec ist seit 6h tot, Gateway wurde neu gestartet.\n\nMiosha 🦊"
+    const res = await onlyRelease({ to: "telegram:5763330319", content: otherTitle }, cronCtx)
+    assert.ok(res && res.cancel === true, "nicht konfigurierter Titel muss blockiert werden")
+  })
+
+  await t("Gate: Alarm-Titel konfiguriert → ⚠️ Problem-Formular geht durch (27.09-Fix)", async () => {
+    const withProblem = buildCronFormGateHandler({ enabled: true, titles: [...GATE_TITLES, "⚠️ Problem"], maxLines: 6, maxChars: 900 })
+    const alarm = "⚠️ Problem\nExec seit 6h tot — Gateway um 12:43 neu gestartet, Ursache wird geprüft.\n\nMiosha 🦊"
+    const res = await withProblem({ to: "telegram:5763330319", content: alarm }, cronCtx)
+    assert.ok(!res || !res.cancel, "konfigurierter Alarm-Titel muss durchgehen")
+  })
+
+  await t("Gate: maxChars aus Config greift (100)", async () => {
+    const tight = buildCronFormGateHandler({ enabled: true, titles: GATE_TITLES, maxLines: 6, maxChars: 100 })
+    const long = "🚀 OpenClaw Release\n" + "X".repeat(120)
+    const res = await tight({ to: "telegram:5763330319", content: long }, cronCtx)
+    assert.ok(res && res.cancel === true, "Text über dem konfigurierten maxChars muss blockiert werden")
+  })
+
+  await t("Gate: maxLines aus Config greift (3)", async () => {
+    const tight = buildCronFormGateHandler({ enabled: true, titles: GATE_TITLES, maxLines: 3, maxChars: 900 })
+    const fourLines = "🚀 OpenClaw Release\nZeile 2\nZeile 3\nZeile 4"
+    const res = await tight({ to: "telegram:5763330319", content: fourLines }, cronCtx)
+    assert.ok(res && res.cancel === true, "mehr Zeilen als konfiguriert muss blockiert werden")
   })
 } catch (e) {
   // Fehler außerhalb von t() (z.B. Register- oder Fixture-Fehler) → zählt als FAIL.

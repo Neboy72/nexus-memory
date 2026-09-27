@@ -166,6 +166,16 @@
         "maxLength": 40,
         "pattern": "^$|^[a-z0-9][a-z0-9-]{0,39}$"
       },
+      "cronFormGate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "titles": { "type": "array", "items": { "type": "string" } },
+          "maxLines": { "type": "number", "minimum": 1, "maximum": 50 },
+          "maxChars": { "type": "number", "minimum": 50, "maximum": 5000 }
+        }
+      },
       "debug": {
         "type": "boolean",
         "default": false

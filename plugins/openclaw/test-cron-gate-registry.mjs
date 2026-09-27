@@ -140,7 +140,7 @@ await t("cron-form-gate wird unbedingt registriert (eigenständiger Block)", () 
   // so the contract is: a LINE-START match on src (no comment prefix).
   assert.match(
     src,
-    /^\s*api\.on\(\s*"message_sending",\s*buildCronFormGateHandler\(\)\s*\)/m,
+    /^\s*api\.on\(\s*"message_sending",\s*buildCronFormGateHandler\([^)]*\)\s*\)/m,
     "eigene, unbedingte api.on-Registrierung erwartet (Zeilenanfang, nicht kommentiert)",
   )
 })
@@ -153,7 +153,7 @@ await t("cron-form-gate hat eine eigene, Handler-Ebenen-Registrierung (indent, m
   // beliebige Zeilen) matchte ab der ERSTEN api.on-Zeile im File (Zeile 138,
   // before_prompt_build) und vermaß deren Einrückung statt der Gate-Zeile.
   // Jetzt: einzeilige Registrierung, keine Zeilensprünge im Pattern.
-  const m = masked.match(/^([ \t]*)api\.on\([^\n]*buildCronFormGateHandler\(\)[^\n]*\)/m)
+  const m = masked.match(/^([ \t]*)api\.on\([^\n]*buildCronFormGateHandler\([^)]*\)[^\n]*\)/m)
   assert.ok(m, "unbedingte api.on(...buildCronFormGateHandler...)-Registrierung nicht gefunden")
   const indent = m[1]
   // OCR-6 (bug medium): `indent.length <= 8` proved nothing — register(api) {

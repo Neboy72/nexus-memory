@@ -11,6 +11,15 @@ export type EmbeddingConfig = {
   dimensions: number | undefined
 }
 
+export type CronFormGateConfig = {
+  /** Master switch. Default false: an unconfigured deployment must never block. */
+  enabled: boolean
+  /** Exact allowed first-line titles. enabled + empty list => gate stays OFF. */
+  titles: string[]
+  maxLines: number
+  maxChars: number
+}
+
 export type NexusConfig = {
   qdrantUrl: string
   collection: string
@@ -28,6 +37,9 @@ export type NexusConfig = {
    *  'default'-scoped memories plus this agent's own scope. Explicit
    *  search (nexus_search) is never scope-filtered. Empty = no gating. */
   scope: string
+  /** Cron-Form-Gate (Astra-R6): unattended (cron/heartbeat) sends must match one
+   *  exact title. Ships neutral (enabled: false) — deployments opt in. */
+  cronFormGate: CronFormGateConfig
   debug: boolean
 }
 
@@ -42,6 +54,7 @@ const ALLOWED_KEYS = [
   "forgetMinScore",
   "accessLevel",
   "scope",
+  "cronFormGate",
   "debug",
 ]
 
@@ -56,6 +69,41 @@ const ALLOWED_EMBEDDING_KEYS = [
 const VALID_ACCESS_LEVELS: AccessLevel[] = ["public", "trusted", "private"]
 
 const VALID_PROVIDERS: EmbeddingProvider[] = ["voyage", "openai", "ollama", "google", "jina"]
+
+const ALLOWED_GATE_KEYS = ["enabled", "titles", "maxLines", "maxChars"]
+
+/** Defaults for the cron-form-gate limits (used when not configured). */
+export const DEFAULT_GATE_MAX_LINES = 6
+export const DEFAULT_GATE_MAX_CHARS = 900
+
+/**
+ * Parse the cron-form-gate block.
+ *
+ * Decision (27.09.2026): neutral default = disabled. `enabled: true` with an
+ * EMPTY title list also stays off (the handler logs a warning) — a broken
+ * configuration must not silently turn into a block-everything mode that
+ * swallows a deployment's cron messages.
+ */
+function parseCronFormGate(value: unknown): CronFormGateConfig {
+  const raw =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  if (Object.keys(raw).length > 0) {
+    assertAllowedKeys(raw, ALLOWED_GATE_KEYS, "nexus-memory cronFormGate config")
+  }
+  const titles = Array.isArray(raw.titles)
+    ? raw.titles
+        .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+        .map((t) => t.trim())
+    : []
+  return {
+    enabled: toBool(raw.enabled, false),
+    titles,
+    maxLines: toClampedInt(raw.maxLines, DEFAULT_GATE_MAX_LINES, 1, 50),
+    maxChars: toClampedInt(raw.maxChars, DEFAULT_GATE_MAX_CHARS, 50, 5000),
+  }
+}
 
 function assertAllowedKeys(
   value: Record<string, unknown>,
@@ -224,6 +272,7 @@ export function parseConfig(raw: unknown): NexusConfig {
         : 0.8,
     accessLevel,
     scope,
+    cronFormGate: parseCronFormGate(cfg.cronFormGate),
     debug: toBool(cfg.debug, false),
   }
 }
@@ -252,6 +301,16 @@ export const nexusConfigSchema = {
       forgetMinScore: { type: "number", minimum: 0, maximum: 1 },
       accessLevel: { type: "string", enum: VALID_ACCESS_LEVELS },
       scope: { type: "string" },
+      cronFormGate: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean" },
+          titles: { type: "array", items: { type: "string" } },
+          maxLines: { type: "number", minimum: 1, maximum: 50 },
+          maxChars: { type: "number", minimum: 50, maximum: 5000 },
+        },
+      },
       debug: { type: "boolean" },
     },
   },

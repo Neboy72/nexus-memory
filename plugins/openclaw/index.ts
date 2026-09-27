@@ -184,8 +184,16 @@ export default {
     // H136: eigener, unbedingter Block — hing früher am thoughtFilter-if und
     // war damit über `thoughtFilter: false` abschaltbar. Ein Fail-closed-Gate
     // für unbeaufsichtigte Sends darf nicht an einem Reasoning-Filter hängen.
-    api.on("message_sending", buildCronFormGateHandler())
-    log.info("cron-form-gate: message_sending hook aktiv")
+    // 27.09.2026 (universal): Titel/Limits/Schalter kommen aus cfg.cronFormGate
+    // (Default AUS; enabled + leere Titel-Liste = AUS + Warn-Log).
+    api.on("message_sending", buildCronFormGateHandler(cfg.cronFormGate))
+    log.info(
+      `cron-form-gate: message_sending hook aktiv (${
+        cfg.cronFormGate.enabled && cfg.cronFormGate.titles.length > 0
+          ? `enabled, ${cfg.cronFormGate.titles.length} Titel, max ${cfg.cronFormGate.maxLines} Zeilen/${cfg.cronFormGate.maxChars} Zeichen`
+          : "aus (nicht konfiguriert)"
+      })`,
+    )
 
     if (cfg.autoCapture) {
       api.on("agent_end", buildCaptureHandler(embedder, qdrantClient, cfg, centroidCache))

@@ -7,6 +7,15 @@
  * Fail-open NUR bei Gate-eigenem Crash (nie den Sendepfad kaputtmachen).
  * Interaktive Sessions (DM/Gruppe mit User) bleiben unangetastet.
  *
+ * 27.09.2026 — universal konfigurierbar (Review-Fund): Titel, Limits und
+ * Schalter kommen aus der Plugin-Config (`cronFormGate`). Vorher waren vier
+ * installations-spezifische Titel fest im Repo verdrahtet — jeder andere
+ * OpenClaw-Nutzer dieses Plugins bekam damit seine eigenen Cron-Sends stumm
+ * blockiert, ohne es konfigurieren zu können.
+ * Neutraler Default: AUS. `enabled: true` mit LEERER Titel-Liste bleibt
+ * ebenfalls AUS (+ Warn-Log) statt "alles blockieren" — ein Fehl-Setup darf
+ * sich keinen Stumm-Modus bauen.
+ *
  * sessionKey-Formate (Log-Beweise 08.09.):
  * - Cron:   agent:main:cron:<jobId>:run:<runId>
  * - Heartbeat: agent:main:main:heartbeat
@@ -17,15 +26,12 @@ import { isPureReasoningBlock } from "./thought-filter.ts"
 import { appendFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import type { CronFormGateConfig } from "../lib/config.ts"
 
-const ALLOWED_TITLES = [
-  "🚀 OpenClaw Release",
-  "Weekly Skill Check",
-  "⚠️ Balance",
-  "⚠️ Snapshot",
-]
-const MAX_LINES = 6
-const MAX_CHARS = 900
+// Fallback-Limits für Aufrufe ohne Config (Alt-Pfade/Tests). Die echten Werte
+// liefert parseConfig: cronFormGate.maxLines / cronFormGate.maxChars.
+const FALLBACK_MAX_LINES = 6
+const FALLBACK_MAX_CHARS = 900
 
 // Erlaubte Kurz-Nachrichten (Cron-/Heartbeat-Steuersignale). Alles andere —
 // auch Kurz-Texte < 24 Zeichen — muss das Formular erfüllen, sonst Gate-Umgehung.
@@ -36,16 +42,19 @@ export function isUnattendedSession(sessionKey: string | undefined | null): bool
   return sessionKey.includes(":cron:") || sessionKey.endsWith(":heartbeat")
 }
 
-export function isCompliantForm(text: string): boolean {
+export function isCompliantForm(
+  text: string,
+  opts: { titles: string[]; maxLines: number; maxChars: number },
+): boolean {
   if (typeof text !== "string") return false
   const trimmed = text.trim()
-  if (trimmed.length < 12 || trimmed.length > MAX_CHARS) return false
+  if (trimmed.length < 12 || trimmed.length > opts.maxChars) return false
   const lines = trimmed.split("\n")
-  if (lines.length > MAX_LINES) return false
+  if (lines.length > opts.maxLines) return false
   // EXACT match (after trim): a startsWith check let titles like
   // "Weekly Skill CheckXYZ" through as a "fixed form".
   const firstLine = trimmed.split("\n")[0].trim()
-  if (!ALLOWED_TITLES.includes(firstLine)) return false
+  if (!opts.titles.includes(firstLine)) return false
   // Kein Reasoning-Leak irgendwo im Text (reuse der bewährten Marker)
   for (const line of lines) {
     if (isPureReasoningBlock(line, false)) return false
@@ -70,13 +79,32 @@ function appendDailyNote(line: string): void {
 
 /**
  * message_sending-Handler: blockt nicht-formalisierte Cron-Sends.
+ *
+ * `gate` ist cfg.cronFormGate aus parseConfig. Ohne Config (oder mit
+ * disabled / leerer Titel-Liste) ist der Handler neutral: er gibt `undefined`
+ * zurück (= keine eigene Meinung, nichts wird blockiert).
  */
-export function buildCronFormGateHandler() {
+export function buildCronFormGateHandler(gate?: Partial<CronFormGateConfig>) {
+  const titles = Array.isArray(gate?.titles) ? gate.titles : []
+  const maxLines =
+    typeof gate?.maxLines === "number" ? gate.maxLines : FALLBACK_MAX_LINES
+  const maxChars =
+    typeof gate?.maxChars === "number" ? gate.maxChars : FALLBACK_MAX_CHARS
+  const enabled = gate?.enabled === true
+  if (enabled && titles.length === 0) {
+    log.warn(
+      "cron-form-gate: enabled=true, aber keine Titel konfiguriert — Gate bleibt AUS",
+    )
+  }
+  const active = enabled && titles.length > 0
+
   return async (
     event: { to?: string; content?: string; message?: unknown; text?: unknown },
     ctx?: { sessionKey?: string },
   ) => {
     try {
+      // Gate aus (neutraler Default / Fehl-Setup) → keine Meinung abgeben.
+      if (!active) return
       const sessionKey = ctx?.sessionKey
       if (!isUnattendedSession(sessionKey)) return // interaktiv → nichts tun
       // Gleiche Payload-Kette wie thought-filter: der Sender kann den Text in
@@ -107,7 +135,7 @@ export function buildCronFormGateHandler() {
       const trimmed = raw.trim()
       if (trimmed.length === 0) return // leer/whitespace
       if (SHORT_TOKENS.has(trimmed)) return // explizite Steuersignale (NO_REPLY etc.)
-      if (isCompliantForm(raw)) return // Formular ok → durchlassen
+      if (isCompliantForm(raw, { titles, maxLines, maxChars })) return // Formular ok → durchlassen
       // Ab hier: echter Formular-Verstoß (nicht-leerer String ohne gültiges
       // Formular und ohne Steuersignal) → blockieren.
       log.warn(

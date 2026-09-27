@@ -94,4 +94,39 @@ await t("Schema deklariert minimum 1 / maximum 20", () => {
   assert.strictEqual(schema.maximum, 20)
 })
 
+// ── 27.09.2026: cronFormGate (universal konfigurierbares Unattended-Gate) ──
+await t("cronFormGate: Default = AUS, titles [], Limits 6/900", () => {
+  const g = parseConfig({}).cronFormGate
+  assert.strictEqual(g.enabled, false, "neutraler Default muss AUS sein")
+  assert.deepStrictEqual(g.titles, [])
+  assert.strictEqual(g.maxLines, 6)
+  assert.strictEqual(g.maxChars, 900)
+})
+
+await t("cronFormGate: enabled-Strings koerziert, Titel getrimmt + Nicht-Strings gefiltert", () => {
+  assert.strictEqual(parseConfig({ cronFormGate: { enabled: "true" } }).cronFormGate.enabled, true)
+  assert.strictEqual(parseConfig({ cronFormGate: { enabled: "0" } }).cronFormGate.enabled, false)
+  const g = parseConfig({ cronFormGate: { titles: ["  ⚠️ Problem  ", "", "   ", 7, null] } }).cronFormGate
+  assert.deepStrictEqual(g.titles, ["⚠️ Problem"])
+})
+
+await t("cronFormGate: Limits geclamped (0→1, 999→50, 10→50, 99999→5000)", () => {
+  assert.strictEqual(parseConfig({ cronFormGate: { maxLines: 0 } }).cronFormGate.maxLines, 1)
+  assert.strictEqual(parseConfig({ cronFormGate: { maxLines: 999 } }).cronFormGate.maxLines, 50)
+  assert.strictEqual(parseConfig({ cronFormGate: { maxChars: 10 } }).cronFormGate.maxChars, 50)
+  assert.strictEqual(parseConfig({ cronFormGate: { maxChars: 99999 } }).cronFormGate.maxChars, 5000)
+})
+
+await t("cronFormGate: unbekannter Key → fail-loud statt stillem Ignorieren", () => {
+  assert.throws(() => parseConfig({ cronFormGate: { nope: 1 } }), /unknown keys/)
+})
+
+await t("Schema deklariert cronFormGate (Objekt, additionalProperties false)", () => {
+  const props = nexusConfigSchema?.jsonSchema?.properties
+  const gate = props?.cronFormGate
+  assert.ok(gate && typeof gate === "object", "properties.cronFormGate fehlt — Schema-Shape hat sich geändert")
+  assert.strictEqual(gate.additionalProperties, false)
+  assert.ok(gate.properties?.titles, "properties.cronFormGate.titles fehlt")
+})
+
 process.exitCode = failed ? 1 : 0
