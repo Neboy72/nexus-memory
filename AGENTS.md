@@ -94,6 +94,9 @@ Or, run these commands yourself:
           "accessLevel": "private",
           "cronFormGate": {
             "enabled": false
+          },
+          "planGate": {
+            "enabled": false
           }
         }
       }
@@ -105,7 +108,8 @@ Or, run these commands yourself:
 `cronFormGate` is off by default: unattended cron/heartbeat sends pass through
 unchanged. Enable it (`enabled: true` + `titles`) to accept only fixed-form
 messages from unattended sessions — see the plugin README for the full option
-list.
+list. `planGate` is off by default too and only controls the level-3 plan lock;
+the level-1 command guardrails are always active.
 
 2. Restart OpenClaw:
 ```bash

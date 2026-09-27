@@ -110,6 +110,9 @@ Add to `~/.openclaw/openclaw.json`:
 | `cronFormGate.titles` | `string[]` | `[]` | Exact allowed first-line titles; `enabled` with an empty list keeps the gate off |
 | `cronFormGate.maxLines` | `number` | `6` | Max lines of an accepted form (1–50) |
 | `cronFormGate.maxChars` | `number` | `900` | Max characters of an accepted form (50–5000) |
+| `planGate.enabled` | `boolean` | `false` | Level-3 plan lock: non-trivial commands require a plan lock file. Level-1 guardrails stay active either way |
+| `planGate.lockPath` | `string` | `<os tmpdir>/nexus-plan-gate.lock` | Where the plan lock is expected (portable per-user default) |
+| `planGate.maxAgeSeconds` | `number` | `300` | Lock validity in seconds (30–3600) |
 
 ### Unattended send gate (`cronFormGate`)
 
@@ -121,12 +124,45 @@ as one line in the workspace daily note. Interactive sessions (DMs, groups)
 are never affected. This is what lets a cron job alert you without opening a
 free-text channel for unattended runs.
 
+> **Titles are deployment-specific data, not code.** Every installation picks
+> its own titles in its local config; the repo ships none, and the test-suite
+> enforces that (see `test-deploy-literals.ts`-style contract in
+> `test-cron-form-gate.mjs`). Never add your deployment's real titles to this
+> repository — a foreign user's cron sends must never be shaped by literals
+> that only make sense in one deployment.
+
 ```json
 "cronFormGate": {
   "enabled": true,
   "titles": ["⚠️ Alert", "🚀 Release"]
 }
 ```
+
+### Plan gate (`planGate`)
+
+Level 1 (the destructive-command guardrails: recursive deletes on protected
+paths, killing the embedding runtime, full config replaces) is **always
+active** and cannot be switched off — it is a documented safety feature.
+`planGate.*` controls **level 3 only**: the plan coercion that makes
+non-trivial actions require a plan lock file first.
+
+Off by default. When enabled, an allowed action must be preceded by a lock
+file whose content starts with `plan:` (an exact prefix — a `# Plan:` heading
+does **not** count), written to `planGate.lockPath` (default:
+`<os tmpdir>/nexus-plan-gate.lock`) and not older than `maxAgeSeconds`.
+Invalid or expired locks are deleted. Without a valid lock the call is blocked
+with a message naming the path, the contract and the validity.
+
+```json
+"planGate": {
+  "enabled": true
+}
+```
+
+> Migration: if you relied on the plan lock before this release, set
+> `planGate.enabled: true` — the default is off so no existing deployment is
+> suddenly blocked. The lock path moved from a hard-coded developer path to
+> the portable OS temp dir; a previous `lockPath` override is honoured as-is.
 
 ### Access Levels
 

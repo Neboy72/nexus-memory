@@ -11,6 +11,17 @@ export type EmbeddingConfig = {
   dimensions: number | undefined
 }
 
+export type PlanGateConfig = {
+  /** Level-3 switch (plan coercion + lock mechanics). Default false.
+   *  Level 1 (destructive-command guardrails) is NEVER affected by this. */
+  enabled: boolean
+  /** Optional override. Default: <os tmpdir>/nexus-plan-gate.lock — portable,
+   *  per-user on every platform (no developer-home literal). */
+  lockPath?: string
+  /** Lock validity in seconds. Default 300 (5 minutes). */
+  maxAgeSeconds: number
+}
+
 export type CronFormGateConfig = {
   /** Master switch. Default false: an unconfigured deployment must never block. */
   enabled: boolean
@@ -40,6 +51,9 @@ export type NexusConfig = {
   /** Cron-Form-Gate (Astra-R6): unattended (cron/heartbeat) sends must match one
    *  exact title. Ships neutral (enabled: false) — deployments opt in. */
   cronFormGate: CronFormGateConfig
+  /** Plan-Gate level 3 (the plan lock). Default off; the level-1 guardrails
+   *  stay active regardless of this switch. */
+  planGate: PlanGateConfig
   debug: boolean
 }
 
@@ -55,6 +69,7 @@ const ALLOWED_KEYS = [
   "accessLevel",
   "scope",
   "cronFormGate",
+  "planGate",
   "debug",
 ]
 
@@ -71,6 +86,43 @@ const VALID_ACCESS_LEVELS: AccessLevel[] = ["public", "trusted", "private"]
 const VALID_PROVIDERS: EmbeddingProvider[] = ["voyage", "openai", "ollama", "google", "jina"]
 
 const ALLOWED_GATE_KEYS = ["enabled", "titles", "maxLines", "maxChars"]
+
+const ALLOWED_PLAN_GATE_KEYS = ["enabled", "lockPath", "maxAgeSeconds"]
+
+/** Default validity of the plan lock (seconds). */
+export const DEFAULT_PLAN_MAX_AGE_SECONDS = 300
+
+/**
+ * Parse the plan-gate block (level 3: plan coercion + lock mechanics).
+ *
+ * Neutral default = disabled. A deployment that never used the plan lock must
+ * not be forced into writing one after an update. Level 1 (the destructive
+ * command guardrails) is a separate, unconditional code path — this switch
+ * never touches it.
+ */
+function parsePlanGate(value: unknown): PlanGateConfig {
+  const raw =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  if (Object.keys(raw).length > 0) {
+    assertAllowedKeys(raw, ALLOWED_PLAN_GATE_KEYS, "nexus-memory planGate config")
+  }
+  const lockPath =
+    typeof raw.lockPath === "string" && raw.lockPath.trim()
+      ? raw.lockPath.trim()
+      : undefined
+  return {
+    enabled: toBool(raw.enabled, false),
+    lockPath,
+    maxAgeSeconds: toClampedInt(
+      raw.maxAgeSeconds,
+      DEFAULT_PLAN_MAX_AGE_SECONDS,
+      30,
+      3600,
+    ),
+  }
+}
 
 /** Defaults for the cron-form-gate limits (used when not configured). */
 export const DEFAULT_GATE_MAX_LINES = 6
@@ -273,6 +325,7 @@ export function parseConfig(raw: unknown): NexusConfig {
     accessLevel,
     scope,
     cronFormGate: parseCronFormGate(cfg.cronFormGate),
+    planGate: parsePlanGate(cfg.planGate),
     debug: toBool(cfg.debug, false),
   }
 }
@@ -309,6 +362,15 @@ export const nexusConfigSchema = {
           titles: { type: "array", items: { type: "string" } },
           maxLines: { type: "number", minimum: 1, maximum: 50 },
           maxChars: { type: "number", minimum: 50, maximum: 5000 },
+        },
+      },
+      planGate: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean" },
+          lockPath: { type: "string" },
+          maxAgeSeconds: { type: "number", minimum: 30, maximum: 3600 },
         },
       },
       debug: { type: "boolean" },

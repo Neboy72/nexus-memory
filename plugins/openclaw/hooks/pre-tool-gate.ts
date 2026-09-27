@@ -16,6 +16,7 @@
  */
 
 import { lstatSync, readFileSync, realpathSync, unlinkSync } from "node:fs"
+import { join } from "node:path"
 import os from "node:os"
 import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
@@ -25,8 +26,21 @@ import { log } from "../logger.ts"
 // ── Configuration ────────────────────────────────────────────────
 
 const NEXUS_QUERY_LIMIT = 5
-const PLAN_LOCK_PATH = "/tmp/miosha-think-gate.lock"
-const PLAN_MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
+/** Generic default lock location: portable, per-user, exists on every platform
+ *  (a developer-home literal in a universal repo locked out every other user). */
+export const DEFAULT_PLAN_LOCK_PATH = join(os.tmpdir(), "nexus-plan-gate.lock")
+const DEFAULT_PLAN_MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
+
+export function resolvePlanLockPath(planGate?: { lockPath?: string }): string {
+  const p = planGate?.lockPath
+  return typeof p === "string" && p.trim() ? p.trim() : DEFAULT_PLAN_LOCK_PATH
+}
+export function resolvePlanMaxAgeMs(planGate?: { maxAgeSeconds?: number }): number {
+  const s = planGate?.maxAgeSeconds
+  return typeof s === "number" && Number.isFinite(s) && s > 0
+    ? s * 1000
+    : DEFAULT_PLAN_MAX_AGE_MS
+}
 
 // Keywords die Pre-Action Recall triggern (Tool-Parameter-Scan)
 const RECALL_KEYWORDS = new Set([
@@ -122,7 +136,7 @@ function firstCommand(params: Record<string, unknown>): string {
   return parts.join(" ")
 }
 
-function hasValidPlan(): boolean {
+function hasValidPlan(lockPath: string, maxAgeMs: number): boolean {
   try {
     // Fix 27.08.2026: direkter node:fs-Import statt Deno/require-Shim.
     // Der alte Shim ((globalThis as any).Deno?.statSync ?? (globalThis as any).require?.("fs")?.statSync)
@@ -137,17 +151,17 @@ function hasValidPlan(): boolean {
     //    content MUST start with `plan:`;
     //  - unlink only after the realpath comparison shows the file we read is
     //    still the one at the path (no TOCTOU delete of a swapped file).
-    const lst = lstatSync(PLAN_LOCK_PATH) // wirft, wenn Datei fehlt
+    const lst = lstatSync(lockPath) // wirft, wenn Datei fehlt
     if (lst.isSymbolicLink() || !lst.isFile()) {
       try {
-        unlinkSync(PLAN_LOCK_PATH)
+        unlinkSync(lockPath)
       } catch {}
       return false
     }
 
-    const realPathBefore = realpathSync(PLAN_LOCK_PATH)
-    const content = readFileSync(PLAN_LOCK_PATH, "utf8")
-    const realPathAfter = realpathSync(PLAN_LOCK_PATH)
+    const realPathBefore = realpathSync(lockPath)
+    const content = readFileSync(lockPath, "utf8")
+    const realPathAfter = realpathSync(lockPath)
     if (realPathBefore !== realPathAfter) {
       // TOCTOU: the file we read is not the one currently at the path.
       return false
@@ -161,7 +175,7 @@ function hasValidPlan(): boolean {
     }
 
     const age = Date.now() - lst.mtimeMs
-    if (age > PLAN_MAX_AGE_MS) {
+    if (age > maxAgeMs) {
       // Plan expired — clean up
       try {
         unlinkSync(realPathAfter)
@@ -353,23 +367,27 @@ export function buildPreToolGateHandler(
       recallContext = await preActionRecall(embedder, qdrantClient, cfg, recallQuery)
     }
 
-    // ── 3. PLAN-ZWANG (System-Kommandos ohne Plan = BLOCK) ──
+    // ── 3. PLAN-ZWANG (Ebene 3 — schaltbar, Default aus) ──
+    // Ebene 1 (Guardrails, oben) ist von diesem Schalter NICHT betroffen.
+    const lockPath = resolvePlanLockPath(cfg.planGate)
+    const maxAgeMs = resolvePlanMaxAgeMs(cfg.planGate)
+    const planGateOn = cfg.planGate?.enabled === true
+
     // Plan-Lock schreiben ist immer erlaubt (sonst Deadlock)
-    if (toolName === "write" && String(params.path ?? "") === PLAN_LOCK_PATH) {
+    if (toolName === "write" && String(params.path ?? "") === lockPath) {
       return {} // allow
     }
 
-    if (needsPlan(toolName, params) && !hasValidPlan()) {
+    if (planGateOn && needsPlan(toolName, params) && !hasValidPlan(lockPath, maxAgeMs)) {
+      const maxAgeSeconds = Math.round(maxAgeMs / 1000)
       const reason = [
-        "VORBEREITUNG-GATE: Du planst eine nicht-triviale Aktion ohne Plan.",
+        "PLAN GATE: this non-trivial action needs a plan lock.",
         "",
-        "BEVOR du losrennst:",
-        "1. Was ist das Ziel? Welcher Weg ist der beste?",
-        "2. Welche Tools brauchst du? Was fehlt dir?",
-        "3. Was koennte danach kaputt sein?",
+        `Write your plan to: ${lockPath} (write tool).`,
+        `Contract: the content must START with "plan:" — a "# Plan:" heading does NOT count.`,
+        `Validity: ${maxAgeSeconds} seconds. An invalid or expired lock is deleted.`,
         "",
-        `Schreibe deinen Plan nach ${PLAN_LOCK_PATH} (write tool).`,
-        "Der Plan ist 5 Minuten gueltig.",
+        `DE: Plan nach ${lockPath} schreiben; Inhalt muss mit plan: beginnen (nicht # Plan:); gültig ${maxAgeSeconds} Sekunden.`,
       ].join("\n")
 
       const fullReason = recallContext ? `${reason}\n\n${recallContext}` : reason

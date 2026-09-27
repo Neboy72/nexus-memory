@@ -5,7 +5,7 @@ import { nexusConfigSchema, parseConfig } from "./lib/config.ts"
 import { ScopeCentroidCache } from "./lib/scope-auto.ts"
 import { buildCaptureHandler } from "./hooks/capture.ts"
 import { buildRecallHandler } from "./hooks/recall.ts"
-import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
+import { buildPreToolGateHandler, resolvePlanLockPath } from "./hooks/pre-tool-gate.ts"
 import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts"
 import { buildCronFormGateHandler } from "./hooks/cron-form-gate.ts"
 import { initLogger, log } from "./logger.ts"
@@ -158,8 +158,15 @@ export default {
       api.on("before_prompt_build", buildRecallHandler(embedder, qdrantClient, cfg, centroidCache))
     }
 
-    // Pre-Tool Gate: forces Nexus recall + plan before non-trivial actions
+    // Pre-Tool Gate: Ebene 1 (Guardrails) ist UNBEDINGT — deshalb bleibt diese
+    // Registrierung unbedingt. Ebene 3 (Plan-Zwang) ist über planGate.enabled
+    // schaltbar (Default aus) und wird im Handler geprüft.
     api.on("before_tool_call", buildPreToolGateHandler(embedder, qdrantClient, cfg))
+    log.info(
+      `pre-tool-gate: before_tool_call hook aktiv (guardrails immer; plan-gate ${
+        cfg.planGate.enabled ? `enabled, lock=${resolvePlanLockPath(cfg.planGate)}, ${cfg.planGate.maxAgeSeconds}s` : "aus"
+      })`,
+    )
 
     // Thought-Filter (29.08.2026): GLM-5.x emittiert CoT als plain text
     // (GitHub #42062) — filtert Reasoning-Blöcke vor dem Senden.

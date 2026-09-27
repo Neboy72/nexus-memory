@@ -129,4 +129,39 @@ await t("Schema deklariert cronFormGate (Objekt, additionalProperties false)", (
   assert.ok(gate.properties?.titles, "properties.cronFormGate.titles fehlt")
 })
 
+// ── 27.09.2026: planGate (schaltbare Ebene 3; Ebene 1 bleibt unbedingt) ──
+await t("planGate: Default = AUS, lockPath undefined, maxAgeSeconds 300", () => {
+  const g = parseConfig({}).planGate
+  assert.strictEqual(g.enabled, false, "neutraler Default muss AUS sein")
+  assert.strictEqual(g.lockPath, undefined, "kein Deployment-Literal als Default")
+  assert.strictEqual(g.maxAgeSeconds, 300)
+})
+
+await t("planGate: enabled-Strings koerziert, lockPath getrimmt, leer → undefined", () => {
+  assert.strictEqual(parseConfig({ planGate: { enabled: "true" } }).planGate.enabled, true)
+  assert.strictEqual(parseConfig({ planGate: { enabled: "0" } }).planGate.enabled, false)
+  assert.strictEqual(parseConfig({ planGate: { lockPath: "  /x/y.lock  " } }).planGate.lockPath, "/x/y.lock")
+  assert.strictEqual(parseConfig({ planGate: { lockPath: "   " } }).planGate.lockPath, undefined)
+  assert.strictEqual(parseConfig({ planGate: { lockPath: 7 } }).planGate.lockPath, undefined)
+})
+
+await t("planGate: maxAgeSeconds geclamped (0→30, 99999→3600, 120 bleibt)", () => {
+  assert.strictEqual(parseConfig({ planGate: { maxAgeSeconds: 0 } }).planGate.maxAgeSeconds, 30)
+  assert.strictEqual(parseConfig({ planGate: { maxAgeSeconds: 99999 } }).planGate.maxAgeSeconds, 3600)
+  assert.strictEqual(parseConfig({ planGate: { maxAgeSeconds: 120 } }).planGate.maxAgeSeconds, 120)
+  assert.strictEqual(parseConfig({ planGate: { maxAgeSeconds: "abc" } }).planGate.maxAgeSeconds, 300)
+})
+
+await t("planGate: unbekannter Key → fail-loud statt stillem Ignorieren", () => {
+  assert.throws(() => parseConfig({ planGate: { nope: 1 } }), /unknown keys/)
+})
+
+await t("Schema deklariert planGate (Objekt, additionalProperties false)", () => {
+  const props = nexusConfigSchema?.jsonSchema?.properties
+  const pg = props?.planGate
+  assert.ok(pg && typeof pg === "object", "properties.planGate fehlt — Schema-Shape hat sich geändert")
+  assert.strictEqual(pg.additionalProperties, false)
+  assert.ok(pg.properties?.maxAgeSeconds, "properties.planGate.maxAgeSeconds fehlt")
+})
+
 process.exitCode = failed ? 1 : 0
