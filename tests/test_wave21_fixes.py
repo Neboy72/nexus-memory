@@ -314,12 +314,15 @@ class TestNr369ToolFailures:
         assert "err.message" not in src
 
 
-# ── Nr 370: cron-form-gate exact match ──────────────────────────────────────
+# ── Nr 370: cron-form-gate title matching ───────────────────────────────────
 
 class TestNr370ExactMatch:
-    def test_exact_match(self):
+    def test_title_match(self):
+        # Gate-Umbau 27.09.: Titel/Limits kommen aus cronFormGate-Config.
+        # Der Match-Code darf keine Starts-Präfixe (startsWith) verwenden.
         src = _read("plugins/openclaw/hooks/cron-form-gate.ts")
-        assert "ALLOWED_TITLES.includes(firstLine)" in src
+        assert "ALLOWED_TITLES" not in src, \
+            "ALLOWED_TITLES was replaced by config-driven titles"
         # startsWith must be gone from CODE, not from the explanatory comment
         code_only = "\n".join(
             line for line in src.splitlines() if not line.strip().startswith("//")
