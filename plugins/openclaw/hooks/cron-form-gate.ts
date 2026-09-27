@@ -52,7 +52,7 @@ export function isCompliantForm(
   const lines = trimmed.split("\n")
   if (lines.length > opts.maxLines) return false
   // EXACT match (after trim): a startsWith check let titles like
-  // "Weekly Skill CheckXYZ" through as a "fixed form".
+  // "Release CheckXYZ" through as a "fixed form".
   const firstLine = trimmed.split("\n")[0].trim()
   if (!opts.titles.includes(firstLine)) return false
   // Kein Reasoning-Leak irgendwo im Text (reuse der bewährten Marker)

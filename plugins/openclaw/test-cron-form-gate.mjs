@@ -29,10 +29,10 @@ const mod = await import(DIST_ENTRY)
 
 // 27.09.2026: Titel + Limits sind Config, nicht mehr Code-Konstanten.
 const GATE_TITLES = [
-  "🚀 OpenClaw Release",
-  "Weekly Skill Check",
-  "⚠️ Balance",
-  "⚠️ Snapshot",
+  "🚀 Test Release",
+  "Test Skill Check",
+  "⚠️ Test Balance",
+  "⚠️ Test Snapshot",
 ]
 const GATE_CFG = { enabled: true, titles: GATE_TITLES, maxLines: 6, maxChars: 900 }
 // Strategie: register(api) aus dem echten Bundle liefert den E2E-Handler;
@@ -107,11 +107,11 @@ try {
   const DM_KEY = "agent:main:telegram:default:direct:5763330319"
 
   const goodForm = [
-    "🚀 OpenClaw Release",
+    "🚀 Test Release",
     "Neue Version v2026.9.3 ist draußen.",
     "Relevant: Memory-Plugin-Schema geändert.",
     "",
-    "Miosha 🦊",
+    "Test Bot 🤖",
   ].join("\n")
 
   await t("cron + gültiges Formular → durchgelassen", async () => {
@@ -122,7 +122,7 @@ try {
   })
 
   await t("cron + Thinking-Leak → BLOCKED", async () => {
-    const leakText = "🚀 OpenClaw Release\nLet me work through this task step by step. First I need to fetch the feed.\n\nMiosha 🦊"
+    const leakText = "🚀 Test Release\nLet me work through this task step by step. First I need to fetch the feed.\n\nTest Bot 🤖"
     const res = await sendingHandler({ to: "telegram:5763330319", content: leakText }, { sessionKey: CRON_KEY })
     assert.ok(res && res.cancel === true, "Leak-Formular MUSS geblockt werden")
   })
@@ -145,7 +145,7 @@ try {
   })
 
   await t("cron + zu langer Text (>900) → BLOCKED", async () => {
-    const long = "🚀 OpenClaw Release\n" + "X".repeat(950)
+    const long = "🚀 Test Release\n" + "X".repeat(950)
     const res = await sendingHandler({ to: "telegram:5763330319", content: long }, { sessionKey: CRON_KEY })
     assert.ok(res && res.cancel === true, "übergroße Nachricht MUSS geblockt werden")
   })
@@ -197,7 +197,7 @@ try {
   // echte dist-Bundle, die H6/H7-Checks gegen die .ts-Quelle. Wenn Build stale ist,
   // merkt keiner. Beweis: beide Entscheiden gleich auf dem kritischen Leak-Input.
   {
-    const leakProbe = "🚀 OpenClaw Release\nLet me work through this task step by step. First I need to fetch the feed.\n\nMiosha 🦊"
+    const leakProbe = "🚀 Test Release\nLet me work through this task step by step. First I need to fetch the feed.\n\nTest Bot 🤖"
     const srcRes = await gate({ to: "telegram:5763330319", content: leakProbe }, cronCtx)
     const distRes = await sendingHandler({ to: "telegram:5763330319", content: leakProbe }, { sessionKey: CRON_KEY })
     assert.strictEqual(
@@ -239,29 +239,29 @@ try {
   })
 
   await t("Gate: nicht konfigurierter Titel → BLOCKED", async () => {
-    const onlyRelease = buildCronFormGateHandler({ enabled: true, titles: ["🚀 OpenClaw Release"], maxLines: 6, maxChars: 900 })
-    const otherTitle = "⚠️ Problem\nExec ist seit 6h tot, Gateway wurde neu gestartet.\n\nMiosha 🦊"
+    const onlyRelease = buildCronFormGateHandler({ enabled: true, titles: ["🚀 Test Release"], maxLines: 6, maxChars: 900 })
+    const otherTitle = "⚠️ Test Alarm\nExec ist seit 6h tot, Gateway wurde neu gestartet.\n\nTest Bot 🤖"
     const res = await onlyRelease({ to: "telegram:5763330319", content: otherTitle }, cronCtx)
     assert.ok(res && res.cancel === true, "nicht konfigurierter Titel muss blockiert werden")
   })
 
-  await t("Gate: Alarm-Titel konfiguriert → ⚠️ Problem-Formular geht durch (27.09-Fix)", async () => {
-    const withProblem = buildCronFormGateHandler({ enabled: true, titles: [...GATE_TITLES, "⚠️ Problem"], maxLines: 6, maxChars: 900 })
-    const alarm = "⚠️ Problem\nExec seit 6h tot — Gateway um 12:43 neu gestartet, Ursache wird geprüft.\n\nMiosha 🦊"
+  await t("Gate: Alarm-Titel konfiguriert → ⚠️ Test Alarm-Formular geht durch ", async () => {
+    const withProblem = buildCronFormGateHandler({ enabled: true, titles: [...GATE_TITLES, "⚠️ Test Alarm"], maxLines: 6, maxChars: 900 })
+    const alarm = "⚠️ Test Alarm\nExec seit 6h tot — Gateway um 12:43 neu gestartet, Ursache wird geprüft.\n\nTest Bot 🤖"
     const res = await withProblem({ to: "telegram:5763330319", content: alarm }, cronCtx)
     assert.ok(!res || !res.cancel, "konfigurierter Alarm-Titel muss durchgehen")
   })
 
   await t("Gate: maxChars aus Config greift (100)", async () => {
     const tight = buildCronFormGateHandler({ enabled: true, titles: GATE_TITLES, maxLines: 6, maxChars: 100 })
-    const long = "🚀 OpenClaw Release\n" + "X".repeat(120)
+    const long = "🚀 Test Release\n" + "X".repeat(120)
     const res = await tight({ to: "telegram:5763330319", content: long }, cronCtx)
     assert.ok(res && res.cancel === true, "Text über dem konfigurierten maxChars muss blockiert werden")
   })
 
   await t("Gate: maxLines aus Config greift (3)", async () => {
     const tight = buildCronFormGateHandler({ enabled: true, titles: GATE_TITLES, maxLines: 3, maxChars: 900 })
-    const fourLines = "🚀 OpenClaw Release\nZeile 2\nZeile 3\nZeile 4"
+    const fourLines = "🚀 Test Release\nZeile 2\nZeile 3\nZeile 4"
     const res = await tight({ to: "telegram:5763330319", content: fourLines }, cronCtx)
     assert.ok(res && res.cancel === true, "mehr Zeilen als konfiguriert muss blockiert werden")
   })
