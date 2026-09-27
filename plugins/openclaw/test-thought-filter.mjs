@@ -142,7 +142,7 @@ const cases = [
   ],
   [
     "LEAK: Cron-Selbstplanung (Release Tracker, 08.09. 08:30)",
-    "Let me work through this task. I'm the OpenClaw Release Tracker cron job. Steps:\n\n1. Fetch the Atom feed\n2. Compare with last known release",
+    "Let me work through this task. I'm the Test Release Tracker cron job. Steps:\n\n1. Fetch the Atom feed\n2. Compare with last known release",
     [],
     ["Release Tracker", "Fetch the Atom feed"],
   ],
