@@ -10,16 +10,18 @@
  */
 import assert from "node:assert"
 import { existsSync, readFileSync, writeFileSync, unlinkSync, utimesSync } from "node:fs"
+import { basename, join } from "node:path"
 import os from "node:os"
-import { buildPreToolGateHandler } from "./hooks/pre-tool-gate.ts"
+import {
+  buildPreToolGateHandler,
+  DEFAULT_PLAN_LOCK_PATH,
+} from "./hooks/pre-tool-gate.ts"
 
-// W39/F5: Pfad aus der Handler-Quelle abgeleitet statt dupliziert — ein Drift
-// im Handler (z.B. os.tmpdir()) lässt den Test fail-loud schlagen statt still
-// den falschen Zweig zu testen.
-const handlerSrc = readFileSync(new URL("./hooks/pre-tool-gate.ts", import.meta.url), "utf8")
-const _lockMatch = handlerSrc.match(/const PLAN_LOCK_PATH = "([^"]+)"/)
-assert.ok(_lockMatch, "PLAN_LOCK_PATH muss in hooks/pre-tool-gate.ts deklariert sein")
-const PLAN_LOCK_PATH = _lockMatch[1]
+// 27.09.2026: Der Lock-Pfad ist jetzt Config (`planGate.lockPath`) mit generischem
+// Default (`os.tmpdir()`). Der Test benutzt einen EIGENEN Pfad, damit er nie den
+// echten Lock einer laufenden Session anfasst oder löscht.
+const PLAN_LOCK_PATH = join(os.tmpdir(), "nexus-plan-gate-test.lock")
+const PLAN_GATE_ON = { enabled: true, lockPath: PLAN_LOCK_PATH, maxAgeSeconds: 300 }
 
 let failed = 0
 const t = (name, fn) =>
@@ -31,7 +33,7 @@ const t = (name, fn) =>
       console.log("FAIL ", name, "—", e?.stack ?? String(e))
     })
 
-function makeHandler() {
+function makeHandler(planGate = PLAN_GATE_ON) {
   const state = { embed: 0 }
   const handler = buildPreToolGateHandler(
     { embed: async () => { state.embed++; return [0.1, 0.2] } },
@@ -40,7 +42,7 @@ function makeHandler() {
         { id: "m1", text: "relevantes Memory", score: 0.9, category: "fact" },
       ],
     },
-    { accessLevel: "private" },
+    { accessLevel: "private", planGate },
   )
   return { handler, state }
 }
@@ -100,7 +102,13 @@ async function assertBlockPath() {
   const { handler, state } = makeHandler()
   const res = await handler({ toolName: "exec", params: { command: "rm -rf /tmp/irgendwas" } }, {})
   assert.strictEqual(res.block, true, "ohne Plan-Lock muss geblockt werden")
-  assert.match(res.blockReason, /VORBEREITUNG-GATE/, "Plan-Begründung erwartet")
+  // 27.09.2026: Meldung nennt jetzt den Vertrag (plan:-Präfix) und den Pfad.
+  assert.match(res.blockReason, /PLAN GATE/, "Plan-Begründung erwartet")
+  assert.match(res.blockReason, /plan:/, "Vertrag (plan:-Präfix) muss in der Meldung stehen")
+  assert.ok(
+    res.blockReason.includes(PLAN_LOCK_PATH),
+    "Lock-Pfad muss in der Meldung stehen — sonst ist sie nicht handlungsfähig",
+  )
   assert.match(
     res.blockReason,
     /VORBEREITUNG-GATE \(pre-action recall\)/,
@@ -117,6 +125,54 @@ await t("Guardrail-Block liefert {block, blockReason} (Shape unverändert)", asy
   assert.strictEqual(res.block, true)
   assert.ok(typeof res.blockReason === "string" && res.blockReason.length > 0)
   assert.deepStrictEqual(Object.keys(res).sort(), ["block", "blockReason"])
+})
+
+// ── 27.09.2026: Ebene 3 schaltbar, Ebene 1 unbedingt ────────────────────────
+
+await t("planGate.enabled=false → KEIN Plan-Zwang (Ebene 3 aus)", async () => {
+  const { handler } = makeHandler({ enabled: false, maxAgeSeconds: 300 })
+  // "openclaw gateway restart" steht in PLAN_REQUIRED_COMMANDS.
+  const res = await handler({ toolName: "exec", params: { command: "openclaw gateway restart --safe" } }, {})
+  assert.ok(!res || res.block !== true, `ohne planGate darf nicht wegen des Plans geblockt werden: ${JSON.stringify(res)}`)
+})
+
+await t("planGate.enabled=false → Guardrails blocken WEITER (Ebene 1 unbedingt)", async () => {
+  const { handler } = makeHandler({ enabled: false, maxAgeSeconds: 300 })
+  const res = await handler({ toolName: "exec", params: { command: `rm -rf ${os.homedir()}/.hermes` } }, {})
+  assert.strictEqual(res.block, true, "Guardrail muss auch mit ausgeschaltetem Plan-Gate blocken")
+  assert.match(res.blockReason, /BLOCKED/, "Guardrail-Meldung erwartet")
+})
+
+await t("Default-Lock-Pfad ist portabel (os.tmpdir + generischer Dateiname)", async () => {
+  assert.strictEqual(DEFAULT_PLAN_LOCK_PATH, join(os.tmpdir(), "nexus-plan-gate.lock"))
+  assert.strictEqual(basename(DEFAULT_PLAN_LOCK_PATH), "nexus-plan-gate.lock", "generischer Dateiname erwartet")
+  assert.ok(
+    !/miosha|think-gate/.test(basename(DEFAULT_PLAN_LOCK_PATH)),
+    `Dateiname darf kein Deployment-Literal enthalten: ${DEFAULT_PLAN_LOCK_PATH}`,
+  )
+})
+
+await t("Quelle: kein hartcodiertes Deployment-Literal mehr (Portabilitäts-Beweis an der Quelle)", async () => {
+  // Bewusst an der QUELLE geprüft: os.tmpdir() löst zur Laufzeit legitim auf einen
+  // Per-User-Pfad auf (hier ~/.openclaw/tmp) — Portabilität heißt: kein Literal im Code.
+  const src = readFileSync(new URL("./hooks/pre-tool-gate.ts", import.meta.url), "utf8")
+  assert.ok(!src.includes("miosha-think-gate"), "alter hartcodierter Lock-Pfad muss entfernt sein")
+  assert.ok(
+    !src.includes('\"/tmp/'),
+    "kein hartcodierter /tmp-Literalpfad (existiert auf Windows nicht)",
+  )
+})
+
+await t("maxAgeSeconds aus Config bestimmt die Gültigkeit", async () => {
+  // Frischer Lock (jetzt) + maxAgeSeconds 30 → gültig → KEIN Plan-Block.
+  writeFileSync(PLAN_LOCK_PATH, "plan: frischer Testplan\n")
+  try {
+    const { handler } = makeHandler({ enabled: true, lockPath: PLAN_LOCK_PATH, maxAgeSeconds: 30 })
+    const res = await handler({ toolName: "exec", params: { command: "openclaw update" } }, {})
+    assert.ok(!res || res.block !== true, `frischer Lock muss gelten: ${JSON.stringify(res)}`)
+  } finally {
+    try { unlinkSync(PLAN_LOCK_PATH) } catch {}
+  }
 })
 
 process.exitCode = failed ? 1 : 0
