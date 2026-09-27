@@ -106,8 +106,8 @@ await t("cronFormGate: Default = AUS, titles [], Limits 6/900", () => {
 await t("cronFormGate: enabled-Strings koerziert, Titel getrimmt + Nicht-Strings gefiltert", () => {
   assert.strictEqual(parseConfig({ cronFormGate: { enabled: "true" } }).cronFormGate.enabled, true)
   assert.strictEqual(parseConfig({ cronFormGate: { enabled: "0" } }).cronFormGate.enabled, false)
-  const g = parseConfig({ cronFormGate: { titles: ["  ⚠️ Problem  ", "", "   ", 7, null] } }).cronFormGate
-  assert.deepStrictEqual(g.titles, ["⚠️ Problem"])
+  const g = parseConfig({ cronFormGate: { titles: ["  ⚠️ Test Alarm  ", "", "   ", 7, null] } }).cronFormGate
+  assert.deepStrictEqual(g.titles, ["⚠️ Test Alarm"])
 })
 
 await t("cronFormGate: Limits geclamped (0→1, 999→50, 10→50, 99999→5000)", () => {
