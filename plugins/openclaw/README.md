@@ -79,7 +79,10 @@ Add to `~/.openclaw/openclaw.json`:
           "autoCapture": true,
           "maxRecallResults": 10,
           "accessLevel": "private",
-          "debug": false
+          "debug": false,
+          "cronFormGate": {
+            "enabled": false
+          }
         }
       }
     }
@@ -103,6 +106,27 @@ Add to `~/.openclaw/openclaw.json`:
 | `maxRecallResults` | `number` | `10` | Max memories injected per turn (1–20) |
 | `accessLevel` | `string` | `private` | Agent access level: `public`, `trusted`, or `private` |
 | `debug` | `boolean` | `false` | Verbose debug logs |
+| `cronFormGate.enabled` | `boolean` | `false` | Master switch for the unattended-send gate (cron/heartbeat sessions) |
+| `cronFormGate.titles` | `string[]` | `[]` | Exact allowed first-line titles; `enabled` with an empty list keeps the gate off |
+| `cronFormGate.maxLines` | `number` | `6` | Max lines of an accepted form (1–50) |
+| `cronFormGate.maxChars` | `number` | `900` | Max characters of an accepted form (50–5000) |
+
+### Unattended send gate (`cronFormGate`)
+
+Off by default. When enabled, messages from unattended sessions (`:cron:`,
+`:heartbeat`) are delivered only if they match a fixed form: an exact
+first-line title from `titles`, at most `maxLines` lines / `maxChars`
+characters, and no reasoning traces. Anything else is cancelled and recorded
+as one line in the workspace daily note. Interactive sessions (DMs, groups)
+are never affected. This is what lets a cron job alert you without opening a
+free-text channel for unattended runs.
+
+```json
+"cronFormGate": {
+  "enabled": true,
+  "titles": ["⚠️ Alert", "🚀 Release"]
+}
+```
 
 ### Access Levels
 

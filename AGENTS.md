@@ -91,13 +91,21 @@ Or, run these commands yourself:
           "autoRecall": true,
           "autoCapture": true,
           "maxRecallResults": 10,
-          "accessLevel": "private"
+          "accessLevel": "private",
+          "cronFormGate": {
+            "enabled": false
+          }
         }
       }
     }
   }
 }
 ```
+
+`cronFormGate` is off by default: unattended cron/heartbeat sends pass through
+unchanged. Enable it (`enabled: true` + `titles`) to accept only fixed-form
+messages from unattended sessions — see the plugin README for the full option
+list.
 
 2. Restart OpenClaw:
 ```bash
