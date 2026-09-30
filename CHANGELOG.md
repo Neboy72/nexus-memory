@@ -48,10 +48,15 @@
 
 ### Tests
 
-- 13 new tests: Claude Code self-report suite (file contract, health probe,
+- 14 new tests: Claude Code self-report suite (file contract, health probe,
   atomic write, fail-open, warning text, version/manifest consistency,
   installer contract) and the OpenClaw self-check suite (payload shape,
-  atomic write, prompt-warning persistence, fail-open).
+  atomic write, prompt-warning persistence, fail-open). The OpenClaw installer
+  tests stub `npm` and run against a throwaway plugin copy, so they exercise
+  the build path without a Node toolchain — and prove a failed build aborts
+  before anything is installed.
+- Full suite: 2083 passed, 3 skipped (local); 2063 passed, 23 skipped in the
+  bare Ubuntu CI replica (the difference is optional dependencies only).
 
 ## [0.22.2] - 2026-09-30
 
