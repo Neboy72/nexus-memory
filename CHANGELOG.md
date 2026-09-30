@@ -1,3 +1,23 @@
+## [0.22.2] - 2026-09-30
+
+### Added
+
+- **Hermes plugin self-report.** On every process start the plugin writes
+  `<data-dir>/agent-selfcheck-<agent-id>.json` (legacy `agent-selfcheck.json`
+  still supported) naming whether its memory provider is working, the reason
+  when it is not, and a one-line repair command. Written once per process,
+  fail-open.
+- **Server-side self-report watchdog (`self_report.py`).** An in-process daemon
+  reads those self-checks plus the agent registry and alerts on (a) a fresh
+  `ok: false` report and (b) suspicious silence from a `plugin` agent that
+  previously used memory (4–14 days quiet). Delivered through
+  `NEXUS_ALERT_WEBHOOK_URL` (fallback `NEXUS_WEBHOOK_URL`) and/or
+  `NEXUS_ALERT_MACOS=1`; alerts deduped (48 h broken / 168 h silent) via
+  `<data-dir>/selfreport-state.json`. Silent with no channel configured;
+  kill-switch `NEXUS_SELFREPORT=0`. No new dependencies.
+- **Health surfaces.** The `health` MCP tool and `GET /healthz` now include a
+  compact `self_report` status (`ok`/`warning`), fail-open.
+
 ## [0.22.1] - 2026-09-25
 
 ### Fixed

@@ -700,6 +700,19 @@ class MemoryStore:
                 logging.info("Retrieval-watch daemon active")
             except Exception as e:
                 logging.warning(f"Retrieval-watch daemon unavailable: {e}")
+        # 2026-09-30: server-side self-report — notice a broken agent memory
+        # plugin (self-check files) and suspicious registry silence without the
+        # user building a watchdog. Same fail-open daemon style. Kill-switch:
+        # NEXUS_SELFREPORT=0.
+        self._self_report = None
+        try:
+            # The daemon owns its own kill-switch (NEXUS_SELFREPORT=0 in
+            # SelfReportDaemon.start()); no duplicate gate here.
+            from nexus_memory.self_report import SelfReportDaemon
+            self._self_report = SelfReportDaemon(self)
+            self._self_report.start()
+        except Exception as e:
+            logging.warning(f"Self-report daemon unavailable: {e}")
         # 2026-09-05 (Nebo-GO, benchmark-driven): ingestion consolidation — raw
         # session dumps get distilled into atomic facts + contradictions
         # superseded at write time. In-process daemon (no cron dependency).
@@ -1819,6 +1832,18 @@ class MemoryStore:
                     flags = auditor.get_flags()
                     if flags:
                         result["health_flags"] = flags
+            except Exception:
+                pass
+            # 2026-09-30: agent memory-plugin self-report. Small, fail-open
+            # payload — the agent sees a broken/silent peer on its next check.
+            try:
+                from nexus_memory.self_report import evaluate as _evaluate_self_report
+                evaluation = _evaluate_self_report()
+                result["self_report"] = {
+                    "status": evaluation.get("status"),
+                    "broken_agents": evaluation.get("broken_agents", []),
+                    "silent_agents": evaluation.get("silent_agents", []),
+                }
             except Exception:
                 pass
             return result
@@ -3309,11 +3334,19 @@ def build_serve_app():
     def healthz(request):
         reachable = _qdrant_reachable()
         started = _serve_started_at if _serve_started_at is not None else time.monotonic()
+        # Cheap self-report verdict: file reads + registry parse only. A failure
+        # here must never degrade /healthz, so it reports "unknown".
+        try:
+            from nexus_memory.self_report import evaluate as _evaluate_self_report
+            self_report = _evaluate_self_report().get("status") or "unknown"
+        except Exception:
+            self_report = "unknown"
         return JSONResponse({
             "status": "ok" if reachable else "degraded",
             "qdrant": reachable,
             "version": nexus_version,
             "uptime_s": round(time.monotonic() - started, 3),
+            "self_report": self_report,
         })
 
     return Starlette(
