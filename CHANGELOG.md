@@ -1,3 +1,43 @@
+## [0.22.4] - 2026-09-30
+
+### Fixed
+
+- **The OpenClaw thought filter never worked.** The `message_sending` hook
+  returned its verdict in a `{message: …}` field, but the host reads only
+  `{content}` (documented contract, `PluginHookMessageSendingResult`, confirmed
+  against the host bundle). Every cleaning step and every drop of pure reasoning
+  text was silently discarded — the GLM chain-of-thought leak the filter exists
+  for would have gone straight to the chat, while everyone assumed it was
+  guarded. The handler now returns `undefined` (no opinion), `{content: cleaned}`
+  or `{cancel: true}` for pure reasoning, fail-open on its own errors, and the
+  detection logic moved into a pure `scanReasoningLeak()` so it is testable
+  without a host.
+  - **New `test-host-contract.mjs`** pins the host semantics against the real
+    bundle, so a field-name drift can no longer pass unnoticed again.
+- **Self-check warning could clobber a filtered message.** The new
+  `hooks/self-check-warning.ts` appends the "memory is broken" block to outgoing
+  messages at most once per session but never onto text that itself carries
+  reasoning, and it consumes no throttle slot when it declines. Health check runs
+  before the scan, so a healthy backend costs nothing.
+
+### Added
+
+- **A broken memory backend is now visible in the chat, not just in the prompt.**
+  The v0.22.2/v0.22.3 self-report reached the model only, so a weak model could
+  ignore it and the user still could not tell that memory was off.
+  - **Hermes** (`plugins/memory/nexus/__init__.py`): a `transform_llm_output`
+    hook appends a short two-line warning (cause masked, repair command) once per
+    session, capped at 64 sessions, and returns `None` in every other case so the
+    answer path can never break. Registration failures degrade to the existing
+    prompt section.
+  - **Claude Code** (`plugins/claude-code/scripts/self_check.py`): the
+    SessionStart hook now emits a `systemMessage` alongside `additionalContext`,
+    bounded to a single line for the tight chat surfaces.
+- **11 new tests** (2097 total, up from 2083): `test_hermes_plugin_selfreport.py`
+  covers the output hook (warn once per session, bounded cache, fail-open on
+  empty text and on probe errors), `test_claude_code_selfreport.py` covers the
+  bounded single-line system message.
+
 ## [0.22.3] - 2026-09-30
 
 ### Added
