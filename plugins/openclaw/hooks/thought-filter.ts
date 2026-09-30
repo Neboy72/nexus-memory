@@ -122,62 +122,115 @@ export function isPureReasoningBlock(
 }
 
 /**
+ * Reine Scan-Funktion: teilt den Text in Blöcke, droppt die FÜHRENDEN
+ * Leak-Zeilen und liefert den Rest. Kein Logging, keine Seiteneffekte —
+ * dieselbe Logik trägt den Handler UND die Kompositions-Wache
+ * (hasReasoningLeak); zwei Kopien würden auseinanderdriften.
+ */
+export function scanReasoningLeak(raw: string): { out: string; droppedLines: number } {
+  const blocks = raw.split(/\n{2,}/)
+  let prevWasLeak = false
+  let continuationCount = 0
+  let droppedLines = 0
+  const kept: string[] = []
+  for (const b of blocks) {
+    // W29-8: Marker-Check auf ZEILEN-Ebene. Reasoning + Antwort ohne
+    // Leerzeile landen im selben Block ("Let me think…\nHier die Antwort")
+    // — der alte Block-Check löschte den ganzen Block inkl. Antwort.
+    // Jetzt werden nur die FÜHRENDEN Leak-Zeilen gedroppt, der Rest bleibt.
+    const lines = b.split("\n")
+    let cut = 0
+    while (
+      cut < lines.length &&
+      isPureReasoningBlock(lines[cut], prevWasLeak || cut > 0, continuationCount)
+    ) {
+      cut++
+    }
+    const isLeakBlock = cut > 0
+    if (isLeakBlock) {
+      prevWasLeak = true
+      continuationCount++
+      droppedLines += cut
+    } else {
+      prevWasLeak = false
+      continuationCount = 0
+    }
+    const remaining = lines.slice(cut)
+    if (remaining.length > 0) kept.push(remaining.join("\n"))
+  }
+  return { out: kept.join("\n\n").trim(), droppedLines }
+}
+
+/**
+ * Wache für NACHFOLGENDE message_sending-Handler (Kompositions-Beweis
+ * oc-composition-probe.mjs, Szenario S2): jeder Handler sieht das
+ * ORIGINAL-Event — NICHT die Änderung seines Vorgängers — und der Host behält
+ * den LETZTEN definierten `content`. Ein Handler, der an `content` anhängt,
+ * überschreibt damit den bereinigten Text dieses Filters mit Original+Anhang
+ * und der Leak ginge wieder raus. true = dieser Text wird vom Filter verändert
+ * (gekürzt oder ganz verworfen) und darf von keinem späteren Handler mehr
+ * angefasst werden.
+ */
+export function hasReasoningLeak(raw: string): boolean {
+  try {
+    if (typeof raw !== "string" || raw.trim().length < MIN_LEN_PROCESS) return false
+    return scanReasoningLeak(raw).droppedLines > 0
+  } catch {
+    return false // die Wache darf nie selbst zur Fehlerquelle werden
+  }
+}
+
+/** Logging, das den Sendepfad nie bricht (ein werfender Logger tötete sonst den Handler). */
+function safeLogWarn(message: string): void {
+  try {
+    log.warn(message)
+  } catch {
+    /* Logger kaputt → das Filter-Ergebnis zählt trotzdem */
+  }
+}
+
+/**
  * message_sending-Handler: modifiziert den Outbound-Text.
- * Merge-Regel (Doku): "message_sending uses the last returned content".
+ *
+ * KONTRAKT (Host-Doku docs/plugins/hooks/messages.md, Typ-Vertrag
+ * PluginHookMessageSendingResult, Empirie oc-hook-contract-probe.mjs): der
+ * Host liest vom Handler-Ergebnis AUSSCHLIESSLICH `content`; `cancel: true`
+ * ist terminal (Kette stoppt, Delivery wird als
+ * "cancelled_by_message_sending_hook" unterdrückt). Ein früherer Stand gab
+ * `{message: …}` zurück — dieses Feld existiert im Vertrag nicht, der Host
+ * ignorierte es (Filter wirkungslos) und auch der Drop
+ * `{message: undefined}` lief ins Leere. Rückgabe deshalb heute:
+ *   - undefined      → keine Meinung, Text bleibt unverändert,
+ *   - {content}      → bereinigter Text,
+ *   - {cancel: true} → nur Reasoning übrig, Send wird unterdrückt.
  */
 export function buildThoughtFilterHandler() {
   return async (ctx: { message?: string; content?: string; text?: string }) => {
-    // raw VOR dem try deklarieren: der Fail-open-catch muss den ORIGINAL-Text
-    // zurückgeben können. ctx.message ist undefined, wenn die Payload in
-    // content/text lag — die Message würde sonst gedroppt statt durchzugehen.
-    let raw: string | undefined
     try {
-      raw = ctx?.message ?? ctx?.content ?? ctx?.text
-      if (typeof raw !== "string" || raw.trim().length < MIN_LEN_PROCESS) return { message: raw }
-
-      const blocks = raw.split(/\n{2,}/)
-      let prevWasLeak = false
-      let continuationCount = 0
-      let droppedLines = 0
-      const kept: string[] = []
-      for (const b of blocks) {
-        // W29-8: Marker-Check auf ZEILEN-Ebene. Reasoning + Antwort ohne
-        // Leerzeile landen im selben Block ("Let me think…\nHier die Antwort")
-        // — der alte Block-Check löschte den ganzen Block inkl. Antwort.
-        // Jetzt werden nur die FÜHRENDEN Leak-Zeilen gedroppt, der Rest bleibt.
-        const lines = b.split("\n")
-        let cut = 0
-        while (
-          cut < lines.length &&
-          isPureReasoningBlock(lines[cut], prevWasLeak || cut > 0, continuationCount)
-        ) {
-          cut++
-        }
-        const isLeakBlock = cut > 0
-        if (isLeakBlock) {
-          prevWasLeak = true
-          continuationCount++
-          droppedLines += cut
-        } else {
-          prevWasLeak = false
-          continuationCount = 0
-        }
-        const remaining = lines.slice(cut)
-        if (remaining.length > 0) kept.push(remaining.join("\n"))
-      }
-      if (droppedLines === 0) return { message: raw }
-
-      const out = kept.join("\n\n").trim()
-      log.warn(
-        `thought-filter: reasoning-Leak entfernt (${droppedLines} Zeile(n), ${raw.length} -> ${out.length} Zeichen)`
+      const raw = ctx?.message ?? ctx?.content ?? ctx?.text
+      if (typeof raw !== "string" || raw.trim().length < MIN_LEN_PROCESS) return undefined
+      const { out, droppedLines } = scanReasoningLeak(raw)
+      if (droppedLines === 0) return undefined // kein Leak → keine Meinung
+      safeLogWarn(
+        `thought-filter: reasoning-Leak entfernt (${droppedLines} Zeile(n), ${raw.length} -> ${out.length} Zeichen)`,
       )
-      // W29-9: { message: undefined } is INTENTIONAL for fully-suppressed leaks —
-      // message_sending merges the last returned content; undefined here means
-      // "nothing to send" (drop). Verified in production since 29.08.2026.
-      if (out.length < MIN_LEN_SEND) return { message: undefined } // alles war Leak → nicht senden
-      return { message: out }
-    } catch {
-      return { message: raw } // Fail-open: Original unverändert durchlassen
+      // W29-9: reiner Leak — es bleibt nichts Sendbares übrig. Der Host kennt
+      // dafür genau EINEN Terminal-Weg: cancel (Doku: "cancel: true is
+      // terminal"); ein leeres content würde in einzelnen Pfaden noch einen
+      // leeren Send versuchen.
+      if (out.length < MIN_LEN_SEND) {
+        safeLogWarn("thought-filter: nur Reasoning übrig — Send unterdrückt (cancel)")
+        return { cancel: true, cancelReason: "thought-filter: pure reasoning leak" }
+      }
+      return { content: out }
+    } catch (err) {
+      // Fail-open: Original unverändert durchlassen (undefined = keine
+      // Meinung). Nie cancel im Fehlerfall — ein Filter-Bug darf keine
+      // legitime Nachricht verschlucken.
+      safeLogWarn(
+        `thought-filter: Fehler — fail-open (${err instanceof Error ? err.message : String(err)})`,
+      )
+      return undefined
     }
   }
 }
