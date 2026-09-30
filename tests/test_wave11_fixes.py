@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -24,6 +25,7 @@ from nexus_memory import trust_service as TS
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HERMES_INSTALLER = REPO_ROOT / "scripts" / "install_hermes_plugin.sh"
 OPENCLAW_INSTALLER = REPO_ROOT / "plugins" / "openclaw" / "scripts" / "install_openclaw_plugin.sh"
+OPENCLAW_PLUGIN_DIR = REPO_ROOT / "plugins" / "openclaw"
 RELEASE_GATE = REPO_ROOT / "scripts" / "release_gate.sh"
 
 
@@ -416,10 +418,48 @@ class TestH8HermesBackup:
 # ── H9: openclaw installer guards the destructive rm -rf (#106) ──────────────
 
 
-def _run_openclaw(state_dir: str):
+def _fake_npm(bin_dir: Path, exit_code: int = 0) -> Path:
+    """Stub ``npm`` so the installer's build step runs without Node.js.
+
+    The installer rebuilds ``dist/index.js`` when the bundle is missing or older
+    than the sources — OpenClaw executes that bundle and it is gitignored, so a
+    fresh checkout has none. A successful stub actually writes the bundle:
+    trusting the exit code alone would model a build that produced nothing.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    npm = bin_dir / "npm"
+    body = ["#!/bin/sh"]
+    if exit_code:
+        body.append(f"exit {exit_code}")
+    else:
+        body += [
+            'if [ "$1" = "run" ] && [ "$2" = "build" ]; then',
+            '  mkdir -p dist && echo "// stub bundle" > dist/index.js',
+            "fi",
+            "exit 0",
+        ]
+    npm.write_text("\n".join(body) + "\n")
+    npm.chmod(0o755)
+    return bin_dir
+
+
+def _plugin_copy(tmp_path: Path) -> Path:
+    """A throwaway copy of the plugin WITHOUT dist/ (models a fresh checkout)."""
+    dest = tmp_path / "plugin"
+    shutil.copytree(
+        OPENCLAW_PLUGIN_DIR,
+        dest,
+        ignore=shutil.ignore_patterns("dist", "node_modules", "__pycache__"),
+    )
+    return dest
+
+
+def _run_openclaw(state_dir: str, bin_dir: Path | None = None, installer: Path | None = None):
     env = dict(os.environ)
     env["OPENCLAW_STATE_DIR"] = state_dir
-    return subprocess.run(["bash", str(OPENCLAW_INSTALLER)], capture_output=True,
+    if bin_dir is not None:
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    return subprocess.run(["bash", str(installer or OPENCLAW_INSTALLER)], capture_output=True,
                           text=True, env=env, timeout=60)
 
 
@@ -436,10 +476,39 @@ class TestH9OpenclawGuard:
         # to model an existing OpenClaw state dir; the assertions themselves
         # are unchanged.
         state.mkdir()
-        r = _run_openclaw(str(state))
+        # Run against a throwaway copy of the plugin: the installer now builds
+        # the runtime bundle when it is missing or stale, and that build must
+        # never be able to touch the real checkout. The copy has no dist/
+        # (models a fresh clone); the npm stub produces the bundle.
+        plugin = _plugin_copy(tmp_path)
+        r = _run_openclaw(str(state), _fake_npm(tmp_path / "bin"),
+                          installer=plugin / "scripts" / "install_openclaw_plugin.sh")
         assert r.returncode == 0, r.stdout + r.stderr
         target = state / "plugins" / "nexus-memory"
         assert target.is_symlink()
+        assert (plugin / "dist" / "index.js").exists()
+
+    def test_failed_build_aborts_before_installing(self, tmp_path):
+        """A bundle that cannot be built must stop the install.
+
+        OpenClaw loads ``dist/index.js``; registering a plugin whose bundle was
+        never built gives a loaded-but-dead memory (hooks and tools never fire)
+        while everything looks installed — exactly the silent failure this
+        installer now refuses.
+        """
+        plugin = _plugin_copy(tmp_path)
+        state = tmp_path / "oc"
+        state.mkdir()
+        env = dict(os.environ)
+        env["OPENCLAW_STATE_DIR"] = str(state)
+        env["PATH"] = f"{_fake_npm(tmp_path / 'bin', exit_code=1)}{os.pathsep}{env.get('PATH', '')}"
+        r = subprocess.run(["bash", str(plugin / "scripts" / "install_openclaw_plugin.sh")],
+                           capture_output=True, text=True, env=env, timeout=60)
+        assert r.returncode != 0, r.stdout + r.stderr
+        out = (r.stdout + r.stderr).lower()
+        assert "build" in out and "npm" in out
+        # Nothing half-installed: the aborted run leaves no plugin behind.
+        assert not (state / "plugins" / "nexus-memory").exists()
 
     def test_guards_precede_the_rm_rf(self):
         src = OPENCLAW_INSTALLER.read_text()
