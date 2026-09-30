@@ -134,6 +134,20 @@ def _warning_text(reason: str, fix: str) -> str:
     return text[:1000]
 
 
+def _system_message(reason: str, fix: str) -> str:
+    """Short single-line warning shown to the user via systemMessage."""
+    cause = " ".join((reason or "memory backend unhealthy").split())
+    remedy = " ".join((fix or "check the Nexus install").split())
+    if len(cause) > 160:
+        cause = cause[:157].rstrip() + "…"
+    if len(remedy) > 120:
+        remedy = remedy[:117].rstrip() + "…"
+    return (
+        f"Nexus Memory is not working: {cause}. Fix: {remedy}. "
+        "Your memories are safe."
+    )
+
+
 def write_selfcheck() -> tuple[bool, str, str]:
     """Probe health and atomically write the self-check file.
 
@@ -188,7 +202,8 @@ def main() -> None:
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": warning,
-            }
+            },
+            "systemMessage": _system_message(reason, fix),
         }
         print(json.dumps(output))
 
