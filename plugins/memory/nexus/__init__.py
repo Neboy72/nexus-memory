@@ -46,6 +46,37 @@ def _env_int_bounded(name: str, default: int, lo: int, hi: int) -> int:
 _HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 _PORT = _env_int_bounded("NEXUS_QDRANT_PORT", 6333, 1, 65535)
 _COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
+# Bounded grace period shutdown() gives an in-flight prefetch before it closes
+# the shared Qdrant client. Bounded so a hung prefetch can never stall exit;
+# if it expires the survivor is logged at ERROR (never silently ignored).
+_PREFETCH_JOIN_TIMEOUT = 2.0
+
+# Error shapes that the shutdown itself explains. A prefetch thread can fail
+# because shutdown() set ``self._qdrant = None`` after the thread passed its
+# guard (AttributeError on None) or because the client was closed underneath
+# it. ONLY those may be downgraded during shutdown: the flag is set for
+# seconds (2 s prefetch + 5 s write + backup/update joins), so "during
+# shutdown" is NOT the same as "caused by shutdown" — a genuine Qdrant/network
+# failure in that window must keep its WARNING and health re-probe.
+_SHUTDOWN_CLIENT_ERROR_MARKERS = (
+    "has been closed", "is closed", "client is closed", "client is none",
+    "shutdown", "shutting down",
+)
+
+
+def _prefetch_error_explained_by_shutdown(exc: BaseException) -> bool:
+    """True only when the exception's CAUSE is the shutdown itself.
+
+    Two shapes occur in production: an ``AttributeError`` on a ``None`` client
+    (shutdown set ``self._qdrant = None`` after the thread's guard) and a
+    Qdrant client error whose text says the client was closed. A genuine
+    failure (server unreachable, network/disk error) matches neither and must
+    keep its visibility — see ``_do_prefetch_inner``.
+    """
+    if isinstance(exc, AttributeError) and "NoneType" in str(exc):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in _SHUTDOWN_CLIENT_ERROR_MARKERS)
 
 # Health-probe cost control: ``_status_section_content`` runs on EVERY
 # system-prompt build (every turn), so a real Qdrant round-trip per turn would
@@ -184,6 +215,14 @@ class NexusMemoryProvider:
         # Single-flight guard for queue_prefetch: a new prefetch thread per call
         # would let a slow/old query overwrite a fresher _prefetch_result.
         self._prefetch_gate = threading.Lock()
+        # Shutdown coordination: a prefetch thread shares self._qdrant, so
+        # shutdown() must be able to see and join the one in flight before it
+        # closes the client. _prefetch_thread_lock makes "check _shutting_down
+        # + publish the thread" atomic against "set _shutting_down + read the
+        # thread", so a prefetch started during shutdown is never unjoined.
+        self._prefetch_thread: Optional[threading.Thread] = None
+        self._prefetch_thread_lock = threading.Lock()
+        self._shutting_down = False
         # Serializes the flywheel read-modify-write (Qdrant has no atomic
         # increment, so concurrent recalls would lose a bump).
         self._flywheel_lock = threading.Lock()
@@ -433,6 +472,30 @@ class NexusMemoryProvider:
 
     def shutdown(self) -> None:
         self._write_stop.set()
+        # A prefetch thread shares self._qdrant too: refuse new ones and join
+        # the one in flight BEFORE the client is closed below. Without this the
+        # thread hit None.query_points ("Prefetch failed") and the session
+        # silently got an empty memory block. Bounded like the joins below —
+        # a hung prefetch must never stall shutdown.
+        with self._prefetch_thread_lock:
+            self._shutting_down = True
+            prefetch_thread = self._prefetch_thread
+        # Never join ourselves: shutdown() called from the prefetch thread
+        # would burn the full timeout and then close the client under the
+        # still-running caller.
+        if (prefetch_thread and prefetch_thread.is_alive()
+                and prefetch_thread is not threading.current_thread()):
+            prefetch_thread.join(timeout=_PREFETCH_JOIN_TIMEOUT)
+            if prefetch_thread.is_alive():
+                # The join deadline is the whole point of the bound, so we
+                # still close below — but a survivor must be loud, not silent:
+                # the earlier ignored join result is exactly what hid the
+                # original close-under-in-flight client bug.
+                logger.error(
+                    "Prefetch thread outlived the %.1fs shutdown grace period; "
+                    "closing the Qdrant client underneath it "
+                    "(the prefetch aborts at its next checkpoint)",
+                    _PREFETCH_JOIN_TIMEOUT)
         if self._write_thread and self._write_thread.is_alive():
             self._write_thread.join(timeout=5.0)
         # Nr 290: backup/update threads share self._qdrant — give them a
@@ -477,9 +540,24 @@ class NexusMemoryProvider:
             gate = self._prefetch_gate = threading.Lock()
         if not gate.acquire(blocking=False):
             return  # one prefetch in flight — skip instead of racing it
+        # __init__ always defines this lock; shutdown() uses the attribute
+        # directly too, so a missing one is a real bug and must fail fast
+        # rather than silently substituting a second, unseen lock.
+        lock = self._prefetch_thread_lock
         try:
-            threading.Thread(target=self._do_prefetch, args=(query,),
-                             name="nexus-prefetch", daemon=True).start()
+            # Publish the thread under the shutdown lock so shutdown() either
+            # sees it (and joins it) or has already set _shutting_down and we
+            # bail out without spawning into a closing client.
+            with lock:
+                if getattr(self, "_shutting_down", False):
+                    gate.release()
+                    logger.info("Prefetch skipped: provider is shutting down")
+                    return
+                thread = threading.Thread(target=self._do_prefetch,
+                                          args=(query,), name="nexus-prefetch",
+                                          daemon=True)
+                self._prefetch_thread = thread
+                thread.start()
         except Exception as exc:
             # Thread spawn failed: release or prefetch dies for the lifetime
             gate.release()
@@ -652,8 +730,20 @@ class NexusMemoryProvider:
                         max_workers=1, thread_name_prefix="nexus-rewrite")
         return ex
 
+    def _clear_prefetch_result(self) -> None:
+        """Publish "no result" under the lock — used by every abort checkpoint
+        (shutdown checkpoints and the exception path) so a consumer reading
+        during shutdown never sees a stale result from an earlier query."""
+        with self._prefetch_lock:
+            self._prefetch_result = ""
+
     def _do_prefetch(self, query: str) -> None:
         try:
+            # A shutdown may have started between spawn and first run: do not
+            # touch the shared client at all in that case.
+            if getattr(self, "_shutting_down", False):
+                self._clear_prefetch_result()
+                return
             self._do_prefetch_inner(query)
         finally:
             # Release the queue_prefetch single-flight gate. Guarded because
@@ -668,6 +758,11 @@ class NexusMemoryProvider:
         try:
             query = self._rewrite_if_enabled(query)
             vector = self._embed_cached(query)
+            # Embedding/rewriting can outlast the shutdown grace period: abort
+            # at this last checkpoint before the client is dereferenced below.
+            if getattr(self, "_shutting_down", False):
+                self._clear_prefetch_result()
+                return
             budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
             # Scope filter (project/agent areas): auto-prefetch surfaces only
             # 'default' memories plus the agent's OWN scope. Explicit recall()
@@ -737,9 +832,23 @@ class NexusMemoryProvider:
                 _banner + "\n".join(items)
             ) if items else ""
         except Exception as exc:
-            logger.warning("Prefetch failed: %s", exc)
-            _refresh_selfcheck_if_needed()
-            with self._prefetch_lock: self._prefetch_result = ""
+            if getattr(self, "_shutting_down", False):
+                # Branch on the CAUSE, not merely the flag: the flag is set for
+                # seconds (prefetch grace + write/backup/update joins), so a
+                # genuine Qdrant/network/disk failure in that window must not be
+                # downgraded to DEBUG. Only an error explained by the closed or
+                # absent client itself is shutdown noise.
+                if _prefetch_error_explained_by_shutdown(exc):
+                    logger.debug("Prefetch aborted by shutdown: %s", exc)
+                else:
+                    logger.warning(
+                        "Prefetch failed during shutdown (may be unrelated to "
+                        "the shutdown): %s", exc)
+                    _refresh_selfcheck_if_needed()
+            else:
+                logger.warning("Prefetch failed: %s", exc)
+                _refresh_selfcheck_if_needed()
+            self._clear_prefetch_result()
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "",
                   messages: Optional[List[Dict[str, Any]]] = None) -> None:
