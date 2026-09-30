@@ -5,16 +5,67 @@ and embedding logic as the MCP server so all agents share the same memory.
 """
 
 from __future__ import annotations
-import json, logging, os, re, threading, time, uuid
+import json, logging, math, os, re, sys, threading, time, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from qdrant_client import QdrantClient
-from qdrant_client.http import models as qmodels
+
+# Resilient import: a Hermes update once replaced its managed venv and dropped
+# qdrant_client here. The module then failed to import and Hermes silently
+# discarded the provider for days. Never let a missing dependency kill the
+# module — record the failure and report it instead.
+_QDRANT_IMPORT_ERROR: str = ""
+try:
+    from qdrant_client import QdrantClient
+    from qdrant_client.http import models as qmodels
+except Exception as _exc:  # missing dependency in this interpreter — must not kill the module
+    QdrantClient = None  # type: ignore
+    qmodels = None  # type: ignore
+    _QDRANT_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int_bounded(name: str, default: int, lo: int, hi: int) -> int:
+    """Parse an int env var defensively — a malformed value must never raise.
+
+    ``NEXUS_QDRANT_PORT`` once sat outside the guarded dependency import; a bad
+    value raised at import and silently killed the whole plugin (the incident
+    this feature exists to prevent).
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        val = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, val))
+
+
 _HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
-_PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
+_PORT = _env_int_bounded("NEXUS_QDRANT_PORT", 6333, 1, 65535)
 _COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
+
+# Health-probe cost control: ``_status_section_content`` runs on EVERY
+# system-prompt build (every turn), so a real Qdrant round-trip per turn would
+# add latency (and block on a hung server). Cache the verdict for a short TTL
+# and bound the client call with a timeout.
+def _env_float_bounded(name: str, default: float, lo: float, hi: float) -> float:
+    """Parse a float env var defensively: malformed/non-finite/negative → default."""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        val = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(val) or val < 0:
+        return default
+    return max(lo, min(hi, val))
+
+
+_PROBE_TTL_SEC = _env_float_bounded("NEXUS_PROBE_TTL_SEC", 30.0, 0.5, 3600.0)
+_QDRANT_TIMEOUT_SEC = _env_float_bounded("NEXUS_QDRANT_TIMEOUT", 5.0, 1.0, 60.0)
 
 # H207: automatic-backup cadence. The loop sleeps in CHECK_INTERVAL slices, so
 # the iteration count * interval must equal the advertised 24h — the previous
@@ -140,34 +191,75 @@ class NexusMemoryProvider:
     def name(self) -> str: return "nexus"
 
     def is_available(self) -> bool:
+        # Identical semantics to _health_probe() (deps importable, Qdrant
+        # reachable, embedding provider importable) — delegate so there is one
+        # probe implementation, sharing its TTL cache.
+        return _health_probe()[0]
+
+    def unavailable_reason(self) -> str:
+        """Precise English explanation of why the provider is unusable ("" if usable).
+
+        Hermes shows this in its "provider reports unavailable" warning and the
+        user reads it, so it names the concrete cause, the interpreter that has
+        the problem, and exactly one copy-pasteable fix command.
+        """
         try:
-            import qdrant_client  # noqa: F401
-            from nexus_memory.embeddings import EmbeddingProvider  # noqa: F401
-            c = QdrantClient(host=_HOST, port=_PORT)
-            c.get_collections(); c.close(); return True
-        except Exception: return False
+            ok, cause = _health_probe()
+            if ok:
+                return ""
+            return (
+                f"Nexus Memory provider is unavailable: {_mask_paths(cause)}. "
+                f"Interpreter: {_mask_paths(sys.executable)}. "
+                f"Fix: run `{_repair_command()}` and restart the agent."
+            )
+        except Exception as exc:
+            return (
+                f"Nexus Memory provider self-check failed: "
+                f"{_mask_paths(f'{type(exc).__name__}: {exc}')}. "
+                f"Interpreter: {_mask_paths(sys.executable)}. "
+                f"Fix: run `{_repair_command()}`."
+            )
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
-        self._session_id = session_id; self._hermes_home = kwargs.get("hermes_home", "")
-        self._agent_context = kwargs.get("agent_context", "primary")
-        cfg = self._load_config(); self._collection = cfg.get("collection_name", _COLLECTION)
-        # A key entered through the config UI is persisted by save_config(); the
-        # embedder reads VOYAGE_API_KEY from the environment, so export it when
-        # the env var is not already set (otherwise the setting was ignored).
-        _vkey = (cfg.get("voyage_api_key") or "").strip()
-        if _vkey and not os.environ.get("VOYAGE_API_KEY"):
-            os.environ["VOYAGE_API_KEY"] = _vkey
-        self._qdrant = QdrantClient(host=_HOST, port=_PORT)
-        self._embedder = _Embedder()
-        self._ensure_collection()
-        self._check_dimension_compat()
-        self._write_stop.clear()
-        self._write_thread = threading.Thread(target=self._write_loop, name="nexus-writer", daemon=True)
-        self._write_thread.start()
-        self._update_nudged = False
-        self._check_nexus_update()
-        self._start_auto_backup()
-        logger.info("NexusMemoryProvider init (collection=%s, dim=%d)", self._collection, self._embedder.dim)
+        if QdrantClient is None or qmodels is None:
+            # Hermes only calls initialize() after is_available() is True, but a
+            # manual/foreign caller must not crash on a missing dependency.
+            logger.warning("Nexus provider initialize skipped: qdrant_client unavailable (%s)",
+                           _QDRANT_IMPORT_ERROR)
+            write_agent_selfcheck(False, _QDRANT_IMPORT_ERROR or "qdrant_client unavailable",
+                                  _repair_command())
+            return
+        try:
+            self._session_id = session_id; self._hermes_home = kwargs.get("hermes_home", "")
+            self._agent_context = kwargs.get("agent_context", "primary")
+            cfg = self._load_config(); self._collection = cfg.get("collection_name", _COLLECTION)
+            # A key entered through the config UI is persisted by save_config(); the
+            # embedder reads VOYAGE_API_KEY from the environment, so export it when
+            # the env var is not already set (otherwise the setting was ignored).
+            _vkey = (cfg.get("voyage_api_key") or "").strip()
+            if _vkey and not os.environ.get("VOYAGE_API_KEY"):
+                os.environ["VOYAGE_API_KEY"] = _vkey
+            self._qdrant = QdrantClient(host=_HOST, port=_PORT)
+            self._embedder = _Embedder()
+            self._ensure_collection()
+            self._check_dimension_compat()
+            self._write_stop.clear()
+            self._write_thread = threading.Thread(target=self._write_loop, name="nexus-writer", daemon=True)
+            self._write_thread.start()
+            self._update_nudged = False
+            self._check_nexus_update()
+            self._start_auto_backup()
+            logger.info("NexusMemoryProvider init (collection=%s, dim=%d)", self._collection, self._embedder.dim)
+        except Exception as exc:
+            # A failed initialize() used to leave the earlier ok:true self-check
+            # on disk, so the watchdog stayed silent about a dead provider.
+            # Record the concrete cause before re-raising; the return contract
+            # is unchanged (initialize() still propagates the error).
+            write_agent_selfcheck(False, f"{type(exc).__name__}: {exc}", _repair_command())
+            raise
+        # Second (and last) self-report of the process: the provider is now
+        # known-good, so clear any failure recorded at register() time.
+        write_agent_selfcheck(True, "", _repair_command())
 
     def _start_auto_backup(self) -> None:
         """Start automatic daily backup of all memories."""
@@ -645,6 +737,7 @@ class NexusMemoryProvider:
             ) if items else ""
         except Exception as exc:
             logger.warning("Prefetch failed: %s", exc)
+            _refresh_selfcheck_if_needed()
             with self._prefetch_lock: self._prefetch_result = ""
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "",
@@ -689,7 +782,9 @@ class NexusMemoryProvider:
                 if self._write_queue: entry = self._write_queue.pop(0)
             if entry and self._embedder and self._qdrant:
                 try: self._upsert(**entry)
-                except Exception as exc: logger.warning("Background write failed: %s", exc)
+                except Exception as exc:
+                    logger.warning("Background write failed: %s", exc)
+                    _refresh_selfcheck_if_needed()
             else: time.sleep(0.5)
 
     def _upsert(self, text: str, category: str = "fact", access_level: str = "public",
@@ -1216,6 +1311,7 @@ class NexusMemoryProvider:
             return json.dumps(result)
         except Exception as exc:
             logger.warning("Tool call %s failed: %s", tool_name, exc)
+            _refresh_selfcheck_if_needed()
             return json.dumps({"error": str(exc)})
 
     def get_config_schema(self) -> List[Dict[str, Any]]:
@@ -1551,5 +1647,268 @@ class NexusMemoryProvider:
         except (FileNotFoundError, json.JSONDecodeError): return {}
 
 
+# ── Self-report (2026-09-30): a broken provider must never fail silently ──
+# When this module cannot import its dependencies, Hermes drops the provider
+# and logs only "loaded but no provider instance found" — the user had no idea
+# for days that external memory was off. Everything below is fail-open: it
+# explains the failure (to the agent and to a watchdog file) instead of raising.
+_STATUS_SECTION_ID = "nexus-status"
+_status_section_registered = False
+
+
+def _plugin_version() -> str:
+    """Best-effort installed plugin version for the self-check file (never raises)."""
+    try:
+        from importlib.metadata import version as _dist_version
+        return str(_dist_version("nexus-memory"))
+    except Exception:
+        return "unknown"
+
+
+def _sanitize_agent_id(raw: str) -> str:
+    """Filesystem-safe agent id — a raw id with a path separator would escape the data dir."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", (raw or "").strip())
+    return safe.strip("-") or "unknown"
+
+
+def _selfcheck_path() -> Path:
+    """Location of the watchdog-consumed self-check file (patchable in tests).
+
+    One file PER AGENT (``agent-selfcheck-<agent-id>.json``): several agents
+    share the data dir, and a single shared file would let one healthy agent
+    overwrite another agent's broken report.
+
+    The directory is ``$NEXUS_DATA_DIR`` when set, else ``~/.nexus-memory`` —
+    the SAME rule as ``self_report.data_dir()`` so the plugin and the daemon
+    never write/read in different places (a mismatch made the watchdog report
+    "ok" forever).
+    """
+    agent_id = _sanitize_agent_id(os.environ.get("NEXUS_AGENT_ID") or "hermes")
+    env_dir = os.environ.get("NEXUS_DATA_DIR", "").strip()
+    base = Path(os.path.expanduser(env_dir)) if env_dir else Path(os.path.expanduser("~/.nexus-memory"))
+    return base / f"agent-selfcheck-{agent_id}.json"
+
+
+def write_agent_selfcheck(ok: bool, reason: str, fix: str) -> None:
+    """Atomically publish provider health for the server-side watchdog.
+
+    Called once per process from register() and again from initialize() on
+    success — never per turn. Fail-open: a read-only or missing home directory
+    must never stop the agent from running, so errors are logged and swallowed.
+    """
+    try:
+        path = _selfcheck_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "agent_id": os.environ.get("NEXUS_AGENT_ID") or "hermes",
+            "ok": bool(ok),
+            "reason": reason,
+            "fix": fix,
+            "interpreter": sys.executable,
+            "plugin_version": _plugin_version(),
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+        try:
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(tmp, path)
+        except Exception:
+            # Never leak the temp file when the write/replace fails (same
+            # pattern as mcp_server/agent_detect atomic writers).
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+    except Exception as exc:
+        logger.debug("agent-selfcheck write skipped (non-fatal): %s", exc)
+
+
+_ABS_PATH_RE = re.compile(r"/[^\s\"']+")
+
+
+def _mask_paths(text: str) -> str:
+    """Mask absolute filesystem paths in API-bound text, keeping the file name.
+
+    ``/Users/x/repo/src/foo.py`` → ``<path>/foo.py``; the exception type and the
+    file name stay readable, the directory (which reveals the local layout and
+    user name) is replaced.
+    """
+    def _repl(match: "re.Match[str]") -> str:
+        token = match.group(0)
+        name = token.rstrip("/").rsplit("/", 1)[-1]
+        return f"<path>/{name}" if name else "<path>"
+    return _ABS_PATH_RE.sub(_repl, str(text))
+
+
+def _repair_command() -> str:
+    """One copy-pasteable command that reinstalls the plugin's dependencies.
+
+    A source checkout / editable install is repaired against the active
+    interpreter with `uv pip install -e`; a packaged install upgrades from the
+    index. Paths are quoted because they may contain spaces.
+    """
+    try:
+        # <repo>/plugins/memory/nexus/__init__.py → repo root
+        repo_root = Path(__file__).resolve().parent.parent.parent.parent
+        if (repo_root / "pyproject.toml").exists():
+            return f'uv pip install -e "{repo_root}" --python "{sys.executable}"'
+    except Exception:
+        pass
+    return f'"{sys.executable}" -m pip install --upgrade nexus-memory'
+
+
+# Cached probe verdict: (ok, cause, monotonic_timestamp). A verdict younger
+# than _PROBE_TTL_SEC is reused; a missing dependency is cached forever because
+# it cannot change without a process restart.
+_PROBE_CACHE: "Optional[tuple[bool, str, float]]" = None
+
+
+def _probe_once() -> tuple[bool, str]:
+    """One real health round-trip (client + embedding-provider import)."""
+    client = None
+    try:
+        client = QdrantClient(host=_HOST, port=_PORT, timeout=_QDRANT_TIMEOUT_SEC)
+        client.get_collections()
+    except Exception as exc:
+        return False, (
+            f"Qdrant at {_HOST}:{_PORT} is unreachable or unhealthy "
+            f"({type(exc).__name__}: {exc})"
+        )
+    finally:
+        if client is not None:
+            try: client.close()
+            except Exception: pass
+    try:
+        from nexus_memory.embeddings import EmbeddingProvider  # noqa: F401
+    except Exception as exc:
+        return False, (
+            f"the embedding provider is not importable "
+            f"({type(exc).__name__}: {exc})"
+        )
+    return True, ""
+
+
+def _health_probe() -> tuple[bool, str]:
+    """Cheap provider health check returning (ok, human-readable cause).
+
+    Mirrors is_available() but reports the concrete failure instead of a bare
+    bool. The verdict is CACHED for ``_PROBE_TTL_SEC`` because this runs on
+    every system-prompt build (every turn) — an uncached Qdrant round-trip
+    would add per-turn latency and a hung server could block the prompt build.
+    A missing dependency is cached for the whole process. Never raises.
+    """
+    global _PROBE_CACHE
+    if QdrantClient is None or qmodels is None:
+        cause = (
+            "the Python package 'qdrant_client' is not importable in this "
+            f"interpreter ({_QDRANT_IMPORT_ERROR or 'import failed'})"
+        )
+        # Cannot change without a restart: cache the verdict for the process.
+        _PROBE_CACHE = (False, cause, float("inf"))
+        return False, cause
+    now = time.monotonic()
+    cached = _PROBE_CACHE
+    if cached is not None and (now - cached[2]) < _PROBE_TTL_SEC:
+        return cached[0], cached[1]
+    ok, cause = _probe_once()
+    _PROBE_CACHE = (ok, cause, now)
+    return ok, cause
+
+
+# Throttle for re-writing the self-check from already-caught error paths: a
+# provider that starts failing mid-session should refresh its report, but not
+# once per failed operation.
+_SELFCHECK_REFRESH_SEC = 60.0
+_last_selfcheck_refresh: float = 0.0
+
+
+def _refresh_selfcheck_if_needed() -> None:
+    """Re-probe and rewrite the self-check at most once per 60 s (fail-open).
+
+    Called only from error paths that already catch their exception; never
+    from a hot success path. Failures are swallowed — the self-report must
+    never affect storage or retrieval.
+    """
+    global _last_selfcheck_refresh
+    now = time.monotonic()
+    if (now - _last_selfcheck_refresh) < _SELFCHECK_REFRESH_SEC:
+        return
+    with _SELFCHECK_REFRESH_LOCK:
+        now = time.monotonic()
+        if (now - _last_selfcheck_refresh) < _SELFCHECK_REFRESH_SEC:
+            return
+        _last_selfcheck_refresh = now
+    try:
+        ok, cause = _health_probe()
+        write_agent_selfcheck(ok, "" if ok else cause, _repair_command())
+    except Exception as exc:
+        logger.debug("self-check refresh skipped (non-fatal): %s", exc)
+
+
+_SELFCHECK_REFRESH_LOCK = threading.Lock()
+
+
+def _status_section_content(_session_info: Any = None) -> str:
+    """System-prompt self-report rendered only while the provider is broken.
+
+    Module-level on purpose: the prompt section outlives any provider instance.
+    Returns "" when healthy (zero prompt clutter) and never raises.
+
+    Takes (and ignores) the session-info mapping Hermes passes:
+    ``section.content(frozen_info)`` — a zero-argument callable raises
+    TypeError there and Hermes would skip the section silently (logged only
+    at warning level), which is exactly the silent failure this feature
+    exists to prevent.
+    """
+    try:
+        ok, cause = _health_probe()
+        if ok:
+            return ""
+        section = (
+            "⚠️ Nexus Memory self-check: NOT WORKING\n"
+            f"Cause: {_mask_paths(cause)}\n"
+            f"Fix: {_repair_command()}\n"
+            "Your stored memories are safe and not lost — they remain in the "
+            "memory database; only this agent's access is offline.\n"
+            "Tell your user about this and offer to run the fix."
+        )
+        # This text travels to the model API — keep it bounded.
+        return section[:1000]
+    except Exception as exc:
+        logger.debug("nexus-status self-check failed (non-fatal): %s", exc)
+        return ""
+
+
+def _register_status_section(ctx: Any) -> None:
+    """Register the self-report prompt section exactly once per process.
+
+    Registration failures (duplicate id, older Hermes without this API) are
+    non-fatal and must never affect the provider registration.
+    """
+    global _status_section_registered
+    if _status_section_registered:
+        return
+    try:
+        ctx.register_system_prompt_section(
+            id=_STATUS_SECTION_ID,
+            position="after_memory",
+            max_chars=1200,
+            content=_status_section_content,
+        )
+        _status_section_registered = True
+    except Exception as exc:
+        logger.debug("nexus-status section registration skipped: %s", exc)
+
+
 def register(ctx: Any) -> None:
+    """Hermes plugin entry point: always succeed, report health separately."""
     ctx.register_memory_provider(NexusMemoryProvider())
+    # Self-report once per process so a broken provider is visible to the agent
+    # and to the watchdog instead of silently losing memory for days.
+    try:
+        ok, reason = _health_probe()
+        write_agent_selfcheck(ok, reason, _repair_command())
+    except Exception as exc:
+        logger.debug("nexus self-check write skipped: %s", exc)
+    _register_status_section(ctx)

@@ -57,6 +57,24 @@ def isolated_agents_registry(tmp_path, monkeypatch):
     yield path
 
 
+@pytest.fixture(autouse=True)
+def isolated_nexus_data_dir(tmp_path, monkeypatch):
+    """Redirect the Nexus data directory to a temp path for EVERY test.
+
+    The Hermes plugin writes an agent self-check file whenever it registers
+    or initializes; without this redirect a plain test run would write into
+    the developer's real ``~/.nexus-memory`` — polluting live installs and
+    feeding test artifacts to the server-side self-report watchdog, which
+    would then alert on them. Same reasoning as ``isolated_agents_registry``.
+
+    Modules read ``$NEXUS_DATA_DIR`` at call time (not import time), so
+    setting the variable is enough for every code path.
+    """
+    data_dir = tmp_path / "nexus-data"
+    monkeypatch.setenv("NEXUS_DATA_DIR", str(data_dir))
+    yield data_dir
+
+
 @pytest.fixture
 def isolated_env(monkeypatch):
     """Strip embedding-provider API keys from the environment.

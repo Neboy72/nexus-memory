@@ -656,6 +656,34 @@ Fully automatic daily backup every 6 hours. All memories (payload + vectors) exp
 
 On startup, checks GitHub for new releases. If an update is available, the agent proactively tells the user in chat: "Nexus Memory v0.X.X is available - shall I update?" Non-blocking, fails silently if GitHub is unreachable.
 
+### Self-Report & Health 🩺
+
+Nexus watches its own agents, so a broken memory plugin cannot go unnoticed:
+
+- **Detects** a fresh `ok: false` self-check from any agent (the plugin writes
+  `<data-dir>/agent-selfcheck-<agent-id>.json` on every start — e.g. a missing
+  dependency in that agent's interpreter), and suspicious silence from a
+  `plugin` agent that previously used its memory and has not called back for
+  4–14 days. MCP-only agents and long-dormant agents are ignored on purpose.
+- **Wire a webhook:** set `NEXUS_ALERT_WEBHOOK_URL` (Discord-compatible JSON
+  `content`; `NEXUS_WEBHOOK_URL` is the fallback).
+- **macOS notifications:** set `NEXUS_ALERT_MACOS=1` on a Mac.
+- **Silent by default:** with no channel configured, nothing is sent.
+- **Kill-switch:** `NEXUS_SELFREPORT=0`. Interval/start delay:
+  `NEXUS_SELFREPORT_INTERVAL_SEC` (default 6 h) /
+  `NEXUS_SELFREPORT_START_DELAY` (default 90 s).
+- **Data directory:** `NEXUS_DATA_DIR` relocates self-checks and registry
+  together — set the same value for the server and every agent, otherwise the
+  watcher looks in a directory the plugins never write to.
+- **Probe cost:** the plugin checks Qdrant at most once per
+  `NEXUS_PROBE_TTL_SEC` (default 30 s), with `NEXUS_QDRANT_TIMEOUT`
+  (default 5 s) bounding a hung server.
+- The `health` tool payload and `GET /healthz` both surface a compact
+  `self_report` status (`ok`/`warning`).
+
+A broken agent's stored memories are safe and not lost; running the plugin's
+one-line repair command restores memory.
+
 ### Pre-Update Safety Backup 🛡️
 
 Before any `do_update()`, a full backup is created automatically. If the update fails or breaks something, memories are safe in the backup file and can be restored via the `restore` tool.

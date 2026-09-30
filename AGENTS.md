@@ -43,6 +43,34 @@ hermes config get memory.provider
 
 Restart Hermes Gateway. Nexus tools appear as `nexus_recall`, `nexus_remember`, `nexus_forget`.
 
+### Self-Report (memory health)
+
+The plugin writes a self-check file on every process start
+(`<data-dir>/agent-selfcheck-<agent-id>.json`; legacy `agent-selfcheck.json` is
+still read). The Nexus server reads it and reports when an agent's memory is
+loaded but not working — you do not need to build a watchdog.
+
+- **What it detects.** (1) A fresh `ok: false` self-check — e.g. a dependency
+  missing in that agent's interpreter. (2) Suspicious silence: a `plugin` agent
+  that has used its memory before but has not called back for 4–14 days.
+  MCP-only agents and long-dormant agents are deliberately ignored.
+- **Channels.** Set `NEXUS_ALERT_WEBHOOK_URL` for a JSON POST (Discord-compatible
+  `content` field; `NEXUS_WEBHOOK_URL` is the fallback), and/or `NEXUS_ALERT_MACOS=1`
+  for a macOS desktop notification. With no channel configured nothing is sent.
+- **Knobs.** `NEXUS_SELFREPORT=0` disables the daemon;
+  `NEXUS_SELFREPORT_INTERVAL_SEC` (default 21600 = 6 h) and
+  `NEXUS_SELFREPORT_START_DELAY` (default 90 s) tune it.
+  `NEXUS_DATA_DIR` moves the whole data directory (self-checks + registry) —
+  set it consistently for the server AND every agent, or the watcher reads a
+  different directory than the plugins write.
+- **Probe cost.** The plugin's self-check probes Qdrant at most once per
+  `NEXUS_PROBE_TTL_SEC` (default 30 s) instead of on every prompt build, with
+  `NEXUS_QDRANT_TIMEOUT` (default 5 s) so a hung server cannot delay a turn.
+- **Repair a broken plugin.** Run the one-line command the plugin itself reports:
+  `uv pip install -e "<nexus-memory checkout>" --python "<agent interpreter>"`
+  (or `"<agent interpreter>" -m pip install --upgrade nexus-memory` for a packaged
+  install). Stored memories are safe and not lost; running the fix restores memory.
+
 ## OpenClaw Native Plugin (Recommended for OpenClaw)
 
 If you use **OpenClaw**, install Nexus Memory as a native memory plugin. This gives you Auto-Recall (memories injected before every turn) and Auto-Capture (facts extracted after every turn) — all powered by your local Qdrant.
