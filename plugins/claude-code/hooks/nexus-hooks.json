@@ -33,6 +33,12 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py\"",
             "timeout": 10,
             "statusMessage": "Nexus: loading session context..."
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/self_check.py\"",
+            "timeout": 10,
+            "statusMessage": "Nexus: checking memory health..."
           }
         ]
       }

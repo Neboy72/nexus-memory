@@ -1,4 +1,5 @@
 import type { QdrantClient } from "./lib/qdrant-client.ts"
+import { buildSelfCheckWarning } from "./lib/self-check.ts"
 import { buildUpdateNudgeLines, type UpdateCheckResult } from "./lib/update-check.ts"
 import { log } from "./logger.ts"
 
@@ -236,7 +237,15 @@ export function buildPromptSection(params: {
 }): string[] {
   const hasSearch = params.availableTools.has(NEXUS_SEARCH_TOOL)
   const hasStore = params.availableTools.has(NEXUS_STORE_TOOL)
-  if (!hasSearch && !hasStore) return []
+  // Self-report (parity with the Hermes plugin + server watchdog): while the
+  // provider is broken the agent must keep surfacing it. `[]` while healthy,
+  // so the healthy output is unchanged. Unlike the update nudge this is NOT
+  // consumed — it stays until a healthy write clears the state.
+  const selfCheckWarning = buildSelfCheckWarning()
+  // A broken memory is exactly the case the warning exists for, so it is
+  // emitted even when neither memory tool is available (the old early return
+  // would have swallowed it, leaving the agent silently memory-less).
+  if (!hasSearch && !hasStore) return selfCheckWarning
 
   const lines: string[] = [
     "## Memory (Nexus)",
@@ -270,6 +279,8 @@ export function buildPromptSection(params: {
     const { lines: nudgeLines } = buildUpdateNudgeLines(updateInfo, params.nudged === true)
     lines.push(...nudgeLines)
   }
+
+  lines.push(...selfCheckWarning)
 
   return lines
 }

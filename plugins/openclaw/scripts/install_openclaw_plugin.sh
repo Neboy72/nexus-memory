@@ -71,6 +71,27 @@ fi
 # Create plugins directory if it doesn't exist
 mkdir -p "$PLUGINS_DIR"
 
+# OpenClaw executes the BUILT bundle (openclaw.plugin.json → runtimeExtensions
+# ./dist/index.js); a fresh clone has no dist/ (gitignored). Build first so the
+# installed plugin is not a shell that answers nothing.
+if [ ! -f "$PLUGIN_DIR/dist/index.js" ] || \
+   find "$PLUGIN_DIR" -name '*.ts' -newer "$PLUGIN_DIR/dist/index.js" -print -quit 2>/dev/null | grep -q .; then
+  if command -v npm &> /dev/null; then
+    echo "ℹ️  Building the plugin bundle (dist/index.js)..."
+    if (cd "$PLUGIN_DIR" && npm install --no-audit --no-fund --silent && npm run build --silent); then
+      echo "✅ Bundle built: $PLUGIN_DIR/dist/index.js"
+    else
+      echo "❌ ERROR: build failed — the plugin will not work until it is built."
+      echo "   Run: cd $PLUGIN_DIR && npm install && npm run build"
+      exit 1
+    fi
+  else
+    echo "❌ ERROR: 'npm' not found, but the plugin must be built (OpenClaw loads dist/index.js)."
+    echo "   Install Node.js 20+, then: cd $PLUGIN_DIR && npm install && npm run build"
+    exit 1
+  fi
+fi
+
 # A directory may only be removed when it really is a previous install of
 # THIS plugin — rm -rf on an unrecognized directory would destroy unrelated
 # user data sitting at the seat path.

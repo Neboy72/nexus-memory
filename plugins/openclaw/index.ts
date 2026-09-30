@@ -18,6 +18,7 @@ import {
   setUpdateCheckResult,
 } from "./runtime.ts"
 import { checkForUpdate } from "./lib/update-check.ts"
+import { writeSelfCheck } from "./lib/self-check.ts"
 import { registerForgetTool } from "./tools/forget.ts"
 import { registerSearchTool } from "./tools/search.ts"
 import { registerStoreTool } from "./tools/store.ts"
@@ -28,6 +29,34 @@ import {
   registerGetSubgraphTool,
   registerGetRelatedTool,
 } from "./tools/graph_traverse.ts"
+
+/**
+ * One-line repair hint shown to the agent when the Qdrant backend is
+ * unreachable. Deliberately a hint and not a command: the plugin ships as a
+ * source path, and there is no published npm package to reinstall from.
+ */
+const SELF_CHECK_FIX =
+  "start Qdrant or point qdrantUrl at your instance in the OpenClaw plugin config"
+/** Same, when the cause is embedding configuration rather than a server outage. */
+const SELF_CHECK_FIX_CONFIG =
+  "check embedding.provider / embedding.apiKey in the OpenClaw plugin config and set the matching API key env var"
+
+/**
+ * Reachability probe for the self-report: a non-ok response or a throw means
+ * the memory backend is offline. `reason` always names the URL and the error;
+ * the 5s timeout bounds the fire-and-forget call. Never throws.
+ */
+async function probeQdrant(qdrantUrl: string): Promise<{ ok: boolean; reason: string }> {
+  const url = `${qdrantUrl}/collections`
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) return { ok: false, reason: `Qdrant at ${url} responded HTTP ${res.status}` }
+    return { ok: true, reason: "" }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { ok: false, reason: `Qdrant at ${url} is unreachable (${msg})` }
+  }
+}
 
 export default {
   id: "nexus-memory",
@@ -52,9 +81,12 @@ export default {
         cfg.embedding.dimensions,
       )
     } catch (err) {
-      api.logger.error(
-        `nexus: embedding init failed — ${err instanceof Error ? err.message : String(err)}`,
-      )
+      const embedderError = err instanceof Error ? err.message : String(err)
+      api.logger.error(`nexus: embedding init failed — ${embedderError}`)
+      // Self-report: a broken embedder is exactly the silent death this
+      // feature exists for — publish it (which also feeds the in-prompt
+      // warning) BEFORE the registration fails, so the watchdog + agent know.
+      writeSelfCheck(false, `embedding init failed: ${embedderError}`, SELF_CHECK_FIX_CONFIG)
       // Re-throw: without an embedder this plugin cannot function, so the
       // host must treat the registration as FAILED instead of loading a
       // half-dead memory capability.
@@ -77,6 +109,16 @@ export default {
         `nexus: Qdrant collection not ready — will be created on first write. Make sure Qdrant is running at ${cfg.qdrantUrl}`,
       )
     })
+
+    // Self-report (parity with the Hermes plugin + server watchdog): publish
+    // provider health so a broken memory is alertable AND surfaces in the
+    // prompt. Fire-and-forget (the 5s timeout bounds it); writeSelfCheck is
+    // fail-open and never throws.
+    probeQdrant(cfg.qdrantUrl)
+      .then(({ ok, reason }) => writeSelfCheck(ok, ok ? "" : reason, SELF_CHECK_FIX))
+      .catch((err) => {
+        writeSelfCheck(false, err instanceof Error ? err.message : String(err), SELF_CHECK_FIX)
+      })
 
     // Roadmap v0.13.1: fire-and-forget update check (fail-open, 24h cache)
     // OCR-5 (maintainability low): the catch is contractually dead

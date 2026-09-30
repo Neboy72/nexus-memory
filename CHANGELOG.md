@@ -1,3 +1,58 @@
+## [0.22.3] - 2026-09-30
+
+### Added
+
+- **Self-report parity for the other two plugins.** The v0.22.2 self-report was
+  Hermes-only, so Claude Code and OpenClaw users could still lose memory in
+  silence — exactly the failure the feature exists for. Both now publish the
+  same contract (`<data-dir>/agent-selfcheck-<agent-id>.json`:
+  `agent_id`, `ok`, `reason`, `fix`, `interpreter`, `plugin_version`, `ts`),
+  read by the same server-side watchdog.
+  - **Claude Code** (`plugins/claude-code/scripts/self_check.py`): runs as a
+    SessionStart hook, probes Qdrant reachability and the embedding provider's
+    API key, writes the file atomically, and emits the warning into the session
+    context when broken (silent while healthy).
+  - **OpenClaw** (`plugins/openclaw/lib/self-check.ts`): probes Qdrant with a
+    bounded timeout, publishes the verdict, and feeds the warning into the
+    system prompt — repeated on every prompt build until a healthy write
+    clears it, so a broken memory cannot go unnoticed mid-session. A failed
+    embedder init reports before the registration fails, and Qdrant probe
+    results are cached to keep recall latency unaffected.
+
+### Fixed
+
+- **OpenClaw installer built nothing.** `install_openclaw_plugin.sh` (repo and
+  plugin copy) never ran `npm run build`, while OpenClaw executes the built
+  `dist/index.js` and `dist/` is gitignored — a fresh clone registered a plugin
+  whose hooks and tools could not fire. Both installers now build when the
+  bundle is missing or older than the sources, with a Node.js 20+ prerequisite
+  message and a hard failure instead of a silently empty plugin.
+- **Dead repair command.** The OpenClaw self-check named
+  `npm install -g @neboy72/nexus-memory@latest` as the fix; that npm package is
+  not published (404), so following the advice failed. The hint now points at
+  the two causes that actually occur: Qdrant not reachable, or a missing
+  embedding key.
+- **Version fallback could go stale silently.** The Claude Code self-check's
+  literal fallback (used when the manifest is unreadable — i.e. exactly on a
+  broken install) had no consistency check. A test now pins fallback ==
+  manifest version, so a bump cannot leave the repair path reporting a wrong
+  version.
+
+### Added (tooling)
+
+- **`scripts/install_claude_plugin.sh`** — the one-command installer the README
+  has advertised since the plugin shipped, but which did not exist. Backs up an
+  existing install, copies the plugin to `~/.claude/plugins/nexus-memory`,
+  verifies every hook script (including the self-check), and reports whether
+  `nexus_memory` is importable for the MCP server plus whether Qdrant answers.
+
+### Tests
+
+- 13 new tests: Claude Code self-report suite (file contract, health probe,
+  atomic write, fail-open, warning text, version/manifest consistency,
+  installer contract) and the OpenClaw self-check suite (payload shape,
+  atomic write, prompt-warning persistence, fail-open).
+
 ## [0.22.2] - 2026-09-30
 
 ### Added
