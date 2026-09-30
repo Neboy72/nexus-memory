@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.5-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.22.6-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-2108%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -771,6 +771,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.6** | 2026-09-30 | False-alarm fix: the OpenClaw reachability probe made one 5 s attempt at plugin start, so a build/index spike could publish `ok:false` and put "Nexus Memory self-check: NOT WORKING" into the agent's prompt while Qdrant was healthy (reported live: 13 days uptime, sub-millisecond probes, 33813 points, memory working). Now 15 s per attempt with exactly one retry — the warning only appears when every attempt fails, and the healthy path still makes one request. 5 new behaviour tests, falsification-verified. |
 | **v0.22.5** | 2026-09-30 | Shutdown race: the prefetch thread was never joined, so it could hit the closed Qdrant client (`'NoneType' object has no attribute 'query_points'`, 12× in one day) and leave the session with a silent empty memory block. Now tracked under its own lock, joined with a bounded grace period before the client closes, loud when it outlives that period, and the error handler branches on the cause — a real failure during shutdown is no longer downgraded to DEBUG. 11 new regression tests, falsification-verified. 2108 tests. |
 | **v0.22.4** | 2026-09-30 | Contract fix: the OpenClaw thought filter had never worked (verdict returned as `message`, host reads only `content`) — GLM chain-of-thought would have leaked to the chat unguarded. Handler now speaks the documented protocol, detection extracted into testable `scanReasoningLeak()`, host contract pinned by a new test. Plus: a broken memory backend is now visible in the chat itself (Hermes `transform_llm_output` hook, Claude Code `systemMessage`), self-check warning can no longer clobber filtered text. 2097 tests. |
 | **v0.22.3** | 2026-09-30 | Self-report parity: Claude Code and OpenClaw now publish the same health contract their watchdog reads (Claude SessionStart hook, OpenClaw prompt warning), installers build the OpenClaw bundle instead of shipping an empty plugin, dead npm repair hint replaced, missing `install_claude_plugin.sh` added. 2083 tests. |
@@ -879,4 +880,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.22.5 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.22.6 · One memory for all your agents</sub>

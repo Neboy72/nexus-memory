@@ -1,3 +1,25 @@
+## [0.22.6] - 2026-09-30
+
+### Fixed
+
+- **A single hiccup at gateway start no longer raises a false "memory is offline"
+  alarm (OpenClaw plugin).** The reachability probe behind the self-report made *one*
+  attempt with a hard 5 s deadline and ran exactly once, at plugin start. A build,
+  index or backup spike — or a cold IPv4/IPv6 resolution — in that one second was
+  enough to publish `ok:false`, which puts "Nexus Memory self-check: NOT WORKING" into
+  the agent's system prompt and into the chat. Reported on 2026-09-30 while Qdrant was
+  in fact healthy (13 days uptime, five consecutive probes under 1 ms, 33813 points,
+  and a live agent turn that answered from its memory). The probe now allows 15 s per
+  attempt and makes exactly one retry, 750 ms apart; `ok:false` — and therefore the
+  warning — only appears when **all** attempts fail, and a final deadline failure names
+  the attempt count (`... is unreachable (…; 2 attempts)`). A real outage still fails
+  both attempts and still warns; the healthy path still makes exactly one request.
+  - New `plugins/openclaw/test-self-check-probe.mjs` (5 behaviour tests: the
+    false-alarm case, the real-outage case, the budget constants, the single-request
+    happy path, and an HTTP error status). Falsification-verified against the previous
+    code: a one-off 6 s stall produced the exact production message before the change
+    and stays silent after it, while a refused connection still reports.
+
 ## [0.22.5] - 2026-09-30
 
 ### Fixed
