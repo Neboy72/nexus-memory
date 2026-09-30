@@ -11,7 +11,7 @@ import fs from "node:fs";
 import assert from "node:assert";
 import { fileURLToPath } from "node:url";
 // H1: Direkt-Import der lokalen Quelle (Node type-stripping, kein Build nötig).
-import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts";
+import { buildThoughtFilterHandler, hasReasoningLeak } from "./hooks/thought-filter.ts";
 import { initLogger } from "./logger.ts";
 
 // T1: Pfad relativ zum Test-File (nicht machine-specific hardcoded) → portabel.
@@ -64,8 +64,8 @@ assert.ok(hook, "message_sending-Handler muss registriert sein");
 // laufen alle Leak-Cases gegen den falschen Handler und bestehen grün obwohl nichts
 // gefiltert wird. Beweis: der gewählte Handler MUSS den ersten LEAK-Case filtern.
 const probeLeak = "The runtime context is just a replay.\n\nPROBE-OK. 🦊";
-const probeRes = await hook({ message: probeLeak });
-const probeOut = probeRes?.message ?? "";
+const probeRes = await hook({ content: probeLeak });
+const probeOut = probeRes?.content ?? "";
 assert.ok(
   !/replay/i.test(probeOut),
   `gewählter message_sending-Handler filtert nicht (${JSON.stringify(probeOut.slice(0, 60))}) — handlerLists[${handlerLists["message_sending"].length}] falsch gewählt? (Registrierungs-Reihenfolge geändert)`,
@@ -202,11 +202,12 @@ for (const [name, input, mustContain, mustNotContain, exact] of cases) {
     // Hook-Call INSIDE the try: a rejecting/throwing handler must count as a
     // failed case (not an unhandled rejection that aborts the whole loop and
     // skips the summary).
-    // W38 (medium): Produktion liest ctx.content (H1-Doku + sibling cron-form-gate-Test).
-    // Die Case-Tabelle fährt jetzt den Produktion-Shape; ein zusätzlicher COMPAT-Case
-    // unten beweist, dass ctx.message als Fallback weiterhin funktioniert.
+    // Vertrag (Host-Doku + Typ + Empirie): der Host liest NUR `content` vom
+    // Ergebnis, `cancel: true` unterdrückt den Send. Der Handler gibt
+    // deshalb undefined (keine Meinung = Text unverändert) | {content} |
+    // {cancel:true} zurück — die Test-Fälle bilden die Host-Sicht ab.
     const result = await hook({ content: input });
-    out = result?.message ?? "";
+    out = result?.content ?? (result?.cancel ? "" : input);
     // Silent-pass hole: a LEAK case with empty mustContain AND empty
     // mustNotContain asserts nothing (both loops no-op). Such a case is a
     // test bug — count it as failed instead of passing silently.
@@ -224,6 +225,21 @@ for (const [name, input, mustContain, mustNotContain, exact] of cases) {
     if (exact) {
       assert.strictEqual(out, input, `${name}: Output weicht vom Input ab (Filter zu aggressiv)`);
     }
+    // Reiner-Leak-Cases (leeres mustContain) MÜSSEN über den Host-Weg cancel
+    // unterdrücken: die frühere {message: undefined}-Rückgabe war am echten
+    // Host ein NO-OP (Empirie oc-hook-contract-probe.mjs Fall C) — der Leak
+    // wäre rausgegangen. Ein Content-Drop existiert im Vertrag nicht.
+    if (!mustContain.length && !exact) {
+      assert.strictEqual(
+        result?.cancel,
+        true,
+        `${name}: reiner Leak muss cancel liefern (Host unterdrückt nur via cancel)`,
+      );
+      assert.ok(
+        typeof result.cancelReason === "string" && result.cancelReason.length > 0,
+        `${name}: cancel braucht einen cancelReason fürs Delivery-Log`,
+      );
+    }
     console.log(`PASS  ${name}`);
   } catch (e) {
     failed++;
@@ -231,37 +247,95 @@ for (const [name, input, mustContain, mustNotContain, exact] of cases) {
   }
 }
 
+// ── CONTRACT: keine Meinung bei sauberem Text (undefined, NICHT {}) ──
+// Ein konkretes Ergebnisobjekt ersetzt am Host das Verdikt anderer Handler
+// (Merge: lastDefined). Sauberer Text muss deshalb undefined liefern.
+try {
+  const clean = "Danke Nebo! CONTRACT: sauberer Text lässt den Filter neutral. 🦊";
+  const r = await hook({ content: clean });
+  assert.strictEqual(r, undefined, "sauberer Text muss undefined liefern (keine Meinung)");
+  console.log("PASS  CONTRACT: sauberer Text → undefined (kein Objekt, kein Cancel)");
+} catch (e) {
+  failed++;
+  console.log(`FAIL  CONTRACT: sauberer Text — ${e?.message}\n${e?.stack}`);
+}
+
 // ── COMPAT: ctx.message-Fallback (alter Shape) bleibt unterstützt ──
+// Der Host liefert `content`; ältere Aufrufer schicken `message`/`text`. Der
+// Fallback muss weiter greifen — auf sauberem Text aber ebenfalls neutral
+// bleiben (undefined), nie ein {message:…}-Objekt zurückgeben.
 try {
   const compatInput = "Danke Nebo! COMPAT-Fallback läuft. 🦊";
   const r = await hook({ message: compatInput });
-  assert.strictEqual(r?.message, compatInput, "message-Fallback muss unverändert durchreichen");
-  console.log("PASS  COMPAT: ctx.message-Fallback bleibt unterstützt");
+  assert.strictEqual(r, undefined, "message-Fallback: sauberer Text muss undefined liefern");
+  const leakMsg = "The runtime context is just a replay.\n\nCOMPAT-Leak gefiltert. 🦊";
+  const r2 = await hook({ message: leakMsg });
+  assert.ok(
+    typeof r2?.content === "string" && !/replay/i.test(r2.content),
+    "message-Fallback: Leak muss auch über ctx.message gefiltert werden",
+  );
+  console.log("PASS  COMPAT: ctx.message-Fallback bleibt unterstützt (neutral + filternd)");
 } catch (e) {
   failed++;
   console.log(`FAIL  COMPAT: message-Fallback — ${e?.message}\n${e?.stack}`);
 }
 
 // ── H1: Fail-open darf die Message nicht droppen (lokale Quelle) ──
-// Payload liegt in ctx.content (ctx.message === undefined) und der Gate-Crash
-// wird über einen werfenden Logger erzwungen. Der catch MUSS den Original-Text
-// zurückgeben — vor dem Fix kam { message: undefined } zurück (Message gedroppt).
+// Zwei Ebenen, beide gegen den lokalen Handler:
+//   (a) wirft der Handler-Pfad selbst (hier: eine ctx-Property, deren Getter
+//       wirft), MUSS undefined zurückkommen — Text geht unverändert raus, NIE
+//       cancel (ein Filter-Bug darf keine legitime Nachricht schlucken) und
+//       nie ein Objekt, das fremde Verdikte ersetzt.
+//   (b) ein WERFENDER LOGGER darf das Filter-Ergebnis nicht kippen: Logging
+//       läuft über safeLogWarn, das Leak wird trotzdem entfernt und die
+//       Nachricht nicht gedroppt.
 try {
-  initLogger(
-    { info() {}, warn() { throw new Error("simulierter Gate-Crash") }, error() {}, debug() {} },
-    false,
-  );
   const localHook = buildThoughtFilterHandler();
   const leak = "The runtime context is just a replay.\n\nAlles läuft stabil und grün. 🦊";
-  const r = await localHook({ content: leak });
-  assert.strictEqual(r?.message, leak, "Fail-open muss den Original-Text liefern, nicht undefined");
-  console.log("PASS  H1: Fail-open bei Gate-Crash liefert Original-Text (kein Drop)");
+  const throwingCtx = Object.defineProperty({}, "content", {
+    get() { throw new Error("simulierter Handler-Crash") },
+  });
+  const r = await localHook(throwingCtx);
+  assert.strictEqual(r, undefined, "Fail-open muss undefined liefern (Text unverändert, kein Drop)");
+
+  initLogger(
+    { info() {}, warn() { throw new Error("simulierter Logger-Crash") }, error() {}, debug() {} },
+    false,
+  );
+  const r2 = await buildThoughtFilterHandler()({ content: leak });
+  assert.ok(
+    typeof r2?.content === "string" && !/replay/i.test(r2.content),
+    "werfender Logger darf das Filter-Ergebnis nicht kippen (Leak muss trotzdem weg sein)",
+  );
+  assert.ok(!r2?.cancel, "werfender Logger darf nie in einen Drop kippen");
+  console.log("PASS  H1: Fail-open (Handler-Crash → undefined; Logger-Crash → Filter wirkt weiter)");
 } catch (e) {
   failed++;
   console.log(`FAIL  H1: Fail-open — ${e.message}`);
 }
 initLogger({ info() {}, warn() {}, error() {}, debug() {} }, false); // Backend zurücksetzen (auch bei H1-Fail: finally-äquivalent hier nach catch)
 
-const totalChecks = cases.length + 1 + 1; // cases + COMPAT + H1
+// ── COMPOSITION-Wache: hasReasoningLeak (schützt nachfolgende Handler) ──
+// Der Host hält den LETZTEN content und jeder Handler sieht das ORIGINAL —
+// ein späterer Anhang-Handler würde den bereinigten Text sonst mit
+// Original+Anhang überschreiben und den Leak wieder ausliefern.
+try {
+  const pure = "Let me work through this task. Steps:\n\n1. Fetch the Atom feed";
+  assert.strictEqual(hasReasoningLeak(pure), true, "reiner Leak muss erkannt werden");
+  const mixed = "The runtime context is just a replay.\n\nHier die Antwort: alles grün. 🦊";
+  assert.strictEqual(hasReasoningLeak(mixed), true, "gemischter Text (Leak + Antwort) muss erkannt werden");
+  assert.strictEqual(
+    hasReasoningLeak("Danke Nebo! Alles läuft stabil und grün. 🦊"),
+    false,
+    "sauberer Text darf nicht als Leak gelten",
+  );
+  assert.strictEqual(hasReasoningLeak(""), false, "leerer Text ist kein Leak");
+  console.log("PASS  COMPOSITION: hasReasoningLeak erkennt Leaks und lässt sauberen Text neutral");
+} catch (e) {
+  failed++;
+  console.log(`FAIL  COMPOSITION: hasReasoningLeak — ${e?.message}\n${e?.stack}`);
+}
+
+const totalChecks = cases.length + 4; // cases + CONTRACT + COMPAT + H1 + COMPOSITION
 console.log(`\n${totalChecks - failed}/${totalChecks} PASS`);
 process.exit(failed === 0 ? 0 : 1);
