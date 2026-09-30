@@ -8,6 +8,7 @@ import { buildRecallHandler } from "./hooks/recall.ts"
 import { buildPreToolGateHandler, resolvePlanLockPath } from "./hooks/pre-tool-gate.ts"
 import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts"
 import { buildCronFormGateHandler } from "./hooks/cron-form-gate.ts"
+import { buildSelfCheckWarningHandler } from "./hooks/self-check-warning.ts"
 import { initLogger, log } from "./logger.ts"
 import {
   buildMemoryRuntime,
@@ -213,16 +214,14 @@ export default {
     // Thought-Filter (29.08.2026): GLM-5.x emittiert CoT als plain text
     // (GitHub #42062) — filtert Reasoning-Blöcke vor dem Senden.
     // Standard: an. Ausschaltbar via thoughtFilter: false in Plugin-Config.
-    // OCR-4 (korrigiert): der Filter läuft VOR dem Gate. Begründung: die
-    // message_sending-Merge-Semantik ist "last returned content wins" — ein
-    // späterer Handler ERSETZT das bisherige Ergebnis. Läuft das Gate zuerst,
-    // ersetzt die Filter-Rückgabe ({ message: undefined } beim Drop) das
-    // Gate-Urteil { cancel: true } vollständig = fail-open. In dieser
-    // Reihenfolge (Filter erst, Gate zuletzt) ist jeder Fall sicher:
-    // Filter-Drop → Gate { cancel: false } ohne message-Key → Original-Text
-    // geht raus (kein Verlust); Gate-Block → cancel:true bleibt letzte
-    // Rückgabe. (Der ursprüngliche OCR-4-Tausch-Entwurf wurde durch die
-    // Kette-Kette-Beweise /tmp/chain-probe2.mjs widerlegt und zurückgebaut.)
+    // KONTRAKT-FIX 30.09.: der Filter lieferte {message: …} — der Host liest
+    // aber AUSSCHLIESSLICH `content` (Doku docs/plugins/hooks/messages.md,
+    // Typ PluginHookMessageSendingResult, Empirie gegen das Host-Bundle) und
+    // ignorierte damit sowohl die Bereinigung als auch den Drop. Jetzt:
+    // {content: bereinigt} bzw. {cancel: true} bei reinem Reasoning.
+    // Reihenfolge bleibt Filter VOR Gate — jeder Handler sieht das ORIGINAL
+    // und der letzte definierte content gewinnt; das Gate liefert nur cancel
+    // und überschreibt deshalb nie einen bereinigten Text.
     if (cfg.thoughtFilter !== false) {
       api.on("message_sending", buildThoughtFilterHandler())
       log.info("thought-filter: message_sending hook aktiv")
@@ -243,6 +242,19 @@ export default {
           : "aus (nicht konfiguriert)"
       })`,
     )
+
+    // Self-Check-Chat-Warnung (30.09.2026): hängt bei kaputtem Memory EINMAL
+    // pro Session einen kurzen, user-visible Warnblock an Outgoing-Nachrichten
+    // an — der Prompt-Warntext allein erreicht den Operator nicht sicher.
+    // Registrierung ALS LETZTER message_sending-Handler (bewusste Entscheidung,
+    // Full-Proof im Dateikopf von hooks/self-check-warning.ts): die Merge-
+    // Semantik ist lastDefined auf content + cancel-blockt alle weiteren
+    // Handler. Nur wenn dieser Hook ZULETZT läuft, kann sein Anhang nicht
+    // (a) ein fremdes bereinigtes content überschreiben und nicht (b) eine
+    // Suppression "wiederbeleben" — ein später registrierter Content-Lieferant
+    // wäre umgekehrt der Herr über den Text (Doku: last returned content wins).
+    api.on("message_sending", buildSelfCheckWarningHandler())
+    log.info("self-check-warning: message_sending hook aktiv (max 1 Warnung pro Session)")
 
     if (cfg.autoCapture) {
       api.on("agent_end", buildCaptureHandler(embedder, qdrantClient, cfg, centroidCache))

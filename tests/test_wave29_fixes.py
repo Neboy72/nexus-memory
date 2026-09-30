@@ -159,11 +159,18 @@ class TestW29Collateral:
 class TestW29LineLevel:
     def test_source_splits_lines(self):
         src = _read("plugins/openclaw/hooks/thought-filter.ts")
-        idx = src.index("buildThoughtFilterHandler")
+        # Der Zeilen-Split lebt seit dem Kontrakt-Fix (30.09.) in der reinen
+        # Scan-Funktion, die Handler UND Kompositions-Wache tragen: der Split
+        # in Blöcke/Zeilen (kept-Logik) ist das, was den Leak nur ZEILENWEISE
+        # entfernt statt den ganzen Block zu löschen.
+        idx = src.index("scanReasoningLeak")
         seg = src[idx:]
-        assert "\\n" in seg  # line splitting present in handler
+        assert "\\n" in seg  # line splitting present in the scan
         # kept logic no longer whole-block-only
         assert "kept" in seg
+        # Der Handler selbst hängt nur noch am Scan-Ergebnis.
+        hidx = src.index("buildThoughtFilterHandler")
+        assert "scanReasoningLeak(" in src[hidx:]
 
 
 # ── W29-9: undefined-message documentation ────────────────────────────────
