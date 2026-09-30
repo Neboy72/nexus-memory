@@ -1,3 +1,38 @@
+## [0.22.5] - 2026-09-30
+
+### Fixed
+
+- **The prefetch thread was not joined on shutdown.** `shutdown()` joined three
+  background threads and then closed the Qdrant client, but the prefetch thread
+  spawned by `queue_prefetch()` was not among them. If it was still in flight,
+  it dereferenced the already-closed (or `None`) client and failed with
+  `'NoneType' object has no attribute 'query_points'` — twelve times on
+  2026-09-30 alone. The affected session silently received an empty memory block
+  for that turn, and the warning noise helped hide the real failures. The fix
+  tracks the thread under its own lock (with a spawn guard against
+  `_shutting_down`), joins it with a bounded grace period (`_PREFETCH_JOIN_TIMEOUT`,
+  2 s) *before* the client is closed, logs an **ERROR** naming the grace period
+  when a prefetch outlives it (the join result is no longer ignored — an ignored
+  `join()` only made the race rarer, not impossible), aborts at checkpoints inside
+  the prefetch thread, and resets a stale prefetch result on those aborts.
+- **A genuine failure during shutdown is no longer silenced.** The error handler
+  used to branch on the `_shutting_down` flag alone, so any real error landing in
+  the shutdown window (which lasts seconds: 2 s prefetch grace plus the write,
+  backup and update joins) was downgraded to DEBUG and skipped the health
+  self-check — exactly the silent-failure class this fix exists to remove. It now
+  branches on the **cause**: only an error explained by the closed or absent client
+  is shutdown noise; every other error keeps its WARNING (naming the shutdown
+  context) and its health re-probe.
+  - **11 new regression tests** (`tests/test_prefetch_shutdown_race.py`): the
+    survivor path, a three-variant stress run (fast / survivor / embed-blocked),
+    checkpoint aborts, the cause predicate, the self-join guard and the positive
+    path proving normal prefetch still returns memories. Verified by
+    falsification: against the previous code the decisive tests fail, against the
+    fix they pass.
+  - Independently reviewed by a second model across two rounds; the first round
+    found the ignored-join defect (reproduced, then fixed), the second found no
+    P0/P1.
+
 ## [0.22.4] - 2026-09-30
 
 ### Fixed
