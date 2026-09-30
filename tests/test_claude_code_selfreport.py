@@ -109,7 +109,35 @@ class TestProbeAndFile:
         ctx = parsed["hookSpecificOutput"]["additionalContext"]
         assert "NOT WORKING" in ctx
         assert data["reason"] in ctx
+        # Universal hook field: the same failure is shown directly to the user.
+        assert parsed["systemMessage"]
         assert captured.err == ""
+
+    def test_system_message_is_short_single_line_user_facing(
+        self, sc, monkeypatch, tmp_path, capsys
+    ):
+        """systemMessage is the user-facing one-liner; additionalContext is the
+        full model-facing warning. Both must ride in the same hook output."""
+        _run(sc, monkeypatch, tmp_path, healthy=False)
+        captured = capsys.readouterr()
+        parsed = json.loads(captured.out)
+
+        msg = parsed["systemMessage"]
+        assert isinstance(msg, str) and msg
+        assert "\n" not in msg
+        assert msg.startswith("Nexus Memory is not working")
+        assert "Fix:" in msg
+        assert "Your memories are safe" in msg
+
+        ctx = parsed["hookSpecificOutput"]["additionalContext"]
+        assert "NOT WORKING" in ctx
+        assert "\n" in ctx
+
+    def test_system_message_truncated_reason_stays_bounded(self, sc):
+        long_reason = "x" * 5000
+        msg = sc._system_message(long_reason, "y" * 500)
+        assert len(msg) <= 500
+        assert "\n" not in msg
 
     def test_missing_api_key_writes_false_and_names_var(
         self, sc, monkeypatch, tmp_path

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json, logging, math, os, re, sys, threading, time, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from collections import OrderedDict
 
 # Resilient import: a Hermes update once replaced its managed venv and dropped
 # qdrant_client here. The module then failed to import and Hermes silently
@@ -1901,6 +1902,76 @@ def _register_status_section(ctx: Any) -> None:
         logger.debug("nexus-status section registration skipped: %s", exc)
 
 
+# ── Chat-visible self-report (transform_llm_output hook) ──
+# The prompt section above only reaches the model, so a weak model can ignore
+# it and the user still cannot see that memory is off. This hook appends a
+# short warning to the assistant's answer itself: Hermes fires it once per
+# turn before persisting/delivering the text (first non-empty string wins),
+# which covers Telegram, Discord, desktop and CLI with one code path.
+# Fail-open everywhere: a broken warning path must never corrupt an answer.
+_OUTPUT_WARN_SESSION_CAP = 64
+_warned_sessions: "OrderedDict[str, bool]" = OrderedDict()
+_output_warning_registered = False
+
+
+def _output_warning_block() -> str:
+    """Short user-facing warning appended to the chat answer when broken.
+
+    English, self-contained and about two lines: chat platforms have the least
+    room. The cause comes from the same cached probe as the prompt section and
+    paths are masked because this text goes to the user.
+    """
+    ok_unused, cause = _health_probe()
+    return "\n\n".join([
+        f"⚠️ Nexus Memory is not working (Cause: {_mask_paths(cause)}). "
+        f"Fix: {_repair_command()}",
+        "Your stored memories are safe. This notice appears once per session.",
+    ])
+
+
+def _on_llm_output(response_text: Any, session_id: str = "", **kwargs: Any) -> Optional[str]:
+    """transform_llm_output hook: surface a broken memory backend in the chat.
+
+    Returns the answer with the warning appended at most once per session_id
+    (bounded cache), and None in every other case: healthy probe, non-string
+    or empty text, or any exception — the answer path must never break.
+    """
+    try:
+        text = response_text if isinstance(response_text, str) else ""
+        if not text:
+            return None
+        ok, cause = _health_probe()
+        if ok:
+            return None
+        sid = str(session_id or "")
+        if sid in _warned_sessions:
+            return None
+        _warned_sessions[sid] = True
+        while len(_warned_sessions) > _OUTPUT_WARN_SESSION_CAP:
+            _warned_sessions.pop(next(iter(_warned_sessions)))
+        logger.info("nexus health warning appended to chat (throttled per session)")
+        return text + _output_warning_block()
+    except Exception as exc:
+        logger.debug("nexus output warning skipped (non-fatal): %s", exc)
+        return None
+
+
+def _register_output_warning(ctx: Any) -> None:
+    """Register the transform_llm_output hook exactly once per process.
+
+    Registration failures (older Hermes without this hook type) are logged at
+    debug level only — the prompt-based self-report stays the fallback.
+    """
+    global _output_warning_registered
+    if _output_warning_registered:
+        return
+    try:
+        ctx.register_hook("transform_llm_output", _on_llm_output)
+        _output_warning_registered = True
+    except Exception as exc:
+        logger.debug("nexus output warning hook registration skipped: %s", exc)
+
+
 def register(ctx: Any) -> None:
     """Hermes plugin entry point: always succeed, report health separately."""
     ctx.register_memory_provider(NexusMemoryProvider())
@@ -1912,3 +1983,7 @@ def register(ctx: Any) -> None:
     except Exception as exc:
         logger.debug("nexus self-check write skipped: %s", exc)
     _register_status_section(ctx)
+    # Make a broken backend visible in the chat itself: the prompt section
+    # only reaches the model, the hook reaches the user's answer (one warn
+    # per session), so a weak model ignoring the prompt can no longer hide it.
+    _register_output_warning(ctx)
