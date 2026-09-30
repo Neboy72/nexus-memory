@@ -127,6 +127,40 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# --- Build the runtime bundle ---
+# OpenClaw runs the BUILT bundle (openclaw.plugin.json → runtimeExtensions
+# ./dist/index.js). In a fresh clone dist/ does not exist (gitignored), so
+# without this step the plugin would register as an empty shell: hooks and
+# tools would never fire. Rebuild when dist is missing or older than sources.
+
+needs_build() {
+    [ ! -f "${PLUGIN_SRC}/dist/index.js" ] && return 0
+    find "${PLUGIN_SRC}" -name '*.ts' -newer "${PLUGIN_SRC}/dist/index.js" -print -quit 2>/dev/null | grep -q . && return 0
+    return 1
+}
+
+if needs_build; then
+    if command -v npm &> /dev/null; then
+        echo -e "${BLUE}ℹ${NC} Building the plugin bundle (dist/index.js)..."
+        if (cd "${PLUGIN_SRC}" && npm install --no-audit --no-fund --silent && npm run build --silent); then
+            echo -e "${GREEN}✓${NC} Bundle built: ${PLUGIN_SRC}/dist/index.js"
+        else
+            echo -e "${RED}✗${NC} Build failed — the plugin will not work until it is built:"
+            echo "      cd \"${PLUGIN_SRC}\" && npm install && npm run build"
+            exit 1
+        fi
+    else
+        echo -e "${RED}✗${NC} 'npm' not found, but OpenClaw needs the built bundle (dist/index.js)."
+        echo "      Install Node.js 20+, then:"
+        echo "      cd \"${PLUGIN_SRC}\" && npm install && npm run build"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✓${NC} Bundle up to date: ${PLUGIN_SRC}/dist/index.js"
+fi
+
+echo ""
+
 # --- Create or patch openclaw.json ---
 
 # We use Python for reliable JSON manipulation (jq may not be installed)
