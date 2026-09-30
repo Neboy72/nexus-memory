@@ -33,7 +33,7 @@ def _plugin_version() -> str:
             return str(version)
     except Exception:
         pass
-    return "1.2.1"
+    return "1.2.2"
 
 
 def _sanitize_agent_id(raw: str) -> str:

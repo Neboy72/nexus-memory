@@ -43,20 +43,65 @@ const SELF_CHECK_FIX_CONFIG =
   "check embedding.provider / embedding.apiKey in the OpenClaw plugin config and set the matching API key env var"
 
 /**
- * Reachability probe for the self-report: a non-ok response or a throw means
- * the memory backend is offline. `reason` always names the URL and the error;
- * the 5s timeout bounds the fire-and-forget call. Never throws.
+ * Self-report probe budget (30.09.2026): a single hard 5s attempt used to turn
+ * a momentary hiccup at gateway start (build/load spike, cold IPv4/IPv6
+ * resolution) into a false "NOT WORKING" alert. One attempt plus exactly one
+ * retry over a 15s per-attempt deadline rides out such a hiccup while a real
+ * outage still fails both attempts and warns.
  */
-async function probeQdrant(qdrantUrl: string): Promise<{ ok: boolean; reason: string }> {
-  const url = `${qdrantUrl}/collections`
+export const SELF_CHECK_PROBE_TIMEOUT_MS = 15000
+/** Attempts per probe: the initial attempt plus exactly one retry. */
+export const SELF_CHECK_PROBE_ATTEMPTS = 2
+/** Pause before the retry (ms) so both attempts do not hit the same load spike. */
+export const SELF_CHECK_PROBE_PAUSE_MS = 750
+
+/** Outcome of a single probe fetch; `timeout` marks a deadline/abort failure. */
+type ProbeAttempt =
+  | { ok: true }
+  | { ok: false; kind: "http"; detail: string }
+  | { ok: false; kind: "unreachable"; msg: string; timeout: boolean }
+
+/** One probe attempt. Never throws — every fetch failure becomes a result. */
+async function probeQdrantAttempt(url: string, fetchFn: typeof fetch): Promise<ProbeAttempt> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
-    if (!res.ok) return { ok: false, reason: `Qdrant at ${url} responded HTTP ${res.status}` }
-    return { ok: true, reason: "" }
+    const res = await fetchFn(url, { signal: AbortSignal.timeout(SELF_CHECK_PROBE_TIMEOUT_MS) })
+    if (!res.ok) {
+      // The server ANSWERED with a failing status — that is an error, not a
+      // network/deadline problem, so it is reported as such (after the retry).
+      return { ok: false, kind: "http", detail: `Qdrant at ${url} responded HTTP ${res.status}` }
+    }
+    return { ok: true }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return { ok: false, reason: `Qdrant at ${url} is unreachable (${msg})` }
+    const timeout = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")
+    return { ok: false, kind: "unreachable", msg, timeout }
   }
+}
+
+/**
+ * Reachability probe for the self-report: `ok:false` only when ALL attempts
+ * fail, so a single deadline overrun no longer raises a false alarm. `reason`
+ * always names the URL and the error; a final deadline failure also names the
+ * attempt count. `fetchFn` is injectable for tests and defaults to global
+ * fetch, so production behaviour is unchanged. Never throws.
+ */
+export async function probeQdrant(
+  qdrantUrl: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<{ ok: boolean; reason: string }> {
+  const url = `${qdrantUrl}/collections`
+  let last: ProbeAttempt = { ok: true }
+  for (let attempt = 1; attempt <= SELF_CHECK_PROBE_ATTEMPTS; attempt++) {
+    last = await probeQdrantAttempt(url, fetchFn)
+    if (last.ok) return { ok: true, reason: "" }
+    if (attempt < SELF_CHECK_PROBE_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, SELF_CHECK_PROBE_PAUSE_MS))
+    }
+  }
+  if (last.ok) return { ok: true, reason: "" }
+  if (last.kind === "http") return { ok: false, reason: last.detail }
+  const suffix = last.timeout ? `; ${SELF_CHECK_PROBE_ATTEMPTS} attempts` : ""
+  return { ok: false, reason: `Qdrant at ${url} is unreachable (${last.msg}${suffix})` }
 }
 
 export default {
@@ -113,8 +158,8 @@ export default {
 
     // Self-report (parity with the Hermes plugin + server watchdog): publish
     // provider health so a broken memory is alertable AND surfaces in the
-    // prompt. Fire-and-forget (the 5s timeout bounds it); writeSelfCheck is
-    // fail-open and never throws.
+    // prompt. Fire-and-forget (the per-attempt deadline + retry bound it);
+    // writeSelfCheck is fail-open and never throws.
     probeQdrant(cfg.qdrantUrl)
       .then(({ ok, reason }) => writeSelfCheck(ok, ok ? "" : reason, SELF_CHECK_FIX))
       .catch((err) => {
