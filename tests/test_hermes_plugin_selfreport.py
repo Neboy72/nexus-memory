@@ -386,3 +386,169 @@ def test_unavailable_reason_masks_cause_paths(monkeypatch):
     reason = nexus_plugin.NexusMemoryProvider().unavailable_reason()
     assert "/Users/someone" not in reason
     assert "<path>/x.py" in reason
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10: chat-visible warning via the transform_llm_output hook
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _HookCtx:
+    """Minimal Hermes context that only records hook registrations."""
+
+    def __init__(self) -> None:
+        self.hooks: list = []
+
+    def register_hook(self, hook_name, callback) -> None:
+        self.hooks.append((hook_name, callback))
+
+
+def _reset_warning_state(monkeypatch):
+    """Clear the throttle cache and the once-per-process guard for a test."""
+    monkeypatch.setattr(nexus_plugin, "_warned_sessions",
+                        nexus_plugin.OrderedDict())
+    monkeypatch.setattr(nexus_plugin, "_output_warning_registered", False)
+
+
+def test_output_hook_noop_when_healthy(monkeypatch):
+    """A healthy probe must leave the answer untouched (None)."""
+    _reset_warning_state(monkeypatch)
+    monkeypatch.setattr(nexus_plugin, "_health_probe", lambda: (True, ""))
+    assert nexus_plugin._on_llm_output("all good", "sess-a") is None
+
+
+def test_output_hook_appends_cause_and_fix_when_broken(monkeypatch):
+    """The appended block names the probe cause and the repair command."""
+    _reset_warning_state(monkeypatch)
+    monkeypatch.setattr(
+        nexus_plugin, "_health_probe",
+        lambda: (False, "Qdrant at localhost:6333 is unreachable"),
+    )
+    out = nexus_plugin._on_llm_output("Here is your answer.", "sess-b")
+    assert out is not None
+    assert out.startswith("Here is your answer.")
+    assert "Qdrant at localhost:6333 is unreachable" in out
+    assert nexus_plugin._repair_command() in out
+    assert "Your stored memories are safe" in out
+    assert len(out.splitlines()) <= 7  # answer + short block
+
+
+def test_output_hook_warns_once_per_session(monkeypatch):
+    """A second turn for the same session_id must not warn again."""
+    _reset_warning_state(monkeypatch)
+    monkeypatch.setattr(
+        nexus_plugin, "_health_probe",
+        lambda: (False, "Qdrant down"),
+    )
+    ctx = _HookCtx()
+    nexus_plugin._register_output_warning(ctx)
+    nexus_plugin._on_llm_output("first answer", "sess-c")
+    assert nexus_plugin._on_llm_output("second answer", "sess-c") is None
+    assert nexus_plugin._on_llm_output(None, "sess-c") is None
+
+
+def test_output_hook_warns_again_for_new_session(monkeypatch):
+    """A fresh session_id warns again after the cap-bounded cache was used."""
+    _reset_warning_state(monkeypatch)
+    monkeypatch.setattr(nexus_plugin, "_health_probe",
+                        lambda: (False, "Qdrant down"))
+    nexus_plugin._on_llm_output("answer", "sess-d1")
+    assert nexus_plugin._on_llm_output("answer", "sess-d2") is not None
+    assert nexus_plugin._on_llm_output("answer", "sess-d3") is not None
+
+
+def test_output_hook_fail_open_when_probe_raises(monkeypatch):
+    """An exploding probe must return None, never propagate, never warn."""
+    _reset_warning_state(monkeypatch)
+
+    def boom():
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(nexus_plugin, "_health_probe", boom)
+    assert nexus_plugin._on_llm_output("answer", "sess-e") is None
+    assert "sess-e" not in nexus_plugin._warned_sessions
+
+
+def test_output_hook_fail_open_on_empty_or_missing_session(monkeypatch):
+    """Empty/None text is a no-op; the throttle also tolerates an empty id."""
+    _reset_warning_state(monkeypatch)
+    monkeypatch.setattr(nexus_plugin, "_health_probe",
+                        lambda: (False, "Qdrant down"))
+    assert nexus_plugin._on_llm_output("", "sess-f") is None
+    assert nexus_plugin._on_llm_output(None, "sess-f") is None
+    assert nexus_plugin._on_llm_output(12345, "sess-f") is None
+    # Missing session_id kwarg: hook still works, throttled under "".
+    first = nexus_plugin._on_llm_output("answer")
+    assert first is not None and "Qdrant down" in first
+    assert nexus_plugin._on_llm_output("answer") is None
+
+
+def test_output_hook_warn_cache_is_bounded(monkeypatch):
+    """The throttle cache must never grow beyond the cap (64 entries)."""
+    _reset_warning_state(monkeypatch)
+    monkeypatch.setattr(nexus_plugin, "_health_probe",
+                        lambda: (False, "Qdrant down"))
+    for i in range(nexus_plugin._OUTPUT_WARN_SESSION_CAP + 20):
+        nexus_plugin._on_llm_output("answer", f"sess-{i}")
+    assert len(nexus_plugin._warned_sessions) <= nexus_plugin._OUTPUT_WARN_SESSION_CAP
+
+
+def test_register_registers_transform_llm_output_hook(monkeypatch, tmp_path):
+    """register() must wire the chat warning hook beside the prompt section."""
+    _reset_warning_state(monkeypatch)
+    monkeypatch.setattr(nexus_plugin, "_selfcheck_path",
+                        lambda: tmp_path / "agent-selfcheck.json")
+    monkeypatch.setattr(nexus_plugin, "_health_probe", lambda: (True, ""))
+    monkeypatch.setattr(nexus_plugin, "_status_section_registered", False)
+
+    class _FullCtx:
+        def __init__(self) -> None:
+            self.providers: list = []
+            self.hooks: list = []
+
+        def register_memory_provider(self, provider) -> None:
+            self.providers.append(provider)
+
+        def register_system_prompt_section(self, **kwargs) -> None:
+            pass
+
+        def register_hook(self, hook_name, callback) -> None:
+            self.hooks.append((hook_name, callback))
+
+    ctx = _FullCtx()
+    nexus_plugin.register(ctx)
+    registered = [name for name, cb in ctx.hooks]
+    assert "transform_llm_output" in registered
+    # Exactly once per process: a second register() call must not re-add it.
+    registered_after = [name for name, cb in ctx.hooks]
+    assert registered_after.count("transform_llm_output") == 1
+    # The recorded callback is the hook itself, and the hook is fail-open.
+    callback = next(cb for name, cb in ctx.hooks
+                    if name == "transform_llm_output")
+    assert callback is nexus_plugin._on_llm_output
+    assert callback("hello", "sess-g") is None  # healthy probe -> no-op
+
+
+def test_register_output_warning_survives_missing_hook_api(monkeypatch, tmp_path):
+    """An older Hermes without register_hook must not break registration."""
+    _reset_warning_state(monkeypatch)
+    monkeypatch.setattr(nexus_plugin, "_selfcheck_path",
+                        lambda: tmp_path / "agent-selfcheck.json")
+    monkeypatch.setattr(nexus_plugin, "_health_probe", lambda: (True, ""))
+    monkeypatch.setattr(nexus_plugin, "_status_section_registered", False)
+    monkeypatch.setattr(nexus_plugin, "_output_warning_registered", False)
+
+    class _NoHookCtx:
+        def __init__(self) -> None:
+            self.providers: list = []
+
+        def register_memory_provider(self, provider) -> None:
+            self.providers.append(provider)
+
+        def register_system_prompt_section(self, **kwargs) -> None:
+            pass
+
+        # No register_hook attribute at all: the guard must swallow the
+        # AttributeError and keep the provider registration intact.
+    ctx = _NoHookCtx()
+    nexus_plugin.register(ctx)  # must not raise
+    assert len(ctx.providers) == 1
