@@ -22,8 +22,8 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.2-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-2069%20passing-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.22.3-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-2082%20passing-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -771,6 +771,7 @@ One server. Multiple backends. Same API.
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.3** | 2026-09-30 | Self-report parity: Claude Code and OpenClaw now publish the same health contract their watchdog reads (Claude SessionStart hook, OpenClaw prompt warning), installers build the OpenClaw bundle instead of shipping an empty plugin, dead npm repair hint replaced, missing `install_claude_plugin.sh` added. 2082 tests. |
 | **v0.22.2** | 2026-09-30 | Self-Report: plugin and server speak up when memory breaks — resilient plugin imports, per-agent self-check files, server watchdog (webhook / macOS), `self_report` status in healthz. 2069 tests. |
 | **v0.22.1** | 2026-09-25 | Review-fix round: serve self-kill guard, dreaming marker timing, verdict stage wired, honest archive report, install armor. |
 | **v0.22.0** | 2026-09-25 | Sleep Cycle: Dreaming (recurring playbooks) + Archive-Forgetting (backup-then-forget), memory-worthiness filters, injection hardening. 2013 tests. |
@@ -876,4 +877,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.22.2 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · September 2026, continuously developed · v0.22.3 · One memory for all your agents</sub>
