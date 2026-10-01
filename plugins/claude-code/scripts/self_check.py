@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULT_QDRANT_URL = "http://localhost:6333"
-DEFAULT_PROVIDER = "voyage"
+DEFAULT_PROVIDER = "ollama"
 DEFAULT_AGENT_ID = "claude-code"
 PLUGIN_MANIFEST = (
     Path(__file__).resolve().parent.parent / ".claude-plugin" / "plugin.json"

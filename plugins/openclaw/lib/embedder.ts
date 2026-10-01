@@ -6,7 +6,7 @@ export type EmbeddingProvider = "voyage" | "openai" | "ollama" | "google" | "jin
 const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: number; baseUrl?: string }> = {
   voyage: { model: "voyage-4", dimensions: 1024 },
   openai: { model: "text-embedding-3-small", dimensions: 1536 },
-  ollama: { model: "nomic-embed-text", dimensions: 768, baseUrl: "http://localhost:11434" },
+  ollama: { model: "qwen3-embedding:0.6b", dimensions: 1024, baseUrl: "http://localhost:11434" },
   google: { model: "text-embedding-004", dimensions: 768 },
   jina: { model: "jina-embeddings-v3", dimensions: 1024 },
 }
@@ -26,13 +26,13 @@ export function detectProvider(): EmbeddingProvider | null {
   if (process.env.OPENAI_API_KEY) return "openai"
   if (process.env.GOOGLE_API_KEY) return "google"
   if (process.env.JINA_API_KEY) return "jina"
-  // Ollama needs no key. Reachability is NOT probed here (too expensive in
-  // detectProvider): if no other provider is configured we assume Ollama is
-  // intended. An unreachable Ollama is only surfaced later, when embed() calls
-  // it — the constructor does NOT fail on it (verified: it only resolves
-  // provider/model/baseUrl and logs).
+  // Ollama needs no key and is the default local provider. Returning it as the
+  // final fallback means a user with no cloud key at all gets a working local
+  // setup instead of a hard "No embedding provider configured" failure.
+  // Reachability is NOT probed here (too expensive in detectProvider); an
+  // unreachable Ollama surfaces later, when embed() calls it.
   if (process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL) return "ollama"
-  return null
+  return "ollama"
 }
 
 /** Default time budget for a single HTTP call (provider or Qdrant). */

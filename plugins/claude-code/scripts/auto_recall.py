@@ -34,7 +34,7 @@ except Exception as _scope_import_exc:  # pragma: no cover - defensive
         "recalling without scope filter",
         file=sys.stderr,
     )
-EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
+EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
 
@@ -140,7 +140,7 @@ def get_embedding(text: str, input_type: str = "query") -> list:
             # URL with the NEW field, so Ollama received no prompt and
             # returned no vector (recall silently skipped). Migrated.
             req_data = json.dumps({
-                "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+                "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "qwen3-embedding:0.6b"),
                 "input": text
             }).encode()
             req = urllib.request.Request(

@@ -22,7 +22,7 @@ QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
-EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
+EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
 _SCOPE_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
@@ -155,7 +155,7 @@ def get_embedding(text: str) -> list:
             # field, so Ollama received no prompt and returned no vector.
             # Migrated to the new API (same one confidence._embed uses).
             req_data = json.dumps({
-                "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+                "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "qwen3-embedding:0.6b"),
                 "input": text
             }).encode()
             req = urllib.request.Request(

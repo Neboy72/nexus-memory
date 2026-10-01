@@ -17,7 +17,7 @@ QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
-EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
+EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
 def _resolve_trust_level() -> str:
@@ -70,6 +70,25 @@ def get_embedding(text: str) -> Optional[list]:
     OSError and the body-shape errors (KeyError/IndexError/ValueError).
     """
     try:
+        if EMBEDDING_PROVIDER == "ollama":
+            # Local default: no API key, nothing leaves the machine.
+            req_data = json.dumps({
+                "model": os.getenv("NEXUS_OLLAMA_EMBED_MODEL", "qwen3-embedding:0.6b"),
+                "input": text,
+            }).encode()
+            req = urllib.request.Request(
+                os.getenv("NEXUS_OLLAMA_URL", "http://localhost:11434") + "/api/embed",
+                data=req_data,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            if isinstance(data, dict):
+                embs = data.get("embeddings")
+                if isinstance(embs, list) and embs and isinstance(embs[0], list):
+                    return embs[0]
+            print("[nexus session-start] ollama embedding response shape unexpected", file=sys.stderr)
+            return None
         if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
             req_data = json.dumps({
                 "input": [text],

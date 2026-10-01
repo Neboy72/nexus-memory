@@ -1,18 +1,20 @@
 ---
 name: nexus-memory
 description: >
-  Persistent memory for Claude Code powered by Qdrant. Auto-Recall injects
-  relevant memories before each prompt. Auto-Capture stores facts after
-  each turn. Self-hosted, private, works alongside Hermes and OpenClaw
-  with the same Qdrant collection. Configure via NEXUS_* environment
-  variables. Use when the user asks to "remember", "recall", "search
-  memory", or when project context from past sessions is needed.
+  Persistent memory for Claude Code backed by Qdrant. Auto-Recall injects
+  relevant memories before each prompt. Auto-Capture stores facts after each
+  turn, automatically. Storage is a local Qdrant instance; embeddings default
+  to a fully local Ollama model, so nothing leaves your machine out of the box.
+  The same Qdrant collection can be shared with Hermes and OpenClaw. Read the
+  "What gets stored" section before installing. Configure via NEXUS_*
+  environment variables. Use when the user asks to "remember", "recall",
+  "search memory", or when project context from past sessions is needed.
 ---
 
 # Nexus Memory
 
 Nexus Memory gives Claude Code persistent memory across sessions using a
-local Qdrant instance. The same memory store shared with Hermes Agent and
+Qdrant instance. The same memory store can be shared with Hermes Agent and
 OpenClaw - one brain, many agents.
 
 ## How it works
@@ -24,6 +26,45 @@ OpenClaw - one brain, many agents.
 - **Session Start** (SessionStart hook): Loads project-related memories
   when a session begins or resumes.
 
+## Read this before you install: what gets stored, and where it goes
+
+**This skill stores to persistent memory automatically.** Facts are
+extracted from your conversations after every turn and written to Qdrant,
+then re-injected into later prompts without asking again. Two things
+deserve a deliberate decision:
+
+**1. Conversation content is persisted.** Anything said in a session can
+end up as a stored memory, including details you did not intend to keep.
+Do not run this around credentials, secrets, regulated data, or client
+material you are not permitted to retain - unless you have decided how to
+handle review, deletion and disabling (see "Disabling and controlling it").
+Stored memories also resurface later, where they can be mistaken for
+something just said.
+
+**2. Where the text goes depends on your embedding provider - and the
+default is local.** Out of the box this plugin embeds with Ollama on your
+own machine, so memory text does not leave it. Only if you deliberately
+configure the cloud provider (Voyage) is the text of your memories sent to
+that provider's API. Choose deliberately - and if you switch providers
+later, re-embed, because vectors from different models are not comparable.
+
+**3. A shared collection is readable across agents.** If Claude Code,
+Hermes Agent and OpenClaw point at the same Qdrant collection (the common
+setup), a memory written by one agent is visible to the others. That
+crosses tool and trust boundaries - use a separate `NEXUS_COLLECTION` per
+project when contexts must not mix.
+
+### Disabling and controlling it
+
+- **Turn off automatic storage:** remove or disable the `Stop` hook in the
+  plugin's hook configuration (`hooks/nexus-hooks.json`, or Claude Code's
+  hooks settings) - that hook is what captures facts after each turn. The
+  manual `remember` / `recall` / `forget` tools keep working without it.
+- **Keep memory local:** this is already the default (Ollama, on your
+  machine) - just do not set a cloud provider.
+- **Keep memory separate:** set a distinct `NEXUS_COLLECTION` per project.
+- **Remove something:** use the `forget` tool on the memory you do not want.
+
 ## Configuration
 
 Environment variables (set in `.env` or shell):
@@ -32,11 +73,35 @@ Environment variables (set in `.env` or shell):
 |----------|---------|-------------|
 | `NEXUS_QDRANT_URL` | `http://localhost:6333` | Qdrant server URL |
 | `NEXUS_COLLECTION` | `nexus` | Qdrant collection name |
-| `NEXUS_EMBEDDING_PROVIDER` | `voyage` | Embedding provider (voyage/ollama) |
-| `VOYAGE_API_KEY` | - | Voyage AI API key |
-| `NEXUS_EMBEDDING_MODEL` | `voyage-4` | Embedding model |
+| `NEXUS_EMBEDDING_PROVIDER` | `ollama` | `ollama` (local, default) or `voyage` (cloud) - only these two are supported |
+| `NEXUS_EMBEDDING_MODEL` | `voyage-4` | Model used when the provider is `voyage` |
+| `VOYAGE_API_KEY` | - | Required only if you choose the Voyage provider |
+| `NEXUS_OLLAMA_EMBED_MODEL` | `qwen3-embedding:0.6b` | Model used when the provider is `ollama` |
 | `NEXUS_MAX_RECALL` | `5` | Max memories to inject per prompt |
-| `NEXUS_OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Ollama embed model |
+
+## Embeddings
+
+The plugin supports **two** embedding providers and defaults to the local
+one - no API key, no account, nothing leaving your machine:
+
+| Provider | Where | Setup | Default model |
+|----------|-------|-------|---------------|
+| `ollama` | **Local (default)** - nothing leaves the machine | `ollama pull qwen3-embedding:0.6b` | `qwen3-embedding:0.6b` |
+| `voyage` | Cloud (text is sent to Voyage) | set `NEXUS_EMBEDDING_PROVIDER=voyage` and `VOYAGE_API_KEY` | `voyage-4` |
+
+**Setup (once):**
+
+```bash
+ollama pull qwen3-embedding:0.6b        # 639 MB, 1024d, multilingual
+```
+
+That is the whole setup for the default path. `qwen3-embedding:0.6b` is
+multilingual and instruction-aware, which matters if your memory is not
+English-only.
+
+`bge-m3` (1.2 GB, 1024d, multilingual) is a heavier local alternative.
+Use one model consistently - mixing models inside a single collection
+produces incomparable vectors.
 
 ## Manual Tools
 
@@ -53,4 +118,4 @@ Same Qdrant collection as:
 - Any MCP-compatible agent
 
 A memory stored by Claude Code is immediately visible to Hermes and vice
-versa. One brain, many agents.
+versa - one brain, many agents, as long as you want them to share.
