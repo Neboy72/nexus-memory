@@ -98,6 +98,11 @@ def isolated_env(monkeypatch):
         "JINA_API_KEY",
         "NEXUS_REPO_PATH",
         "NEXUS_ENV_FILE",
+        # A developer whose shell or ~/.hermes/.env exports an explicit
+        # provider (e.g. the maintainer's own cloud setup) would otherwise
+        # fail the "no provider configured" assertions below. The default
+        # path is what these tests exercise, so pin it to unset.
+        "NEXUS_EMBEDDING_PROVIDER",
         # Fail-closed tests need the fallback opt-in gone, or _try_voyage
         # (which reads VOYAGE_API_KEY live from the environment) re-succeeds
         # on hosts where ~/.hermes/.env exports it and the fallback flag
