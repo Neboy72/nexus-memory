@@ -318,7 +318,17 @@ def _scan_providers() -> list[ProviderStatus]:
 
 
 def _find_recommended(statuses: list[ProviderStatus]) -> int:
-    """Find the best available provider index. Returns 0-based index."""
+    """Find the best available provider index. Returns 0-based index.
+
+    Ordering is by quality, then cloud before local *when both are already
+    available* - the user has made a deliberate choice at that point.
+
+    The interesting case is what happens when nothing is configured yet:
+    that must recommend the good local option (Ollama + qwen3-embedding,
+    1024d, multilingual), never the 384d sentence-transformers fallback.
+    Recommending the weakest local model to a user who has nothing is how
+    the setup ends up worse than the default it replaced.
+    """
     # Priority: excellent > good > basic, cloud > local
     for quality in ["excellent", "good", "basic"]:
         for provider_type in ["cloud", "local"]:
@@ -330,7 +340,12 @@ def _find_recommended(statuses: list[ProviderStatus]) -> int:
                 ):
                     return i
 
-    # If nothing available, recommend local (will prompt to install)
+    # Nothing available yet: recommend the good local path (Ollama), which
+    # the wizard will offer to install, before falling back to the basic one.
+    for i, ps in enumerate(statuses):
+        if ps.provider["id"] == "ollama":
+            return i
+
     for i, ps in enumerate(statuses):
         if ps.provider["id"] == "local":
             return i

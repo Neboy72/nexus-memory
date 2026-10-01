@@ -103,17 +103,39 @@ detect_embedding() {
         EMBEDDING_APIKEY='${JINA_API_KEY}'
         echo -e "${GREEN}✓${NC} Embedding: Jina (jina-embeddings-v3, 1024d)"
     elif command -v ollama &> /dev/null; then
+        # Prefer whatever multilingual embed model is already pulled, then
+        # fall back to the recommended one. Defaulting to nomic-embed-text
+        # (768d, English-focused) would also mismatch the 1024d collection
+        # the other integrations use.
+        local_model=""
+        for candidate in qwen3-embedding:0.6b bge-m3 nomic-embed-text; do
+            if ollama list 2>/dev/null | awk '{print $1}' | grep -qx "$candidate"; then
+                local_model="$candidate"
+                break
+            fi
+        done
         EMBEDDING_PROVIDER="ollama"
-        EMBEDDING_MODEL="nomic-embed-text"
+        EMBEDDING_MODEL="${local_model:-qwen3-embedding:0.6b}"
         EMBEDDING_APIKEY=""
-        echo -e "${GREEN}✓${NC} Embedding: Ollama (nomic-embed-text, 768d) — local, no API key needed"
+        echo -e "${GREEN}✓${NC} Embedding: Ollama (${EMBEDDING_MODEL}, local, no API key needed)"
+        if [ -z "$local_model" ]; then
+            echo "  Pull it once:  ollama pull qwen3-embedding:0.6b   # 639 MB, 1024d, multilingual"
+        fi
     else
+        # Neither a cloud key nor Ollama: record no explicit provider. The
+        # plugin's own default is a local one, so leaving the block out makes
+        # it fail closed now and come alive by itself once Ollama is there.
         EMBEDDING_PROVIDER=""
         EMBEDDING_MODEL=""
         EMBEDDING_APIKEY=""
-        echo -e "${YELLOW}⚠${NC} No embedding provider detected. plugin will not load until an embedding provider API key is set"
-        echo "  Set one of: VOYAGE_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, JINA_API_KEY"
-        echo "  Or install Ollama with an embed model for local zero-setup."
+        echo -e "${YELLOW}⚠${NC} No embedding provider found yet — embeddings will default to local."
+        echo "  Finish the local setup (free, private, no API key):"
+        echo "    1. curl -fsSL https://ollama.com/install.sh | sh     # or: brew install ollama"
+        echo "    2. ollama pull qwen3-embedding:0.6b                 # 639 MB, 1024d, multilingual"
+        echo "    3. re-run this script"
+        echo "  Prefer a cloud provider instead? Set VOYAGE_API_KEY, OPENAI_API_KEY,"
+        echo "  GOOGLE_API_KEY or JINA_API_KEY and re-run this script."
+        echo "  Want to choose interactively?  python3 -m nexus_memory.wizard"
     fi
 }
 
