@@ -86,8 +86,16 @@ This script:
 1. Detects your OpenClaw installation
 2. Adds the plugin to `plugins.load.paths` in `~/.openclaw/openclaw.json`
 3. Sets `plugins.slots.memory = "nexus-memory"`
-4. Auto-detects your embedding provider (Voyage > OpenAI > Google > Jina > Ollama)
+4. Auto-detects your embedding provider. Cloud keys win if present (Voyage > OpenAI > Google > Jina); otherwise it uses a **local Ollama model** (`qwen3-embedding:0.6b`, 1024d, multilingual) with no API key at all.
 5. Restarts OpenClaw gateway
+
+Want to choose the provider yourself? The interactive picker knows every option and what is already installed on your machine:
+
+```bash
+python3 -m nexus_memory.wizard      # or: nexus-memory-init
+```
+
+It scans your system, shows each provider with its status, and recommends one — your existing local model if you have one, otherwise it offers to pull `qwen3-embedding:0.6b` for you.
 
 ### Manual Setup
 
@@ -215,10 +223,11 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
 
 - Python 3.11+
 - **Qdrant running on localhost:6333** — REQUIRED, the server will not start without it. One command: `docker run -d -p 6333:6333 -v qdrant_data:/qdrant/storage --name qdrant qdrant/qdrant` (verify: `curl http://localhost:6333/healthz`)
-- At least **one** embedding provider (auto-detected in this order):
+- At least **one** embedding provider. Cloud is optional — the **default is local**, and it needs no key:
 
   | Provider | Type | Dimensions | How to get |
   |----------|------|-----------|------------|
+  | **Ollama** 🦙 *(default)* | Local | 1024d | `ollama pull qwen3-embedding:0.6b` — free, private, no key |
   | **Voyage** ☁️ | Cloud | 1024d | `VOYAGE_API_KEY` |
   | **OpenAI** ☁️ | Cloud | 1536d | `OPENAI_API_KEY` |
   | **Google/Vertex AI** 💚 | Cloud | 768d | `GOOGLE_API_KEY` |
