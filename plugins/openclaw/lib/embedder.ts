@@ -29,8 +29,11 @@ export function detectProvider(): EmbeddingProvider | null {
   // Ollama needs no key and is the default local provider. Returning it as the
   // final fallback means a user with no cloud key at all gets a working local
   // setup instead of a hard "No embedding provider configured" failure.
-  // Reachability is NOT probed here (too expensive in detectProvider); an
-  // unreachable Ollama surfaces later, when embed() calls it.
+  // Reachability is NOT probed here (too expensive in detectProvider): if no
+  // other provider is configured we assume Ollama is intended. An unreachable
+  // Ollama is only surfaced later, when embed() calls it — the constructor
+  // does NOT fail on it (verified: it only resolves provider/model/baseUrl and
+  // logs).
   if (process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL) return "ollama"
   return "ollama"
 }
