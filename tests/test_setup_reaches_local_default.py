@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WIZARD = REPO_ROOT / "src" / "nexus_memory" / "wizard.py"
 INSTALL_OPENCLAW = REPO_ROOT / "scripts" / "install_openclaw_plugin.sh"
 AGENTS_MD = REPO_ROOT / "AGENTS.md"
+README_MD = REPO_ROOT / "README.md"
 
 
 def _read(path: Path) -> str:
@@ -129,7 +130,7 @@ class TestInstallerDetectionMatchesTheDefault:
 
 
 class TestDocsRouteUsersToTheWizard:
-    """AGENTS.md is the documented install path for agents - it must mention it."""
+    """The docs are the install path - they must mention the picker."""
 
     def test_agents_md_mentions_the_wizard(self):
         src = _read(AGENTS_MD)
@@ -143,4 +144,29 @@ class TestDocsRouteUsersToTheWizard:
         assert "auto-detected in this order" not in src, (
             "AGENTS.md still presents cloud as the detection order; the "
             "default is local and cloud is the opt-in."
+        )
+
+    def test_readme_quickstart_names_the_wizard(self):
+        """The README is the front page - the picker must be visible there.
+
+        It used to appear only inside the changelog table, i.e. nowhere a
+        new user would look. That is how a built feature stays invisible.
+        """
+        src = _read(README_MD)
+        quickstart = src.split("## 🤖 Quick Start", 1)
+        assert len(quickstart) == 2, "README has no Quick Start section"
+        body = quickstart[1]
+        assert "nexus_memory.wizard" in body or "nexus-memory-init" in body, (
+            "the README Quick Start never mentions the interactive provider "
+            "picker, so users never learn they can choose."
+        )
+
+    def test_readme_does_not_present_cloud_as_the_default(self):
+        src = _read(README_MD)
+        assert "Embedding Provider (auto-detected)" not in src, (
+            "the README still headlines the embedding section as "
+            "'auto-detected' with cloud listed first; the default is local."
+        )
+        assert "The default is local" in src, (
+            "the README must state plainly that the embedding default is local."
         )

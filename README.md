@@ -75,7 +75,7 @@ curl http://127.0.0.1:9122/healthz   # → {"status":"ok","qdrant":true,...}
   - [Path 1: Hermes Native Plugin](#path-1-hermes-native-plugin)
   - [Path 2: OpenClaw Native Plugin](#path-2-openclaw-native-plugin)
   - [Path 3: MCP Server (any MCP-compatible agent)](#path-3-mcp-server-any-mcp-compatible-agent)
-  - [🛠️ Embedding Provider (auto-detected)](#embedding-provider-auto-detected)
+  - [🛠️ Embedding Provider (default: local)](#-embedding-provider-default-local-no-key-needed)
   - [🌐 Web Dashboard (optional)](#-web-dashboard-optional)
   - [🔌 Platform Configuration](#-platform-configuration)
 - [MCP Tools](#mcp-tools)
@@ -154,19 +154,32 @@ Same as Path 1, but the last line is:
 nexus-memory
 ```
 
-### 🛠️ Embedding Provider (auto-detected)
+### 🛠️ Embedding Provider (default: local, no key needed)
 
-Pick **one** — or none: the server auto-detects at runtime. The detection priority is: cloud keys first (Voyage → OpenAI → Google → Jina), then **Ollama with qwen3-embedding** (preferred local model; benchmark: +4 R@5 vs bge-m3), then bge-m3, then other local options. You always stay in control of the embedding provider — and if your collection already uses a local model, the auto-detect keeps it (no silent mixed-model collections).
+**The default is local.** Out of the box the server embeds with Ollama on your own machine — nothing leaves it and you need no account and no API key. One command sets it up:
 
-> **🦙 Recommended local setup (free, private, offline):** `ollama pull qwen3-embedding:0.6b` — 639 MB, 1024d, 100+ languages, instruction-aware, 32k context, best local quality (benchmark 04.09.). Works out of the box, no API key. Alternatives: `bge-m3` (1.2 GB, 1024d) or the smaller `nomic-embed-text` (274 MB, 768d, English-focused).
+```bash
+ollama pull qwen3-embedding:0.6b      # 639 MB, 1024d, multilingual
+```
+
+Prefer a cloud provider? Set an API key (`VOYAGE_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` or `JINA_API_KEY`) and it is used instead. At runtime the server picks the first cloud key it finds, then falls back to **Ollama with qwen3-embedding** (preferred local model; benchmark: +4 R@5 vs bge-m3), then bge-m3, then other local options. Your choice is always respected — and if your collection already uses a local model, the auto-detect keeps it (no silent mixed-model collections).
+
+**Want to choose yourself?** There is an interactive picker. It scans your machine, lists every provider with its status, recommends one — your existing local model if you have it, otherwise it offers to pull `qwen3-embedding:0.6b` for you:
+
+```bash
+python3 -m nexus_memory.wizard       # or: nexus-memory-init
+```
+
+> **🦙 Recommended local setup (free, private, offline):** `ollama pull qwen3-embedding:0.6b` — 639 MB, 1024d, 100+ languages, instruction-aware, 32k context, best local quality (benchmark 04.09.). Alternatives: `bge-m3` (1.2 GB, 1024d) or the smaller `nomic-embed-text` (274 MB, 768d, English-focused).
 
 **Not sure what to pick? Here's the plain-language guide:**
 
 | Your situation | Do this |
 |---|---|
-| You have an API key (Voyage, OpenAI, …) | Put it in `.env` — done, best quality, nothing else to install |
-| You have Ollama installed | Run `ollama pull qwen3-embedding:0.6b` — free, private, offline, 1024d quality |
-| No Ollama, no key, want the best local option | Install [Ollama](https://ollama.com) (free, one download), then run `ollama pull qwen3-embedding:0.6b` — or skip Ollama entirely and let the wizard load bge-m3 via HuggingFace |
+| **Default — nothing configured yet** | Run `ollama pull qwen3-embedding:0.6b` — free, private, offline, 1024d quality |
+| You have Ollama already | Same one command — or start the wizard, it detects your existing model |
+| You have an API key (Voyage, OpenAI, …) and want cloud | Put it in `.env` — the key takes precedence, nothing else to install |
+| No Ollama, no key, want the best local option | Install [Ollama](https://ollama.com) (free, one download), then `ollama pull qwen3-embedding:0.6b` — or skip Ollama entirely and let the wizard load bge-m3 via HuggingFace |
 | No Ollama, no key, just want it to work NOW | Do nothing — the server falls back to a built-in small model automatically. Fine to start. Upgrade later when your memories grow |
 | Coming from Hugging Face only | Set `NEXUS_HF_BGE3=1` — loads bge-m3 directly via sentence-transformers, no Ollama needed (wizard configures this for you) |
 
@@ -855,14 +868,16 @@ pytest tests/ -v # 1818 tests ✅
 
 - Python 3.11+
 - Qdrant v1.12+ running on `localhost:6333`
-- One embedding provider (auto-detected):
- - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` in `.env` (768d)
- - **💜 Jina**: `JINA_API_KEY` in `.env` (1024d)
- - **🦙 Ollama**: `ollama pull qwen3-embedding:0.6b` (recommended, 639 MB, 1024d, multilingual, instruction-aware) — alternatives: `bge-m3` (1.2 GB) — smaller: `nomic-embed-text` (274 MB)
- - **☁️ Voyage**: `VOYAGE_API_KEY` in `.env` (1024d)
- - **☁️ OpenAI**: `OPENAI_API_KEY` in `.env` (1536d)
- - **🏠 Local (bge-m3 via HuggingFace, no Ollama)**: `NEXUS_HF_BGE3=1` (wizard sets this automatically)
-- **🏠 Local (fallback)**: `pip install sentence-transformers` (built-in MiniLM, 384d)
+- One embedding provider. **The default is local and needs no key:**
+ - **🦙 Ollama (default)**: `ollama pull qwen3-embedding:0.6b` — free, private, offline, 639 MB, 1024d, multilingual, instruction-aware. Alternatives: `bge-m3` (1.2 GB) — smaller: `nomic-embed-text` (274 MB)
+ - **🏠 Local (bge-m3 via HuggingFace, no Ollama)**: `NEXUS_HF_BGE3=1` (the wizard sets this for you)
+ - **🏠 Local (fallback)**: `pip install sentence-transformers` (built-in MiniLM, 384d)
+- Cloud instead of local (optional, set a key in `.env`):
+ - **☁️ Voyage**: `VOYAGE_API_KEY` (1024d)
+ - **☁️ OpenAI**: `OPENAI_API_KEY` (1536d)
+ - **💚 Google / Vertex AI**: `GOOGLE_API_KEY` (768d)
+ - **💜 Jina**: `JINA_API_KEY` (1024d)
+- Want to pick interactively? `python3 -m nexus_memory.wizard` scans your machine and recommends one.
 
 ---
 
