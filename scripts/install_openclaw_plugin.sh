@@ -266,7 +266,12 @@ if provider:
         if api_key:
             embedding["apiKey"] = api_key
 else:
-    print("  ⚠ No embedding provider detected — embedding block omitted (plugin will not load until an embedding provider API key is set)")
+    print("  ⚠ No embedding provider configured yet — the plugin will use its local default")
+    print("    (Ollama, qwen3-embedding:0.6b). Finish it with:")
+    print("      ollama pull qwen3-embedding:0.6b   # 639 MB, 1024d, multilingual")
+    print("    Prefer a cloud provider? Set VOYAGE_API_KEY / OPENAI_API_KEY /")
+    print("    GOOGLE_API_KEY / JINA_API_KEY and re-run this script.")
+    print("    Choose interactively: python3 -m nexus_memory.wizard")
 
 cfg.setdefault("autoRecall", True)
 cfg.setdefault("autoCapture", True)
