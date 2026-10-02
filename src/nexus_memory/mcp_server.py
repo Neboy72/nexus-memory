@@ -2867,6 +2867,26 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                         f"{memory_id}: {restore_err}"
                     )
 
+            # ── BM25 index: swap the text of this SAME id ────────────────
+            # An update rewrites the same point, so nothing is added or
+            # removed — only the stored text changes. Without this the keyword
+            # index kept serving the OLD text forever (found 02.10.2026: a
+            # corrected memory stayed findable by its refuted wording).
+            # Non-blocking: an index failure must never break update().
+            if status == "updated":
+                try:
+                    _hybrid = getattr(get_store(), "_hybrid_retriever", None)
+                    if _hybrid is not None and isinstance(new_text, str) and new_text.strip():
+                        _rep = _hybrid.replace_indexed([(memory_id, new_text)])
+                        logging.info(
+                            f"BM25 replace for {memory_id[:8]}: {_rep}"
+                        )
+                except Exception as bm25_err:
+                    logging.warning(
+                        f"BM25 replace failed for {memory_id[:8]} "
+                        f"(non-blocking): {bm25_err}"
+                    )
+
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": status, "detail": result}),
