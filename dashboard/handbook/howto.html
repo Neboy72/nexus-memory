@@ -51,6 +51,12 @@ IDs) are never rephrased.</p>
 <p>Don't delete and re-save, just tell your agent the new truth. Nexus marks the old fact as
 superseded and links the new one as current truth. History stays intact, nothing is lost,
 and contradictions resolve themselves.</p>
+<p><b>Corrections reach the keyword search too.</b> Updating a memory rewrites its entry in the
+keyword index (the fast, exact-word lookup that runs beside the semantic search) as well, so a
+refuted wording stops being findable. Before 0.22.7 the index kept the old text: the corrected
+fact was right in the store and still reachable by what it used to say. If you corrected
+something in an older version and want the old wording gone from search, the index is rebuilt
+from the database by a full reindex (one call, seconds for tens of thousands of memories).</p>
 
 <h2>Back up everything</h2>
 <p>Click <b>📥 Backup</b> in the dashboard. The backup contains every memory, including private

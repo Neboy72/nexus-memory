@@ -521,8 +521,19 @@ class HybridRetriever:
             new_ids = []
             new_texts = []
             new_raw = []
+            # Idempotenz: eine bereits indexierte ID darf NICHT ein zweites Mal
+            # angehaengt werden. Vorher war das ein reines extend(), was jeden
+            # Aufruf mit derselben ID zum Duplikat machte. Das blockierte auch
+            # jeden UPDATE-Pfad (geaenderter Text, gleiche ID): der Aufruf konnte
+            # gar nicht angerufen werden, ohne den Index zu verdoppeln.
+            existing = set(self._ids)
+            dup_added = 0
             for pid, text in to_add:
                 if isinstance(pid, str) and isinstance(text, str):
+                    if pid in existing:
+                        dup_added += 1
+                        continue
+                    existing.add(pid)
                     new_ids.append(pid)
                     new_texts.append(text.lower())
                     new_raw.append(text)
@@ -564,6 +575,55 @@ class HybridRetriever:
         }
 
     # ── BM25 Cache ───────────────────────────────────────────────────────────
+
+    def replace_indexed(
+        self,
+        replacements: list[tuple[str, str]] | None = None,
+    ) -> dict:
+        """Replace the indexed text of EXISTING ids (BM25 + raw sidecar).
+
+        The update path (``nexus_update`` / the Hermes plugin's in-place edit)
+        rewrites the same point id, so there is nothing to add or remove — only
+        the stored text to swap. ``update_index`` cannot express that: it only
+        appends new ids and drops removed ones, which is why corrected memories
+        kept their OLD text in the keyword index (found 02.10.2026).
+
+        Unknown ids are ignored (nothing to replace), and the BM25 corpus is
+        rebuilt from the mutated text so the very next search sees the new text.
+
+        Returns: {replaced, missing, total_ids, bm25_built}
+        """
+        if not HAS_BM25:
+            raise ImportError("bm25s is required: pip install bm25s")
+        pairs = [(pid, text) for pid, text in (replacements or [])
+                 if isinstance(pid, str) and isinstance(text, str)]
+        if not pairs or not self._ids:
+            return {"replaced": 0, "missing": len(pairs), "total_ids": len(self._ids),
+                    "bm25_built": self._bm25 is not None}
+
+        pos = {pid: i for i, pid in enumerate(self._ids)}
+        raw_aligned = len(self._texts_raw) == len(self._ids)
+        replaced = 0
+        missing = 0
+        for pid, text in pairs:
+            i = pos.get(pid)
+            if i is None:
+                missing += 1
+                continue
+            self._texts[i] = text.lower()
+            if raw_aligned:
+                self._texts_raw[i] = text
+            replaced += 1
+
+        if replaced:
+            self._rebuild_aux_indexes()
+            if self._texts:
+                corpus_tokens = bm25s.tokenize(self._texts)
+                self._bm25 = bm25s.BM25()
+                self._bm25.index(corpus_tokens)
+                self._save_bm25_cache()
+        return {"replaced": replaced, "missing": missing,
+                "total_ids": len(self._ids), "bm25_built": self._bm25 is not None}
 
     def _load_bm25_cache(self) -> bool:
         """Load persisted BM25 index from disk. Returns True if loaded."""

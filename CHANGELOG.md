@@ -1,3 +1,25 @@
+## [0.22.7] - 2026-10-02
+
+### Fixed
+
+- **A corrected memory no longer stays findable by its refuted wording.** The update path
+  rewrote the fact in the store but never touched the keyword (BM25) index, so the entry kept
+  its OLD text there: `nexus_update` returned `status: updated`, the store was right, and a
+  search for the very wording that had just been refuted still returned the fact at the top.
+  The remember path had been updating the index all along, which is why the gap only showed up
+  on corrections. Found on 2026-10-02 while auditing a live correction (the index was rebuilt
+  by hand to confirm: 31 978 entries, the corrected id carried its new text).
+
+- **The index update is now idempotent.** `update_index()` appended ids unconditionally, so
+  calling it for an already-indexed id duplicated that entry — which is also why the update
+  path could not simply reuse the existing call. Existing ids are now skipped, and a new
+  `replace_indexed()` swaps the stored text of an existing id in place (BM25 corpus and the
+  raw-text sidecar are both rewritten, then persisted).
+
+- **Covered by tests.** `tests/test_bm25_reindex_on_update.py` pins the behaviour: an edited
+  memory stops matching its old wording, an unknown id is ignored, and adding an
+  already-indexed id is refused instead of duplicated.
+
 ## [0.22.6] - 2026-09-30
 
 ### Fixed
