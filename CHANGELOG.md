@@ -1,3 +1,22 @@
+## [0.22.8] - 2026-10-03
+
+### Fixed
+
+- **The documented prefetch budget was three revisions out of date.** `AGENTS.md` still
+  listed `NEXUS_PREFETCH_CHARS` as 1200; the code has used 2400 since v0.13.2 (2026-08-30,
+  "prefetch capacity doubled"), so anyone tuning recall from the docs was working from a
+  number that no longer existed. The table now carries the live default, the raise history,
+  and the reason it is capped at all: the injected block is replayed with every later turn
+  of the session, so on per-token billing its cost recurs on each request.
+
+### Added
+
+- **README: "Tuning the prefetch budget" guidance under Auto-Recall.** Documents what the
+  cap actually costs, when raising it helps and when it does not (missing fact ⇒ fix the
+  stored wording, not the budget), and that prefetch is a head start rather than a
+  guarantee — explicit `recall`, which is never budget-capped, stays the reliable path for
+  factual questions about the user's own life.
+
 ## [0.22.7] - 2026-10-02
 
 ### Fixed
