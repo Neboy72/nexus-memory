@@ -450,6 +450,15 @@ Standard MCP stdio config:
 
 **Native plugins** (Hermes & OpenClaw) automatically inject relevant memories before every turn and extract new facts after every turn: zero manual tool calls needed. The MCP server provides the same capabilities via explicit `recall` / `remember` tools.
 
+The injected block is capped at `NEXUS_PREFETCH_CHARS` characters (default **2400** — around 600 tokens, up to 10 hits). That matters more than it looks: the block is stamped into the turn it arrived on and is **replayed with every later turn of the session**, so on a metered API you pay for it again on each request. The cap exists for exactly that reason — raising it buys more recalled context and costs proportionally more, forever. On a flat-rate backend the price is zero and the question disappears; on per-token billing it never does.
+
+Two rules of thumb, both learned from real misses:
+
+- **Raise the budget when correct facts are being cut off**, not when the *wrong* facts show up. If a query surfaces thematic neighbours but misses the fact you needed, the budget is not the problem — the fact is filed under the wrong wording. Store it together with the words you will actually type ("dog" alone does not match a later question about pet insurance).
+- **The prefetch is a head start, not a guarantee.** It runs one similarity query per turn, so it can always miss. An explicit `recall` before answering a factual question about the user's own life is still the reliable path.
+
+Verify your setting with `nexus_recall` — explicit recall is never budget-capped, which is what makes it trustworthy when the prefetch was silent.
+
 ### Hybrid Retrieval 🛡️
 
 Pure vector search is vulnerable to **RAG poisoning**: adversarial documents that rank high semantically but contain garbage. Nexus Memory blends **BM25 + Vector + Reciprocal Rank Fusion**:

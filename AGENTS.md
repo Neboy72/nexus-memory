@@ -433,7 +433,7 @@ result = run_sica(auto_patch=True)
 | `SICA_RETENTION_TEMP` / `SICA_RETENTION_SESSION` / `SICA_RETENTION_<CATEGORY>` | 1 / 7 / — | Per-category retention in days (roadmap 2.2). Categories without a policy keep memories forever |
 | `SICA_DEFAULT_RETENTION_DAYS` | — | Fallback retention for categories without explicit policy |
 | `NEXUS_RERANK` / `NEXUS_RERANKER` / `NEXUS_RERANK_POOL` | off / auto / 20 | Cross-encoder reranking (roadmap 1.2): auto = Voyage when key present, free local cross-encoder otherwise |
-| `NEXUS_PREFETCH_CHARS` | 1200 | Token budget for auto-injected memory context (roadmap 3.1b) |
+| `NEXUS_PREFETCH_CHARS` | 2400 | Character budget for auto-injected memory context (roadmap 3.1b). Raised from 1200 on 2026-08-30: at 14k+ stored memories the old limit surfaced only 2-3 hits. See "Tuning the prefetch budget" in the README before changing it |
 | `NEXUS_AUTO_ENRICH` | 1 | Auto entity enrichment on nexus_remember (0 = off) |
 | `SICA_RETENTION_*` etc. also accept `SICA_STALE_TEMP_DAYS` | — | Legacy single-category knob still works |
 | `SICA_LOW_CONFIDENCE` | 0.5 | Confidence threshold for low-confidence detection |
