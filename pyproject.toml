@@ -34,10 +34,16 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["nexus_memory*", "nexus*", "plugins*"]
+# `plugins` is deliberately NOT listed. Hermes ships a top-level package of the
+# same name (`plugins/memory/__init__.py`, the memory-provider discovery), and a
+# wheel that also installs `plugins/` overwrites it: whichever distribution lands
+# last wins the name, and an import of `plugins.memory` then resolves to this
+# package's two-line stub instead of the discovery logic. Nothing in this
+# repository imports `plugins` as an installed package — the shipped Hermes
+# plugin is installed from this repo's git subdirectory (plugins/memory/nexus),
+# not from the wheel, and the tests reach the directory by path.
+include = ["nexus_memory*", "nexus*"]
 
-[tool.setuptools.package-data]
-"plugins.memory.nexus" = ["plugin.yaml", "README.md"]
 
 # Handbook is served from the dashboard source checkout (dashboard/handbook),
 # not installed globally — see dashboard/server.py handbook_dir. The old
