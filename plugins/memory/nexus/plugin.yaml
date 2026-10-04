@@ -1,5 +1,5 @@
 name: nexus
-version: 0.22.9
+version: 0.22.10
 description: "Nexus Memory — universal memory layer for AI agents. Qdrant + auto-detect embeddings (Voyage/OpenAI/Google/Jina/Ollama/sentence-transformers). Self-hosted, MCP-compatible."
 pip_dependencies:
   - "qdrant-client>=1.12.0,<2.0.0"
@@ -9,6 +9,12 @@ requires_env: []
 # GOOGLE_API_KEY | JINA_API_KEY | NEXUS_QDRANT_HOST | NEXUS_QDRANT_PORT |
 # NEXUS_COLLECTION. Cloud provider SDKs (voyageai, openai, google-generativeai)
 # are optional extras — pip install nexus-memory[voyage|openai|google].
-hooks:
-  - on_session_end
-  - on_memory_write
+#
+# provides_hooks lists only PLUGIN hooks (validated against Hermes' VALID_HOOKS).
+# `on_session_end` and `on_memory_write` are NOT plugin hooks: this provider
+# implements them as MemoryProvider METHODS (agent/memory_provider.py), so
+# declaring them here made `hermes plugins validate` report an unknown hook.
+# Only `transform_llm_output` is a real plugin hook — it surfaces a broken
+# memory backend in the chat answer itself.
+provides_hooks:
+  - transform_llm_output
