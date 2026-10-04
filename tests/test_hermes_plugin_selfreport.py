@@ -113,12 +113,20 @@ def test_unavailable_reason_mentions_missing_package_and_fix():
 # 3: repair command
 # ---------------------------------------------------------------------------
 
-def test_repair_command_uses_uv_for_checkout():
-    """A source checkout/editable install is repaired against the active interpreter."""
+def test_repair_command_uses_own_venv_never_host_interpreter():
+    """Der Reparaturbefehl zielt auf das EIGENE venv, nie auf den Host.
+
+    Der Host-Interpreter gehoert Hermes; bei pipx-/System-Installationen ist
+    er fremdverwaltet. Ein Befehl gegen ``sys.executable`` wuerde bei
+    Fremd-Usern Schaden anrichten (Auslieferungs-Regel).
+    """
     cmd = nexus_plugin._repair_command()
-    assert "uv pip install -e" in cmd
+    assert "uv venv" in cmd
     assert str(_REPO_ROOT) in cmd
-    assert sys.executable in cmd
+    # Das eigene venv unter dem Datenverzeichnis ist das Ziel ...
+    assert "plugin-venv" in cmd
+    # ... und NIE der Interpreter des Host-Prozesses.
+    assert sys.executable not in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -261,10 +269,44 @@ def test_health_probe_caches_within_ttl(monkeypatch):
     assert len(calls) == 2
 
 
+def test_plugin_venv_site_packages_rejects_foreign_python(tmp_path):
+    """Ein venv einer ANDEREN Minor-Version wird abgelehnt (ABI-Schutz).
+
+    CPython haengt ``lib/python3.14/site-packages`` klaglos in den Suchpfad,
+    aber C-Erweiterungen (torch/numpy) brechen dann mit einem ABI-Fehler. Ein
+    fremdes venv darf darum nie akzeptiert werden.
+    """
+    venv = tmp_path / "plugin-venv"
+    foreign = venv / "lib" / "python2.7" / "site-packages"
+    foreign.mkdir(parents=True)
+    assert nexus_plugin._plugin_venv_site_packages(venv) is None
+
+    # Das passende venv der laufenden Version wird akzeptiert.
+    want = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    own = venv / "lib" / want / "site-packages"
+    own.mkdir(parents=True)
+    assert nexus_plugin._plugin_venv_site_packages(venv) == own
+
+
+def test_repair_command_pins_the_python_version():
+    """Der Reparaturbefehl fordert die laufende Minor-Version an."""
+    cmd = nexus_plugin._repair_command()
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert f"--python {py_ver}" in cmd
+
+
 def test_health_probe_missing_dependency_never_calls_client(monkeypatch):
+    """Ohne qdrant_client: kein Qdrant-Zugriff, aber das Urteil laeuft ab.
+
+    Der Fehlerfall darf NICHT prozessweit eingefroren werden: nach Ablauf von
+    ``_DEP_MISSING_TTL_SEC`` wird der Import neu versucht, damit eine
+    Reparatur den laufenden Dienst heilt (04.10.2026).
+    """
     monkeypatch.setattr(nexus_plugin, "QdrantClient", None)
-    monkeypatch.setattr(nexus_plugin, "qmodels", object())
+    monkeypatch.setattr(nexus_plugin, "qmodels", None)
     monkeypatch.setattr(nexus_plugin, "_PROBE_CACHE", None)
+    # Ein wirklich fehlendes Paket: der Re-Import-Versuch findet nichts.
+    monkeypatch.setattr(nexus_plugin, "_try_import_qdrant", lambda: False)
 
     def boom():
         raise AssertionError("probe_once must not run without qdrant_client")
@@ -274,8 +316,57 @@ def test_health_probe_missing_dependency_never_calls_client(monkeypatch):
     ok, cause = nexus_plugin._health_probe()
     assert ok is False
     assert "qdrant_client" in cause
-    # Cached for the whole process — a second call is also served locally.
+    # Zweiter Aufruf innerhalb des TTL wird lokal bedient (kein Re-Import).
     assert nexus_plugin._health_probe()[0] is False
+
+    # Nach Ablauf des TTL wird der Import erneut versucht -> Reparatur kann
+    # den laufenden Prozess heilen, statt nur den naechsten.
+    attempts: list = []
+
+    def still_missing():
+        attempts.append(1)
+        return False
+
+    monkeypatch.setattr(nexus_plugin, "_try_import_qdrant", still_missing)
+    # Das Fehlurteil kuenstlich altern lassen.
+    monkeypatch.setattr(nexus_plugin, "_PROBE_CACHE", (False, "stale", -1e12))
+    assert nexus_plugin._health_probe()[0] is False
+    assert attempts == [1]
+
+
+def test_health_probe_recovers_when_dependency_appears(monkeypatch):
+    """Die Kern-Lektion: ein nachinstalliertes Paket heilt den LAUFENDEN Prozess.
+
+    Vorher war das Urteil prozessweit eingefroren (``float('inf')``) — nur ein
+    Neustart half. Jetzt genuegt der naechste Re-Probe nach Ablauf des TTL.
+    """
+    monkeypatch.setattr(nexus_plugin, "QdrantClient", None)
+    monkeypatch.setattr(nexus_plugin, "qmodels", None)
+    monkeypatch.setattr(nexus_plugin, "_PROBE_CACHE", None)
+    monkeypatch.setattr(nexus_plugin, "_try_import_qdrant", lambda: False)
+    assert nexus_plugin._health_probe()[0] is False
+
+    # "Reparatur": der Re-Import findet das Paket jetzt und traegt es ein.
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_collections(self):
+            return None
+
+        def close(self):
+            pass
+
+    def import_now():
+        monkeypatch.setattr(nexus_plugin, "QdrantClient", FakeClient)
+        monkeypatch.setattr(nexus_plugin, "qmodels", object())
+        return True
+
+    monkeypatch.setattr(nexus_plugin, "_try_import_qdrant", import_now)
+    monkeypatch.setattr(nexus_plugin, "_PROBE_CACHE", (False, "stale", -1e12))
+
+    # Kein Neustart, kein neuer Prozess: derselbe Prozess ist wieder gesund.
+    assert nexus_plugin._health_probe()[0] is True
 
 
 # ---------------------------------------------------------------------------

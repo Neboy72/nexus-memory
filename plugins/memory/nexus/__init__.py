@@ -14,14 +14,82 @@ from collections import OrderedDict
 # qdrant_client here. The module then failed to import and Hermes silently
 # discarded the provider for days. Never let a missing dependency kill the
 # module — record the failure and report it instead.
+#
+# Fremd-User-Schutz (04.10.2026): Der Host-Interpreter gehoert HERMES, nicht
+# uns — bei pipx-/System-Installationen ist er fremdverwaltet und schreib-
+# geschuetzt. Darum haengt Nexus sein EIGENES venv (<data-dir>/plugin-venv)
+# in den Suchpfad, und kein Reparaturbefehl zeigt je auf sys.executable.
 _QDRANT_IMPORT_ERROR: str = ""
-try:
-    from qdrant_client import QdrantClient
-    from qdrant_client.http import models as qmodels
-except Exception as _exc:  # missing dependency in this interpreter — must not kill the module
-    QdrantClient = None  # type: ignore
-    qmodels = None  # type: ignore
-    _QDRANT_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
+QdrantClient: Any = None
+qmodels: Any = None
+
+
+def _plugin_venv_dir() -> Path:
+    """Pfad zum EIGENEN venv des Plugins — bewusst nicht der Host-Interpreter.
+
+    Gleiche Daten-Dir-Regel wie ``_selfcheck_path()``, damit Plugin und Daemon
+    nie in verschiedenen Ordnern lesen und schreiben. Fail-open: ein kaputter
+    ``NEXUS_DATA_DIR``-Wert darf den Modul-Import nicht toeten.
+    """
+    try:
+        env_dir = os.environ.get("NEXUS_DATA_DIR", "").strip()
+        base = (Path(os.path.expanduser(env_dir)) if env_dir
+                else Path(os.path.expanduser("~/.nexus-memory")))
+        return base / "plugin-venv"
+    except Exception:
+        return Path(os.path.expanduser("~/.nexus-memory")) / "plugin-venv"
+
+
+def _plugin_venv_site_packages(venv: Path) -> "Optional[Path]":
+    """site-packages eines venv — NUR passend zur laufenden Python-Version.
+
+    Versions-Treue ist Pflicht (Fund 04.10.2026): Wird ein venv mit einer
+    anderen Minor-Version in den Suchpfad gehaengt, laedt CPython es zwar
+    (``lib/python3.14/site-packages`` liegt nur auf ``sys.path``), aber jede
+    C-Erweiterung (``sentence-transformers``/``torch``/``numpy``) bricht mit
+    einem ABI-Fehler — und der Fehler waere verwirrend statt hilfreich. Eine
+    fremde Version wird darum abgelehnt; der Reparaturbefehl fordert die
+    passende Version ohnehin an.
+    """
+    want = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    try:
+        if (venv / "lib" / want / "site-packages").is_dir():
+            return venv / "lib" / want / "site-packages"
+        # Windows-Layout kennt keine Minor-Version im Pfad.
+        win = venv / "Lib" / "site-packages"
+        if os.name == "nt" and win.is_dir():
+            return win
+    except Exception:
+        pass
+    return None
+
+
+def _try_import_qdrant() -> bool:
+    """Importiert oder laedt qdrant_client neu — eigenes venv hat Vorrang.
+
+    Idempotent und fail-open. Wird beim Modulstart UND bei jedem Re-Probe
+    gerufen, damit eine Reparatur den LAUFENDEN Prozess heilt statt nur den
+    naechsten (der eingefrorene Probe-Cache war genau dieser Fehler).
+    """
+    global QdrantClient, qmodels, _QDRANT_IMPORT_ERROR
+    if QdrantClient is not None and qmodels is not None:
+        return True
+    site = _plugin_venv_site_packages(_plugin_venv_dir())
+    if site is not None and str(site) not in sys.path:
+        sys.path.append(str(site))
+    try:
+        from qdrant_client import QdrantClient as _client
+        from qdrant_client.http import models as _models
+    except Exception as exc:  # missing dependency in this interpreter — must not kill the module
+        _QDRANT_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+        return False
+    QdrantClient = _client  # type: ignore
+    qmodels = _models  # type: ignore
+    _QDRANT_IMPORT_ERROR = ""
+    return True
+
+
+_try_import_qdrant()
 
 logger = logging.getLogger(__name__)
 
@@ -1852,26 +1920,44 @@ def _mask_paths(text: str) -> str:
 
 
 def _repair_command() -> str:
-    """One copy-pasteable command that reinstalls the plugin's dependencies.
+    """One copy-pasteable command that installs the plugin into ITS OWN venv.
 
-    A source checkout / editable install is repaired against the active
-    interpreter with `uv pip install -e`; a packaged install upgrades from the
-    index. Paths are quoted because they may contain spaces.
+    Der Befehl zeigt NIE auf ``sys.executable``: das ist der Host-Prozess von
+    Hermes und bei pipx-/System-Installationen fremdverwaltet und schreibge-
+    schuetzt — der Empfaenger wuerde sich sein Hermes beschaedigen (Ausliefe-
+    rungs-Regel in ``references/hermes-plugin-hardening.md``). Ziel ist immer
+    das eigene venv unter dem Datenverzeichnis, das ``_try_import_qdrant()``
+    ohnehin in den Suchpfad haengt.
+
+    Die Python-Version wird mitgegeben: das Plugin akzeptiert nur ein venv
+    derselben Minor-Version (C-Erweiterungen sind nicht ABI-stabil), ein
+    ``uv venv`` mit der Vorgabe von uv wuerde also je nach Rechner abgelehnt.
     """
+    venv = _plugin_venv_dir()
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
     try:
         # <repo>/plugins/memory/nexus/__init__.py → repo root
         repo_root = Path(__file__).resolve().parent.parent.parent.parent
         if (repo_root / "pyproject.toml").exists():
-            return f'uv pip install -e "{repo_root}" --python "{sys.executable}"'
+            return (f'uv venv --python {py_ver} "{venv}" && '
+                    f'uv pip install --python "{python}" -e "{repo_root}"')
     except Exception:
         pass
-    return f'"{sys.executable}" -m pip install --upgrade nexus-memory'
+    return (f'uv venv --python {py_ver} "{venv}" && '
+            f'uv pip install --python "{python}" nexus-memory')
 
 
 # Cached probe verdict: (ok, cause, monotonic_timestamp). A verdict younger
-# than _PROBE_TTL_SEC is reused; a missing dependency is cached forever because
-# it cannot change without a process restart.
+# than _PROBE_TTL_SEC is reused. A MISSING DEPENDENCY is also cached — but
+# only for _DEP_MISSING_TTL_SEC, never forever (see _health_probe).
 _PROBE_CACHE: "Optional[tuple[bool, str, float]]" = None
+
+# Wie lange ein "Paket fehlt"-Urteil gilt, bevor neu geprueft wird. Bewusst
+# endlich (nicht inf): ein prozessweit eingefrorenes Urteil liess am
+# 04.10.2026 jede Reparatur am laufenden Dienst vorbeigehen — der Dienst lief
+# stundenlang ohne Gedaechtnis, und nur ein Prozess-Neustart heilte.
+_DEP_MISSING_TTL_SEC = _env_float_bounded("NEXUS_DEP_MISSING_TTL_SEC", 60.0, 1.0, 3600.0)
 
 
 def _probe_once() -> tuple[bool, str]:
@@ -1903,20 +1989,40 @@ def _health_probe() -> tuple[bool, str]:
     """Cheap provider health check returning (ok, human-readable cause).
 
     Mirrors is_available() but reports the concrete failure instead of a bare
-    bool. The verdict is CACHED for ``_PROBE_TTL_SEC`` because this runs on
-    every system-prompt build (every turn) — an uncached Qdrant round-trip
-    would add per-turn latency and a hung server could block the prompt build.
-    A missing dependency is cached for the whole process. Never raises.
+    bool. The verdict is CACHED because this runs on every system-prompt build
+    (every turn) — an uncached Qdrant round-trip would add per-turn latency and
+    a hung server could block the prompt build.
+
+    Ein fehlendes Paket wird NICHT prozessweit eingefroren (04.10.2026): Das
+    Urteil gilt nur ``_DEP_MISSING_TTL_SEC`` lang, danach wird der Import neu
+    versucht. Dadurch heilt eine nachgeholte Reparatur auch den LAUFENDEN
+    Dienst, statt nur den naechsten Prozess — vorher blieb jede Sitzung im
+    alten Prozess blind, auch nach ``/new``. Never raises.
     """
     global _PROBE_CACHE
     if QdrantClient is None or qmodels is None:
-        cause = (
-            "the Python package 'qdrant_client' is not importable in this "
-            f"interpreter ({_QDRANT_IMPORT_ERROR or 'import failed'})"
-        )
-        # Cannot change without a restart: cache the verdict for the process.
-        _PROBE_CACHE = (False, cause, float("inf"))
-        return False, cause
+        now = time.monotonic()
+        cached = _PROBE_CACHE
+        # Ein noch gueltiges Fehlurteil wiederverwenden — sonst wuerde jeder
+        # Turn einen Import-Versuch (und damit Platten-I/O) ausloesen.
+        if (cached is not None and not cached[0]
+                and (now - cached[2]) < _DEP_MISSING_TTL_SEC):
+            return cached[0], cached[1]
+        # Abgelaufen (oder erster Aufruf): neu versuchen. Findet der Import
+        # jetzt statt, laeuft der Dienst ohne Neustart wieder.
+        _try_import_qdrant()
+        if QdrantClient is None or qmodels is None:
+            # Ursache neu formulieren — der zweite Versuch kann einen anderen
+            # Fehler gezeigt haben als der Import beim Modulstart.
+            cause = (
+                "the Python package 'qdrant_client' is not importable in this "
+                f"interpreter ({_QDRANT_IMPORT_ERROR or 'import failed'})"
+            )
+            _PROBE_CACHE = (False, cause, now)
+            return False, cause
+        # Reparatur hat gegriffen: das alte Fehlurteil verwerfen und normal
+        # weiterpruefen (Qdrant-Erreichbarkeit steht noch aus).
+        _PROBE_CACHE = None
     now = time.monotonic()
     cached = _PROBE_CACHE
     if cached is not None and (now - cached[2]) < _PROBE_TTL_SEC:
