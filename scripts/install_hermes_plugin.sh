@@ -142,6 +142,56 @@ else
     echo -e "${GREEN}✓${NC} Plugin linked: ${PLUGIN_DST} → ${PLUGIN_SRC}"
 fi
 
+# --- Install the plugin's OWN venv -----------------------------------------
+#
+# Warum das hier passiert (Fund 04.10.2026): Nexus laeuft als Memory-Provider,
+# nicht ueber den Plugin-Manager — und NUR der Plugin-Manager liest
+# `pip_dependencies` aus plugin.yaml. Ein User, der nur den Symlink setzt,
+# bekommt deshalb KEINE Pakete und landet im stillen Ausfall (Provider laedt
+# nicht, der Chat laeuft trotzdem weiter). Darum baut der Installer das venv
+# selbst.
+#
+# Ziel ist bewusst NICHT der Host-Interpreter: der gehoert Hermes (pipx /
+# systemweit) und ist oft schreibgeschuetzt. Das Plugin haengt
+# <data-dir>/plugin-venv selbst in den Suchpfad (_try_import_qdrant), also
+# genuegt es, die Pakete DORT abzulegen.
+NEXUS_DATA_DIR="${NEXUS_DATA_DIR:-${HOME}/.nexus-memory}"
+PLUGIN_VENV="${NEXUS_DATA_DIR}/plugin-venv"
+
+install_plugin_venv() {
+    local venv="$1"
+    # Die Minor-Version des Host-Interpreters ist Pflicht: das Plugin akzeptiert
+    # nur ein venv derselben Version (C-Erweiterungen sind nicht ABI-stabil).
+    local py_ver
+    py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "")"
+    local py_flag=""
+    [ -n "${py_ver}" ] && py_flag="--python ${py_ver}"
+    if ! command -v uv &> /dev/null; then
+        echo -e "${YELLOW}⚠${NC} 'uv' not found — skipping dependency install."
+        echo "  Install uv, then run:"
+        echo "    uv venv ${py_flag} \"${venv}\" && uv pip install --python \"${venv}/bin/python3\" -e \"${NEXUS_REPO}\""
+        return 0
+    fi
+    echo -e "  Building the plugin's own venv at ${venv} ..."
+    if ! uv venv ${py_flag} "${venv}" >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠${NC} Could not create ${venv} — continuing (the symlink is valid)."
+        return 0
+    fi
+    # Vollstaendige Laufzeit-Abhaengigkeiten: die Basis-Deps aus pyproject plus
+    # die Cloud-Embedding-Extras, die das Plugin zur Laufzeit importiert.
+    if uv pip install --python "${venv}/bin/python3" \
+            'qdrant-client>=1.12.0,<2.0.0' 'sentence-transformers>=3.0.0,<4.0.0' \
+            voyageai openai bm25s networkx pyyaml requests httpx >/dev/null 2>&1 \
+       && uv pip install --python "${venv}/bin/python3" --no-deps -e "${NEXUS_REPO}" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Plugin venv ready: ${venv}"
+    else
+        echo -e "${YELLOW}⚠${NC} Dependency install into ${venv} did not complete."
+        echo "  Retry: uv pip install --python \"${venv}/bin/python3\" -e \"${NEXUS_REPO}\""
+    fi
+}
+
+install_plugin_venv "${PLUGIN_VENV}"
+
 # --- Set memory.provider ---
 
 if command -v hermes &> /dev/null; then
