@@ -138,6 +138,20 @@ pip install -e .
 ./scripts/install_hermes_plugin.sh
 ```
 
+> **The installer builds the plugin's own venv for you.** Hermes runs Nexus as a
+> *memory provider*, and only Hermes' plugin manager reads `pip_dependencies`
+> from `plugin.yaml` — the provider path does not. So the installer creates
+> `~/.nexus-memory/plugin-venv` and installs the runtime dependencies there.
+> The plugin adds that venv to its own import path at startup, which is why
+> nothing is ever written into Hermes' interpreter (it may be pipx- or
+> system-managed and read-only).
+>
+> If a dependency ever goes missing anyway, the plugin heals itself: the
+> "missing package" verdict expires (default 60 s), the next probe retries the
+> import, and the *running* process recovers without a restart. If you do want
+> to repair manually, the exact command is in the warning text — it targets the
+> plugin venv, never your Hermes install.
+
 ### Path 2: OpenClaw Native Plugin
 
 Same as Path 1, but the last line is:
