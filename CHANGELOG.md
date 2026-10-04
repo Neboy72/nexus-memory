@@ -1,3 +1,23 @@
+## [0.22.12] - 2026-10-04
+
+### Fixed
+
+- **The update check is now opt-in, off by default.** Hermes' plugin catalog forbids
+  self-updating behaviour in a listed plugin (admission rule 3): the exact SHA pin *is* the
+  trust model, so an installed copy must not reach out on its own and announce that a
+  different revision is the one to want. `NEXUS_UPDATE_CHECK=1` keeps the notification for the
+  standalone/MCP distribution; the catalog build does not set it. Nothing was ever downloaded
+  or replaced — the only effect is one informational line in the system prompt.
+
+- **A personal LaunchAgent filename left the shipped code.** The external-backup detector
+  checked two hard-coded plist paths belonging to one deployment. It now scans the
+  LaunchAgents directory for any plist that names the backups path, which is what the check
+  was always trying to express.
+
+- **The `salience` parameter of `nexus_remember` was described in German.** The description is
+  user-visible in every client that renders tool schemas; it now reads in English like the rest
+  of the schema.
+
 ## [0.22.11] - 2026-10-04
 
 ### Fixed
