@@ -1,3 +1,23 @@
+## [0.22.10] - 2026-10-04
+
+### Fixed
+
+- **The plugin manifest declared the wrong hooks, which would have failed catalog admission.**
+  `on_session_end` and `on_memory_write` are `MemoryProvider` *methods*, not plugin hooks — they
+  belong to the provider contract in `agent/memory_provider.py`, not to Hermes' `VALID_HOOKS`.
+  Declaring them made `hermes plugins validate` report an unknown hook. The manifest now declares
+  only the one real plugin hook, `transform_llm_output` (the chat-visible self-report). Kept the
+  `provides_hooks` field name so the file matches every other plugin in the catalog.
+
+- **The guardrail tool description tripped the security scanner.** Its example command read as a
+  literal recursive home delete, so `hermes plugins validate` flagged `destructive_home_rm` at
+  critical severity on a string that was never executable — the schema only *describes* the kind of
+  command to check. Reworded to name the operation instead of showing the raw command; the tool is
+  unchanged in behaviour, the false positive is gone.
+
+Validation now passes all 15 checks (`hermes plugins validate`), which is the CI gate for catalog
+admission.
+
 ## [0.22.9] - 2026-10-04
 
 ### Fixed
