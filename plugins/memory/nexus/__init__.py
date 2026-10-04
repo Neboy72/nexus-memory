@@ -23,6 +23,13 @@ _QDRANT_IMPORT_ERROR: str = ""
 QdrantClient: Any = None
 qmodels: Any = None
 
+# Update checking is OPT-IN and off by default. Hermes' plugin catalog forbids
+# self-updating code in a listed plugin (admission rule 3): the pinned commit is
+# the trust model, so an installed copy must not reach out and decide on its own
+# that a different revision is the one to want. The standalone/MCP distribution
+# sets NEXUS_UPDATE_CHECK=1 to keep the notification; the catalog build does not.
+_UPDATE_CHECK_ENABLED = os.environ.get("NEXUS_UPDATE_CHECK", "").strip().lower() in ("1", "true", "yes", "on")
+
 
 def _plugin_venv_dir() -> Path:
     """Path to the plugin's OWN venv — deliberately not the host interpreter.
@@ -200,7 +207,7 @@ def _memory_injection_score(text: str) -> int:
 # Tool schemas (OpenAI function-calling format)
 RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
                   "as_of": {"type": "string", "description": "Point-in-time: YYYY-MM-DD - only memories created on/before this date.", "default": ""}}, "required": ["query"]}}
-REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "public"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}, "salience": {"type": "number", "description": "Wichtigkeit 0.0-1.0. >= 0.8 immun gegen Decay. Default: kategorie-abhaengig."}}, "required": ["text"]}}
+REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "public"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}, "salience": {"type": "number", "description": "Importance 0.0-1.0. >= 0.8 is immune to decay. Default: depends on category."}}, "required": ["text"]}}
 FORGET_SCHEMA = {"name": "nexus_forget", "description": "Delete a memory from Nexus Memory by ID.", "parameters": {"type": "object", "properties": {"memory_id": {"type": "string", "description": "The memory ID to delete."}}, "required": ["memory_id"]}}
 GUARDRAIL_CHECK_SCHEMA = {"name": "nexus_guardrail_check", "description": "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (a recursive delete, a table drop, a process kill, an overwrite).", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command string to check (e.g. a recursive delete of a project directory)"}, "tool_name": {"type": "string", "description": "The tool being called (e.g. 'terminal', 'write_file')", "default": ""}, "tool_input": {"type": "object", "description": "Full tool input dict for path-based checks", "default": {}}}, "required": ["command"]}}
 GUARDRAIL_OVERRIDE_SCHEMA = {"name": "nexus_guardrail_override", "description": "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command that was blocked"}, "reasoning": {"type": "string", "description": "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters."}, "matched_rules": {"type": "array", "items": {"type": "object"}, "description": "The matched_rules array from the guardrail_check response", "default": []}, "agent_id": {"type": "string", "description": "Agent identifier for audit trail", "default": "unknown"}}, "required": ["command", "reasoning"]}}
@@ -465,7 +472,15 @@ class NexusMemoryProvider:
         return backup_path
 
     def _check_nexus_update(self) -> None:
-        """Background check for Nexus Memory updates on GitHub."""
+        """Background check for Nexus Memory updates on GitHub.
+
+        Opt-in only (``NEXUS_UPDATE_CHECK=1``); disabled by default because a
+        catalog-listed plugin must not carry self-updating behaviour (admission
+        rule 3). Nothing is fetched, downloaded or replaced here — the check
+        only reads the latest release tag and surfaces a one-time nudge.
+        """
+        if not _UPDATE_CHECK_ENABLED:
+            return
         import threading, json, urllib.request
         def _bg():
             try:
@@ -516,15 +531,21 @@ class NexusMemoryProvider:
     def _external_backup_configured() -> bool:
         """True when an external backup pipeline exists for ~/.nexus-memory/backups.
 
-        Checks the most common local install artefacts (Synology rsync script,
-        LaunchAgent, known backup cron). Fail-open: nudge on uncertainty.
+        Checks the common local install markers: a LaunchAgent that names the
+        backups directory, or a backup script in the Hermes scripts directory
+        that copies it. Fail-open: nudge on uncertainty.
         """
         markers = [
             Path.home() / ".hermes/scripts/backup-macmini.sh",
             Path.home() / ".hermes/scripts/backup.sh",
-            Path.home() / "Library/LaunchAgents/com.kiosha.backup-macmini.plist",
-            Path.home() / "Library/LaunchAgents/com.nexus.backup.plist",
         ]
+        try:
+            # Any LaunchAgent whose ProgramArguments mention the backups path.
+            agents = Path.home() / "Library/LaunchAgents"
+            if agents.is_dir():
+                markers.extend(sorted(agents.glob("*.plist"))[:50])
+        except Exception:
+            pass
         try:
             for m in markers:
                 if m.exists():
