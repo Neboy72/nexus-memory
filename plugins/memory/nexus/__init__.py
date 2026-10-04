@@ -15,21 +15,21 @@ from collections import OrderedDict
 # discarded the provider for days. Never let a missing dependency kill the
 # module — record the failure and report it instead.
 #
-# Fremd-User-Schutz (04.10.2026): Der Host-Interpreter gehoert HERMES, nicht
-# uns — bei pipx-/System-Installationen ist er fremdverwaltet und schreib-
-# geschuetzt. Darum haengt Nexus sein EIGENES venv (<data-dir>/plugin-venv)
-# in den Suchpfad, und kein Reparaturbefehl zeigt je auf sys.executable.
+# Foreign-user protection (2026-10-04): the host interpreter belongs to HERMES,
+# not to us — under a pipx/system install it is managed externally and
+# write-protected. Nexus therefore puts its OWN venv (<data-dir>/plugin-venv) on
+# the search path, and no repair command ever points at sys.executable.
 _QDRANT_IMPORT_ERROR: str = ""
 QdrantClient: Any = None
 qmodels: Any = None
 
 
 def _plugin_venv_dir() -> Path:
-    """Pfad zum EIGENEN venv des Plugins — bewusst nicht der Host-Interpreter.
+    """Path to the plugin's OWN venv — deliberately not the host interpreter.
 
-    Gleiche Daten-Dir-Regel wie ``_selfcheck_path()``, damit Plugin und Daemon
-    nie in verschiedenen Ordnern lesen und schreiben. Fail-open: ein kaputter
-    ``NEXUS_DATA_DIR``-Wert darf den Modul-Import nicht toeten.
+    Same data-dir rule as ``_selfcheck_path()``, so the plugin and the daemon
+    never read and write in different directories. Fail-open: a broken
+    ``NEXUS_DATA_DIR`` value must not kill the module import.
     """
     try:
         env_dir = os.environ.get("NEXUS_DATA_DIR", "").strip()
@@ -41,21 +41,21 @@ def _plugin_venv_dir() -> Path:
 
 
 def _plugin_venv_site_packages(venv: Path) -> "Optional[Path]":
-    """site-packages eines venv — NUR passend zur laufenden Python-Version.
+    """site-packages of a venv — ONLY one matching the running Python version.
 
-    Versions-Treue ist Pflicht (Fund 04.10.2026): Wird ein venv mit einer
-    anderen Minor-Version in den Suchpfad gehaengt, laedt CPython es zwar
-    (``lib/python3.14/site-packages`` liegt nur auf ``sys.path``), aber jede
-    C-Erweiterung (``sentence-transformers``/``torch``/``numpy``) bricht mit
-    einem ABI-Fehler — und der Fehler waere verwirrend statt hilfreich. Eine
-    fremde Version wird darum abgelehnt; der Reparaturbefehl fordert die
-    passende Version ohnehin an.
+    Version fidelity is mandatory (finding 2026-10-04): putting a venv built
+    for another minor version on the search path does load in CPython
+    (``lib/python3.14/site-packages`` only needs to be on ``sys.path``), but
+    every C extension (``sentence-transformers``/``torch``/``numpy``) breaks
+    with an ABI error — and that error would be confusing rather than helpful.
+    A foreign version is therefore refused; the repair command asks for the
+    matching version anyway.
     """
     want = f"python{sys.version_info.major}.{sys.version_info.minor}"
     try:
         if (venv / "lib" / want / "site-packages").is_dir():
             return venv / "lib" / want / "site-packages"
-        # Windows-Layout kennt keine Minor-Version im Pfad.
+        # The Windows layout has no minor version in the path.
         win = venv / "Lib" / "site-packages"
         if os.name == "nt" and win.is_dir():
             return win
@@ -65,11 +65,11 @@ def _plugin_venv_site_packages(venv: Path) -> "Optional[Path]":
 
 
 def _try_import_qdrant() -> bool:
-    """Importiert oder laedt qdrant_client neu — eigenes venv hat Vorrang.
+    """Import or reload qdrant_client — the plugin's own venv takes precedence.
 
-    Idempotent und fail-open. Wird beim Modulstart UND bei jedem Re-Probe
-    gerufen, damit eine Reparatur den LAUFENDEN Prozess heilt statt nur den
-    naechsten (der eingefrorene Probe-Cache war genau dieser Fehler).
+    Idempotent and fail-open. Called at module start AND on every re-probe, so
+    a repair heals the RUNNING process rather than only the next one (the
+    frozen probe cache was exactly that bug).
     """
     global QdrantClient, qmodels, _QDRANT_IMPORT_ERROR
     if QdrantClient is not None and qmodels is not None:
@@ -514,10 +514,10 @@ class NexusMemoryProvider:
 
     @staticmethod
     def _external_backup_configured() -> bool:
-        """True wenn eine externe Backup-Pipeline für ~/.nexus-memory/backups besteht.
+        """True when an external backup pipeline exists for ~/.nexus-memory/backups.
 
-        Prüfe die gängigsten lokalen Installations-Artefakte (Synology-rsync-Script,
-        LaunchAgent, bekannter Backup-Cron). Fail-open: bei Unklarheit Nudge zeigen.
+        Checks the most common local install artefacts (Synology rsync script,
+        LaunchAgent, known backup cron). Fail-open: nudge on uncertainty.
         """
         markers = [
             Path.home() / ".hermes/scripts/backup-macmini.sh",
@@ -926,8 +926,8 @@ class NexusMemoryProvider:
                                        "category": "session", "access_level": "public",
                                        "source": "hermes-plugin", "confidence": 0.5})
 
-        # Auto-Entity-Detection (2026-08-30): Hardware-Fakten sofort als Entity speichern,
-        # nicht nur bei session_end. Pattern: "Ich habe X" / "Ich nutze X" / "Ich habe X per Y"
+        # Auto entity detection (2026-08-30): store hardware facts as an entity
+        # right away, not only at session_end. Pattern: "ich habe X" / "ich nutze X" / "ich habe X per Y"
         if any(sig in user_content.lower() for sig in ["ich habe ", "ich nutze ", "ich hab ", "ich nutz "]):
             # Extraction is LLM/network-bound: run it in a daemon thread and
             # honour the same single-flight lock + NEXUS_AUTO_ENRICH opt-out as
@@ -971,13 +971,13 @@ class NexusMemoryProvider:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         vector = self._embedder.embed(text, is_query=False)  # stored doc, not a query
-        # v0.15 Memory Dynamics: Salience via Helper (klemmt auf [0,1] und
-        # setzt Kategorie-Defaults; Review-Fix: Werte außerhalb 0-1 wurden
-        # unclampet gespeichert und sind jetzt sicher normalisiert).
+        # v0.15 Memory Dynamics: salience via helper (clamps to [0,1] and
+        # applies category defaults; review fix: values outside 0-1 were stored
+        # unclamped and are now safely normalised).
         from nexus_memory.memory_dynamics import normalize_salience
         eff_salience = normalize_salience(salience, category)
         # Fable-calibration idea 5 (2026-09-13): memory-as-DATA hardening.
-        # Embedded-instruction text ("ab jetzt gilt: ... merke dir folgendes")
+        # Embedded-instruction text ("from now on: ... remember the following")
         # is STORED (legitimate security discussions stay possible) but
         # flagged and demoted below the recall/prefetch anchor threshold so
         # it can never outrank genuinely stated user rules.
@@ -1010,10 +1010,10 @@ class NexusMemoryProvider:
         return {"status": "ok", "id": eid, "category": category}
 
     def _bump_agent_stats(self, read: bool = False, write: bool = False) -> None:
-        """Registry-Hygiene (Dashboard last_seen/reads/writes): der Plugin-Pfad
-        ist der tatsaechlich genutzte Gedachtnis-Weg von Hermes — ohne dieses
-        Wiring lief 'last seen' auf einem eingefrorenen Stand (31.08. gevonden).
-        Fire-and-forget: Registry-Statistiken durfen nie den Memory-Op brechen."""
+        """Registry hygiene (dashboard last_seen/reads/writes): the plugin path
+        is the memory route Hermes actually uses — without this wiring
+        'last seen' ran on a frozen value (found 2026-08-31).
+        Fire-and-forget: registry statistics must never break the memory op."""
         try:
             agent_id = os.environ.get("NEXUS_AGENT_ID", "").strip() or "hermes"
             from nexus_memory.agent_detect import update_agent_stats
@@ -1059,11 +1059,11 @@ class NexusMemoryProvider:
                 voyage_api_key=cfg.get("voyage_api_key") or None,
             )
         # v0.15 Memory Dynamics: effective_score = base x reinforcement x decay.
-        # ANWENDUNG ALS TIE-BREAKER (Review-Fix): Der Voyage/Cross-Encoder-Reranker
-        # oben liefert die semantische Relevanz-Ordnung — die duerfen wir NICHT
-        # mit Vektor-Score neu sortieren (bricht den Rerank-Integrationstest).
-        # Stattdessen: Nur bei (fast) gleichen Rerank-Positionen entscheidet die
-        # Dynamik (use_count/Salience) die Reihenfolge. Zustandslos, fail-open.
+        # APPLIED AS A TIE-BREAKER (review fix): the Voyage/cross-encoder reranker
+        # above supplies the semantic relevance order — we must NOT re-sort that
+        # by vector score (it breaks the rerank integration test).
+        # Instead: only for (near-)equal rerank positions does the dynamics
+        # score (use_count/salience) decide the order. Stateless, fail-open.
         try:
             from nexus_memory.memory_dynamics import effective_score as _eff
         except ImportError:
@@ -1089,9 +1089,9 @@ class NexusMemoryProvider:
             if pid in seen_ids: continue
             seen_ids.add(pid)
             if len(flywheel) < 3:
-                # v0.15 (Review-Fix): use_count UND access_count separat
-                # transportieren — beide incrementieren sich in _flywheel_bump
-                # von ihrer eigenen Basis, keiner überschreibt den anderen.
+                # v0.15 (review fix): carry use_count AND access_count separately
+                # — both increment in _flywheel_bump from their own baseline,
+                # neither overwrites the other.
                 flywheel.append((pid, pl.get("use_count", 0) or 0,
                                  pl.get("access_count", 0) or 0,
                                  (pl.get("lifecycle_status") or "canonical")))
@@ -1106,9 +1106,9 @@ class NexusMemoryProvider:
         # survive the limit slice regardless of their 0.0 score.
         graph_pids: set = set()
         graph_items = self._graph_boost(pts, max_boost=3, out_pids=graph_pids)
-        # Review fix B1 (blocker): graph-boosted neighbors count as accessed -
-        # ohne Bump stuft autonomous purge aktiv genutzte Nachbarn als
-        # "never accessed" ein und loescht sie (Datenverlust).
+        # Review fix B1 (blocker): graph-boosted neighbours count as accessed —
+        # without the bump, autonomous purge treats actively used neighbours as
+        # "never accessed" and deletes them (data loss).
         for gpid in list(graph_pids)[:3]:
             if len(flywheel) < 6:
                 flywheel.append((gpid, 0, 0, "canonical"))
@@ -1126,31 +1126,31 @@ class NexusMemoryProvider:
         return vector_results
 
     def _apply_dynamics_tiebreak(self, pts, _eff) -> list:
-        """v0.15: Memory-Dynamics als Tie-Breaker NACH dem Reranker.
+        """v0.15: memory dynamics as a tie-breaker AFTER the reranker.
 
-        Verifier-Fix (M2): Fenster werden auf dem BASIS-Score gebildet (die
-        semantische Relevanz-Ordnung des Rerankers), nicht auf eff — eff
-        enthält reinforcement/decay und würde das Fenster sonst beliebig
-        verschieben (Dynamik könnte semantische Ordnung umsortieren).
-        Innerhalb eines Basis-Fensters (score-Delta <= EPS) entscheidet die
-        Dynamik (eff); darüber hinaus bleibt die Rerank-Reihenfolge.
-        Zustandslos, fail-open.
+        Verifier fix (M2): windows are built on the BASE score (the reranker's
+        semantic relevance order), not on eff — eff carries reinforcement/decay
+        and would otherwise shift the window arbitrarily (dynamics could
+        reorder semantic ranking).
+        Within a base window (score delta <= EPS) the dynamics score (eff)
+        decides; beyond it, the rerank order stands.
+        Stateless, fail-open.
         """
         if not pts:
             return pts
-        EPS = 0.02  # Toleranz auf dem BASIS-Score: darunter gilt Relevanz als "gleich"
+        EPS = 0.02  # tolerance on the BASE score: below it, relevance counts as "equal"
         decorated = []
         for rank, p in enumerate(pts):
             eff = _eff(float(p.score or 0.0), p.payload or {})
             decorated.append((p, rank, eff))
-        # Fenster-Algorithmus: laufe über die Rangliste, tausche nur Punkte
-        # innerhalb eines Relevanz-Fensters (score-Delta <= EPS).
+        # Window algorithm: walk the ranking, swapping only points
+        # within a relevance window (score delta <= EPS).
         sorted_pts = []
         remaining = list(decorated)
         while remaining:
             head = remaining.pop(0)
             base_head = float(head[0].score or 0.0)
-            # Sammle alle Kandidaten im Fenster (gleiche Basis-Relevanz wie head)
+            # Collect every candidate in the window (same base relevance as head)
             window = [head]
             j = 0
             while j < len(remaining):
@@ -1158,7 +1158,7 @@ class NexusMemoryProvider:
                     window.append(remaining.pop(j))
                 else:
                     j += 1
-            # Innerhalb des Fensters: dynamischer Score entscheidet (sekundaer)
+            # Within the window: the dynamic score decides (secondary)
             window.sort(key=lambda t: (-t[2], t[1]))
             sorted_pts.extend(w[0] for w in window)
         return sorted_pts
@@ -1167,14 +1167,14 @@ class NexusMemoryProvider:
         """Roadmap 4.9 + v0.15 Memory Dynamics: increment access_count/use_count
         on recalled points.
 
-        Fire-and-forget: läuft im eigenen Thread, blockiert den Recall-Pfad
-        nie. v0.15 (Review-Fix, Race): der Thread liest VOR dem Write den
-        AKTUELLEN Zählerstand (retrieve) statt den Recall-Snapshot zu
-        überschreiben — bei zwei gleichzeitigen Recalls zählt sonst der
-        zweite den ersten weg (Lost-Update). Snapshot-Werte bleiben Fallback,
-        falls der Retrieve fehlschlägt. Skips points deprecated between
-        recall and this bump (review fix B2). SICA uses access_count
-        later as trust signal for retrieval weighting.
+        Fire-and-forget: runs in its own thread and never blocks the recall path.
+        v0.15 (review fix, race): before writing, the thread reads the CURRENT
+        counter value (retrieve) instead of overwriting the recall snapshot —
+        with two concurrent recalls the second would otherwise count away the
+        first (lost update). Snapshot values stay the fallback if the retrieve
+        fails. Skips points deprecated between recall and this bump
+        (review fix B2). SICA uses access_count later as a trust signal for
+        retrieval weighting.
 
         Best-effort serialization: the retrieve→+1→set_payload sequence is not
         atomic (Qdrant has no atomic increment). The in-process lock around it
@@ -1203,10 +1203,10 @@ class NexusMemoryProvider:
                     # Review fix: skip facts deprecated after the recall snapshot
                     if status in ("deprecated", "rolled_back"):
                         continue
-                    # v0.15 (Review-Fix): aktuelle Zähler verwenden wenn lesbar,
-                    # sonst Snapshot — und von der eigenen Basis incrementieren
-                    # (use_count nicht mehr aus access_count abgeleitet, das
-                    # überschrieb sonst MCP-Zähler → Reset auf 1).
+                    # v0.15 (review fix): use the current counters when readable,
+                    # otherwise the snapshot — and increment from their own
+                    # baseline (use_count no longer derived from access_count,
+                    # which overwrote MCP counters → reset to 1).
                     fp = _fresh.get(str(pid)) or {}
                     try:
                         u_now = max(0, int(fp.get("use_count", use_count) or 0))
@@ -1424,9 +1424,9 @@ class NexusMemoryProvider:
                 result = self._recall(args.get("query", ""), args.get("limit", 5),
                                       as_of=args.get("as_of", ""))
             elif tool_name == "nexus_remember":
-                # v0.15 (Review-Fix, CRITICAL): salience/confidence/source_url
-                # wirklich durchreichen — das Tool-Schema verspricht sie,
-                # vorher wurden sie stillschweigend ignoriert.
+                # v0.15 (review fix, CRITICAL): actually pass salience/confidence/
+                # source_url through — the tool schema promises them, and they
+                # were previously ignored silently.
                 result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
                                       access_level=args.get("access_level", "public"),
                                       source=args.get("source", ""),
@@ -1556,28 +1556,28 @@ class NexusMemoryProvider:
             self._entity_extract_lock.release()
 
     def _maybe_extract_hardware_entities(self, text: str, session_id: str) -> None:
-        """Hardware-Pattern (2026-08-30): "ich habe X", "ich nutze Y" sofort extrahieren.
+        """Hardware pattern (2026-08-30): extract "ich habe X", "ich nutze Y" right away.
 
-        Triggert NUR auf deklarative Hardware-Sätze, niemals auf Fragen ("Hast du...?").
-        Speichert als nexus_remember mit confidence=0.9 (User-deklariert, kein LLM-Guess).
+        Triggers ONLY on declarative hardware statements, never on questions ("Hast du...?").
+        Stores via nexus_remember with confidence=0.9 (user-declared, not an LLM guess).
         """
-        # Skip Fragensätze (beginnen mit Fragewort oder haben Fragezeichen-Pattern)
+        # Skip questions (start with a question word or match a question pattern)
         if text.strip().startswith(("Hast", "Kannst", "Bist", "Wie ", "Was ", "Wo ", "Warum ")):
             return
 
-        # Hardware-Keywords die Entity-Extraktion auslösen
+        # Hardware keywords that trigger entity extraction
         hw_keywords = ["Bose", "Razer", "Mikrofon", "Mikro", "USB", "Bluetooth", "BT", "Lautsprecher",
                        "Headset", "Kopfhörer", "SoundLink", "Webcam", "Monitor", "Tastatur", "Maus"]
 
         if not any(kw.lower() in text.lower() for kw in hw_keywords):
             return
 
-        # Text auf 500 Zeichen begrenzen (Kosten + Signal-Rausch-Verhältnis)
+        # Cap the text at 500 characters (cost + signal-to-noise ratio)
         snippet = text[:500]
         try:
             er = self._extract_entities_from_text(snippet, source="auto-hardware-detection")
             if er.get("entities", 0) > 0:
-                logger.info("Auto-hardware extraction: %d entities aus User-Aussage gespeichert",
+                logger.info("Auto-hardware extraction: %d entities stored from user statement",
                             er.get("entities"))
         except Exception as exc:
             logger.warning("Hardware-auto-extract failed: %s", exc)
@@ -1755,10 +1755,10 @@ class NexusMemoryProvider:
             "source": source,
             "source_url": "",
             "created_at": ts,
-            # v0.15 (Review-Fix): Dynamics-Defaults explizit — Entities decayen
-            # normal (salience 0.5), Nutzung zählt ab 0. Ohne Felder würde die
-            # Berechnung zwar auch die Defaults nehmen, aber explizit ist
-            # besser als implizit (Doku im Datenbestand statt nur im Code).
+            # v0.15 (review fix): make the dynamics defaults explicit — entities
+            # decay normally (salience 0.5), usage counts from 0. Without the
+            # fields the calculation would also use the defaults, but explicit
+            # beats implicit (documented in the data, not only in the code).
             "salience": 0.5,
             "use_count": 0,
             "provenance": {
@@ -1922,26 +1922,26 @@ def _mask_paths(text: str) -> str:
 def _repair_command() -> str:
     """One copy-pasteable command that installs the plugin into ITS OWN venv.
 
-    Der Befehl zeigt NIE auf ``sys.executable``: das ist der Host-Prozess von
-    Hermes und bei pipx-/System-Installationen fremdverwaltet und schreibge-
-    schuetzt — der Empfaenger wuerde sich sein Hermes beschaedigen (Ausliefe-
-    rungs-Regel in ``references/hermes-plugin-hardening.md``). Ziel ist immer
-    das eigene venv unter dem Datenverzeichnis, das ``_try_import_qdrant()``
-    ohnehin in den Suchpfad haengt.
+    The command NEVER points at ``sys.executable``: that is Hermes' host process,
+    managed externally and write-protected under a pipx/system install — the
+    recipient would damage their own Hermes (shipping rule in
+    ``references/hermes-plugin-hardening.md``). The target is always the plugin's
+    own venv under the data directory, which ``_try_import_qdrant()`` puts on the
+    search path anyway.
 
-    Die Python-Version wird mitgegeben: das Plugin akzeptiert nur ein venv
-    derselben Minor-Version (C-Erweiterungen sind nicht ABI-stabil), ein
-    ``uv venv`` mit der Vorgabe von uv wuerde also je nach Rechner abgelehnt.
+    The Python version is passed explicitly: the plugin accepts only a venv of the
+    same minor version (C extensions are not ABI-stable), so a ``uv venv`` with
+    uv's own default would be refused on some machines.
     """
     venv = _plugin_venv_dir()
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-    # Die QUELLE ist immer unser eigenes Repository, nie ein Index. Der Name
-    # ``nexus-memory`` gehoert auf PyPI einem fremden Projekt
-    # (shivamtyagi18/smriti-memcore, Versionen 0.1.x/1.0.x) — ein ``pip install
-    # nexus-memory`` ohne Quelle wuerde fremden Code installieren. Der Commit
-    # wird festgenagelt, damit eine Reparatur genau den geprueften Stand holt
-    # und nicht, was zufaellig gerade auf main steht.
+    # The source is always this repository, never an index. The name
+    # ``nexus-memory`` belongs on PyPI to an unrelated project
+    # (shivamtyagi18/smriti-memcore, versions 0.1.x/1.0.x) — a bare
+    # ``pip install nexus-memory`` would install a stranger's code. The commit
+    # is pinned so a repair fetches exactly the reviewed revision and not
+    # whatever happens to be on main.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
             "@adff7ad8c77941f0ca86bf5e307ea3388d45c890")
     try:
@@ -1961,10 +1961,10 @@ def _repair_command() -> str:
 # only for _DEP_MISSING_TTL_SEC, never forever (see _health_probe).
 _PROBE_CACHE: "Optional[tuple[bool, str, float]]" = None
 
-# Wie lange ein "Paket fehlt"-Urteil gilt, bevor neu geprueft wird. Bewusst
-# endlich (nicht inf): ein prozessweit eingefrorenes Urteil liess am
-# 04.10.2026 jede Reparatur am laufenden Dienst vorbeigehen — der Dienst lief
-# stundenlang ohne Gedaechtnis, und nur ein Prozess-Neustart heilte.
+# How long a "package missing" verdict holds before it is re-checked. Deliberately
+# finite (not inf): a verdict frozen process-wide let every repair miss the running
+# service on 2026-10-04 — the service ran for hours without memory, and only a
+# process restart healed it.
 _DEP_MISSING_TTL_SEC = _env_float_bounded("NEXUS_DEP_MISSING_TTL_SEC", 60.0, 1.0, 3600.0)
 
 
@@ -2001,35 +2001,35 @@ def _health_probe() -> tuple[bool, str]:
     (every turn) — an uncached Qdrant round-trip would add per-turn latency and
     a hung server could block the prompt build.
 
-    Ein fehlendes Paket wird NICHT prozessweit eingefroren (04.10.2026): Das
-    Urteil gilt nur ``_DEP_MISSING_TTL_SEC`` lang, danach wird der Import neu
-    versucht. Dadurch heilt eine nachgeholte Reparatur auch den LAUFENDEN
-    Dienst, statt nur den naechsten Prozess — vorher blieb jede Sitzung im
-    alten Prozess blind, auch nach ``/new``. Never raises.
+    A missing package is NOT frozen process-wide (2026-10-04): the verdict holds
+    for ``_DEP_MISSING_TTL_SEC`` only, after which the import is retried. That way
+    a repair performed later also heals the RUNNING service instead of only the
+    next process — before, every session in the old process stayed blind, even
+    after ``/new``. Never raises.
     """
     global _PROBE_CACHE
     if QdrantClient is None or qmodels is None:
         now = time.monotonic()
         cached = _PROBE_CACHE
-        # Ein noch gueltiges Fehlurteil wiederverwenden — sonst wuerde jeder
-        # Turn einen Import-Versuch (und damit Platten-I/O) ausloesen.
+        # Reuse a still-valid negative verdict — otherwise every turn would
+        # trigger an import attempt (and thus disk I/O).
         if (cached is not None and not cached[0]
                 and (now - cached[2]) < _DEP_MISSING_TTL_SEC):
             return cached[0], cached[1]
-        # Abgelaufen (oder erster Aufruf): neu versuchen. Findet der Import
-        # jetzt statt, laeuft der Dienst ohne Neustart wieder.
+        # Expired (or first call): retry. If the import succeeds now, the service
+        # runs again without a restart.
         _try_import_qdrant()
         if QdrantClient is None or qmodels is None:
-            # Ursache neu formulieren — der zweite Versuch kann einen anderen
-            # Fehler gezeigt haben als der Import beim Modulstart.
+            # Reformulate the cause — the second attempt may have shown a
+            # different error than the import at module start.
             cause = (
                 "the Python package 'qdrant_client' is not importable in this "
                 f"interpreter ({_QDRANT_IMPORT_ERROR or 'import failed'})"
             )
             _PROBE_CACHE = (False, cause, now)
             return False, cause
-        # Reparatur hat gegriffen: das alte Fehlurteil verwerfen und normal
-        # weiterpruefen (Qdrant-Erreichbarkeit steht noch aus).
+        # The repair worked: discard the old negative verdict and continue
+        # normally (Qdrant reachability is still pending).
         _PROBE_CACHE = None
     now = time.monotonic()
     cached = _PROBE_CACHE
