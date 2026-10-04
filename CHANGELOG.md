@@ -1,3 +1,33 @@
+## [0.22.11] - 2026-10-04
+
+### Fixed
+
+- **A catalog install would have shipped a provider without its engine.** The Hermes plugin
+  directory (`plugins/memory/nexus/`) held only `__init__.py`, `plugin.yaml` and `README.md`,
+  while the code it imports 32 times over — `nexus_memory.embeddings`, `nexus_memory.guardrails`,
+  `nexus_graph`, and the rest — lives in this repository's `src/` and `nexus/` packages and is
+  **not** part of that subdirectory. A catalog entry installs the pinned subdirectory alone, so a
+  new user would have received a provider that loads and then reports "the embedding provider is
+  not importable" forever. `hermes plugins validate` stayed green through all of this: it probes
+  in the host process, where the engine happens to be present. Found by installing the pinned
+  subdirectory in isolation and probing it.
+
+- **The repair command pointed at a stranger's package.** With no repository above it, the plugin
+  fell back to `uv pip install nexus-memory` — an index lookup for a name that belongs on PyPI to
+  an unrelated project (`shivamtyagi18/smriti-memcore`, versions 0.1.x/1.0.x). A user following
+  our own error message would have installed someone else's code. The fallback now installs
+  `nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git@<commit>` — our repository at a
+  pinned commit, resolved by source rather than by name.
+
+### Added
+
+- **`plugins/memory/nexus/pyproject.toml`** declares the plugin's Python runtime, so the plugin
+  manager installs the engine alongside the plugin. Its project name is `hermes-nexus-provider`,
+  deliberately not `nexus-memory`: the dependency `nexus-memory` resolves through
+  `[tool.uv.sources]` to this repository at a pinned commit, so a bare index lookup can never pull
+  the unrelated PyPI project. `package = false` marks the directory as a declarative dependency
+  holder — nothing is built or packaged from it.
+
 ## [0.22.10] - 2026-10-04
 
 ### Fixed

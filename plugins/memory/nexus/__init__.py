@@ -1936,6 +1936,14 @@ def _repair_command() -> str:
     venv = _plugin_venv_dir()
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    # Die QUELLE ist immer unser eigenes Repository, nie ein Index. Der Name
+    # ``nexus-memory`` gehoert auf PyPI einem fremden Projekt
+    # (shivamtyagi18/smriti-memcore, Versionen 0.1.x/1.0.x) — ein ``pip install
+    # nexus-memory`` ohne Quelle wuerde fremden Code installieren. Der Commit
+    # wird festgenagelt, damit eine Reparatur genau den geprueften Stand holt
+    # und nicht, was zufaellig gerade auf main steht.
+    _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
+            "@8983ce9b533debaabac117b1786c38aae2b75484")
     try:
         # <repo>/plugins/memory/nexus/__init__.py → repo root
         repo_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -1945,7 +1953,7 @@ def _repair_command() -> str:
     except Exception:
         pass
     return (f'uv venv --python {py_ver} "{venv}" && '
-            f'uv pip install --python "{python}" nexus-memory')
+            f'uv pip install --python "{python}" "{_SRC}"')
 
 
 # Cached probe verdict: (ok, cause, monotonic_timestamp). A verdict younger
