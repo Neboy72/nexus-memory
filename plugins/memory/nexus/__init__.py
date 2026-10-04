@@ -1943,7 +1943,7 @@ def _repair_command() -> str:
     # wird festgenagelt, damit eine Reparatur genau den geprueften Stand holt
     # und nicht, was zufaellig gerade auf main steht.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
-            "@8983ce9b533debaabac117b1786c38aae2b75484")
+            "@adff7ad8c77941f0ca86bf5e307ea3388d45c890")
     try:
         # <repo>/plugins/memory/nexus/__init__.py → repo root
         repo_root = Path(__file__).resolve().parent.parent.parent.parent
