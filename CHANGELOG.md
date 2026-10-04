@@ -28,6 +28,16 @@
   the unrelated PyPI project. `package = false` marks the directory as a declarative dependency
   holder — nothing is built or packaged from it.
 
+- **The wheel no longer installs a top-level `plugins` package.** Hermes ships a package of that
+  name — `plugins/memory/__init__.py`, its memory-provider discovery (26 KB of logic). This
+  repository's `plugins/` directory held a two-line stub, and `[tool.setuptools.packages.find]`
+  matched it, so a wheel installed next to Hermes overwrote that file: whichever distribution
+  landed last won the name, and `import plugins.memory` could resolve to the stub instead of the
+  discovery. Nothing in this repository imports `plugins` as an installed package — the shipped
+  Hermes plugin is installed from this repository's git subdirectory, and the tests reach the
+  directory by path — so the entry is gone. Verified by installing this wheel beside a package
+  owning `plugins/` and confirming the owner's file and marker survive.
+
 ## [0.22.10] - 2026-10-04
 
 ### Fixed
