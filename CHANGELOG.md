@@ -1,3 +1,43 @@
+## [0.22.9] - 2026-10-04
+
+### Fixed
+
+- **A memory outage could be invisible to every check and survive `/new` — now it heals itself.**
+  If the agent process started *before* the dependencies were installed there, the provider's
+  health verdict ("package missing") was cached for the whole life of the process. Every later
+  repair on disk was invisible to it: the service kept running blind, a fresh session did not
+  help, and only a full process restart recovered it (observed 2026-10-04: three hours
+  unnoticed, while `memory status` and the watchdog both reported "available ✓" because they
+  each ran in a *fresh* process that did see the package). The missing-dependency verdict now
+  expires after `NEXUS_DEP_MISSING_TTL_SEC` (default 60 s) and the import is retried, so the
+  running process recovers on its own.
+
+- **The repair command no longer targets the host interpreter.** It pointed at
+  `sys.executable` — Hermes' own process, which under a pipx or system install is
+  foreign-managed and read-only. A user following that advice could have damaged their Hermes
+  install. The command now builds the plugin's *own* venv (`<data-dir>/plugin-venv`) and pins
+  the running Python minor version, because a venv of a different minor version loads happily
+  and then breaks the C extensions (`sentence-transformers`/`torch`/`numpy`).
+
+### Added
+
+- **The plugin carries its own venv import path.** `_try_import_qdrant()` appends
+  `<data-dir>/plugin-venv/.../site-packages` — matching the running version only — so Nexus
+  runs independently of whatever interpreter Hermes uses, and nothing needs to be written into
+  the host environment.
+
+- **The installer provisions that venv.** `scripts/install_hermes_plugin.sh` now creates the
+  plugin venv and installs the runtime dependencies into it. This closes a silent-failure
+  path: Nexus is delivered as a *memory provider*, and only Hermes' plugin manager reads
+  `pip_dependencies` from `plugin.yaml` — `hermes memory setup` and the provider loader have
+  no code for it, so a user who only followed the symlink step got no packages and an agent
+  that quietly ran without memory.
+
+- **`scripts`-adjacent watchdog probe: the *live* process, not a fresh one.** A new
+  `nexus-live-check.py` reports `LIVE_BROKEN` when the running gateway logged "provider
+  reports unavailable" after its own start with no successful activation afterwards. Every
+  other check starts a new process and is blind to exactly this state.
+
 ## [0.22.8] - 2026-10-03
 
 ### Fixed
