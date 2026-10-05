@@ -14,8 +14,10 @@ WHY THIS EXISTS (catalog review, 05.10.2026)
     `base_url` and an `api_key`, that pair is used as-is. A key from the
     environment (or from `~/.hermes/.env`, which Hermes itself loads into the
     process environment) is only accepted when the endpoint it belongs to
-    matches the configured `base_url`; otherwise the call falls back to the
-    local Ollama endpoint with the Ollama key.
+    matches the configured `base_url`. On a mismatch the configured endpoint is
+    kept and only the key is replaced by the non-secret local placeholder, so
+    no real credential is ever sent to an endpoint the provider was not issued
+    for — at the cost of that extraction call failing auth, which is logged.
 
     Reading keys happens through `os.environ` first. Hermes loads
     `$HERMES_HOME/.env` into the process environment at startup, so the file
@@ -33,7 +35,10 @@ from typing import Dict
 logger = logging.getLogger(__name__)
 
 #: Endpoint host markers per provider key. A key is only paired with a
-#: `base_url` that names its provider — see the module docstring.
+#: `base_url` that names its provider — see the module docstring. A marker is
+#: either a full host (`api.openai.com`) or a bare host literal (`localhost`,
+#: `ollama`); both are compared with an exact-or-subdomain rule, never as a
+#: substring, so `api.openai.com.attacker.example` cannot borrow the key.
 _PROVIDER_HOSTS: Dict[str, tuple[str, ...]] = {
     "OPENAI_API_KEY": ("api.openai.com",),
     "OLLAMA_API_KEY": ("localhost", "127.0.0.1", "::1", "0.0.0.0", "ollama"),
@@ -84,6 +89,12 @@ def _host_of(base_url: str) -> str:
 def _key_matches_base_url(key_name: str, base_url: str) -> bool:
     """True when *key_name*'s provider is the one *base_url* points at.
 
+    The comparison is exact or by domain suffix: the host must *be* the marker
+    or a subdomain of it. A substring test would accept
+    `api.openai.com.attacker.example` (the marker appears in the middle of the
+    host) and hand a real key to a foreign endpoint — the exact leak this
+    module exists to prevent.
+
     An unknown key name (a custom provider's own variable) never matches — the
     configured pair from `config.yaml` is the only authority for that case.
     """
@@ -93,7 +104,7 @@ def _key_matches_base_url(key_name: str, base_url: str) -> bool:
     host = _host_of(base_url)
     if not host:
         return False
-    return any(marker in host for marker in markers)
+    return any(host == marker or host.endswith("." + marker) for marker in markers)
 
 
 def resolve_llm_config(hermes_home: str) -> Dict[str, str]:
@@ -142,6 +153,13 @@ def resolve_llm_config(hermes_home: str) -> Dict[str, str]:
     if not config["api_key"]:
         for key_name in ("OLLAMA_API_KEY", "OPENAI_API_KEY"):
             if not _key_matches_base_url(key_name, config["base_url"]):
+                if _env_file_key(hermes_home, key_name):
+                    # The key exists but belongs to another endpoint. Say so:
+                    # otherwise this surfaces only as a generic auth failure
+                    # downstream and reads like an unrelated outage.
+                    logger.warning(
+                        "llm-endpoint: ignoring %s — not issued for %s",
+                        key_name, config["base_url"])
                 continue
             candidate = _env_file_key(hermes_home, key_name)
             if candidate:

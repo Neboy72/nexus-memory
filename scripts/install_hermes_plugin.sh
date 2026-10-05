@@ -180,7 +180,7 @@ install_plugin_venv() {
     # Vollstaendige Laufzeit-Abhaengigkeiten: die Basis-Deps aus pyproject plus
     # die Cloud-Embedding-Extras, die das Plugin zur Laufzeit importiert.
     if uv pip install --python "${venv}/bin/python3" \
-            'qdrant-client>=1.12.0,<2.0.0' 'sentence-transformers>=3.0.0,<4.0.0' \
+            'qdrant-client>=1.12.0,<2.0.0' 'sentence-transformers>=3.0.0,<7.0.0' \
             voyageai openai bm25s networkx pyyaml requests httpx >/dev/null 2>&1 \
        && uv pip install --python "${venv}/bin/python3" --no-deps -e "${NEXUS_REPO}" >/dev/null 2>&1; then
         echo -e "${GREEN}✓${NC} Plugin venv ready: ${venv}"
