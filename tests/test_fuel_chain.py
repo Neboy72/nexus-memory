@@ -15,6 +15,11 @@ from nexus_memory.fuel_chain import (Station, budget_exhausted, build_chain,
 def _clean_state(tmp_path, monkeypatch):
     monkeypatch.setattr(fuel_chain, "FUEL_STATE", tmp_path / "fuel.json")
     monkeypatch.setattr(fuel_chain, "FUEL_BUDGET_USD", 1.00)
+    # Paid stations are opt-IN (catalog review 05.10.2026). These tests exercise
+    # the paid path on purpose, so they opt in explicitly instead of relying on
+    # a toggle file that only exists on a machine that already clicked it.
+    monkeypatch.setattr(fuel_chain, "FUEL_TOGGLE_PATH", tmp_path / "fuel_paid_enabled")
+    monkeypatch.setenv("NEXUS_FUEL_PAID", "1")
 
 
 def test_ollama_first_when_open(tmp_path, monkeypatch):

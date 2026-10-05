@@ -38,6 +38,10 @@ def _clean_state(tmp_path, monkeypatch):
     monkeypatch.setattr(fuel_chain, "FUEL_BUDGET_USD", 1.00)
     monkeypatch.setattr(fuel_chain, "MAX_PER_CALL_USD", 0.01)
     monkeypatch.setattr(fuel_chain, "_persist_failed", False)
+    # Paid stations are opt-IN (catalog review 05.10.2026); these tests cover
+    # the paid security gates, so they opt in explicitly.
+    monkeypatch.setattr(fuel_chain, "FUEL_TOGGLE_PATH", tmp_path / "fuel_paid_enabled")
+    monkeypatch.setenv("NEXUS_FUEL_PAID", "1")
 
 
 def _key_envs(monkeypatch):
