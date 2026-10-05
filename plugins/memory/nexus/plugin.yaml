@@ -1,6 +1,6 @@
 name: nexus
 version: 0.22.12
-description: "Nexus Memory — universal memory layer for AI agents. Qdrant + auto-detect embeddings (Voyage/OpenAI/Google/Jina/Ollama/sentence-transformers). Self-hosted, MCP-compatible."
+description: "Nexus Memory — self-hosted long-term memory for AI agents on Qdrant. Runs fully local with Ollama or sentence-transformers embeddings; cloud embedders (Voyage/OpenAI/Google/Jina) are opt-in via their API keys. MCP-compatible."
 pip_dependencies:
   - "qdrant-client>=1.12.0,<2.0.0"
   - "sentence-transformers>=3.0.0,<4.0.0"
@@ -9,6 +9,11 @@ requires_env: []
 # GOOGLE_API_KEY | JINA_API_KEY | NEXUS_QDRANT_HOST | NEXUS_QDRANT_PORT |
 # NEXUS_COLLECTION. Cloud provider SDKs (voyageai, openai, google-generativeai)
 # are optional extras — pip install nexus-memory[voyage|openai|google].
+#
+# A fresh install sends nothing off the machine: embeddings use a local model
+# and the two network features (query rewriting, paid fuel stations) are
+# opt-in. Adding a cloud key is what enables cloud embedding — see the README's
+# egress table for the complete list of paths.
 #
 # provides_hooks lists only PLUGIN hooks (validated against Hermes' VALID_HOOKS).
 # `on_session_end` and `on_memory_write` are NOT plugin hooks: this provider

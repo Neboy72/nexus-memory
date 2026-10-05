@@ -755,7 +755,13 @@ class NexusMemoryProvider:
     _REWRITE_MEMO_MAX = 64
 
     def _rewrite_if_enabled(self, query: str) -> str:
-        """Rewrite the query before embedding when NEXUS_REWRITE=1.
+        """Rewrite the query before embedding — OPT-IN under the provider.
+
+        A fresh install sends nothing: rewriting only runs when the user turns
+        it on explicitly with ``NEXUS_REWRITE=1`` (catalog review 05.10.2026 —
+        a per-turn query leaves the machine, so silence is the safe default).
+        The MCP server keeps its own default; this gate is provider-local so
+        the two deployments can differ.
 
         Fail-open in EVERY failure mode: disabled flag, no fuel station,
         station error, timeout, invalid env values, any wiring exception —
@@ -764,6 +770,9 @@ class NexusMemoryProvider:
         q = (query or "").strip()
         if not q:
             return query
+        if os.environ.get("NEXUS_REWRITE", "").strip().lower() not in (
+                "1", "true", "yes", "on"):
+            return query  # opt-in only
         try:
             from nexus_memory import query_rewrite as _qr
             if not _qr.enabled():
@@ -1010,13 +1019,19 @@ class NexusMemoryProvider:
                 "stored but demoted (salience capped 0.4): %.80s",
                 injection_hits, text,
             )
-        # Scope: auto-captured memories inherit the agent's NEXUS_SCOPE
-        # (fail-open to 'default' — same normalization as the server).
-        try:
-            from nexus_memory.mcp_server import _normalize_scope as _nscope
-            scope = _nscope(scope or os.environ.get("NEXUS_SCOPE", "default"))
-        except Exception:
-            scope = (scope or os.environ.get("NEXUS_SCOPE", "default") or "default").strip().lower() or "default"
+        # Scope: auto-captured memories inherit the agent's NEXUS_SCOPE.
+        # Inlined normalization (fail-open to 'default') instead of importing
+        # `nexus_memory.mcp_server`: importing the MCP server module for a
+        # regex helper pulled the whole server (Qdrant client, env loading,
+        # tool registration) into the Hermes provider process. Same contract
+        # as mcp_server._normalize_scope / the server: non-empty [a-z0-9-],
+        # max 40 chars, everything else degrades to 'default'.
+        _scope_raw = scope or os.environ.get("NEXUS_SCOPE", "default")
+        _scope_s = _scope_raw.strip().lower() if isinstance(_scope_raw, str) else ""
+        if _scope_s and re.match(r"^[a-z0-9][a-z0-9-]{0,39}$", _scope_s):
+            scope = _scope_s
+        else:
+            scope = "default"
         payload = {"id": eid, "content": text, "access_level": access_level, "category": category,
                     "source": source, "source_url": source_url, "created_at": ts,
                     "lifecycle_status": "canonical", "salience": eff_salience, "use_count": 0,
@@ -1965,10 +1980,18 @@ def _repair_command() -> str:
     # whatever happens to be on main.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
             "@adff7ad8c77941f0ca86bf5e307ea3388d45c890")
+    # A checkout of THIS repository may be reinstalled in editable mode — handy
+    # while developing. It has to prove it is that repository, though: for a
+    # catalog-installed plugin `__file__` lives under the Hermes plugin dir and
+    # the four `parent`s above it land on an arbitrary directory (the home dir,
+    # typically). Trusting a bare "pyproject.toml exists" there would let the
+    # shipped repair command reinstall whatever tree happens to sit in that
+    # directory. The identity check below only matches our own root.
     try:
-        # <repo>/plugins/memory/nexus/__init__.py → repo root
         repo_root = Path(__file__).resolve().parent.parent.parent.parent
-        if (repo_root / "pyproject.toml").exists():
+        marker = repo_root / "pyproject.toml"
+        if marker.exists() and 'name = "nexus-memory"' in marker.read_text(
+                encoding="utf-8", errors="replace"):
             return (f'uv venv --python {py_ver} "{venv}" && '
                     f'uv pip install --python "{python}" -e "{repo_root}"')
     except Exception:
