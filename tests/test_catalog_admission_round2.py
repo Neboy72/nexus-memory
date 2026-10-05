@@ -304,3 +304,31 @@ def test_rewrite_is_opt_in_under_the_provider(monkeypatch):
 
     monkeypatch.setenv("NEXUS_REWRITE", "0")
     assert provider._rewrite_if_enabled("hund futter") == "hund futter"
+
+
+# ── 6. the mcp floor matches the API the code actually calls ──────────────────
+
+def test_mcp_floor_covers_the_api_the_server_calls():
+    """`add_request_handler` exists only from mcp 2.0.0 on.
+
+    The code is written against the MCP v2 API, so a `<2.0.0` bound installs a
+    version without that attribute and the import dies — this happened on CI
+    (run 37285736327) when the floor was still 1.0.0. The declared range must
+    admit every version that provides the call.
+    """
+    import tomllib
+
+    data = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    deps = [d for d in data["project"]["dependencies"] if d.startswith("mcp")]
+    assert deps, "mcp must stay a declared dependency"
+    spec = deps[0]
+
+    assert ">=2.0.0" in spec, spec
+    # No upper bound below 3.0.0 (a 2.x ceiling would repeat the CI break).
+    assert "<2.0.0" not in spec, spec
+
+
+def test_server_source_calls_the_v2_api():
+    """The server relies on the v2 request-handler API, hence the floor above."""
+    text = (_SRC / "nexus_memory" / "mcp_server.py").read_text(encoding="utf-8")
+    assert "add_request_handler" in text
