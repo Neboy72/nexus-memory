@@ -182,7 +182,12 @@ class TestNr359PyYaml:
         assert any(r.startswith("pyyaml") for r in data["project"]["dependencies"])
 
     def test_import_yaml_used(self):
-        assert "import yaml" in _read("src/nexus_memory/extractor.py")
+        """PyYAML is imported where config.yaml is actually parsed.
+
+        The extractors delegate their config read to the shared resolver
+        (catalog review 05.10.2026), which owns the `import yaml`.
+        """
+        assert "import yaml" in _read("src/nexus_memory/llm_endpoint_config.py")
 
 
 # ── Nr 360: filterwarnings scoped ───────────────────────────────────────────

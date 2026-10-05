@@ -618,28 +618,36 @@ FUEL_TOGGLE_PATH = Path(os.environ.get(
     "NEXUS_FUEL_TOGGLE_FILE", os.path.expanduser("~/.nexus-memory/fuel_paid_enabled")))
 
 
-def _ensure_toggle_default_on() -> None:
-    """Default-ON: first import creates the toggle file (paid stations allowed).
+def _ensure_toggle_default_on() -> None:  # noqa: D401 - kept as a no-op alias
+    """Deprecated no-op. Paid stations are opt-IN now (catalog review 05.10.2026).
 
-    Never raises — a read-only home dir just means the toggle can't persist.
+    This used to create the toggle file on first import, which silently turned
+    paid fuel stations ON for every fresh install. Nothing may write user state
+    as an import side effect, and a download must never start spending provider
+    keys on its own. Kept as a named function so older callers keep importing
+    cleanly; it intentionally does nothing.
     """
-    try:
-        FUEL_TOGGLE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        if not FUEL_TOGGLE_PATH.exists():
-            FUEL_TOGGLE_PATH.touch()
-    except Exception:
-        pass
+    return None
 
 
 def _paid_enabled() -> bool:
-    """User opt-out for PAID stations (dashboard toggle, enabled by default).
+    """Opt-IN gate for PAID stations. Paid stations are OFF unless enabled.
 
-    Toggle file EXISTS  -> paid stations allowed (default after install).
-    Toggle file MISSING -> user turned the slider off; paid stations closed.
-    Ollama (free) is never affected. Env NEXUS_FUEL_PAID=0 forces off (headless).
+    Enable by either:
+      * a dashboard toggle click (writes the toggle file), or
+      * ``NEXUS_FUEL_PAID=1`` in the environment (headless setups).
+
+    Disable explicitly with ``NEXUS_FUEL_PAID=0``, which always wins.
+
+    Ollama (free, local or cloud) is never affected by this gate. Nothing here
+    creates the toggle file: an untouched install stays closed, so a fresh
+    download never starts spending the user's provider keys on its own.
     """
-    if os.environ.get("NEXUS_FUEL_PAID", "").strip() == "0":
+    env = os.environ.get("NEXUS_FUEL_PAID", "").strip().lower()
+    if env in ("0", "false", "no", "off"):
         return False
+    if env in ("1", "true", "yes", "on"):
+        return True
     return FUEL_TOGGLE_PATH.exists()
 
 
@@ -759,4 +767,5 @@ def get_fuel(ollama_base: str, ollama_model: str,
     log.warning("fuel: all stations closed — daemon sleeps until next tick")
     return None
 
-_ensure_toggle_default_on()
+# Paid stations are opt-IN: nothing is written to the user's home at import
+# time (see _ensure_toggle_default_on, now a deliberate no-op).

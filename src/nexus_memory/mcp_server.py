@@ -59,13 +59,19 @@ NEXUS_REPO_PATH = os.environ.get("NEXUS_REPO_PATH", _NEXUS_REPO)
 _BACKGROUND_TASKS: set = set()
 
 # ── Auto-load .env files ──────────────────────────────────────────
-# Load from NEXUS_ENV_FILE explicit path, then ~/.hermes/.env, then cwd/.env
+# Load from NEXUS_ENV_FILE explicit path, then ~/.hermes/.env.
+#
+# NEVER the current working directory: this module is imported as a library
+# by the Hermes provider (for `_normalize_scope`), so a `cwd/.env` read here
+# would let any directory the host process happens to sit in inject arbitrary
+# environment variables (API keys included) before the real server even starts.
+# The server's own `~/.hermes/.env` read is the Hermes-sanctioned home config;
+# an explicit path stays available through NEXUS_ENV_FILE for other setups.
 env_paths = []
 custom_env = os.environ.get("NEXUS_ENV_FILE")
 if custom_env:
     env_paths.append(Path(custom_env))
 env_paths.append(Path.home() / ".hermes" / ".env")
-env_paths.append(Path.cwd() / ".env")
 
 for env_path in env_paths:
     if env_path.exists():
