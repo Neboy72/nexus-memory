@@ -247,9 +247,19 @@ class TestNr511UpperBounds:
     """pip_dependencies get upper bounds (major caps)."""
 
     def test_plugin_yaml_bounds(self):
+        """Both pip dependencies carry an upper bound; the sentence-transformers
+        bound agrees with the package manifest.
+
+        The literal `<4.0.0` that used to sit here was why the drift survived:
+        three manifests advertised two ranges and a hard-coded string in a test
+        cannot notice that. The invariant (a cap exists, and all manifests name
+        the same one) is checked in test_catalog_admission_round2.py.
+        """
         src = _read("plugins/memory/nexus/plugin.yaml")
         assert '"qdrant-client>=1.12.0,<2.0.0"' in src
-        assert '"sentence-transformers>=3.0.0,<4.0.0"' in src
+        m = re.search(r'"sentence-transformers>=3\.0\.0,<([0-9.]+)"', src)
+        assert m, "sentence-transformers needs an upper bound"
+        assert m.group(1) != "4.0.0", "the plugin no longer pins the pre-6 range"
 
 
 # ---------------------------------------------------------------- Nr 512

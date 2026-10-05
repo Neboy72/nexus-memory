@@ -332,3 +332,82 @@ def test_server_source_calls_the_v2_api():
     """The server relies on the v2 request-handler API, hence the floor above."""
     text = (_SRC / "nexus_memory" / "mcp_server.py").read_text(encoding="utf-8")
     assert "add_request_handler" in text
+
+
+# ── 7. the endpoint matcher is exact-or-subdomain, never a substring ─────────
+#
+# Second review round (05.10.2026, OCR): the first version of
+# `_key_matches_base_url` tested `marker in host`. A host that merely CONTAINS
+# a marker therefore passed, so `https://api.openai.com.attacker.example/v1`
+# received the real `OPENAI_API_KEY` — the exact leak the module exists to
+# prevent. These tests pin the corrected rule so a later edit cannot soften it
+# back into a substring test.
+
+def test_host_marker_does_not_match_a_lookalike_domain():
+    """`api.openai.com.attacker.example` must not borrow the OpenAI key."""
+    sys.path.insert(0, str(_SRC))
+    from nexus_memory.llm_endpoint_config import _key_matches_base_url
+
+    for host in (
+        "https://api.openai.com.attacker.example/v1",
+        "https://evil-openai-api.openai.com.attacker.tld/v1",
+        "https://notapi.openai.com.evil.example/v1",
+    ):
+        assert not _key_matches_base_url("OPENAI_API_KEY", host), host
+
+
+def test_host_marker_accepts_the_provider_host_and_its_subdomains():
+    sys.path.insert(0, str(_SRC))
+    from nexus_memory.llm_endpoint_config import _key_matches_base_url
+
+    assert _key_matches_base_url("OPENAI_API_KEY", "https://api.openai.com/v1")
+    # A subdomain of the marker belongs to the provider too.
+    assert _key_matches_base_url("OPENAI_API_KEY", "https://eu.api.openai.com/v1")
+
+
+def test_ollama_markers_are_exact_hosts_not_substrings():
+    """`localhost.evil.example` and `notollama.example` are foreign hosts."""
+    sys.path.insert(0, str(_SRC))
+    from nexus_memory.llm_endpoint_config import _key_matches_base_url
+
+    for host in ("http://localhost.evil.example/v1", "http://notollama.example/v1"):
+        assert not _key_matches_base_url("OLLAMA_API_KEY", host), host
+    for host in ("http://localhost:11434/v1", "http://127.0.0.1:11434/v1"):
+        assert _key_matches_base_url("OLLAMA_API_KEY", host), host
+
+
+def test_a_rejected_key_is_named_in_a_warning(tmp_path, monkeypatch, caplog):
+    """A mismatch must say so instead of surfacing as a generic auth failure."""
+    home = tmp_path
+    _write_config(home, base_url="https://relay.internal/v1")
+    (home / ".env").write_text("OPENAI_API_KEY=sk-secret\n", encoding="utf-8")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+
+    from nexus_memory.llm_endpoint_config import resolve_llm_config
+
+    with caplog.at_level("WARNING"):
+        cfg = resolve_llm_config(str(home))
+
+    assert cfg["api_key"] != "sk-secret"
+    assert any("OPENAI_API_KEY" in r.message and "not issued for" in r.message
+               for r in caplog.records), caplog.text
+
+
+def test_sentence_transformers_bound_is_the_same_in_every_manifest():
+    """Two committed manifests must not advertise different runtime bounds."""
+    import re as _re
+
+    root = (_REPO / "pyproject.toml").read_text(encoding="utf-8")
+    plugin = (_REPO / "plugins" / "memory" / "nexus" / "plugin.yaml").read_text(
+        encoding="utf-8")
+    installer = (_REPO / "scripts" / "install_hermes_plugin.sh").read_text(
+        encoding="utf-8")
+
+    pattern = r"sentence-transformers>=\s*3\.0\.0\s*,\s*<([0-9.]+)"
+    found = set()
+    for text in (root, plugin, installer):
+        m = _re.search(pattern, text)
+        if m:
+            found.add(m.group(1))
+    assert len(found) == 1, f"manifests disagree on the upper bound: {found}"
