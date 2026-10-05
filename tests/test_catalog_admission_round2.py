@@ -394,6 +394,44 @@ def test_a_rejected_key_is_named_in_a_warning(tmp_path, monkeypatch, caplog):
                for r in caplog.records), caplog.text
 
 
+def test_a_resolved_key_does_not_also_warn_about_the_other(tmp_path, monkeypatch, caplog):
+    """No log spam: a key that another key resolves must not produce a warning.
+
+    Second review round: the warning used to fire inside the loop, so a setup
+    holding `OLLAMA_API_KEY` and `OPENAI_API_KEY` warned on every extraction
+    even though `OPENAI_API_KEY` resolved the call. It now fires only when
+    nothing resolved.
+    """
+    home = tmp_path
+    _write_config(home, base_url="https://api.openai.com/v1")
+    (home / ".env").write_text(
+        "OLLAMA_API_KEY=real-ollama\nOPENAI_API_KEY=sk-real\n", encoding="utf-8")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+
+    from nexus_memory.llm_endpoint_config import resolve_llm_config
+
+    with caplog.at_level("WARNING"):
+        cfg = resolve_llm_config(str(home))
+
+    assert cfg["api_key"] == "sk-real"
+    assert not [r for r in caplog.records if "not issued for" in r.message], caplog.text
+
+
+def test_the_endpoint_resolver_uses_the_cross_encoder_api_too():
+    """The dependency cap must cover every entry point the code calls.
+
+    The plugin reranks with `CrossEncoder.predict`, so a cap justified by
+    `SentenceTransformer.encode` alone would be verified against an incomplete
+    list of call sites.
+    """
+    reranker = (_SRC / "nexus_memory" / "reranker.py").read_text(encoding="utf-8")
+    retrieval = (_REPO / "nexus" / "retrieval" / "__init__.py").read_text(
+        encoding="utf-8")
+    assert "CrossEncoder" in reranker or "CrossEncoder" in retrieval
+    assert ".predict(" in reranker or ".predict(" in retrieval
+
+
 def test_sentence_transformers_bound_is_the_same_in_every_manifest():
     """Two committed manifests must not advertise different runtime bounds."""
     import re as _re

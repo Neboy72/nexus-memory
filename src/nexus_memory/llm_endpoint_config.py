@@ -150,22 +150,29 @@ def resolve_llm_config(hermes_home: str) -> Dict[str, str]:
     # `OPENAI_API_KEY` only for an OpenAI endpoint — a mismatched key is never
     # paired with a foreign base_url. The placeholder below is NOT a secret; it
     # only satisfies clients that insist on an api_key.
+    rejected: list[str] = []
     if not config["api_key"]:
         for key_name in ("OLLAMA_API_KEY", "OPENAI_API_KEY"):
             if not _key_matches_base_url(key_name, config["base_url"]):
+                # Present but issued for a different endpoint. Collected, not
+                # logged yet: a later entry in the loop may still resolve the
+                # key, and this runs on every extraction — a warning per call
+                # would be log spam, not a mismatch report.
                 if _env_file_key(hermes_home, key_name):
-                    # The key exists but belongs to another endpoint. Say so:
-                    # otherwise this surfaces only as a generic auth failure
-                    # downstream and reads like an unrelated outage.
-                    logger.warning(
-                        "llm-endpoint: ignoring %s — not issued for %s",
-                        key_name, config["base_url"])
+                    rejected.append(key_name)
                 continue
             candidate = _env_file_key(hermes_home, key_name)
             if candidate:
                 config["api_key"] = candidate
                 break
     if not config["api_key"]:
+        # Nothing resolved. Only here is a rejected key the reason, so only
+        # here is it worth saying: otherwise this surfaces downstream as a
+        # generic auth failure and reads like an unrelated outage.
+        for key_name in rejected:
+            logger.warning(
+                "llm-endpoint: ignoring %s — not issued for %s",
+                key_name, config["base_url"])
         config["api_key"] = _LOCAL_API_KEY
     if not config["model"]:
         config["model"] = _DEFAULT_MODEL
