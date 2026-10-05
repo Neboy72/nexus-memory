@@ -94,19 +94,27 @@ class TestNr293ConfigLogging:
         src = _read("src/nexus_memory/cost_router.py")
         assert "config read failed" in src
 
-    def test_extractor_logs_config_failure(self):
-        src = _read("src/nexus_memory/extractor.py")
+    def test_shared_endpoint_resolver_logs_config_failure(self):
+        """The extractors share ONE resolver now; it owns the logging.
+
+        The two extractors delegate to `llm_endpoint_config` (catalog review
+        05.10.2026), so the marker lives there. Guarded for both paths — the
+        config.yaml read and the .env read.
+        """
+        src = _read("src/nexus_memory/llm_endpoint_config.py")
         assert "config read failed" in src
         assert ".env read failed" in src
 
-    def test_entity_extractor_logs_config_failure(self):
-        src = _read("src/nexus_memory/entity_extractor.py")
-        assert "config read failed" in src
+    def test_extractors_delegate_to_the_shared_resolver(self):
+        """Both extractors log via the resolver, not with their own copies."""
+        for rel in ("src/nexus_memory/extractor.py",
+                    "src/nexus_memory/entity_extractor.py"):
+            src = _read(rel)
+            assert "resolve_llm_config" in src, rel
 
     def test_bare_pass_removed_from_config_loaders(self):
         for rel in ("src/nexus_memory/cost_router.py",
-                    "src/nexus_memory/extractor.py",
-                    "src/nexus_memory/entity_extractor.py"):
+                    "src/nexus_memory/llm_endpoint_config.py"):
             src = _read(rel)
             assert "except Exception:\n            pass" not in src
 

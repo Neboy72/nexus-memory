@@ -58,63 +58,13 @@ _MAX_CONVERSATION_CHARS = 8000
 
 
 def _load_llm_config(hermes_home: str) -> Dict[str, str]:
-    """Read model config from Hermes config.yaml and .env."""
-    config: Dict[str, str] = {"model": "", "base_url": "", "api_key": ""}
+    """Read model config from Hermes config.yaml and .env.
 
-    # Read config.yaml
-    config_path = os.path.join(hermes_home, "config.yaml")
-    try:
-        import yaml
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f) or {}
-
-        model = cfg.get("model", {})
-        config["model"] = model.get("default", "")
-        config["base_url"] = model.get("base_url", "")
-        config["api_key"] = model.get("api_key", "")
-
-        # Resolve custom provider
-        provider = model.get("provider", "")
-        if provider and provider.startswith("custom:"):
-            provider_name = provider[7:]
-            providers = cfg.get("providers", {})
-            if provider_name in providers:
-                p = providers[provider_name]
-                if not config["base_url"]:
-                    config["base_url"] = p.get("base_url", "")
-                if not config["api_key"]:
-                    config["api_key"] = p.get("api_key", "")
-    except Exception as exc:
-        logger.warning("SessionExtractor: config read failed (%s): %s", config_path, exc)
-
-    # Read .env for API keys
-    env_path = os.path.join(hermes_home, ".env")
-    if os.path.exists(env_path) and not config["api_key"]:
-        try:
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if "=" in line and not line.startswith("#"):
-                        key, val = line.split("=", 1)
-                        key = key.strip()
-                        val = val.strip().strip('"').strip("'")
-                        if key == "OLLAMA_API_KEY" and not config["api_key"]:
-                            config["api_key"] = val
-                        elif key == "OPENAI_API_KEY" and not config["api_key"]:
-                            config["api_key"] = val
-        except Exception as exc:
-            logger.warning("SessionExtractor: .env read failed (%s): %s", env_path, exc)
-
-    # Fallback: local Ollama
-    if not config["base_url"]:
-        config["base_url"] = "http://localhost:11434/v1"
-    if not config["api_key"]:
-        config["api_key"] = "ollama"
-    # Use a cheap fast model for extraction if main model is not set
-    if not config["model"]:
-        config["model"] = "gemma3:4b"
-
-    return config
+    Delegates to the shared, key/endpoint-safe resolver — see
+    `nexus_memory.llm_endpoint_config` for why one implementation owns this.
+    """
+    from nexus_memory.llm_endpoint_config import resolve_llm_config
+    return resolve_llm_config(hermes_home)
 
 
 def _quick_health_check(base_url: str, timeout: float = 1.0) -> bool:
