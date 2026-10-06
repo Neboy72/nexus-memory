@@ -72,24 +72,43 @@ def _plugin_venv_site_packages(venv: Path) -> "Optional[Path]":
 
 
 def _try_import_qdrant() -> bool:
-    """Import or reload qdrant_client — the plugin's own venv takes precedence.
+    """Import or reload qdrant_client — package-manager copy first, own venv last.
 
     Idempotent and fail-open. Called at module start AND on every re-probe, so
     a repair heals the RUNNING process rather than only the next one (the
     frozen probe cache was exactly that bug).
+
+    Order matters (review 06.10.2026): the import runs FIRST against the
+    interpreter as it is, so a dependency the package manager installed wins.
+    The plugin's own venv is appended only after that attempt failed, and only
+    its matching-version site-packages — so it is a last-resort repair path,
+    never a second copy that could shadow a managed install. Dropping the
+    fallback entirely would remove the self-healing for deployments where
+    ``hermes update`` wipes the host venv.
     """
     global QdrantClient, qmodels, _QDRANT_IMPORT_ERROR
     if QdrantClient is not None and qmodels is not None:
         return True
-    site = _plugin_venv_site_packages(_plugin_venv_dir())
-    if site is not None and str(site) not in sys.path:
-        sys.path.append(str(site))
-    try:
+
+    def _import():
         from qdrant_client import QdrantClient as _client
         from qdrant_client.http import models as _models
-    except Exception as exc:  # missing dependency in this interpreter — must not kill the module
-        _QDRANT_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
-        return False
+        return _client, _models
+
+    try:
+        _client, _models = _import()
+    except Exception as exc:  # not in this interpreter — try the own venv below
+        site = _plugin_venv_site_packages(_plugin_venv_dir())
+        if site is None or str(site) in sys.path:
+            _QDRANT_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+            return False
+        sys.path.append(str(site))
+        try:
+            _client, _models = _import()
+        except Exception as exc2:
+            _QDRANT_IMPORT_ERROR = f"{type(exc2).__name__}: {exc2}"
+            return False
+
     QdrantClient = _client  # type: ignore
     qmodels = _models  # type: ignore
     _QDRANT_IMPORT_ERROR = ""
@@ -1979,7 +1998,7 @@ def _repair_command() -> str:
     # is pinned so a repair fetches exactly the reviewed revision and not
     # whatever happens to be on main.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
-            "@a9641795d5319a30e8e974529ef118a588ddbe63")
+            "@6f464f723421d7e36352413b86683d3f8310d4a3")
     # A checkout of THIS repository may be reinstalled in editable mode — handy
     # while developing. It has to prove it is that repository, though: for a
     # catalog-installed plugin `__file__` lives under the Hermes plugin dir and
