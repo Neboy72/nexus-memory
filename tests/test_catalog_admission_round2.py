@@ -449,3 +449,198 @@ def test_sentence_transformers_bound_is_the_same_in_every_manifest():
         if m:
             found.add(m.group(1))
     assert len(found) == 1, f"manifests disagree on the upper bound: {found}"
+
+
+# ── 3. the engine pin must match the reviewed commit in BOTH manifests ────────
+# Finding 06.10.2026: the catalog entry pointed at 6f464f72, but the engine pin
+# still said a9641795 — so an install fetched the OLD engine and silently lost
+# the suffix-match key guard and the `mcp>=2.0.0` floor. The two files must
+# never drift apart again.
+
+def _pinned_revs():
+    """Return (rev in plugin pyproject, rev in the provider's repair command)."""
+    import re as _re
+
+    toml = (_REPO / "plugins" / "memory" / "nexus" / "pyproject.toml").read_text(
+        encoding="utf-8")
+    m_toml = _re.search(r'rev\s*=\s*"([0-9a-f]{40})"', toml)
+
+    provider = (_REPO / "plugins" / "memory" / "nexus" / "__init__.py").read_text(
+        encoding="utf-8")
+    m_prov = _re.search(
+        r'nexus-memory @ git\+https://github\.com/Neboy72/nexus-memory\.git"\s*\n?\s*"@([0-9a-f]{40})',
+        provider)
+
+    assert m_toml, "no pinned rev found in the plugin pyproject.toml"
+    assert m_prov, "no pinned rev found in the provider repair command"
+    return m_toml.group(1), m_prov.group(1)
+
+
+def test_engine_pin_is_identical_in_both_manifests():
+    """The uv pin and the repair command must fetch the same commit."""
+    toml_rev, provider_rev = _pinned_revs()
+    assert toml_rev == provider_rev, (
+        "the two pins disagree — one install path would fetch a different engine "
+        f"(pyproject: {toml_rev[:12]}, repair: {provider_rev[:12]})"
+    )
+
+
+def test_engine_pin_carries_the_reviewed_fixes():
+    """The pinned commit must contain the fixes the review asked for.
+
+    A pin can point at a commit that exists but predates the fix — which is
+    exactly what happened. Check the source AT THE PIN, not just that it resolves.
+    """
+    import subprocess
+
+    toml_rev, _ = _pinned_revs()
+
+    # This check reads history. A source tarball (no .git), a bare container, or
+    # an unreadable worktree pointer cannot answer it — skip there rather than
+    # fail, so a packaging job is not broken by a test about repository history.
+    import shutil
+
+    if not (_REPO / ".git").exists() or shutil.which("git") is None:
+        pytest.skip("no git history/binary in this tree — cannot read the pinned commit")
+
+    probe = subprocess.run(["git", "rev-parse", "--git-dir"],
+                           cwd=_REPO, capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip(f"git history not usable here: {probe.stderr.strip()[:80]}")
+
+    def at_pin(path):
+        out = subprocess.run(
+            ["git", "show", f"{toml_rev}:{path}"],
+            cwd=_REPO, capture_output=True, text=True)
+        assert out.returncode == 0, f"{path} is not readable at {toml_rev[:12]}"
+        return out.stdout
+
+    # The suffix-match guard: exact host or subdomain, never a substring.
+    endpoint = at_pin("src/nexus_memory/llm_endpoint_config.py")
+    assert "endswith(\".\" + marker)" in endpoint, (
+        "the pinned engine has no exact-or-subdomain host guard"
+    )
+
+    # The mcp floor that admits the v2 API the server calls.
+    root_toml = at_pin("pyproject.toml")
+    assert "mcp>=2.0.0" in root_toml, "the pinned engine still pins mcp below 2.0.0"
+
+
+def test_both_pins_are_full_commit_shas():
+    """A short sha or a branch name in a pin makes an install non-reproducible."""
+    toml_rev, provider_rev = _pinned_revs()
+    for name, rev in (("pyproject.toml", toml_rev), ("repair command", provider_rev)):
+        assert len(rev) == 40, f"{name} pins a short sha ({rev}) — use the full commit"
+        assert all(c in "0123456789abcdef" for c in rev), f"{name} pins a non-sha value"
+
+
+# ── 4. the own-venv fallback must stay a LAST resort ──────────────────────────
+
+def test_own_venv_path_is_appended_only_after_a_failed_import():
+    """A managed install must win; the own venv is a repair path, not a shadow.
+
+    Finding 06.10.2026 asked for the `sys.path.append` to go. It must not be
+    deleted outright (that would drop the self-healing where `hermes update`
+    wipes the host venv), but it must no longer be prepended before the first
+    import attempt.
+    """
+    provider = (_REPO / "plugins" / "memory" / "nexus" / "__init__.py").read_text(
+        encoding="utf-8")
+    fn = provider.split("def _try_import_qdrant", 1)[1].split("\ndef ", 1)[0]
+
+    first_import = fn.find("_import()")
+    append = fn.find("sys.path.append")
+    assert first_import != -1, "the import helper is gone"
+    assert append != -1, "the own-venv fallback was deleted instead of demoted"
+    assert append > first_import, (
+        "the own venv is still put on sys.path BEFORE the first import attempt"
+    )
+    assert "sys.path.insert" not in fn, (
+        "inserting the own venv would shadow a package-manager install"
+    )
+
+
+def test_own_venv_fallback_still_heals_a_broken_host_venv(tmp_path, monkeypatch):
+    """When the dependency is missing, the fallback venv is still tried.
+
+    Simulated with a meta_path finder that blocks ``qdrant_client`` until the
+    plugin's own venv lands on ``sys.path`` — exactly the situation after a
+    Hermes update replaced its managed venv. The fallback must find it there.
+    """
+    import importlib.util
+    import sys as _sys
+
+    _REPO_ROOT = Path(__file__).resolve().parents[1]
+    plugin_path = _REPO_ROOT / "plugins" / "memory" / "nexus" / "__init__.py"
+
+    # The own venv holds the missing dependency (as a real one would).
+    venv = tmp_path / "plugin-venv"
+    tag = f"python{_sys.version_info.major}.{_sys.version_info.minor}"
+    site = venv / "lib" / tag / "site-packages"
+    (site / "qdrant_client" / "http").mkdir(parents=True)
+    (site / "qdrant_client" / "__init__.py").write_text(
+        "class QdrantClient: pass\n", encoding="utf-8")
+    (site / "qdrant_client" / "http" / "__init__.py").write_text("", encoding="utf-8")
+    (site / "qdrant_client" / "http" / "models.py").write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
+
+    class _BlockUntilOwnVenv:
+        """Refuse qdrant_client until the plugin's own venv is on sys.path."""
+
+        def find_spec(self, name, path=None, target=None):
+            if name == "qdrant_client" or name.startswith("qdrant_client."):
+                if str(site) not in _sys.path:
+                    raise ImportError("qdrant_client blocked until the own venv is used")
+            return None
+
+    monkeypatch.setattr(_sys, "meta_path", [_BlockUntilOwnVenv()] + list(_sys.meta_path))
+
+    # A cached module would bypass the finder entirely — drop it first, so the
+    # import really goes through the search path (this is how the real case
+    # behaves: the host venv has no qdrant_client at all).
+    for key in [k for k in _sys.modules
+                if k == "qdrant_client" or k.startswith("qdrant_client.")]:
+        monkeypatch.delitem(_sys.modules, key)
+
+    spec = importlib.util.spec_from_file_location(
+        "nexus_plugin_fallback_probe", str(plugin_path))
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # The module-level probe ran while the dependency was blocked, so the
+    # provider is broken — clear the state to exercise the repair path.
+    mod.QdrantClient = None
+    mod.qmodels = None
+
+    assert mod._try_import_qdrant() is True, (
+        "the fallback did not heal a host venv that lacks the dependency"
+    )
+    assert str(site) in _sys.path, "the own venv was never put on sys.path"
+
+
+# ── 5. the README must not overclaim "nothing leaves" ─────────────────────────
+# Finding 06.10.2026: an embedding key the host already exports (e.g.
+# OPENAI_API_KEY, present for other tools) turns on cloud embedding of turn
+# text. "Nothing, out of the box" invited reading that as "unless I add a key
+# for Nexus", which is wrong.
+
+def test_readme_discloses_that_a_preexisting_key_enables_egress():
+    """The egress section must name the pre-existing-key case explicitly."""
+    readme = (_REPO / "plugins" / "memory" / "nexus" / "README.md").read_text(
+        encoding="utf-8")
+    section = readme.split("## What Leaves Your Machine", 1)
+    assert len(section) == 2, "the egress section disappeared"
+    body = section[1].split("\n## ", 1)[0]
+
+    assert "already has in its environment" in body, (
+        "the README does not say a pre-existing key enables cloud embedding"
+    )
+    assert "OPENAI_API_KEY" in body, (
+        "the README does not name a concrete example key"
+    )
+    # The absolute claim must not stand unqualified.
+    assert 'out of the box" means' in body or "means *no key present*" in body, (
+        "the 'Nothing, out of the box' claim is unqualified again"
+    )
