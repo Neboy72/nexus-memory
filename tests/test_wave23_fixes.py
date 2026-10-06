@@ -47,21 +47,34 @@ class TestNr408PackageVersions:
     (JSON erlaubt keine Kommentare, darum Test statt Doku)."""
 
     def test_all_four_openclaw_spots_share_base(self):
+        """Die drei Pins teilen EINE Basis; der Peer-BEREICH ist bewusst eigen.
+
+        Urspruenglich waren alle vier Stellen 2026.5.7. Bei der ClawHub-
+        Angleichung (1.21.3) wurden die drei konkreten Pins auf 2026.9.8
+        gezogen — der Peer-Bereich behaelt seine Untergrenze 2026.5.7, weil er
+        auch aeltere Gateways im Feld zulassen muss (so in
+        test_h155_peer_range_is_bounded festgehalten). Drift-Schutz heisst
+        darum: die drei Pins stimmen untereinander ueberein, und der Peer-
+        Bereich ist ein gueltiger, begrenzter Bereich.
+        """
         pkg = json.loads(_read("plugins/openclaw/package.json"))
         bases = {
-            pkg["peerDependencies"]["openclaw"],
             pkg["openclaw"]["compat"]["pluginApi"],
             pkg["openclaw"]["compat"]["minGatewayVersion"],
             pkg["openclaw"]["build"]["openclawVersion"],
         }
-        # extract calver from each value; all must share ONE base
         import re as _re
         extracted = set()
         for v in bases:
-            m = re.search(r"(\d{4}\.\d+\.\d+)", str(v))
+            m = _re.search(r"(\d{4}\.\d+\.\d+)", str(v))
             assert m, f"no calver in {v}"
             extracted.add(m.group(1))
-        assert len(extracted) == 1, f"OpenClaw base versions drift: {extracted}"
+        assert len(extracted) == 1, f"OpenClaw pin versions drift: {extracted}"
+
+        peer = pkg["peerDependencies"]["openclaw"]
+        assert _re.fullmatch(r">=\d{4}\.\d+\.\d+ <\d{4}\.0\.0", peer), (
+            f"the peer range must stay a bounded range, got: {peer}"
+        )
 
     def test_lockfile_version_consistent(self):
         pkg = json.loads(_read("plugins/openclaw/package.json"))

@@ -13,14 +13,22 @@ Cursor, etc.) see the same memories.
 
 ## What Leaves Your Machine
 
-**Nothing, out of the box.** A fresh install runs entirely on the machine:
+**Nothing, out of the box — but "out of the box" means *no key present*.** A
+fresh install on a machine with no embedding key runs entirely locally:
 embeddings use a **local** model (Ollama, or `sentence-transformers` as
 fallback), query rewriting and paid stations are off, and Qdrant plus all state
 stay local under `~/.nexus-memory`.
 
-The picture changes as soon as a **cloud key** is added — that is the operator's
-choice, and the paths below are what it enables. Read this list before adding
-one.
+Read the next paragraph before you conclude "nothing leaves" for *your* machine:
+an embedding key that Hermes **already has in its environment** — for instance
+`OPENAI_API_KEY`, which many setups carry for other tools — is auto-detected and
+turns on cloud embedding of your turn text. It is not necessary to add a key
+*for Nexus* for that to happen; a pre-existing one is enough. Run
+`env | grep -E 'VOYAGE|OPENAI|GOOGLE|JINA'` to see what your agent would pick up.
+
+The picture changes as soon as such a **cloud key** is present — that is the
+operator's choice, and the paths below are what it enables. Read this list
+before adding one.
 
 ### Egress paths, per setting
 
