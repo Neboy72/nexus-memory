@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Added
+
+- **The catalog entry pins the engine that is actually shipped.** `plugin-catalog/nexus.yaml`
+  still pointed at `ec3a21c`, which predates the local-first default, so a catalog install
+  received the cloud-first auto-detection while the README and the ClawHub package described
+  the fixed behaviour. The entry now pins the same commit ClawHub links as its source, and the
+  repository guard test asserts the local-first default *at the pin* — a lagging pin fails the
+  suite instead of passing silently.
+
 ### Fixed
 
 - **Local embeddings are the default; the cloud is now an explicit choice.**
