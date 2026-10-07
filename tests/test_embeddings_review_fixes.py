@@ -23,6 +23,8 @@ All Ollama / Google / OpenAI interactions are mocked — no network.
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import sys
 import types
@@ -117,6 +119,64 @@ def _block_ollama(monkeypatch) -> None:
     monkeypatch.setattr(
         "requests.post",
         lambda *a, **k: (_ for _ in ()).throw(ConnectionError("no ollama")),
+    )
+
+
+def _fake_local_hf(monkeypatch, dim: int = 1024) -> None:
+    """Install a fake SentenceTransformer so the local route needs no download.
+
+    The local HuggingFace route is the developer default now, so tests that
+    exercise detection order must be able to run it without network access and
+    without a multi-hundred-MB model download.
+    """
+
+    class _FakeModel:
+        def __init__(self, name):  # noqa: D107
+            self.name = name
+
+        def encode(self, _text):  # noqa: D102
+            return [0.0] * dim
+
+    fake_st = types.ModuleType("sentence_transformers")
+    fake_st.SentenceTransformer = _FakeModel
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
+
+
+def _no_cloud_keys(monkeypatch) -> None:
+    """Remove every cloud key from the environment and the module constants.
+
+    Needed by the "no backend at all" tests: a developer machine that happens
+    to export a key must not be able to satisfy the cloud level.
+    """
+    for var in ("VOYAGE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "JINA_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    for const in ("VOYAGE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
+        if hasattr(embeddings_module, const):
+            monkeypatch.setattr(embeddings_module, const, "")
+
+
+def _block_st_import(monkeypatch) -> None:
+    """Raise ImportError for sentence_transformers while it is being imported."""
+    monkeypatch.delitem(sys.modules, "sentence_transformers", raising=False)
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _blocked(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "sentence_transformers" or name.startswith("sentence_transformers."):
+            raise ImportError("blocked for test")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked)
+
+
+def _block_local_hf(monkeypatch) -> None:
+    """Make the local HuggingFace route unavailable so detection moves on."""
+    monkeypatch.setattr(
+        embeddings_module.EmbeddingProvider,
+        "_try_sentence_transformers",
+        lambda self: False,
     )
 
 
@@ -296,33 +356,51 @@ class TestFailClosedExplicitProvider:
         with pytest.raises(RuntimeError):
             EmbeddingProvider(preferred="ollama")
 
-    def test_preferred_auto_allows_cloud_first_detection(self, isolated_env, monkeypatch):
-        """'auto' is the explicit opt-in to the cloud-first priority chain."""
+    def test_preferred_auto_stays_local_even_with_cloud_key(
+        self, isolated_env, monkeypatch
+    ):
+        """'auto' must NOT send a user to the cloud any more (developer default, 2026-10-07).
+
+        Local-first is the developer default: even when a cloud key happens to
+        be present in the environment, plain detection picks the local route.
+        Reaching a cloud provider requires an explicit choice or the explicit
+        NEXUS_ALLOWED_CLOUD_FALLBACK opt-in — never auto-detection.
+        """
         monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
         monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "vo-valid")
         fake_voyage = MagicMock(name="voyageai")
         fake_voyage.Client = MagicMock(return_value=MagicMock())
         monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
+        _block_ollama(monkeypatch)
+        _fake_local_hf(monkeypatch)
 
         ep = EmbeddingProvider(preferred="auto")
 
-        assert ep.name == "voyage-4"
-        assert ep.provider_type == "cloud"
+        assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
+        assert ep.dim == 1024
+        assert ep.provider_type == "local"
+        fake_voyage.Client.assert_not_called()
 
     def test_cloud_fallback_env_allows_fallback(
         self, isolated_env, monkeypatch
     ):
-        """NEXUS_ALLOWED_CLOUD_FALLBACK is the second opt-in path."""
+        """NEXUS_ALLOWED_CLOUD_FALLBACK is the second opt-in path.
+
+        A failed explicit CLOUD choice may continue into detection — but the
+        detection itself is local-first (developer default, 2026-10-07), so the provider that
+        ends up selected is the local default, not a cloud one.
+        """
         monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "openai")
         monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "")  # unusable
         monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "1")
         _block_ollama(monkeypatch)
+        _fake_local_hf(monkeypatch)
 
         ep = EmbeddingProvider(preferred="openai")
 
-        # Fallback ran; the provider that got selected must still be local
-        # unless a cloud one is configured (none is, here → MiniLM).
-        assert ep.name == "all-MiniLM-L6-v2"
+        # The fallback ran (no exception) and stayed on this machine.
+        assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
+        assert ep.provider_type == "local"
 
     def test_failed_explicit_cloud_choice_fails_closed_too(
         self, isolated_env, monkeypatch
@@ -548,3 +626,222 @@ class TestStoredCollectionModelResolution:
 
         with pytest.raises(CollectionModelUnavailable):
             EmbeddingProvider(preferred="ollama")
+
+    def test_auto_end_to_end_propagates_collection_model_unavailable(
+        self, isolated_env, monkeypatch
+    ):
+        """The drift error must survive the WHOLE auto-detection chain.
+
+        Regression: calling ``_try_sentence_transformers`` directly proves
+        nothing about ``_detect_auto`` — a broad ``except Exception`` around
+        the local level used to swallow the error, after which detection
+        continued into the next level (and, with the cloud opt-in, into the
+        cloud) despite a recorded local model. This walks the real chain.
+        """
+        monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
+        monkeypatch.setattr(
+            embeddings_module,
+            "_read_existing_collection_model",
+            lambda: "stored-model-name",
+        )
+        _block_ollama(monkeypatch)
+        # The REAL _try_sentence_transformers must run so the drift guard is
+        # exercised inside the real chain: block the library import instead of
+        # stubbing the method away.
+        _block_st_import(monkeypatch)
+
+        with pytest.raises(CollectionModelUnavailable, match="stored-model-name"):
+            EmbeddingProvider(preferred="auto")
+
+    def test_bge3_zero_does_not_override_a_recorded_collection_model(
+        self, isolated_env, monkeypatch
+    ):
+        """Drift beats the skip: a recorded collection keeps its own model.
+
+        NEXUS_HF_BGE3=0 only trims the DEFAULT candidate list. If the
+        collection already stores bge-m3 vectors, that model must still be
+        tried first — and its failure must fail closed rather than silently
+        embedding with a different model.
+        """
+        monkeypatch.setenv("NEXUS_HF_BGE3", "0")
+        monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
+        monkeypatch.setattr(
+            embeddings_module,
+            "_read_existing_collection_model",
+            lambda: "BAAI/bge-m3",
+        )
+        _block_ollama(monkeypatch)
+
+        attempted: list[str] = []
+
+        class _FakeST:
+            def __init__(self, name):  # noqa: D107
+                attempted.append(name)
+                self.name = name
+
+            def encode(self, _text):  # noqa: D102
+                raise OSError("weights gone")
+
+        fake_st = types.ModuleType("sentence_transformers")
+        fake_st.SentenceTransformer = _FakeST
+        monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
+
+        with pytest.raises(CollectionModelUnavailable, match="BAAI/bge-m3"):
+            EmbeddingProvider(preferred="auto")
+
+        assert attempted and attempted[0] == "BAAI/bge-m3", (
+            "the recorded collection model must be tried first, got "
+            f"{attempted}"
+        )
+
+    def test_auto_without_any_backend_reports_loudly(
+        self, isolated_env, monkeypatch, caplog
+    ):
+        """A fresh install with nothing available must SAY so, not go quiet.
+
+        The default path used to end on an unavailable provider without a
+        word; callers then ran without memory and without a hint why. It must
+        not crash either — the plugin contract is "report, do not kill".
+        """
+        monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
+        _block_ollama(monkeypatch)
+        _block_local_hf(monkeypatch)
+        _no_cloud_keys(monkeypatch)
+
+        with caplog.at_level(logging.ERROR):
+            ep = EmbeddingProvider(preferred="auto")
+
+        assert ep.available is False
+        assert ep.provider_type == "none"
+        assert any(
+            rec.levelno >= logging.ERROR and "No embedding provider" in rec.getMessage()
+            for rec in caplog.records
+        ), "the missing backend must be reported at ERROR level"
+
+    def test_default_path_without_any_backend_reports_loudly(
+        self, isolated_env, monkeypatch, caplog
+    ):
+        """Same guarantee for plain construction (no explicit preference)."""
+        monkeypatch.setattr(embeddings_module, "_read_preferred_provider", lambda: "")
+        _block_ollama(monkeypatch)
+        _block_local_hf(monkeypatch)
+        _no_cloud_keys(monkeypatch)
+
+        with caplog.at_level(logging.ERROR):
+            ep = EmbeddingProvider()
+
+        assert ep.available is False
+        assert any(
+            rec.levelno >= logging.ERROR and "No embedding provider" in rec.getMessage()
+            for rec in caplog.records
+        )
+
+
+# ===========================================================================
+# Release-blocker fixes (developer default, 2026-10-07)
+# ===========================================================================
+
+
+class TestReleaseBlockerEmbedderFixes:
+    """Regression tests for the three release-blocking embedder findings."""
+
+    def test_auto_with_cloud_key_and_local_down_never_reaches_cloud(
+        self, isolated_env, monkeypatch
+    ):
+        """Plain 'auto' must never leave the machine, even with a cloud key.
+
+        The cloud client must not even be CONSTRUCTED — that is the exact
+        finding the public scanner reported twice.
+        """
+        monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
+        monkeypatch.setenv("VOYAGE_API_KEY", "vo-test-1234567890")
+        # The module constant is the import-time snapshot; patch it too, or the
+        # cloud level would be unreachable on a machine that never exported the
+        # key and the test would pass even with a regression.
+        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "vo-test-1234567890")
+        fake_voyage = MagicMock(name="voyageai")
+        fake_voyage.Client = MagicMock(return_value=MagicMock())
+        monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
+        _block_ollama(monkeypatch)
+        _block_local_hf(monkeypatch)
+
+        ep = EmbeddingProvider(preferred="auto")
+
+        fake_voyage.Client.assert_not_called()
+        assert ep.provider_type == "none", (
+            "with no local backend and no explicit cloud opt-in the provider "
+            f"must stay unset, not fall into the cloud (got {ep.provider_type})"
+        )
+
+    def test_hf_bge3_zero_skips_bge_and_keeps_local_route(
+        self, isolated_env, monkeypatch
+    ):
+        """NEXUS_HF_BGE3=0 removes bge-m3 from the list; the HF route continues.
+
+        The fake records every model it was asked to load, so a regression
+        that ignores the skip (keeping bge-m3 in the candidate list) fails
+        even when the route happens to recover on the last candidate.
+        """
+        monkeypatch.setenv("NEXUS_HF_BGE3", "0")
+        _block_ollama(monkeypatch)
+        attempted: list[str] = []
+
+        class _FakeST:
+            def __init__(self, name):  # noqa: D107
+                attempted.append(name)
+                self.name = name
+
+            def encode(self, _text):  # noqa: D102
+                if "qwen" in self.name.lower() or "bge" in self.name.lower():
+                    raise OSError("offline")
+                return [0.0] * 384
+
+        fake_st = types.ModuleType("sentence_transformers")
+        fake_st.SentenceTransformer = _FakeST
+        monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
+
+        ep = EmbeddingProvider(preferred="auto")
+
+        assert ep.provider_type == "local"
+        assert ep.backend == "sentence-transformers"
+        assert ep.name == "all-MiniLM-L6-v2"
+        assert ep.name != "BAAI/bge-m3"
+        assert "BAAI/bge-m3" not in attempted, (
+            "NEXUS_HF_BGE3=0 must keep bge-m3 out of the candidate list; "
+            f"the route loaded it anyway: {attempted}"
+        )
+
+    def test_recorded_model_without_sentence_transformers_raises(
+        self, isolated_env, monkeypatch
+    ):
+        """A recorded local model with the library missing fails closed."""
+        monkeypatch.setattr(
+            embeddings_module,
+            "_read_existing_collection_model",
+            lambda: "stored-model-name",
+        )
+        _block_st_import(monkeypatch)
+        p = EmbeddingProvider.__new__(EmbeddingProvider)
+        p._reset_provider_state()
+
+        with pytest.raises(CollectionModelUnavailable, match="stored-model-name"):
+            p._try_sentence_transformers()
+
+    def test_cloud_path_does_not_swallow_collection_model_unavailable(
+        self, isolated_env, monkeypatch
+    ):
+        """A CollectionModelUnavailable reaching the cloud loop must propagate."""
+        monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
+        monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "1")
+        _block_ollama(monkeypatch)
+        _block_local_hf(monkeypatch)
+
+        def _exploding_voyage(self):
+            raise CollectionModelUnavailable("cloud drift")
+
+        monkeypatch.setattr(
+            embeddings_module.EmbeddingProvider, "_try_voyage", _exploding_voyage
+        )
+
+        with pytest.raises(CollectionModelUnavailable, match="cloud drift"):
+            EmbeddingProvider(preferred="auto")

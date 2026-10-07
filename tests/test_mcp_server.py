@@ -542,14 +542,15 @@ class TestCallToolRecall:
 class _FakeSentenceTransformer:
     """Stand-in for ``sentence_transformers.SentenceTransformer``.
 
-    We only need a no-op ``encode`` that returns a 384-dim list of zeros.
+    Returns 1024 dimensions to match the developer default model
+    (Qwen3-Embedding, see ``nexus_memory.embeddings.LOCAL_HF_DEFAULT``).
     """
 
     def __init__(self, model_name: str):
         self.model_name = model_name
 
     def encode(self, text: str):
-        return [0.0] * 384
+        return [0.0] * 1024
 
 
 def _install_fake_sentence_transformers(monkeypatch):
@@ -583,8 +584,8 @@ class TestEmbeddingProviderDetection:
         self._block_ollama_probe(monkeypatch)
 
         ep = mcp.EmbeddingProvider()
-        assert ep.name == "all-MiniLM-L6-v2"
-        assert ep.dim == 384
+        assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
+        assert ep.dim == 1024
         assert ep.available is True
 
     def test_no_provider_when_sentence_transformers_missing(
@@ -628,22 +629,39 @@ class TestEmbeddingProviderDetection:
             import requests as _r
             monkeypatch.setattr(_r, "get", _explode)
 
-    def test_voyage_key_with_correct_prefix_picks_voyage(self, isolated_env, monkeypatch):
-        # Pretend the voyageai package is installed and returning a stub client.
+    def test_voyage_key_with_correct_prefix_stays_local_by_default(self, isolated_env, monkeypatch):
+        """A valid cloud key alone must NOT route a user to the cloud.
+
+        Local-first is the developer default (2026-10-07): without an
+        explicit provider choice, a Voyage key sitting in the environment no
+        longer decides anything. The key only takes effect once the user (or
+        their agent) chooses it deliberately.
+        """
         fake_voyage = MagicMock()
         fake_voyage.Client = MagicMock(return_value=MagicMock(name="voyage-client"))
         monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
 
-        # The MCP server caches the env var at import time → also patch
-        # the module-level constant in BOTH modules (mcp_server and embeddings).
         monkeypatch.setenv("VOYAGE_API_KEY", "vo-test-1234567890")
         monkeypatch.setattr(mcp, "VOYAGE_API_KEY", "vo-test-1234567890")
         monkeypatch.setattr("nexus_memory.embeddings.VOYAGE_API_KEY", "vo-test-1234567890")
 
+        class _LocalStub:
+            def __init__(self, model_name):
+                self.model_name = model_name
+
+            def encode(self, _text):
+                return [0.0] * 1024
+
+        import types as _types
+
+        fake_st = _types.ModuleType("sentence_transformers")
+        fake_st.SentenceTransformer = _LocalStub
+        monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
+
         ep = mcp.EmbeddingProvider()
-        assert ep.name == "voyage-4"
-        assert ep.dim == 1024
-        assert ep.available is True
+        assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
+        assert ep.provider_type == "local"
+        fake_voyage.Client.assert_not_called()
 
     def test_voyage_key_with_wrong_prefix_does_not_pick_voyage(
         self, isolated_env, monkeypatch
@@ -828,7 +846,7 @@ class TestWebhookTools:
         sub = next(t for t in tools if t.name == "subscribe")
         assert set(sub.input_schema["required"]) == {"event_type", "webhook_url"}
         # event_type must be a closed enum of the valid event types
-        # (incl. "fuel.exhausted" — Nebo GO 07.09., chat notice event).
+        # (incl. "fuel.exhausted" — approved 2026-09-07, chat notice event).
         assert set(sub.input_schema["properties"]["event_type"]["enum"]) == {
             "memory.remember", "memory.update", "memory.forget", "fuel.exhausted"
         }

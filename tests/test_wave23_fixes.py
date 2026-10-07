@@ -46,16 +46,18 @@ class TestNr408PackageVersions:
     Gepinnt via plugins/openclaw/test-package-version-consistency.mjs
     (JSON erlaubt keine Kommentare, darum Test statt Doku)."""
 
-    def test_all_four_openclaw_spots_share_base(self):
-        """Die drei Pins teilen EINE Basis; der Peer-BEREICH ist bewusst eigen.
+    def test_all_three_gate_spots_share_base(self):
+        """The three GATE spots carry the same base; the peer RANGE stays its own.
 
-        Urspruenglich waren alle vier Stellen 2026.5.7. Bei der ClawHub-
-        Angleichung (1.21.3) wurden die drei konkreten Pins auf 2026.9.8
-        gezogen — der Peer-Bereich behaelt seine Untergrenze 2026.5.7, weil er
-        auch aeltere Gateways im Feld zulassen muss (so in
-        test_h155_peer_range_is_bounded festgehalten). Drift-Schutz heisst
-        darum: die drei Pins stimmen untereinander ueberein, und der Peer-
-        Bereich ist ein gueltiger, begrenzter Bereich.
+        Originally all four spots were 2026.5.7. The ClawHub alignment moved the
+        three concrete pins (compat.pluginApi, compat.minGatewayVersion,
+        build.openclawVersion) to 2026.9.8 together — they are bumped TOGETHER on
+        every OpenClaw update and must therefore stay identical. The
+        peerDependencies RANGE keeps its 2026.5.7 floor on purpose: it has to
+        admit the older gateways still in the field (see
+        test_h155_peer_range_is_bounded). Drift protection therefore means: the
+        three pins agree with each other, and the peer range stays a valid,
+        bounded range.
         """
         pkg = json.loads(_read("plugins/openclaw/package.json"))
         bases = {
@@ -75,6 +77,12 @@ class TestNr408PackageVersions:
         assert _re.fullmatch(r">=\d{4}\.\d+\.\d+ <\d{4}\.0\.0", peer), (
             f"the peer range must stay a bounded range, got: {peer}"
         )
+
+    def test_peer_range_stays_broad(self):
+        """The peer range must NOT be narrowed onto the gate base."""
+        pkg = json.loads(_read("plugins/openclaw/package.json"))
+        peer = pkg["peerDependencies"]["openclaw"]
+        assert peer == ">=2026.5.7 <2027.0.0", peer
 
     def test_lockfile_version_consistent(self):
         pkg = json.loads(_read("plugins/openclaw/package.json"))

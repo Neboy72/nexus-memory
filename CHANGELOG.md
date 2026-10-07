@@ -1,3 +1,42 @@
+## [Unreleased]
+
+### Fixed
+
+- **Local embeddings are the default; the cloud is now an explicit choice.**
+  Auto-detection used to try cloud providers first, so a machine that merely had
+  an API key exported (a key belonging to some other tool) silently sent turn
+  text to a cloud service. Detection is now local-first — Ollama, then the local
+  HuggingFace route — and the cloud level is only reachable through an explicit
+  choice (`NEXUS_EMBEDDING_PROVIDER=voyage`, or `auto` plus
+  `NEXUS_ALLOWED_CLOUD_FALLBACK=1`). Without either, a cloud client is not even
+  constructed. This closes the finding a public static scanner reported twice
+  (`suspicious.env_credential_access`: an environment key read *and* sent over
+  the network). (`src/nexus_memory/embeddings.py`, `plugins/openclaw/lib/embedder.ts`)
+
+- **`NEXUS_HF_BGE3=0` only drops bge-m3 from the candidate list.** It used to
+  switch the whole local HuggingFace route off, which — combined with the
+  cloud-first order — pushed the install toward the cloud. The local route now
+  continues with the remaining candidates.
+
+- **The collection-drift guard now holds along the full detection chain.** A
+  recorded collection model that can no longer be loaded raises
+  `CollectionModelUnavailable`; the local levels re-raise it instead of letting a
+  broad `except Exception` swallow it, so a collection can never be written with
+  a different model's vectors. If the embedding library is missing while a model
+  is recorded, the same error is raised instead of falling through.
+
+- **Coldstart catch-up can no longer wedge the prefetch gate.** If the catch-up
+  thread ran past its deadline while still holding the single-flight gate, every
+  later prefetch bounced off a lock only that orphan could release — memory went
+  quietly dark for the rest of the process. The timeout now installs a fresh gate
+  and reports it at WARNING; a late-finishing thread publishes (or clears) only
+  while it still holds the current gate, so it cannot overwrite a fresher result.
+  (`plugins/memory/nexus/__init__.py`)
+
+- **A missing embedding backend is reported, not raised.** On the default path
+  the provider stays unavailable and the reason is logged at ERROR; an explicit
+  choice that cannot be served still fails closed with a clear message.
+
 ## [0.22.12] - 2026-10-04
 
 ### Fixed

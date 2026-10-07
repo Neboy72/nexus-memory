@@ -71,19 +71,16 @@ def test_h155_peer_range_is_bounded():
 
 
 def test_h408_other_version_pins_are_deliberately_distinct():
-    """H408 marked as deliberately kept: four version sites, four meanings.
+    """H408 marked as deliberately kept: the pins carry different meanings.
 
-    peerDependencies is a range (H155 bounds it); compat.pluginApi is the host
-    API gate; minGatewayVersion is the gateway floor; build.openclawVersion is
-    the version this bundle was built against. Collapsing them would change the
-    bundle contract, so only the peer range is touched.
-
-    The three concrete pins were moved from 2026.5.7 to 2026.9.8 together with
-    `build.openclawVersion` (ClawHub metadata alignment); the peer RANGE still
-    keeps its 2026.5.7 floor on purpose, because it must also admit the older
-    gateways in the field. That is why the range and the pins differ — the
-    invariant is that the pins agree with the build version, not that every
-    string is identical.
+    peerDependencies is a RANGE — deliberately wide (>=2026.5.7 <2027.0.0) so
+    older hosts keep working (Test H155 bounds it). The three build/gate
+    values (compat.pluginApi, compat.minGatewayVersion,
+    build.openclawVersion) are raised TOGETHER with each OpenClaw release;
+    the invariant is that they agree with the BUILD version (not that every
+    string in the manifest is identical — the peer floor must stay lower).
+    Collapsing the range into the gate values would drop compatible hosts,
+    so the two kinds stay distinct on purpose.
     """
     pkg = _json(PKG)
     build_version = pkg["openclaw"]["build"]["openclawVersion"]

@@ -79,12 +79,12 @@ def isolated_nexus_data_dir(tmp_path, monkeypatch):
 def isolated_env(monkeypatch):
     """Strip embedding-provider API keys from the environment.
 
-    The MCP server's ``EmbeddingProvider._detect()`` walks Voyage → OpenAI →
-    Google → Jina → Ollama → sentence-transformers. With no API keys and
-    no Ollama running, the detector deterministically falls through to
-    ``sentence-transformers`` (or the "no provider" warning if that import
-    is also missing). Tests use this fixture to avoid leaking the
-    developer's real credentials into the assertion path.
+    ``EmbeddingProvider._detect()`` is local-first: it tries Ollama, then the
+    local HuggingFace route, and only then the cloud providers — and the cloud
+    level is reachable solely through an explicit choice or the fallback
+    opt-in. With no API keys and no local backend the detector ends on an
+    unavailable provider and reports it at ERROR level. Tests use this fixture
+    to avoid leaking the developer's real credentials into the assertion path.
 
     Note: ``mcp_server.py`` reads the env vars *at import time* (it binds
     ``VOYAGE_API_KEY = os.environ.get(...)`` as a module-level constant).
@@ -110,6 +110,20 @@ def isolated_env(monkeypatch):
         "NEXUS_ALLOWED_CLOUD_FALLBACK",
     ):
         monkeypatch.delenv(var, raising=False)
+
+    # The explicit provider choice has three sources: the env var above and two
+    # JSON config files (``$HERMES_HOME/nexus/config.json`` and
+    # ``~/.nexus-memory/config.json``). A developer who pinned their own
+    # provider there — exactly what the wizard writes — would otherwise leak
+    # that choice into every test and break the default-path assertions.
+    # Both file readers are neutralised here so the tested default stays the
+    # default on every machine.
+    monkeypatch.setattr(
+        "nexus_memory.embeddings._read_preferred_provider", lambda: ""
+    )
+    monkeypatch.setattr(
+        "nexus_memory.embeddings._read_existing_collection_model", lambda: ""
+    )
 
     # Force a stable collection name and pretend Qdrant is on localhost.
     monkeypatch.setenv("NEXUS_COLLECTION", "test-collection")
