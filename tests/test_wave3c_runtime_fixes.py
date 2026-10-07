@@ -89,8 +89,22 @@ def _fake_st_module(dim: int):
 
 
 class TestE1SentenceTransformersBackend:
-    def test_minilm_path_sets_backend(self, monkeypatch):
+    def test_default_local_path_sets_backend(self, monkeypatch):
+        """The local default is Qwen3 now (developer default, 2026-10-07), not MiniLM."""
         monkeypatch.delenv("NEXUS_HF_BGE3", raising=False)
+        monkeypatch.delenv("NEXUS_HF_MODEL", raising=False)
+        monkeypatch.setattr(embeddings_module, "_read_existing_collection_model", lambda: "")
+        monkeypatch.setitem(sys.modules, "sentence_transformers", _fake_st_module(1024))
+        ep = EmbeddingProvider(preferred="local")
+        assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
+        assert ep.dim == 1024
+        assert ep.backend == "sentence-transformers"
+        assert ep.provider_type == "local"
+
+    def test_explicit_minilm_still_works(self, monkeypatch):
+        """An explicitly requested MiniLM is still honoured (no lock-in)."""
+        monkeypatch.setenv("NEXUS_HF_MODEL", "all-MiniLM-L6-v2")
+        monkeypatch.setattr(embeddings_module, "_read_existing_collection_model", lambda: "")
         monkeypatch.setitem(sys.modules, "sentence_transformers", _fake_st_module(384))
         ep = EmbeddingProvider(preferred="local")
         assert ep.name == "all-MiniLM-L6-v2"
@@ -173,19 +187,22 @@ class TestE3CloudFallbackWhitelist:
         # key left in os.environ by another test is picked up here.
         monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
         monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "voyage")
-        # Auto-detect runs; with everything blocked it lands on MiniLM.
+        # Auto-detect runs; it is local-first now (developer default, 2026-10-07), so with
+        # no cloud key present it lands on the local default.
         monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "")
         monkeypatch.setattr(embeddings_module, "GOOGLE_API_KEY", "")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("JINA_API_KEY", raising=False)
+        monkeypatch.delenv("NEXUS_HF_MODEL", raising=False)
         monkeypatch.setattr(
             "requests.get",
             lambda *a, **k: (_ for _ in ()).throw(ConnectionError("no ollama")),
         )
-        monkeypatch.setitem(sys.modules, "sentence_transformers", _fake_st_module(384))
+        monkeypatch.setitem(sys.modules, "sentence_transformers", _fake_st_module(1024))
         ep = EmbeddingProvider(preferred="voyage")
-        assert ep.name == "all-MiniLM-L6-v2"
+        assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
+        assert ep.provider_type == "local"
 
 
 # ===========================================================================

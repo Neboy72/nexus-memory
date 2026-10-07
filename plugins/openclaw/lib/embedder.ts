@@ -22,18 +22,21 @@ const PROVIDER_ENV_KEYS: Record<EmbeddingProvider, string> = {
 
 /** Auto-detect a provider from environment variables. Priority order. */
 export function detectProvider(): EmbeddingProvider | null {
-  if (process.env.VOYAGE_API_KEY) return "voyage"
-  if (process.env.OPENAI_API_KEY) return "openai"
-  if (process.env.GOOGLE_API_KEY) return "google"
-  if (process.env.JINA_API_KEY) return "jina"
-  // Ollama needs no key and is the default local provider. Returning it as the
-  // final fallback means a user with no cloud key at all gets a working local
-  // setup instead of a hard "No embedding provider configured" failure.
-  // Reachability is NOT probed here (too expensive in detectProvider): if no
-  // other provider is configured we assume Ollama is intended. An unreachable
-  // Ollama is only surfaced later, when embed() calls it — the constructor
-  // does NOT fail on it (verified: it only resolves provider/model/baseUrl and
-  // logs).
+  // Local first (developer default, 2026-10-07).
+  //
+  // This function is only the FALLBACK — an explicit provider choice in the
+  // config always wins (see the constructor: "explicit config > env
+  // auto-detect"). It therefore always resolves to the local service: a cloud
+  // API key sitting in the environment is not a decision, and most users have
+  // no API-based embedding at all.
+  //
+  // Ollama needs no key. Reachability is NOT probed here (too expensive in
+  // detectProvider): an unreachable Ollama is only surfaced later, when embed()
+  // calls it — the constructor does NOT fail on it (verified: it only resolves
+  // provider/model/baseUrl and logs). Both the explicit-host check and the
+  // final return resolve to the same local provider; the check is kept because
+  // an exported OLLAMA_HOST is an explicit local choice and is asserted by the
+  // Nr 504 guard (test_wave26_fixes.py).
   if (process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL) return "ollama"
   return "ollama"
 }

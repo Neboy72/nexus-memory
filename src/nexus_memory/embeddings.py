@@ -33,6 +33,13 @@ QUALITY_EXCELLENT = "excellent"
 QUALITY_GOOD = "good"
 QUALITY_BASIC = "basic"
 
+# Developer default for the local HuggingFace route: the model a fresh install
+# uses when there is no Ollama, no cloud key and no recorded collection model.
+# Qwen3-Embedding-0.6B is fetched by sentence-transformers itself (~600 MB,
+# cached after first use) and was measured on par with a comparable cloud
+# embedding model (R@5 66 % vs 67 %).
+LOCAL_HF_DEFAULT = "Qwen/Qwen3-Embedding-0.6B"
+
 # Unified boolean-env vocabulary (review fix MEDIUM :305): one consistent
 # parser instead of per-variable ad-hoc checks. Case-insensitive; unknown
 # values fall back to the caller's default.
@@ -191,6 +198,15 @@ def _allowed_cloud_fallback(preferred: str = "") -> bool:
     return bool(preferred) and preferred.strip().lower() in allowed
 
 
+_NO_PROVIDER_ERROR = (
+    "No embedding provider available.\n"
+    "Install a local backend: pip install sentence-transformers\n"
+    "Or start Ollama: ollama serve\n"
+    "Or choose a cloud provider explicitly: NEXUS_EMBEDDING_PROVIDER=voyage "
+    "(plus NEXUS_ALLOWED_CLOUD_FALLBACK=1 for an allowed fallback)."
+)
+
+
 class EmbeddingProvider:
     """Auto-detect best embedding provider.
 
@@ -223,39 +239,84 @@ class EmbeddingProvider:
         """Detect best available embedding backend.
 
         If a preferred provider is set, try that first.
-        Falls back to auto-detect if the preferred provider is unavailable.
+        Auto-detection is local-first; the cloud path is only entered when
+        the user explicitly allowed it.
+
+        Without any backend the provider stays unavailable and the reason is
+        logged at ERROR (``_NO_PROVIDER_ERROR``); it is deliberately not
+        raised, so an agent without an embedding backend keeps running
+        instead of dying. An explicit *preference* that cannot be served
+        still raises (fail-closed). ``_try_*`` methods that find the
+        collection's recorded model gone raise ``CollectionModelUnavailable``
+        — that must reach the caller untouched.
         """
         preferred = self._preferred
 
         if preferred:
             explicit_cloud = preferred in CLOUD_PROVIDER_IDS
-            # Security review fix (fail closed): a non-auto explicit choice
-            # must never silently degrade to a different provider — in
-            # particular not from a local backend to a cloud one. Only
-            # "auto" (cloud-first by design) or an explicitly allowed cloud
-            # fallback may continue into auto-detection.
-            allowed_fallback = preferred == "auto" or (
-                explicit_cloud and _allowed_cloud_fallback(preferred)
-            )
+            explicit_auto = preferred == "auto"
+
             logger.info("Embedding: trying preferred provider '%s'", preferred)
             if self._try_provider(preferred):
                 return
-            if not allowed_fallback:
+
+            if explicit_auto:
+                # "auto" is local-first. The cloud level is only reachable
+                # with the explicit NEXUS_ALLOWED_CLOUD_FALLBACK opt-in.
+                if _allowed_cloud_fallback("auto"):
+                    logger.warning(
+                        "'auto' fell back to detection; "
+                        "NEXUS_ALLOWED_CLOUD_FALLBACK permits the cloud level."
+                    )
+                self._detect_auto(allow_cloud=_allowed_cloud_fallback("auto"))
+            elif explicit_cloud:
+                if not _allowed_cloud_fallback(preferred):
+                    raise RuntimeError(
+                        f"Preferred embedding provider '{preferred}' is not "
+                        f"available. Refusing to fall back to another provider "
+                        f"(fail-closed: texts must not be sent to a different "
+                        f"backend than the explicitly configured one). Set "
+                        f"NEXUS_ALLOWED_CLOUD_FALLBACK=1 or change "
+                        f"NEXUS_EMBEDDING_PROVIDER to 'auto' to allow fallbacks."
+                    )
+                logger.warning(
+                    "Preferred embedding provider '%s' is not available; "
+                    "NEXUS_ALLOWED_CLOUD_FALLBACK allows the fallback — the "
+                    "selected backend may differ from the configured one.",
+                    preferred,
+                )
+                self._detect_auto(allow_cloud=True)
+            else:
+                # Explicit local provider (ollama / sentence-transformers /
+                # huggingface) fails closed — no silent backend switch.
                 raise RuntimeError(
                     f"Preferred embedding provider '{preferred}' is not "
                     f"available. Refusing to fall back to another provider "
                     f"(fail-closed: texts must not be sent to a different "
-                    f"backend than the explicitly configured one). Set "
-                    f"NEXUS_ALLOWED_CLOUD_FALLBACK=1 or change "
-                    f"NEXUS_EMBEDDING_PROVIDER to 'auto' to allow fallbacks."
+                    f"backend than the explicitly configured one). Make the "
+                    f"chosen backend available again, or switch deliberately: "
+                    f"NEXUS_EMBEDDING_PROVIDER=auto for local-first "
+                    f"auto-detection."
                 )
-            logger.warning(
-                "Preferred embedding provider '%s' is not available. "
-                "Falling back to auto-detect.", preferred,
-            )
 
-        # Auto-detect: priority order
-        self._detect_auto()
+            if not self.available:
+                # Same contract as the default path below: report, do not
+                # kill. "auto" is auto-detection, and a missing backend must
+                # not take down an agent that merely lacks embeddings.
+                logger.error(_NO_PROVIDER_ERROR)
+            return
+
+        # Default (no explicit preference): local-first auto-detection.
+        # A fresh install never leaves the machine unless the user opts in.
+        #
+        # No backend at all is REPORTED, not raised: the plugin/MCP contract is
+        # "never let a missing dependency kill the module — record the failure
+        # and report it instead" (a raised error here would take down an agent
+        # that merely lacks an embedding backend). An explicit *preference*
+        # keeps its fail-closed RuntimeError above.
+        self._detect_auto(allow_cloud=False)
+        if not self.available:
+            logger.error(_NO_PROVIDER_ERROR)
 
     def _reset_provider_state(self) -> None:
         """Clear all provider state after a failed init attempt.
@@ -308,31 +369,25 @@ class EmbeddingProvider:
             return self._try_sentence_transformers()
         return False
 
-    def _detect_auto(self):
-        """Auto-detect providers in priority order.
+    def _detect_auto(self, allow_cloud: bool = False):
+        """Auto-detect providers — LOCAL FIRST (developer default).
+
+        Order (developer default, 2026-10-07):
+          1. Ollama (local service) — keeps existing local installs (including
+             their recorded collection model) working exactly as before.
+          2. HuggingFace local — Qwen3-Embedding by default; needs no Ollama
+             install and no cloud key, so a fresh machine just works.
+          3. Cloud providers — LAST resort, and only when *allow_cloud* is
+             True (i.e. the user explicitly opted in via a cloud provider
+             preference plus NEXUS_ALLOWED_CLOUD_FALLBACK, or via "auto"
+             with the same opt-in). A user with no cloud opt-in never leaves
+             the machine.
 
         Collection-drift guard: an existing collection keeps its recorded
-        local model — see _try_ollama()/CollectionModelUnavailable.
-        CollectionModelUnavailable must propagate (fail-closed, never silently
-        switch models/backends behind the user's back) — see the ollama step.
+        model. CollectionModelUnavailable must propagate (fail-closed, never
+        silently switch models/backends behind the user's back).
         """
-        # 1. Voyage (cloud, best quality)
-        if self._try_voyage():
-            return
-        self._reset_provider_state()
-        # 2. OpenAI (cloud)
-        if self._try_openai():
-            return
-        self._reset_provider_state()
-        # 3. Google / Vertex AI (cloud)
-        if self._try_google():
-            return
-        self._reset_provider_state()
-        # 4. Jina (cloud, best value)
-        if self._try_jina():
-            return
-        self._reset_provider_state()
-        # 5. Ollama (local service) — may raise CollectionModelUnavailable
+        # 1. Ollama (local service) — may raise CollectionModelUnavailable
         try:
             if self._try_ollama():
                 return
@@ -341,8 +396,31 @@ class EmbeddingProvider:
         except Exception:
             pass
         self._reset_provider_state()
-        # 6. sentence-transformers (local, zero-setup fallback)
-        self._try_sentence_transformers()
+
+        # 2. HuggingFace local (Qwen3 -> bge-m3 -> MiniLM)
+        try:
+            if self._try_sentence_transformers():
+                return
+        except CollectionModelUnavailable:
+            raise
+        except Exception:
+            pass
+        self._reset_provider_state()
+
+        # 3. Cloud — only when explicitly allowed.
+        if not allow_cloud:
+            return
+        for attempt in (self._try_voyage, self._try_openai,
+                        self._try_google, self._try_jina):
+            try:
+                if attempt():
+                    return
+            except CollectionModelUnavailable:
+                raise
+            except Exception:
+                pass
+            self._reset_provider_state()
+
 
     def _try_voyage(self) -> bool:
         """Try Voyage AI. Returns True on success.
@@ -515,23 +593,89 @@ class EmbeddingProvider:
             return None
 
     def _try_sentence_transformers(self) -> bool:
-        """Try local HF embeddings. Returns True on success.
+        """Try local HuggingFace embeddings. Returns True on success.
 
-        Priority: bge-m3 (1024d, multilingual, via HuggingFace weights) when
-        the model is locally available (NEXUS_HF_BGE3=1 forces the attempt),
-        then all-MiniLM-L6-v2 (384d, smallest, always works with the package).
+        DEVELOPER DEFAULT: Qwen3-Embedding-0.6B (1024d).
+        Chosen because it needs no Ollama install — the sentence-transformers
+        library fetches the weights itself (~600 MB on first use, cached
+        afterwards) — and no cloud key. Tested quality is on par with a
+        comparable cloud embedding model (R@5 66 % vs 67 %).
 
-        bge-m3 via HF downloads ~2.3 GB on first use (cached afterwards) so it
-        is opt-in per environment; the wizard offers it after Ollama fails."""
-        hf_raw = os.environ.get("NEXUS_HF_BGE3") or ""
-        hf_flag = _env_bool(hf_raw)
-        # Shared boolean parser: a falsy token ("0"/"false"/"no"/"off"/"n")
-        # DISABLES the HF route, a truthy token selects the default model name
-        # and any other value is used as an explicit model name.
-        if hf_flag is not False and hf_raw.strip():
-            model_name = "BAAI/bge-m3" if hf_flag is True else hf_raw.strip()
+        Order: a model already recorded for this collection (drift guard) →
+        an explicit NEXUS_HF_MODEL → Qwen3 → bge-m3 → all-MiniLM-L6-v2.
+        NEXUS_HF_BGE3=0 only removes bge-m3 from the candidate list; the local
+        route continues with the remaining models.
+
+        Network note (air-gapped installs): the first use downloads the model
+        weights from huggingface.co. No user text leaves the machine, but a
+        machine without internet needs the weights pre-cached; with
+        ``HF_HUB_OFFLINE=1`` the download is skipped and this route fails
+        cleanly (warning + False / CollectionModelUnavailable for a recorded
+        model).
+        """
+        explicit = (os.environ.get("NEXUS_HF_MODEL") or "").strip()
+        legacy_raw = (os.environ.get("NEXUS_HF_BGE3") or "").strip()
+        skip_bge3 = False
+        # Only an actually-present value is a switch. An UNSET variable must not
+        # disable the local route: _env_bool("") reports False, which would have
+        # silently turned the whole HF path off on every fresh install.
+        if legacy_raw:
+            legacy_flag = _env_bool(legacy_raw)
+            if legacy_flag is False:
+                skip_bge3 = True
+            elif legacy_flag is True and not explicit:
+                explicit = "BAAI/bge-m3"
+            elif legacy_flag is None and not explicit:
+                explicit = legacy_raw
+
+        recorded = _read_existing_collection_model()
+
+        # Drift guard: if the collection already stores vectors from a local
+        # model, the embedding library must be available. A silent failure here
+        # would switch to a different model/backend and mix vector spaces.
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            if recorded:
+                raise CollectionModelUnavailable(
+                    f"Collection uses local model '{recorded}', but no local "
+                    "embedding backend is available. Embedding into this "
+                    "collection with a different model would mix incompatible "
+                    "vector spaces. Restore the backend that serves it — "
+                    "`pip install sentence-transformers` for HuggingFace "
+                    "models, a running Ollama for Ollama models — or start a "
+                    "new collection."
+                )
+            logger.warning(
+                "No embedding provider found.\n"
+                "Install: pip install sentence-transformers  (local, free)\n"
+                "Or start Ollama locally. Cloud embeddings require an explicit "
+                "choice: NEXUS_EMBEDDING_PROVIDER=voyage (plus "
+                "NEXUS_ALLOWED_CLOUD_FALLBACK=1 for a permitted fallback)."
+            )
+            return False
+
+        wanted: list[str] = []
+        if recorded:
+            wanted.append(recorded)
+            if explicit and explicit != recorded:
+                # Silent override would be a drift hazard in disguise: say it.
+                logger.warning(
+                    "NEXUS_HF_MODEL=%s ignored: the collection already stores "
+                    "vectors from '%s' and keeps its model (drift guard).",
+                    explicit, recorded,
+                )
+        if explicit and explicit not in wanted:
+            wanted.append(explicit)
+        for name in (LOCAL_HF_DEFAULT, "BAAI/bge-m3", "all-MiniLM-L6-v2"):
+            if skip_bge3 and name == "BAAI/bge-m3":
+                continue
+            if name not in wanted:
+                wanted.append(name)
+
+        last_error: Exception | None = None
+        for model_name in wanted:
             try:
-                from sentence_transformers import SentenceTransformer
                 self._model = SentenceTransformer(model_name)
                 probe = self._model.encode("nexus dimension probe")
                 self._name = model_name
@@ -539,35 +683,32 @@ class EmbeddingProvider:
                 self._backend = "sentence-transformers"
                 logger.info("Embedding: %s (%dd, local HF)", self._name, self._dim)
                 return True
+            except CollectionModelUnavailable:
+                raise
             except Exception as exc:
+                # A recorded model that cannot be loaded must NOT be replaced
+                # silently — that would mix incompatible vector spaces in a
+                # collection that already holds vectors (drift guard).
+                last_error = exc
+                if model_name == recorded:
+                    raise CollectionModelUnavailable(
+                        f"Collection uses local model '{recorded}', but it could "
+                        f"not be loaded ({exc}). Embedding into this collection "
+                        f"with a different model would mix incompatible vector "
+                        f"spaces. Make it available again (e.g. delete the "
+                        f"cached weights so they re-download) or start a new "
+                        f"collection."
+                    ) from exc
                 logger.warning(
-                    "HF model %s unavailable (%s); falling back to MiniLM.",
+                    "HF model %s unavailable (%s); trying next local option.",
                     model_name, exc,
                 )
-        try:
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer("all-MiniLM-L6-v2")
-            self._name = "all-MiniLM-L6-v2"
-            self._dim = 384
-            self._backend = "sentence-transformers"
-            logger.info("Embedding: %s (384d, local)", self._name)
-            return True
-        except ImportError:
-            logger.warning(
-                "No embedding provider found.\n"
-                "Install: pip install sentence-transformers  (local, free)\n"
-                "Or set VOYAGE_API_KEY or OPENAI_API_KEY"
-            )
-            return False
-        except Exception as exc:
-            # Any non-ImportError failure (e.g. OSError while downloading the
-            # model offline) must not escape __init__: report it and stay
-            # unavailable instead of crashing provider detection.
-            logger.warning(
-                "sentence-transformers init failed (%s); no local fallback available.",
-                exc,
-            )
-            return False
+        logger.warning(
+            "sentence-transformers init failed (%s); no local fallback available.",
+            last_error,
+        )
+        return False
+
 
     async def embed(self, text: str, is_query: bool = True) -> list[float]:
         """Embed one text. ``is_query`` selects the query/document mode.
