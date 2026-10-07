@@ -24,6 +24,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The audit tests read the PINNED engine commit out of history
+          # (test_catalog_admission_round2 reads the pin's source via `git show`).
+          # A shallow clone (actions/checkout default: depth 1) does not contain
+          # that commit, so `git show <pin>:<path>` fails with exit 128 and the
+          # suite goes red for a reason that has nothing to do with the code.
+          # fetch-depth: 0 brings the full history; it is the only reliable way,
+          # because the pinned commit is not reachable from a fixed offset.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
