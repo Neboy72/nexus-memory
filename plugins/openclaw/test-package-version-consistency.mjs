@@ -70,7 +70,12 @@ if (!upperMatch) {
   )
 }
 const upper = upperMatch ? upperMatch[1] : calvers.get("peerDependencies.openclaw")[1]
-// Untergrenze: identisch ueber alle vier Stellen (die W23-Invariante).
+// Determine the gate base BEFORE the loop (the gate spots mirror each other):
+const gateBase = String(spots.find(([k]) => k === "openclaw.compat.pluginApi")?.[1] ?? "")
+  .match(/^>=\s*(\d{4}\.\d+\.\d+)/)?.[1]
+assert.ok(gateBase, `compat.pluginApi carries no lower bound (${spots.find(([k]) => k === "openclaw.compat.pluginApi")?.[1]})`)
+// Lower bound: identical across the three GATE spots (the W23 invariant).
+// The peerDependencies range is deliberately NOT part of that comparison.
 // OCR-6 (bug medium): der Loop verglich noch list[0] positional — dieselbe
 // Annahme, die der Operator-Fix oben beseitigte. Upper-first-Ranges
 // ("<2027.0.0 >=2026.5.7") faelschten den Drift-Bericht. Jetzt pro Spot:
@@ -84,26 +89,24 @@ for (const [k, list] of calvers) {
     if (!before) lowers.push(list[i])
   }
   assert.ok(lowers.length > 0, `${k} trägt keine Untergrenze`)
-  assert.strictEqual(lowers[0], lower, `${k} Untergrenze driftet von peerDependencies (${lower})`)
+  // Nr 408, corrected 2026-10-07: the three GATE spots (compat.pluginApi,
+  // compat.minGatewayVersion, openclaw.build.openclawVersion) are bumped
+  // TOGETHER on every OpenClaw update and must therefore carry the same lower
+  // bound. The peerDependencies range instead describes which foreign versions
+  // are accepted (deliberately broad, test H155) and is NOT chained to it —
+  // otherwise the compatibility floor would have to be given up just to
+  // satisfy this pin.
+  if (k !== "peerDependencies.openclaw") {
+    assert.strictEqual(
+      lowers[0],
+      gateBase,
+      `${k} lower bound drifted from the gate base (${gateBase})`,
+    )
+  }
 }
-console.log("PASS  Nr 408: alle 4 OpenClaw-Version-Stellen auf Basis", lower)
+console.log("PASS  Nr 408: gate spots on base", gateBase, "| peer-Range", peerRangeStr)
 
-// Operator-Pin: compat.pluginApi muss exakt die Untergrenze MIT Operator
-// spiegeln ("gte 2026.5.7" als ">=" + version) — eine Range-vs-Pin-Differenz
-// wird so sichtbar statt vom calver-only-Vergleich verschluckt.
-const pluginApi = pkg.openclaw.compat.pluginApi
-assert.match(pluginApi, /^>=/, "compat.pluginApi muss die peer-Untergrenze als >=-Range tragen")
-// OCR-4: plain includes(lower) can never fail here (the W23 loop already
-// asserted pluginApi's calver === lower) AND it accepts substrings like
-// ">=2026.5.70" for "2026.5.7". Anchor as a whole token instead.
-// OCR-6 (bug low, L224): `lower` interpolated into a RegExp unescaped — the
-// dots matched any character, so `>=2026x5x7` satisfied the whole-token
-// check. Escape the dots so the check pins the exact version token.
-const escapedLower = lower.replace(/\./g, "\\.")
-assert.ok(
-  new RegExp(`^>=${escapedLower}(?:\\s|$)`).test(pluginApi),
-  `pluginApi muss die untere peer-Grenze (>=${lower}) exakt tragen`,
-)
+console.log("PASS  Nr 408: gate lower bounds consistent", gateBase)
 
 // Obergrenze der peerRange: muss NACH der Untergrenze liegen — eine
 // vertippte/geschrumpfte Upper-Bound (<2026.5.7) wuerde eine leere Range
