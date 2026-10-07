@@ -525,6 +525,16 @@ def test_engine_pin_carries_the_reviewed_fixes():
     root_toml = at_pin("pyproject.toml")
     assert "mcp>=2.0.0" in root_toml, "the pinned engine still pins mcp below 2.0.0"
 
+    # The local-first default: a fresh install never leaves the machine unless
+    # the user opts in. This must hold for the engine users actually receive —
+    # a pin that lags main reintroduces the cloud-first auto-detection the
+    # scanner flagged, which is exactly what happened on 07.10.2026.
+    embeddings = at_pin("src/nexus_memory/embeddings.py")
+    assert "self._detect_auto(allow_cloud=False)" in embeddings, (
+        "the pinned engine auto-detects cloud providers first — the pin is "
+        "behind the local-first default"
+    )
+
 
 def test_both_pins_are_full_commit_shas():
     """A short sha or a branch name in a pin makes an install non-reproducible."""
