@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
+from nexus_memory.collection_vectors import CollectionBinding, using_name
+
 logger = logging.getLogger(__name__)
 _HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 _PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
@@ -91,6 +93,10 @@ class NexusMemoryProvider:
         self._last_backup_path: str = ""
         self._skill_graph = None  # cached SkillGraph for graph-boost
         self._skill_graph_lock = threading.Lock()
+        # Regel B: named-vector for this collection, filled by initialize().
+        # Pre-declared so __new__ instances never AttributeError on a
+        # prefetch/recall before initialize() ran.
+        self.vector_name: Optional[str] = None
         self._rerank_cfg = None  # cached rerank config (lazy, roadmap 1.2)
         self._embed_cache = None  # roadmap 3.1 L0: lazy EmbedCache
         self._embed_cache_lock = threading.Lock()
@@ -118,8 +124,15 @@ class NexusMemoryProvider:
         self._default_access_level = self._load_default_access_level()
         self._qdrant = QdrantClient(host=_HOST, port=_PORT)
         self._embedder = _Embedder()
-        self._ensure_collection()
-        self._check_dimension_compat()
+        legacy_cfg = self._read_legacy_collections()
+        binding = CollectionBinding(
+            self._qdrant, self._collection, self._embedder._impl,
+            config_legacy_collections=legacy_cfg,
+        )
+        binding.ensure()
+        # Regel B may auto-switch the provider — adopt it (see the plugin).
+        self._embedder._impl = binding.provider
+        self.vector_name = binding.vector_name()
         self._write_stop.clear()
         self._write_thread = threading.Thread(target=self._write_loop, name="nexus-writer", daemon=True)
         self._write_thread.start()
@@ -334,9 +347,14 @@ class NexusMemoryProvider:
         with self._skill_graph_lock:
             if self._skill_graph is None:
                 from nexus.graph.graph import SkillGraph
+                binding = CollectionBinding(
+                    self._qdrant, self._collection, self._embedder._impl,
+                    config_legacy_collections=self._read_legacy_collections(),
+                )
                 self._skill_graph = SkillGraph(
                     qdrant_url=f"http://{_HOST}:{_PORT}",
                     collection=self._collection,
+                    binding=binding,
                 )
                 self._skill_graph.initialize()
             return self._skill_graph
@@ -424,7 +442,9 @@ class NexusMemoryProvider:
         if not self._embedder or not self._qdrant: return
         try:
             vector = self._embed_cached(query)
-            pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=10).points
+            pts = self._qdrant.query_points(
+                collection_name=self._collection, query=vector, limit=10, **using_name(getattr(self, "vector_name", None))
+            ).points
             budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
             total = 0
             items: List[str] = []
@@ -504,8 +524,12 @@ class NexusMemoryProvider:
                     "lifecycle_status": "canonical",
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
-        self._qdrant.upsert(collection_name=self._collection,
-                            points=[qmodels.PointStruct(id=eid, vector=vector, payload=payload)])
+        from nexus_memory.collection_vectors import upsert_named as _upsert_named
+        _upsert_named(
+            self._qdrant, self._collection,
+            [qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
+            getattr(self, "vector_name", None),
+        )
         return {"status": "ok", "id": eid, "category": category}
 
     def _recall(self, query: str, limit: int = 5, as_of: str = "") -> List[Dict[str, Any]]:
@@ -527,7 +551,9 @@ class NexusMemoryProvider:
             # Fetch a larger pool so the reranker can reorder beyond limit.
             from nexus_memory.reranker import DEFAULT_POOL_K
             fetch_k = max(limit, int(cfg.get("pool_k", DEFAULT_POOL_K)))
-        pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=fetch_k).points
+        pts = self._qdrant.query_points(
+            collection_name=self._collection, query=vector, limit=fetch_k, **using_name(getattr(self, "vector_name", None))
+        ).points
         # Roadmap 4.6 + review: filter BEFORE rerank so deprecated points
         # don't burn rerank-pool slots (cost/latency) or shrink results.
         _suppressed = {"deprecated", "rolled_back"}
@@ -684,7 +710,9 @@ class NexusMemoryProvider:
             from nexus_memory.guardrails import GuardrailEngine
             if not self._qdrant: raise RuntimeError("Provider not initialized")
             vector_dim = self._embedder.dim if self._embedder else 384
-            engine = GuardrailEngine(self._qdrant, self._collection, vector_dim=vector_dim)
+            engine = GuardrailEngine(
+                self._qdrant, self._collection, vector_dim=vector_dim, vector_name=self.vector_name,
+            )
             result = engine.check_action(command, tool_name, tool_input or {})
             return result.to_dict()
         except Exception as exc:
@@ -702,7 +730,9 @@ class NexusMemoryProvider:
             from nexus_memory.guardrails import GuardrailEngine
             if not self._qdrant: raise RuntimeError("Provider not initialized")
             vector_dim = self._embedder.dim if self._embedder else 384
-            engine = GuardrailEngine(self._qdrant, self._collection, vector_dim=vector_dim)
+            engine = GuardrailEngine(
+                self._qdrant, self._collection, vector_dim=vector_dim, vector_name=self.vector_name,
+            )
             override_id = engine.record_override(
                 command=command,
                 matched_rules=matched_rules,
@@ -723,9 +753,14 @@ class NexusMemoryProvider:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
             if not self._qdrant: raise RuntimeError("Provider not initialized")
+            binding = CollectionBinding(
+                self._qdrant, self._collection, self._embedder._impl,
+                config_legacy_collections=self._read_legacy_collections(),
+            )
             sg = SkillGraph(
                 qdrant_url=f"http://{_HOST}:{_PORT}",
                 collection=self._collection,
+                binding=binding,
             )
             sg.initialize()
             gt = GraphTraversal(sg)
@@ -748,9 +783,14 @@ class NexusMemoryProvider:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
             if not self._qdrant: raise RuntimeError("Provider not initialized")
+            binding = CollectionBinding(
+                self._qdrant, self._collection, self._embedder._impl,
+                config_legacy_collections=self._read_legacy_collections(),
+            )
             sg = SkillGraph(
                 qdrant_url=f"http://{_HOST}:{_PORT}",
                 collection=self._collection,
+                binding=binding,
             )
             sg.initialize()
             gt = GraphTraversal(sg)
@@ -772,9 +812,14 @@ class NexusMemoryProvider:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
             if not self._qdrant: raise RuntimeError("Provider not initialized")
+            binding = CollectionBinding(
+                self._qdrant, self._collection, self._embedder._impl,
+                config_legacy_collections=self._read_legacy_collections(),
+            )
             sg = SkillGraph(
                 qdrant_url=f"http://{_HOST}:{_PORT}",
                 collection=self._collection,
+                binding=binding,
             )
             sg.initialize()
             gt = GraphTraversal(sg)
@@ -796,9 +841,14 @@ class NexusMemoryProvider:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
             if not self._qdrant: raise RuntimeError("Provider not initialized")
+            binding = CollectionBinding(
+                self._qdrant, self._collection, self._embedder._impl,
+                config_legacy_collections=self._read_legacy_collections(),
+            )
             sg = SkillGraph(
                 qdrant_url=f"http://{_HOST}:{_PORT}",
                 collection=self._collection,
+                binding=binding,
             )
             sg.initialize()
             gt = GraphTraversal(sg)
@@ -841,8 +891,11 @@ class NexusMemoryProvider:
             from nexus.sica import run_sica, _get_config
             if not self._qdrant: raise RuntimeError("Provider not initialized")
             # Pass our embedder to avoid dimension mismatch in session storage
-            result = run_sica(client=self._qdrant, collection=self._collection,
-                            auto_patch=auto_patch, embedder=self._embedder)
+            result = run_sica(
+                client=self._qdrant, collection=self._collection,
+                auto_patch=auto_patch, embedder=self._embedder,
+                vector_name=self.vector_name,
+            )
             cfg = _get_config()
             return result.to_dict(max_suggestions=cfg["max_suggestions"])
         except Exception as exc:
@@ -1091,7 +1144,15 @@ class NexusMemoryProvider:
         try:
             from nexus.graph.store import EdgeStore
             # W30-8: scheme was missing — every other call site uses http://.
-            store = EdgeStore(qdrant_url=f"http://{_HOST}:{_PORT}", collection=self._collection)
+            binding = CollectionBinding(
+                self._qdrant, self._collection, self._embedder._impl,
+                config_legacy_collections=self._read_legacy_collections(),
+            )
+            store = EdgeStore(
+                qdrant_url=f"http://{_HOST}:{_PORT}",
+                collection=self._collection,
+                binding=binding,
+            )
         except Exception as exc:
             logger.warning("EdgeStore init failed: %s", exc)
         try:
@@ -1240,9 +1301,11 @@ class NexusMemoryProvider:
                 "confidence": entity.confidence,
             },
         }
-        self._qdrant.upsert(
-            collection_name=self._collection,
-            points=[qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
+        from nexus_memory.collection_vectors import upsert_named as _upsert_named
+        _upsert_named(
+            self._qdrant, self._collection,
+            [qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
+            getattr(self, "vector_name", None),
         )
         return {"status": "ok", "id": eid, "entity_type": entity.entity_type}
 
@@ -1253,48 +1316,36 @@ class NexusMemoryProvider:
                               access_level=self._default_access_level, source="hermes-builtin")
             except Exception as exc: logger.warning("on_memory_write mirror failed: %s", exc)
 
-    def _ensure_collection(self) -> None:
-        if not self._qdrant or not self._embedder: return
-        cols = [c.name for c in self._qdrant.get_collections().collections]
-        if self._collection not in cols:
-            self._qdrant.create_collection(
-                collection_name=self._collection,
-                vectors_config=qmodels.VectorParams(size=self._embedder.dim, distance=qmodels.Distance.COSINE))
-            self._qdrant.create_payload_index(
-                collection_name=self._collection, field_name="access_level",
-                field_type=qmodels.PayloadSchemaType.KEYWORD)
-            logger.info("Created collection '%s' (%dd)", self._collection, self._embedder.dim)
-
-    def _check_dimension_compat(self) -> None:
-        """Warn if the current embedder dimension doesn't match an existing collection.
-
-        Qdrant rejects upserts/query_points when the vector size doesn't match
-        the collection's configured size. This happens when a user switches
-        embedding providers (e.g. sentence-transformers 384d → Voyage 1024d)
-        without creating a new collection. We log a clear warning instead of
-        crashing so the user can fix it (delete + recreate the collection).
-        """
-        if not self._qdrant or not self._embedder: return
-        try:
-            info = self._qdrant.get_collection(self._collection)
-            existing_dim = info.config.params.vectors.size
-            if existing_dim is not None and existing_dim != self._embedder.dim:
-                logger.warning(
-                    "Nexus dimension mismatch! Collection '%s' has %dd vectors but "
-                    "current embedder '%s' produces %dd. Memories cannot be stored "
-                    "or searched. Delete the collection and restart to fix: "
-                    "curl -X DELETE http://%s:%d/collections/%s",
-                    self._collection, existing_dim, self._embedder._impl.model_name,
-                    self._embedder.dim, _HOST, _PORT, self._collection,
-                )
-        except Exception:
-            pass  # Collection might not exist yet, _ensure_collection handles that
-
     def _load_config(self) -> Dict[str, Any]:
         if not self._hermes_home: return {}
         try:
             with open(os.path.join(self._hermes_home, "nexus", "config.json")) as f: return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError): return {}
+
+    def _read_legacy_collections(self) -> Dict[str, str]:
+        """Read user-maintained legacy_collections mapping from config.
+
+        This is the ONLY config read involved in Regel B (legacy unnamed
+        collections). It never writes; the user must add the mapping manually.
+        """
+        # Same candidate list as mcp_server / the plugin (one mapping, found
+        # wherever the user put it; canonical = <hermes_home>/nexus/config.json).
+        hh = self._hermes_home or ""
+        candidates = []
+        if hh:
+            candidates.append(os.path.join(hh, "nexus", "config.json"))
+            candidates.append(os.path.join(hh, "config.json"))
+        candidates.append(os.path.expanduser("~/.nexus-memory/config.json"))
+        for path in candidates:
+            try:
+                if os.path.exists(path):
+                    with open(path) as f:
+                        cfg = json.load(f)
+                    if isinstance(cfg.get("legacy_collections"), dict):
+                        return dict(cfg["legacy_collections"])
+            except Exception:
+                continue
+        return {}
 
     def _load_default_access_level(self) -> str:
         """Access level for auto-extracted session content (review #43).

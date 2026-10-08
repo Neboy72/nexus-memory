@@ -178,6 +178,7 @@ class HybridRetriever:
         qdrant_port: int = 6333,
         collection_name: Optional[str] = None,
         skillgraph: "SkillGraph | None" = None,
+        vector_name: Optional[str] = None,
     ) -> None:
         collection_name = get_collection(collection_name)
         if not HAS_BM25:
@@ -185,6 +186,7 @@ class HybridRetriever:
 
         self.qdrant_url = f"http://{qdrant_host}:{qdrant_port}"
         self.collection = collection_name
+        self._vector_name = vector_name
         self._skillgraph = skillgraph  # Optional for graph_boost
         self._ids = []
         self._texts = []
@@ -755,16 +757,19 @@ class HybridRetriever:
                 f"is {r_dim}d — wrong embedding provider (fix NEXUS_EMBEDDING_PROVIDER)"
             )
 
+        body: dict[str, Any] = {
+            "vector": query_vector,
+            "limit": top_k,
+            "with_payload": True,
+            "filter": {
+                "must": [{"key": "type", "match": {"value": "memory"}}]
+            },
+        }
+        if getattr(self, "_vector_name", None):
+            body["using"] = self._vector_name
         r = requests.post(
             f"{self.qdrant_url}/collections/{self.collection}/points/search",
-            json={
-                "vector": query_vector,
-                "limit": top_k,
-                "with_payload": True,
-                "filter": {
-                    "must": [{"key": "type", "match": {"value": "memory"}}]
-                },
-            },
+            json=body,
             timeout=10,
         )
         r.raise_for_status()

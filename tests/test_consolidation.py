@@ -42,8 +42,8 @@ class FakeQdrant:
         self.queries = []
 
     # scroll API used by _next_raw_batch
-    def scroll(self, collection, scroll_filter=None, limit=64, offset=None,
-               with_payload=True, with_vectors=False, **kw):
+    def scroll(self, collection=None, scroll_filter=None, limit=64, offset=None,
+               with_payload=True, with_vectors=False, collection_name=None, **kw):
         if offset is None:
             out = self._raw[:limit]
             next_offset = "next" if len(self._raw) > limit else None
@@ -53,23 +53,30 @@ class FakeQdrant:
         return out, next_offset
 
     # similarity search API used by _resolve_conflicts
-    def query_points(self, collection, query=None, limit=3,
-                     score_threshold=None, query_filter=None, **kw):
+    def query_points(self, collection=None, query=None, limit=3,
+                     score_threshold=None, query_filter=None,
+                     collection_name=None, using=None, **kw):
         self.queries.append({"vec": query, "thr": score_threshold})
         points = [p for p in self._similar
                   if score_threshold is None or p.score >= score_threshold]
         return SimpleNamespace(points=points)
 
-    def set_payload(self, collection, payload, points, **kw):
-        self.payload_sets.append((collection, dict(payload), list(points)))
+    def set_payload(self, collection=None, payload=None, points=None,
+                    collection_name=None, **kw):
+        self.payload_sets.append((collection or collection_name, dict(payload or {}), list(points or [])))
 
-    def upsert(self, collection, points, **kw):
-        self.upserts.append((collection, list(points)))
+    def upsert(self, collection=None, points=None, collection_name=None,
+               using=None, **kw):
+        name = collection or collection_name
+        self.upserts.append((name, list(points or [])))
 
 
 class FakeStore:
     def __init__(self, qdrant):
         self.client = qdrant
+        # Regel B: the real store exposes the bound named vector; the
+        # consolidator reads it via getattr. None == legacy unnamed collection.
+        self.vector_name = None
 
 
 def _raw_point(pid="raw-1", text="User: Ich nutze jetzt den Mac Mini M4 mit 16GB RAM.\nAssistant: Notiert."):

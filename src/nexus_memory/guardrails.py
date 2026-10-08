@@ -248,10 +248,17 @@ class GuardrailEngine:
     # Keywords that signal a collection name in the memory text
     COLLECTION_KEYWORD = re.compile(r"collection[\s_=:\"']+([\w-]+)", re.IGNORECASE)
 
-    def __init__(self, qdrant_client, collection_name: str = "nexus", vector_dim: int = 384):
+    def __init__(
+        self,
+        qdrant_client,
+        collection_name: str = "nexus",
+        vector_dim: int = 384,
+        vector_name: Optional[str] = None,
+    ):
         self.client = qdrant_client
         self.collection = collection_name
         self.vector_dim = vector_dim
+        self.vector_name = vector_name
         self._cache: list[dict] = []
         self._cache_time: float = 0
         self._cache_ttl: float = 60.0  # 1 minute cache
@@ -598,9 +605,9 @@ class GuardrailEngine:
             from qdrant_client import models as qmodels
             vector = [0.0] * self.vector_dim  # Zero vector of correct dimension
 
-            self.client.upsert(
-                collection_name=self.collection,
-                points=[qmodels.PointStruct(
+            upsert_kwargs = {
+                "collection_name": self.collection,
+                "points": [qmodels.PointStruct(
                     id=override_id,
                     vector=vector,
                     payload={
@@ -615,6 +622,13 @@ class GuardrailEngine:
                         "agent_id": agent_id,
                     },
                 )],
+            }
+            # Writes carry the vector NAME inside each point, not as a kwarg
+            # (``using`` is a read-side argument only).
+            from nexus_memory.collection_vectors import upsert_named
+            upsert_named(
+                self.client, upsert_kwargs["collection_name"],
+                upsert_kwargs["points"], self.vector_name,
             )
             logger.info(f"Guardrail override recorded: {override_id[:8]} by {agent_id}")
         except Exception as e:

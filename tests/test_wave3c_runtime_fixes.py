@@ -3,10 +3,11 @@
 Covers the 12 findings from the runtime review of
 embeddings / migrate-collections / plugin-edge / hooks.json:
 
-- E1  ``_backend`` is set on both sentence-transformers success paths.
-- E2  Drift-guard matches untagged names against tagged Ollama inventory.
-- E3  ``NEXUS_ALLOWED_CLOUD_FALLBACK`` honours a comma-separated provider
-      whitelist (a non-empty value no longer allows *any* cloud provider).
+- E1  ``_backend`` is set on the sentence-transformers success path.
+      (The old multi-model fallback + drift guard were removed on 08.10.2026:
+      the collection model now lives in Qdrant as a named vector, see
+      ``test_collection_vectors.py``. E2/E3 tested that removed machinery and
+      were dropped with it.)
 - M1  Textless points are never collapsed onto sha256("").
 - M2  ID collisions across source collections no longer silently overwrite.
 - M3  ``upsert_points`` counts failures and ``main()`` exits non-zero.
@@ -41,11 +42,7 @@ if _SRC not in sys.path:
 
 import nexus  # noqa: E402
 import nexus_memory.embeddings as embeddings_module  # noqa: E402
-from nexus_memory.embeddings import (  # noqa: E402
-    EmbeddingProvider,
-    _allowed_cloud_fallback,
-    _model_in_inventory,
-)
+from nexus_memory.embeddings import EmbeddingProvider  # noqa: E402
 
 # Hermes plugin loaded straight from file (avoids the top-level ``nexus`` clash).
 _PLUGIN_PATH = _REPO_ROOT / "plugins" / "memory" / "nexus" / "__init__.py"
@@ -90,10 +87,9 @@ def _fake_st_module(dim: int):
 
 class TestE1SentenceTransformersBackend:
     def test_default_local_path_sets_backend(self, monkeypatch):
-        """The local default is Qwen3 now (developer default, 2026-10-07), not MiniLM."""
+        """The local default is Qwen3 (developer default, 2026-10-07), not MiniLM."""
         monkeypatch.delenv("NEXUS_HF_BGE3", raising=False)
         monkeypatch.delenv("NEXUS_HF_MODEL", raising=False)
-        monkeypatch.setattr(embeddings_module, "_read_existing_collection_model", lambda: "")
         monkeypatch.setitem(sys.modules, "sentence_transformers", _fake_st_module(1024))
         ep = EmbeddingProvider(preferred="local")
         assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
@@ -104,7 +100,6 @@ class TestE1SentenceTransformersBackend:
     def test_explicit_minilm_still_works(self, monkeypatch):
         """An explicitly requested MiniLM is still honoured (no lock-in)."""
         monkeypatch.setenv("NEXUS_HF_MODEL", "all-MiniLM-L6-v2")
-        monkeypatch.setattr(embeddings_module, "_read_existing_collection_model", lambda: "")
         monkeypatch.setitem(sys.modules, "sentence_transformers", _fake_st_module(384))
         ep = EmbeddingProvider(preferred="local")
         assert ep.name == "all-MiniLM-L6-v2"
@@ -118,91 +113,6 @@ class TestE1SentenceTransformersBackend:
         assert ep.name == "BAAI/bge-m3"
         assert ep.dim == 1024
         assert ep.backend == "sentence-transformers"
-
-
-# ===========================================================================
-# E2 — drift-guard inventory matching (tag normalization)
-# ===========================================================================
-
-
-class TestE2ModelInventoryMatching:
-    def test_untagged_name_matches_tagged_inventory(self):
-        assert _model_in_inventory("bge-m3", ["bge-m3:latest"]) is True
-
-    def test_tagged_name_matches_untagged_inventory(self):
-        assert _model_in_inventory("bge-m3:latest", ["bge-m3"]) is True
-
-    def test_different_tag_is_not_a_match(self):
-        assert _model_in_inventory("qwen3-embedding:0.6b", ["qwen3-embedding:8b"]) is False
-
-    def test_absent_model_is_not_a_match(self):
-        assert _model_in_inventory("bge-m3", ["nomic-embed-text:latest"]) is False
-
-
-# ===========================================================================
-# E3 — NEXUS_ALLOWED_CLOUD_FALLBACK whitelist semantics
-# ===========================================================================
-
-
-class TestE3CloudFallbackWhitelist:
-    def test_whitelist_allows_listed_provider(self, monkeypatch):
-        monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "voyage")
-        assert _allowed_cloud_fallback("voyage") is True
-
-    def test_whitelist_rejects_unlisted_provider(self, monkeypatch):
-        monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "voyage")
-        assert _allowed_cloud_fallback("openai") is False
-
-    def test_comma_separated_whitelist(self, monkeypatch):
-        monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "jina, openai")
-        assert _allowed_cloud_fallback("openai") is True
-        assert _allowed_cloud_fallback("jina") is True
-        assert _allowed_cloud_fallback("voyage") is False
-
-    @pytest.mark.parametrize("value", ["1", "true", "yes"])
-    def test_truthy_value_allows_any_provider(self, value, monkeypatch):
-        monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", value)
-        assert _allowed_cloud_fallback("openai") is True
-        assert _allowed_cloud_fallback("voyage") is True
-
-    def test_unset_disallows(self, monkeypatch):
-        monkeypatch.delenv("NEXUS_ALLOWED_CLOUD_FALLBACK", raising=False)
-        assert _allowed_cloud_fallback("voyage") is False
-
-    def test_provider_not_in_whitelist_fails_closed(self, monkeypatch):
-        """Integration: a whitelist that omits the preferred provider must not
-        open the fallback door for that provider."""
-        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "")
-        # Keys are read live from the environment now (module constant is only
-        # a fallback), so an exported key must be cleared too.
-        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
-        monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "openai")
-        with pytest.raises(RuntimeError):
-            EmbeddingProvider(preferred="voyage")
-
-    def test_provider_in_whitelist_allows_fallback(self, monkeypatch):
-        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "")
-        # Keys are read live from the environment now (module constant is only
-        # a fallback), so an exported key must be cleared too — otherwise a
-        # key left in os.environ by another test is picked up here.
-        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
-        monkeypatch.setenv("NEXUS_ALLOWED_CLOUD_FALLBACK", "voyage")
-        # Auto-detect runs; it is local-first now (developer default, 2026-10-07), so with
-        # no cloud key present it lands on the local default.
-        monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "")
-        monkeypatch.setattr(embeddings_module, "GOOGLE_API_KEY", "")
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-        monkeypatch.delenv("JINA_API_KEY", raising=False)
-        monkeypatch.delenv("NEXUS_HF_MODEL", raising=False)
-        monkeypatch.setattr(
-            "requests.get",
-            lambda *a, **k: (_ for _ in ()).throw(ConnectionError("no ollama")),
-        )
-        monkeypatch.setitem(sys.modules, "sentence_transformers", _fake_st_module(1024))
-        ep = EmbeddingProvider(preferred="voyage")
-        assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
-        assert ep.provider_type == "local"
 
 
 # ===========================================================================
