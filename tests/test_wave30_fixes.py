@@ -116,8 +116,10 @@ class TestW30BackupPerms:
 class TestW30EdgeStoreUrl:
     def test_source_scheme(self):
         src = _read("integrations/hermes-plugin/__init__.py")
+        # The EdgeStore call is now multi-line (collection/binding are passed
+        # too), so anchor on the qdrant_url argument instead of the whole call.
         assert 'EdgeStore(qdrant_url=f"{_HOST}:{_PORT}"' not in src
-        assert 'EdgeStore(qdrant_url=f"http://{_HOST}:{_PORT}"' in src
+        assert 'qdrant_url=f"http://{_HOST}:{_PORT}"' in src
 
 
 # ── W30-9: staging _get_version fail-loud ─────────────────────────────────

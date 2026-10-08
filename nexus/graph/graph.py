@@ -43,10 +43,12 @@ class SkillGraph:
         store: EdgeStore | None = None,
         qdrant_url: str | None = None,
         collection: str | None = None,
+        binding: Any = None,
     ):
         self._store = store or EdgeStore(
             qdrant_url=qdrant_url,
             collection=collection,
+            binding=binding,
         )
         # W30-4: a DiGraph holds at most ONE edge per (source, target) pair, so
         # several active relations between the same pair (e.g. supports AND

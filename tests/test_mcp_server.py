@@ -60,6 +60,7 @@ class _FakeEmbedder:
 
     _name = "fake-embedder"
     _dim = 384
+    _backend = "local"
     _model = None
     _client = None
 
@@ -68,6 +69,15 @@ class _FakeEmbedder:
 
     async def embed(self, text: str, is_query: bool = True) -> list[float]:
         return [0.0] * 384
+
+    @property
+    def backend(self) -> str:
+        """Regel B needs the backend id to derive the collection fingerprint."""
+        return self._backend
+
+    @property
+    def provider_type(self) -> str:
+        return "local"
 
     @property
     def name(self) -> str:

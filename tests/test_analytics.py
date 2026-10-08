@@ -24,6 +24,11 @@ from nexus.analytics.scoring import (
 )
 from nexus.analytics.clustering import find_clusters, cluster_summary
 
+from conftest import bind_test_collection, test_vector_name
+
+TEST_COLLECTION = "test-memory"
+TEST_VECTOR_SIZE = 2
+
 
 def fact_id(name: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, name))
@@ -43,11 +48,12 @@ ALL_FACTS = [F1, F2, F3, F4, F5, F6, F7, F8]
 
 
 def create_points(client, collection):
+    vec = {test_vector_name(TEST_VECTOR_SIZE): [0.0, 0.0]}
     client.upsert(
         collection_name=collection,
         points=[
             models.PointStruct(
-                id=fid, vector=[0.0, 0.0],
+                id=fid, vector=vec,
                 payload={"content": f"Test {fid}"},
             )
             for fid in ALL_FACTS
@@ -64,12 +70,9 @@ def qdrant_path():
 @pytest.fixture
 def skillgraph(qdrant_path):
     client = QdrantClient(path=qdrant_path)
-    client.create_collection(
-        collection_name="test-memory",
-        vectors_config=models.VectorParams(size=2, distance=models.Distance.COSINE),
-    )
-    create_points(client, "test-memory")
-    store = EdgeStore(client=client, collection="test-memory")
+    binding = bind_test_collection(client, TEST_COLLECTION, TEST_VECTOR_SIZE)
+    create_points(client, TEST_COLLECTION)
+    store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
     sg = SkillGraph(store=store)
     sg.initialize()
 
@@ -85,11 +88,8 @@ def skillgraph(qdrant_path):
 @pytest.fixture
 def empty_skillgraph(qdrant_path):
     client = QdrantClient(path=qdrant_path + "_empty")
-    client.create_collection(
-        collection_name="test-memory",
-        vectors_config=models.VectorParams(size=2, distance=models.Distance.COSINE),
-    )
-    store = EdgeStore(client=client, collection="test-memory")
+    binding = bind_test_collection(client, TEST_COLLECTION, TEST_VECTOR_SIZE)
+    store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
     sg = SkillGraph(store=store)
     sg.initialize()
     return sg

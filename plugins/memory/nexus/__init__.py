@@ -117,6 +117,19 @@ def _try_import_qdrant() -> bool:
 
 _try_import_qdrant()
 
+# Regel B: collection binding helpers. Imported only when qdrant_client is
+# available so a missing dependency does not kill module import.
+CollectionBinding: Any = None
+using_name: Any = None
+if QdrantClient is not None:
+    try:
+        from nexus_memory.collection_vectors import CollectionBinding as _CollectionBinding
+        from nexus_memory.collection_vectors import using_name as _using_name
+        CollectionBinding = _CollectionBinding
+        using_name = _using_name
+    except Exception as _cv_exc:
+        _QDRANT_IMPORT_ERROR = f"collection_vectors import failed: {_cv_exc}"
+
 logger = logging.getLogger(__name__)
 
 
@@ -324,6 +337,10 @@ class NexusMemoryProvider:
         self._last_backup_path: str = ""
         self._skill_graph = None  # cached SkillGraph for graph-boost
         self._skill_graph_lock = threading.Lock()
+        # Regel B: named-vector for this collection, filled by initialize().
+        # Pre-declared so __new__ instances (bench/tests) never AttributeError
+        # on a prefetch/recall before initialize() ran.
+        self.vector_name: Optional[str] = None
         # ScopeCentroids cache for prefetch auto-scoping (roadmap: scope_auto).
         # Must exist before the first prefetch: _do_prefetch checks it for
         # None, so a missing attribute raised AttributeError on fresh
@@ -411,8 +428,18 @@ class NexusMemoryProvider:
                 os.environ["VOYAGE_API_KEY"] = _vkey
             self._qdrant = QdrantClient(host=_HOST, port=_PORT)
             self._embedder = _Embedder()
-            self._ensure_collection()
-            self._check_dimension_compat()
+            legacy_cfg = self._read_legacy_collections()
+            if CollectionBinding is None:
+                raise RuntimeError(_QDRANT_IMPORT_ERROR or "CollectionBinding unavailable")
+            binding = CollectionBinding(
+                self._qdrant, self._collection, self._embedder._impl,
+                config_legacy_collections=legacy_cfg,
+            )
+            binding.ensure()
+            # Regel B may auto-switch the provider — adopt it, or the plugin
+            # keeps embedding with the old model under the new vector name.
+            self._embedder._impl = binding.provider
+            self.vector_name = binding.vector_name()
             self._write_stop.clear()
             self._write_thread = threading.Thread(target=self._write_loop, name="nexus-writer", daemon=True)
             self._write_thread.start()
@@ -1069,7 +1096,10 @@ class NexusMemoryProvider:
             except Exception as exc:
                 logger.debug("scope_auto: prefetch inference skipped (%s)", exc)
                 allowed_scopes = None
-            pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=10).points
+            pts = self._qdrant.query_points(
+                collection_name=self._collection, query=vector, limit=10,
+                **using_name(getattr(self, "vector_name", None)),
+            ).points
             total = 0
             items: List[str] = []
             for p in pts:
@@ -1228,8 +1258,13 @@ class NexusMemoryProvider:
                     "memory_injection_flag": bool(injection_hits),
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
-        self._qdrant.upsert(collection_name=self._collection,
-                            points=[qmodels.PointStruct(id=eid, vector=vector, payload=payload)])
+        # Writes carry the vector NAME inside each point (``using`` is read-only).
+        from nexus_memory.collection_vectors import upsert_named as _upsert_named
+        _upsert_named(
+            self._qdrant, self._collection,
+            [qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
+            getattr(self, "vector_name", None),
+        )
         try: self._bump_agent_stats(write=True)
         except Exception: pass
         return {"status": "ok", "id": eid, "category": category}
@@ -1270,7 +1305,10 @@ class NexusMemoryProvider:
             # Fetch a larger pool so the reranker can reorder beyond limit.
             from nexus_memory.reranker import DEFAULT_POOL_K
             fetch_k = max(limit, int(cfg.get("pool_k", DEFAULT_POOL_K)))
-        pts = self._qdrant.query_points(collection_name=self._collection, query=vector, limit=fetch_k).points
+        pts = self._qdrant.query_points(
+            collection_name=self._collection, query=vector, limit=fetch_k,
+            **using_name(getattr(self, "vector_name", None)),
+        ).points
         # Roadmap 4.6 + review: filter BEFORE rerank so deprecated points
         # don't burn rerank-pool slots (cost/latency) or shrink results.
         _suppressed = {"deprecated", "rolled_back"}
@@ -1993,9 +2031,12 @@ class NexusMemoryProvider:
                 "confidence": entity.confidence,
             },
         }
-        self._qdrant.upsert(
-            collection_name=self._collection,
-            points=[qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
+        # Writes carry the vector NAME inside each point (``using`` is read-only).
+        from nexus_memory.collection_vectors import upsert_named as _upsert_named
+        _upsert_named(
+            self._qdrant, self._collection,
+            [qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
+            getattr(self, "vector_name", None),
         )
         return {"status": "ok", "id": eid, "entity_type": entity.entity_type}
 
@@ -2006,48 +2047,39 @@ class NexusMemoryProvider:
                               access_level="public", source="hermes-builtin")
             except Exception as exc: logger.warning("on_memory_write mirror failed: %s", exc)
 
-    def _ensure_collection(self) -> None:
-        if not self._qdrant or not self._embedder: return
-        cols = [c.name for c in self._qdrant.get_collections().collections]
-        if self._collection not in cols:
-            self._qdrant.create_collection(
-                collection_name=self._collection,
-                vectors_config=qmodels.VectorParams(size=self._embedder.dim, distance=qmodels.Distance.COSINE))
-            self._qdrant.create_payload_index(
-                collection_name=self._collection, field_name="access_level",
-                field_type=qmodels.PayloadSchemaType.KEYWORD)
-            logger.info("Created collection '%s' (%dd)", self._collection, self._embedder.dim)
-
-    def _check_dimension_compat(self) -> None:
-        """Warn if the current embedder dimension doesn't match an existing collection.
-
-        Qdrant rejects upserts/query_points when the vector size doesn't match
-        the collection's configured size. This happens when a user switches
-        embedding providers (e.g. sentence-transformers 384d → Voyage 1024d)
-        without creating a new collection. We log a clear warning instead of
-        crashing so the user can fix it (delete + recreate the collection).
-        """
-        if not self._qdrant or not self._embedder: return
-        try:
-            info = self._qdrant.get_collection(self._collection)
-            existing_dim = info.config.params.vectors.size
-            if existing_dim is not None and existing_dim != self._embedder.dim:
-                logger.warning(
-                    "Nexus dimension mismatch! Collection '%s' has %dd vectors but "
-                    "current embedder '%s' produces %dd. Memories cannot be stored "
-                    "or searched. Delete the collection and restart to fix: "
-                    "curl -X DELETE http://%s:%d/collections/%s",
-                    self._collection, existing_dim, self._embedder._impl.model_name,
-                    self._embedder.dim, _HOST, _PORT, self._collection,
-                )
-        except Exception:
-            pass  # Collection might not exist yet, _ensure_collection handles that
-
     def _load_config(self) -> Dict[str, Any]:
         if not self._hermes_home: return {}
         try:
             with open(os.path.join(self._hermes_home, "nexus", "config.json")) as f: return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError): return {}
+
+    def _read_legacy_collections(self) -> Dict[str, str]:
+        """Read user-maintained legacy_collections mapping from config.
+
+        This is the ONLY config read involved in Regel B (legacy unnamed
+        collections). It never writes; the user must add the mapping manually.
+        """
+        # Same candidate list as mcp_server._read_legacy_collections, so the
+        # mapping is found wherever the user put it. The canonical location is
+        # ``<hermes_home>/nexus/config.json`` (that is where _load_config and
+        # save_config live) — the bare ``<hermes_home>/config.json`` stays as a
+        # fallback for older layouts, plus ``~/.nexus-memory/config.json``.
+        hh = self._hermes_home or ""
+        candidates = []
+        if hh:
+            candidates.append(os.path.join(hh, "nexus", "config.json"))
+            candidates.append(os.path.join(hh, "config.json"))
+        candidates.append(os.path.expanduser("~/.nexus-memory/config.json"))
+        for path in candidates:
+            try:
+                if os.path.exists(path):
+                    with open(path) as f:
+                        cfg = json.load(f)
+                    if isinstance(cfg.get("legacy_collections"), dict):
+                        return dict(cfg["legacy_collections"])
+            except Exception:
+                continue
+        return {}
 
 
 # ── Self-report (2026-09-30): a broken provider must never fail silently ──

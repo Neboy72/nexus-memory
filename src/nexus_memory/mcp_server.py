@@ -442,6 +442,7 @@ async def _post_webhook(url: str, payload: dict) -> None:
 # ── Embedding Provider ────────────────────────────────────────────
 
 from nexus_memory.embeddings import EmbeddingProvider
+from nexus_memory.collection_vectors import CollectionBinding
 
 # ── Access Levels ──────────────────────────────────────────────────
 
@@ -501,6 +502,33 @@ def _to_point_id(val):
     if val is None:
         return ""  # callers filter None out before calling
     return str(val)
+
+
+def _read_legacy_collections() -> dict[str, str]:
+    """Read the user-maintained legacy_collections mapping from config.
+
+    This is the ONLY config read involved in Regel B (legacy unnamed
+    collections). It never writes; the user must add the mapping manually.
+    """
+    import json as _json
+    candidates = []
+    hermes_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+    # Canonical first (where the plugin's _load_config/save_config live),
+    # then the bare home file, then the standalone data dir — same list as
+    # the plugins, so one mapping is found wherever the user placed it.
+    candidates.append(os.path.join(hermes_home, "nexus", "config.json"))
+    candidates.append(os.path.join(hermes_home, "config.json"))
+    candidates.append(os.path.expanduser("~/.nexus-memory/config.json"))
+    for path in candidates:
+        try:
+            if os.path.exists(path):
+                with open(path) as f:
+                    cfg = _json.load(f)
+                if isinstance(cfg.get("legacy_collections"), dict):
+                    return dict(cfg["legacy_collections"])
+        except Exception:
+            continue
+    return {}
 
 
 def _token_jaccard(a: str, b: str) -> float:
@@ -659,13 +687,30 @@ def _valid_at(payload: dict, as_of: datetime) -> bool:
 
 class MemoryStore:
 
+    # Regel B: named vector of the bound collection, set in __init__ once the
+    # CollectionBinding resolved it. Declared as a class attribute so
+    # instances built via ``__new__`` (test/bench pattern) read ``None``
+    # instead of raising AttributeError on their first recall/upsert.
+    vector_name: Optional[str] = None
+
     def __init__(self):
         self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
         self._embedder = EmbeddingProvider()
+        self._binding = CollectionBinding(
+            self.client, COLLECTION_NAME, self._embedder,
+            config_legacy_collections=_read_legacy_collections(),
+        )
+        self._binding.ensure()
+        # Regel B may auto-switch the provider to match the collection's
+        # existing vector space (auto mode + local match). The binding owns
+        # the decision, so the caller MUST adopt it — otherwise the store would
+        # embed with the old model while writing under the new vector name,
+        # which is exactly the silent vector-space mix this design prevents.
+        self._embedder = self._binding.provider
+        self.vector_name = self._binding.vector_name()
         self._hybrid_retriever = None
         self._skill_graph = None
         self._scope_centroids = None  # scope_auto: lazy, fail-open
-        self._ensure_collection()
         self._init_hybrid()
         self._init_skill_graph()
         self._update_check_result: dict | None = None
@@ -860,23 +905,6 @@ class MemoryStore:
         logging.info(f"💾 Auto-backup: {len(all_points)} memories → {backup_path}")
         return backup_path
 
-    def _ensure_collection(self):
-        collections = [c.name for c in self.client.get_collections().collections]
-        if COLLECTION_NAME not in collections:
-            self.client.create_collection(
-                collection_name=COLLECTION_NAME,
-                vectors_config=qmodels.VectorParams(
-                    size=self._embedder.dim,
-                    distance=qmodels.Distance.COSINE,
-                ),
-            )
-            self.client.create_payload_index(
-                collection_name=COLLECTION_NAME,
-                field_name="access_level",
-                field_type=qmodels.PayloadSchemaType.KEYWORD,
-            )
-            logging.info(f"Created collection '{COLLECTION_NAME}' ({self._embedder.dim}d)")
-
     async def _embed(self, text: str, is_query: bool = True) -> list[float]:
         return await self._embedder.embed(text, is_query)
 
@@ -887,6 +915,7 @@ class MemoryStore:
             self._hybrid_retriever = HybridRetriever(
                 qdrant_host=QDRANT_HOST,
                 qdrant_port=QDRANT_PORT,
+                vector_name=self.vector_name,
             )
             self._hybrid_retriever.index_memories()
             logging.info("Hybrid retriever initialized (BM25 + Vector + RRF)")
@@ -904,8 +933,11 @@ class MemoryStore:
         """
         try:
             from nexus.graph.graph import SkillGraph
-            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
-                            collection=COLLECTION_NAME)
+            sg = SkillGraph(
+                qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+                collection=COLLECTION_NAME,
+                binding=self._binding,
+            )
             sg.initialize()
             self._skill_graph = sg
             logging.info("SkillGraph initialized (networkx-backed edge queries)")
@@ -1039,10 +1071,10 @@ class MemoryStore:
         superseded_ids: list[str] = []
         if category in ("fact", "rule", "preference", "procedure"):
             try:
-                existing = self.client.query_points(
-                    collection_name=COLLECTION_NAME,
-                    query=vector,
-                    query_filter=qmodels.Filter(
+                query_kwargs: dict[str, Any] = {
+                    "collection_name": COLLECTION_NAME,
+                    "query": vector,
+                    "query_filter": qmodels.Filter(
                         must=[
                             qmodels.FieldCondition(
                                 key="category",
@@ -1054,9 +1086,12 @@ class MemoryStore:
                             ),
                         ],
                     ),
-                    limit=3,
-                    score_threshold=0.90,
-                )
+                    "limit": 3,
+                    "score_threshold": 0.90,
+                }
+                if self.vector_name:
+                    query_kwargs["using"] = self.vector_name
+                existing = self.client.query_points(**query_kwargs)
                 for point in existing.points:
                     score = float(point.score or 0.0)
                     if score < 0.90:
@@ -1159,13 +1194,12 @@ class MemoryStore:
         if superseded_ids:
             payload["supersedes"] = superseded_ids
 
-        self.client.upsert(
-            collection_name=COLLECTION_NAME,
-            points=[qmodels.PointStruct(
-                id=entry_id,
-                vector=vector,
-                payload=payload,
-            )],
+        # Writes carry the vector NAME inside each point (``using`` is read-only).
+        from nexus_memory.collection_vectors import upsert_named
+        upsert_named(
+            self.client, COLLECTION_NAME,
+            [qmodels.PointStruct(id=entry_id, vector=vector, payload=payload)],
+            self.vector_name,
         )
         logging.info(f"Stored memory {entry_id[:8]} [{access_level}] cat={category}")
 
@@ -1226,6 +1260,8 @@ class MemoryStore:
                 ad = AutoDiscovery(
                     qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
                     collection=COLLECTION_NAME,
+                    # Regel B: a named-vector collection needs `using`.
+                    vector_name=self.vector_name,
                 )
                 candidates = ad.discover_for_fact(
                     fact_id=entry_id,
@@ -1384,11 +1420,14 @@ class MemoryStore:
 
         # Fallback: vector-only search (reuses the embedding computed above)
         if not raw_results and query_vector is not None:
-            response = self.client.query_points(
-                collection_name=COLLECTION_NAME,
-                query=query_vector,
-                limit=limit * 2,
-            )
+            fb_kwargs: dict[str, Any] = {
+                "collection_name": COLLECTION_NAME,
+                "query": query_vector,
+                "limit": limit * 2,
+            }
+            if self.vector_name:
+                fb_kwargs["using"] = self.vector_name
+            response = self.client.query_points(**fb_kwargs)
             raw_results = []
             for point in response.points:
                 payload = point.payload or {}
@@ -3073,9 +3112,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                         skipped += 1
                         continue
 
-                store.client.upsert(
-                    collection_name=COLLECTION_NAME,
-                    points=[qmodels.PointStruct(id=pid, vector=vec, payload=payload)],
+                from nexus_memory.collection_vectors import upsert_named
+                upsert_named(
+                    store.client, COLLECTION_NAME,
+                    [qmodels.PointStruct(id=pid, vector=vec, payload=payload)],
+                    getattr(store, "vector_name", None),
                 )
                 restored += 1
 
@@ -3133,7 +3174,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
             vector_dim = getattr(store, "_embedder", None)
             vector_dim = vector_dim.dim if vector_dim else 384
-            engine = GuardrailEngine(store.client, COLLECTION_NAME, vector_dim=vector_dim)
+            vector_name = getattr(store, "vector_name", None)
+            engine = GuardrailEngine(
+                store.client, COLLECTION_NAME,
+                vector_dim=vector_dim, vector_name=vector_name,
+            )
             override_id = engine.record_override(
                 command=command,
                 matched_rules=matched_rules,
@@ -3159,7 +3204,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
-            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}", collection=COLLECTION_NAME)
+            sg = SkillGraph(
+                qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+                collection=COLLECTION_NAME,
+                binding=getattr(store, "_binding", None),
+            )
             sg.initialize()
             gt = GraphTraversal(sg)
             results = gt.traverse(
@@ -3177,7 +3226,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
-            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}", collection=COLLECTION_NAME)
+            sg = SkillGraph(
+                qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+                collection=COLLECTION_NAME,
+                binding=getattr(store, "_binding", None),
+            )
             sg.initialize()
             gt = GraphTraversal(sg)
             results = gt.find_entities(
@@ -3193,7 +3246,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
-            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}", collection=COLLECTION_NAME)
+            sg = SkillGraph(
+                qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+                collection=COLLECTION_NAME,
+                binding=getattr(store, "_binding", None),
+            )
             sg.initialize()
             gt = GraphTraversal(sg)
             result = gt.get_subgraph(
@@ -3209,7 +3266,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         try:
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
-            sg = SkillGraph(qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}", collection=COLLECTION_NAME)
+            sg = SkillGraph(
+                qdrant_url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+                collection=COLLECTION_NAME,
+                binding=getattr(store, "_binding", None),
+            )
             sg.initialize()
             gt = GraphTraversal(sg)
             results = gt.get_related(

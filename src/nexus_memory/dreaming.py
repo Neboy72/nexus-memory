@@ -181,10 +181,16 @@ class Dreamer:
             return False
         try:
             vec = self._store._embed([text])[0]
-            hits = self._store.client.search(
-                collection_name=self._store.collection,
-                query_vector=vec, limit=1,
-                query_filter=None)
+            qp_kwargs = {
+                "collection_name": self._store.collection,
+                "query": vec,
+                "limit": 1,
+            }
+            vector_name = getattr(self._store, "vector_name", None)
+            if vector_name:
+                qp_kwargs["using"] = vector_name
+            resp = self._store.client.query_points(**qp_kwargs)
+            hits = resp.points
             if hits and hits[0].score >= 0.92:
                 return True
         except Exception as exc:

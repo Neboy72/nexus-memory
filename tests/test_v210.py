@@ -16,6 +16,8 @@ from qdrant_client import QdrantClient, models
 from nexus.graph.schema import EdgeRelation, EdgeStatus
 from nexus.graph.store import EdgeStore
 
+from conftest import bind_test_collection, test_vector_name
+
 TEST_COLLECTION = "test-memory"
 TEST_VECTOR_CONFIG = models.VectorParams(size=2, distance=models.Distance.COSINE)
 
@@ -39,11 +41,12 @@ F_FACT_B = fact_id("fact-b")
 
 
 def create_points(client: QdrantClient, collection: str, ids: list[str]) -> None:
+    vec = {test_vector_name(2): [0.0, 0.0]}
     client.upsert(
         collection_name=collection,
         points=[
             models.PointStruct(
-                id=fid, vector=[0.0, 0.0],
+                id=fid, vector=vec,
                 payload={"content": f"Test {fid}"},
             )
             for fid in ids
@@ -62,13 +65,10 @@ def qdrant_store():
     """EdgeStore backed by embedded Qdrant with pre-created fact-points."""
     with tempfile.TemporaryDirectory() as tmp:
         client = QdrantClient(path=os.path.join(tmp, "qdrant"))
-        client.create_collection(
-            collection_name=TEST_COLLECTION,
-            vectors_config=TEST_VECTOR_CONFIG,
-        )
+        binding = bind_test_collection(client, TEST_COLLECTION, 2)
         create_points(client, TEST_COLLECTION, ALL_TEST_IDS)
 
-        store = EdgeStore(client=client, collection=TEST_COLLECTION)
+        store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
         store.initialize()
         yield store
 

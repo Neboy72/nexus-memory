@@ -96,10 +96,12 @@ class EdgeStore:
         qdrant_url: str | None = None,
         collection: str | None = None,
         client: QdrantClient | None = None,
+        binding: Any = None,
     ):
         self._qdrant_url = qdrant_url or DEFAULT_QDRANT_URL
         self._collection = collection or DEFAULT_COLLECTION
         self._client: QdrantClient | None = client
+        self._binding = binding
         self._valid_relations = {e.value for e in EdgeRelation}
         # Serializes read-modify-write cycles on the ``edges`` payload array.
         # Threads sharing ONE EdgeStore no longer lose concurrent appends to
@@ -142,58 +144,38 @@ class EdgeStore:
     # ── Initialization ──────────────────────────────────────────────────────
 
     def initialize(self) -> bool:
-        """Verify the Qdrant connection and ensure the collection exists.
+        """Verify the Qdrant connection and ensure the collection is bound.
 
-        H225: this used to only *warn* that the collection "will be created on
-        first write" — while nothing in this module ever created it, so a
-        caller believed ``initialize()`` succeeded and the first
-        ``set_payload``/``scroll`` failed with a Qdrant "collection not
-        found". The collection is now created here (idempotent) with the same
-        vector config as the canonical bootstrap path.
+        Reuses ``nexus_memory.collection_vectors.CollectionBinding`` (Regel B)
+        instead of duplicating collection bootstrap logic. The binding creates
+        the collection with a named vector fingerprint when it does not exist,
+        validates mismatches, and handles legacy unnamed collections.
 
         Returns:
-            ``True`` if the collection exists / was created, ``False`` if it
-            could not be created.
+            ``True`` if the collection is bound, ``False`` if it could not be
+            created.
 
         Raises:
-            EdgeStoreError: If Qdrant is unreachable.
+            EdgeStoreError: If Qdrant is unreachable or binding is rejected.
         """
-        try:
-            exists = self.client.collection_exists(self._collection)
-        except Exception as e:
-            raise EdgeStoreError(f"Failed to connect to Qdrant: {e}") from e
-
-        if not exists:
-            size = _default_vector_size()
+        if self._binding is None:
             try:
-                self.client.create_collection(
-                    collection_name=self._collection,
-                    vectors_config=models.VectorParams(
-                        size=size, distance=models.Distance.COSINE,
-                    ),
+                from nexus_memory.collection_vectors import CollectionBinding
+                from nexus_memory.embeddings import EmbeddingProvider
+
+                self._binding = CollectionBinding(
+                    self.client, self._collection, EmbeddingProvider()
                 )
-                _logger.info(
-                    "Created Qdrant collection '%s' (%dd Cosine)",
-                    self._collection, size,
-                )
-            except Exception as e:
-                # W37: this check-then-create is racy — if another process
-                # created the collection in between, Qdrant answers "already
-                # exists" and the caller was told initialization failed even
-                # though the collection is present and usable.
-                try:
-                    if self.client.collection_exists(self._collection):
-                        _logger.info(
-                            "Collection '%s' was created concurrently",
-                            self._collection,
-                        )
-                        return True
-                except Exception:
-                    pass
-                _logger.error(
-                    "Failed to create collection '%s': %s", self._collection, e,
+            except Exception as exc:
+                _logger.warning(
+                    "EdgeStore could not build a collection binding: %s", exc
                 )
                 return False
+
+        try:
+            self._binding.ensure()
+        except Exception as e:
+            raise EdgeStoreError(f"Failed to bind Qdrant collection: {e}") from e
 
         _logger.info(
             "EdgeStore initialized (Qdrant=%s, collection=%s)",

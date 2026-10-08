@@ -17,6 +17,7 @@ import os
 import shutil
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -60,9 +61,26 @@ def provider():
 
 @pytest.fixture
 def tmp_hermes_home():
-    """Create a temp directory to use as hermes_home during testing."""
+    """Temp hermes_home with a THROWAWAY collection name.
+
+    Writes ``nexus/config.json`` pointing at a per-run collection so these
+    integration tests never touch the developer's/production collection
+    (previously they inherited ``NEXUS_COLLECTION`` and poked whatever live
+    collection that pointed at — including a non-empty LEGACY one, which
+    Regel B rightly refuses).
+    """
     tmp = tempfile.mkdtemp(prefix="test-nexus-")
+    coll = f"test-plugin-{uuid.uuid4().hex[:12]}"
+    os.makedirs(os.path.join(tmp, "nexus"), exist_ok=True)
+    with open(os.path.join(tmp, "nexus", "config.json"), "w") as f:
+        json.dump({"collection_name": coll}, f)
     yield tmp
+    # Drop the throwaway collection so the test host stays clean.
+    try:
+        from qdrant_client import QdrantClient as _QC
+        _QC(host=nexus_plugin._HOST, port=nexus_plugin._PORT).delete_collection(coll)
+    except Exception:
+        pass
     shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -198,9 +216,11 @@ class TestProviderInitialized:
 
         # Run a vector search to get points, then boost
         vector = initialized_provider._embedder.embed("graph boost test")
+        # Regel B: a query on a named-vector collection must pass `using`.
         pts = initialized_provider._qdrant.query_points(
             collection_name=initialized_provider._collection,
-            query=vector, limit=3
+            query=vector, limit=3,
+            using=initialized_provider.vector_name,
         ).points
         boosted = initialized_provider._graph_boost(pts, max_boost=3)
         assert isinstance(boosted, list)

@@ -1,13 +1,18 @@
-"""Tests for qwen3-embedding priority + Instruct prefix + collection drift guard."""
-import json
+"""Tests for qwen3-embedding priority + Instruct prefix (Regel A, local-first).
+
+Design-Entscheidung 08.10.2026: Ollama serves exactly ONE embedding model
+(``qwen3-embedding``, 1024d). The old multi-model fallback (bge-m3 etc.) and
+the collection drift-guard were removed together with the recorded-provider
+machinery — the collection model now lives in Qdrant as a named vector
+(rule B, ``nexus_memory.collection_vectors``). Tests exercising those removed
+paths were deleted with them.
+"""
+import asyncio
+
 import pytest
 
 from nexus_memory import embeddings as emb_mod
-from nexus_memory.embeddings import (
-    EmbeddingProvider,
-    _same_local_model,
-    _read_existing_collection_model,
-)
+from nexus_memory.embeddings import EmbeddingProvider
 
 
 class _Resp:
@@ -38,52 +43,37 @@ def _clear_env(monkeypatch):
     monkeypatch.setattr(emb_mod, "_read_preferred_provider", lambda: "")
 
 
-def test_ollama_prefers_qwen3_over_bge(monkeypatch):
-    _patch_tags(monkeypatch, ["bge-m3:latest", "qwen3-embedding:0.6b", "nomic-embed-text:latest"])
-    _patch_probe(monkeypatch, 1024)
-    _clear_env(monkeypatch)
+def _bare_provider() -> EmbeddingProvider:
     p = EmbeddingProvider.__new__(EmbeddingProvider)
     p._name = "none"; p._dim = 384; p._client = None; p._model = None
-    p._preferred = ""
+    p._backend = "none"; p._preferred = ""
+    return p
+
+
+def test_ollama_uses_qwen3_embedding(monkeypatch):
+    """Ollama route binds qwen3-embedding — the single supported model."""
+    _patch_tags(monkeypatch, ["qwen3-embedding:0.6b", "llama3.2:latest"])
+    _patch_probe(monkeypatch, 1024)
+    _clear_env(monkeypatch)
+    p = _bare_provider()
     assert p._try_ollama() is True
-    assert p.name == "qwen3-embedding:0.6b"
+    assert p.name.startswith("qwen3-embedding")
     assert p.dim == 1024
+    assert p.backend == "ollama"
 
 
-def test_ollama_falls_back_to_bge(monkeypatch):
+def test_ollama_without_qwen3_is_unavailable(monkeypatch):
+    """No qwen3-embedding in the inventory → the local route is unavailable.
+
+    The old code silently fell back to bge-m3/nomic; that fallback was
+    removed on purpose (one collection, one model — never a quiet mix).
+    """
     _patch_tags(monkeypatch, ["bge-m3:latest", "nomic-embed-text:latest"])
     _patch_probe(monkeypatch, 1024)
     _clear_env(monkeypatch)
-    p = EmbeddingProvider.__new__(EmbeddingProvider)
-    p._name = "none"; p._dim = 384; p._client = None; p._model = None
-    p._preferred = ""
-    assert p._try_ollama() is True
-    assert p.name == "bge-m3:latest"
-
-
-def test_drift_guard_keeps_existing_model(monkeypatch, tmp_path):
-    """Collection already uses bge-m3 → must stay on bge-m3 even though qwen3 exists."""
-    cfg_dir = tmp_path / "nexus"
-    cfg_dir.mkdir()
-    (cfg_dir / "config.json").write_text(json.dumps({"embedding_model": "bge-m3:latest"}))
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setattr(emb_mod2 := emb_mod2, "", None) if False else None
-    _patch_tags(monkeypatch, ["bge-m3:latest", "qwen3-embedding:0.6b"])
-    _patch_probe(monkeypatch, 1024)
-    _clear_env(monkeypatch)
-    p = EmbeddingProvider.__new__(EmbeddingProvider)
-    p._name = "none"; p._dim = 384; p._client = None; p._model = None
-    p._preferred = ""
-    assert p._try_ollama() is True
-    assert p.name == "bge-m3:latest"
-
-
-def test_same_local_model_tolerates_tags():
-    # Ollama semantics: tag-less name == ':latest' variant (same model).
-    assert _same_local_model("bge-m3", "bge-m3:latest") is True
-    assert _same_local_model("qwen3-embedding:0.6b", "qwen3-embedding") is False
-    assert _same_local_model("bge-m3", "qwen3-embedding:0.6b") is False
-    assert _same_local_model("", "bge-m3") is False
+    p = _bare_provider()
+    assert p._try_ollama() is False
+    assert p.name == "none"
 
 
 def test_qwen3_query_gets_instruct_prefix(monkeypatch):
@@ -94,49 +84,48 @@ def test_qwen3_query_gets_instruct_prefix(monkeypatch):
     """
     captured = {}
 
-    class _PostResp:
-        def json(self):
-            return {"embeddings": [[0.1] * 1024]}
-
-    import requests as _requests
-    def fake_post(url, json=None, timeout=None):
-        captured["json"] = json
-        return _RespJson()
     class _RespJson:
         def json(self):
             return {"embeddings": [[0.1] * 1024]}
 
+    def fake_post(url, json=None, timeout=None):
+        captured["json"] = json
+        return _RespJson()
+
     monkeypatch.setattr("requests.post", fake_post)
-    p = EmbeddingProvider.__new__(EmbeddingProvider)
+    p = _bare_provider()
     p._name = "qwen3-embedding:0.6b"
     p._dim = 1024
-    p._model = None
+    p._backend = "ollama"
     p._client = {"base_url": "http://localhost:11434"}
-    import asyncio
     vec = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
         p.embed("wo ist Bleki geboren"))
     assert len(vec) == 1024
     sent = captured["json"]
     assert sent["model"] == "qwen3-embedding:0.6b"
-    assert sent["input"][0].startswith("Instruct: retrieve the relevant memory for the user query. Query: ")
+    assert sent["input"][0].startswith(
+        "Instruct: retrieve the relevant memory for the user query. Query: ")
     assert "wo ist Bleki geboren" in sent["input"][0]
 
 
-def test_bge_no_instruct_prefix(monkeypatch):
+def test_non_qwen3_model_gets_no_instruct_prefix(monkeypatch):
+    """Only qwen3 query embeddings get the Instruct prefix."""
     captured = {}
+
     class _RespJson:
         def json(self):
             return {"embeddings": [[0.1] * 1024]}
+
     def fake_post(url, json=None, timeout=None):
         captured["json"] = json
         return _RespJson()
+
     monkeypatch.setattr("requests.post", fake_post)
-    p = EmbeddingProvider.__new__(EmbeddingProvider)
-    p._name = "bge-m3"
+    p = _bare_provider()
+    p._name = "some-other-model"
     p._dim = 1024
-    p._model = None
+    p._backend = "ollama"
     p._client = {"base_url": "http://localhost:11434"}
-    import asyncio
-    vec = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
         p.embed("irgendein text"))
     assert captured["json"]["input"][0] == "irgendein text"

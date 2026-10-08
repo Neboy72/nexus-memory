@@ -96,11 +96,21 @@ class _FakeEmbedder:
 
     _name = "fake-embedder"
     _dim = 384
+    _backend = "local"
     _model = None
     _client = None
 
     async def embed(self, text: str, is_query: bool = True) -> list[float]:
         return [0.0] * 384
+
+    @property
+    def backend(self) -> str:
+        """Regel B derives the collection fingerprint from the backend."""
+        return self._backend
+
+    @property
+    def provider_type(self) -> str:
+        return "local"
 
     @property
     def name(self) -> str:
@@ -273,7 +283,7 @@ class TestSupersessionSetsValidTo:
 
         with patch.object(MemoryStore, "_embed") as mock_embed:
             mock_embed.return_value = [0.1] * 1024
-            with patch.object(MemoryStore, "_ensure_collection"):
+            with patch.object(MemoryStore, "_init_hybrid"):
                 real_store = MemoryStore.__new__(MemoryStore)
                 real_store.client = MagicMock()
                 real_store._embedder = MagicMock(dim=1024)
@@ -606,8 +616,14 @@ class TestFactHistory:
         chain = await store.fact_history("long")
         assert len(chain[0]["text"]) <= 121  # 120 chars + ellipsis
 
-    async def test_fact_history_mcp_tool_envelope(self):
-        """Dispatcher: fact_history returns JSON envelope with chain + count."""
+    async def test_fact_history_mcp_tool_envelope(self, store, monkeypatch):
+        """Dispatcher: fact_history returns JSON envelope with chain + count.
+
+        Uses the mocked store — a bare ``handle_call_tool`` would build the
+        module-global store against the REAL Qdrant, which made this test
+        depend on whatever collection happened to exist on the host.
+        """
+        monkeypatch.setattr(mcp, "get_store", lambda: store)
         response = await mcp.handle_call_tool(
             "fact_history", {"memory_id": "abc-123"}
         )

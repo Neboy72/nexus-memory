@@ -49,11 +49,12 @@ class TestAutoSupersession:
         from nexus_memory.mcp_server import MemoryStore
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1024
-            with patch.object(MemoryStore, '_ensure_collection'):
+            with patch.object(MemoryStore, '_init_hybrid'):
                 real_store = MemoryStore.__new__(MemoryStore)
                 real_store.client = store.client
                 real_store._embedder = MagicMock(dim=1024)
                 real_store._skill_graph = None
+                real_store.vector_name = None
                 store.client.query_points.return_value = MagicMock(points=[])
 
                 result = await MemoryStore.remember(
@@ -82,11 +83,12 @@ class TestAutoSupersession:
 
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1024
-            with patch.object(MemoryStore, '_ensure_collection'):
+            with patch.object(MemoryStore, '_init_hybrid'):
                 real_store = MemoryStore.__new__(MemoryStore)
                 real_store.client = MagicMock()
                 real_store._embedder = MagicMock(dim=1024)
                 real_store._skill_graph = None
+                real_store.vector_name = None
                 real_store.client.query_points.return_value = MagicMock(points=existing)
 
                 result = await MemoryStore.remember(
@@ -118,11 +120,12 @@ class TestAutoSupersession:
 
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1024
-            with patch.object(MemoryStore, '_ensure_collection'):
+            with patch.object(MemoryStore, '_init_hybrid'):
                 real_store = MemoryStore.__new__(MemoryStore)
                 real_store.client = MagicMock()
                 real_store._embedder = MagicMock(dim=1024)
                 real_store._skill_graph = None
+                real_store.vector_name = None
                 real_store.client.query_points.return_value = MagicMock(points=existing)
 
                 result = await MemoryStore.remember(
@@ -147,11 +150,12 @@ class TestAutoSupersession:
 
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1024
-            with patch.object(MemoryStore, '_ensure_collection'):
+            with patch.object(MemoryStore, '_init_hybrid'):
                 real_store = MemoryStore.__new__(MemoryStore)
                 real_store.client = MagicMock()
                 real_store._embedder = MagicMock(dim=1024)
                 real_store._skill_graph = None
+                real_store.vector_name = None
                 real_store.client.query_points.return_value = MagicMock(points=existing)
 
                 result = await MemoryStore.remember(
@@ -182,11 +186,12 @@ class TestAutoSupersession:
 
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1024
-            with patch.object(MemoryStore, '_ensure_collection'):
+            with patch.object(MemoryStore, '_init_hybrid'):
                 real_store = MemoryStore.__new__(MemoryStore)
                 real_store.client = MagicMock()
                 real_store._embedder = MagicMock(dim=1024)
                 real_store._skill_graph = None
+                real_store.vector_name = None
                 real_store.client.query_points.return_value = MagicMock(points=[old1, old2])
 
                 result = await MemoryStore.remember(
@@ -209,11 +214,12 @@ class TestAutoSupersession:
 
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1024
-            with patch.object(MemoryStore, '_ensure_collection'):
+            with patch.object(MemoryStore, '_init_hybrid'):
                 real_store = MemoryStore.__new__(MemoryStore)
                 real_store.client = MagicMock()
                 real_store._embedder = MagicMock(dim=1024)
                 real_store._skill_graph = None
+                real_store.vector_name = None
                 # query_points raises an exception
                 real_store.client.query_points.side_effect = Exception("Qdrant error")
 
@@ -242,11 +248,12 @@ class TestAutoSupersession:
 
         with patch.object(MemoryStore, '_embed', new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1024
-            with patch.object(MemoryStore, '_ensure_collection'):
+            with patch.object(MemoryStore, '_init_hybrid'):
                 real_store = MemoryStore.__new__(MemoryStore)
                 real_store.client = MagicMock()
                 real_store._embedder = MagicMock(dim=1024)
                 real_store._skill_graph = None
+                real_store.vector_name = None
                 real_store.client.query_points.return_value = MagicMock(points=existing)
 
                 result = await MemoryStore.remember(

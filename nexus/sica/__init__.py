@@ -587,8 +587,13 @@ def _apply_auto_patch(client: Any, collection: str, issue: Dict[str, Any]) -> Op
     return None
 
 
-def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
-             embedder: Any = None) -> SICAResult:
+def run_sica(
+    client: Any = None,
+    collection: str = "",
+    auto_patch: bool = True,
+    embedder: Any = None,
+    vector_name: Optional[str] = None,
+) -> SICAResult:
     """Run a single SICA cycle.
 
     Args:
@@ -597,6 +602,7 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
         auto_patch: If True, apply non-destructive patches automatically.
         embedder: Optional pre-initialized embedder with .embed() method. If provided,
                    used for session storage to avoid dimension mismatch.
+        vector_name: Optional named vector for upserts (Regel B).
 
     Returns:
         SICAResult with issues, suggestions, and auto-patches.
@@ -708,7 +714,7 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
 
         # Phase 3: Learn - store SICA session as a memory
         if result.issues_found > 0 or result.auto_patches:
-            _store_sica_session(client, coll, result, embedder=embedder)
+            _store_sica_session(client, coll, result, embedder=embedder, vector_name=vector_name)
 
         logger.info(
             "SICA: scanned %d, found %d issues, %d auto-patched, %d suggestions",
@@ -727,14 +733,20 @@ def run_sica(client: Any = None, collection: str = "", auto_patch: bool = True,
     return result
 
 
-def _store_sica_session(client: Any, collection: str, result: SICAResult,
-                        embedder: Any = None) -> None:
+def _store_sica_session(
+    client: Any,
+    collection: str,
+    result: SICAResult,
+    embedder: Any = None,
+    vector_name: Optional[str] = None,
+) -> None:
     """Store the SICA run outcome as a memory for future iterations.
 
     Args:
         embedder: Optional pre-initialized EmbeddingProvider. If None, creates
                   a new one (avoid passing None in hot paths - reuse an
                   instance from the caller).
+        vector_name: Optional named vector for the upsert (Regel B).
     """
     try:
         from qdrant_client import models as qm
@@ -757,9 +769,16 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult,
         # Verify dimension matches collection to avoid upsert failure
         try:
             coll_info = client.get_collection(collection_name=collection)
-            coll_dim = coll_info.config.params.vectors.size
+            vectors_cfg = coll_info.config.params.vectors
+            if vector_name and isinstance(vectors_cfg, dict) and vector_name in vectors_cfg:
+                coll_dim = vectors_cfg[vector_name].size
+            elif isinstance(vectors_cfg, dict):
+                # No explicit vector_name but named collection: take first config
+                coll_dim = next(iter(vectors_cfg.values())).size
+            else:
+                coll_dim = vectors_cfg.size
             embedder_dim = getattr(_embedder, 'dim', None) or getattr(_embedder, '_dim', None)
-            if embedder_dim and embedder_dim != coll_dim:
+            if embedder_dim and coll_dim and embedder_dim != coll_dim:
                 logger.warning(
                     "SICA session storage skipped: embedder dim %d != collection dim %d",
                     embedder_dim, coll_dim
@@ -830,9 +849,15 @@ def _store_sica_session(client: Any, collection: str, result: SICAResult,
             "sica_suggestions": len(result.suggestions),
         }
 
-        client.upsert(
-            collection_name=collection,
-            points=[qm.PointStruct(id=eid, vector=vector, payload=payload)],
+        upsert_kwargs = {
+            "collection_name": collection,
+            "points": [qm.PointStruct(id=eid, vector=vector, payload=payload)],
+        }
+        # Writes carry the vector NAME inside each point (``using`` is read-only).
+        from nexus_memory.collection_vectors import upsert_named
+        upsert_named(
+            client, upsert_kwargs["collection_name"],
+            upsert_kwargs["points"], vector_name,
         )
         logger.info("SICA session stored: %s", eid[:8])
     except Exception as exc:
