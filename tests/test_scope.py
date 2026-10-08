@@ -164,6 +164,8 @@ def _make_plugin(monkeypatch, points, my_scope):
     prov._collection = "nexus"  # scope tests don't exercise collection resolution
 
     class FakeEmbedder:
+        backend = "test"
+
         def embed_cached(self, text):
             return [0.0] * 8
 

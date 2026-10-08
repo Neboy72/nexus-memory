@@ -17,6 +17,8 @@ from qdrant_client import QdrantClient, models
 
 from nexus.graph import Edge, EdgeRelation, EdgeStatus, EdgeStore, SkillGraph
 
+from conftest import bind_test_collection, named_vector, test_vector_name
+
 # Collection name used in all test fixtures
 TEST_COLLECTION = "test-memory"
 # Minimal vector config for test points (Qdrant requires vectors)
@@ -62,6 +64,11 @@ F_FACT_Y = fact_id("fact-y")
 F_FACT_Z = fact_id("fact-z")
 
 
+def _fact_vector() -> dict:
+    """Named vector for TEST_COLLECTION (Regel B)."""
+    return {test_vector_name(TEST_VECTOR_SIZE): [0.0] * TEST_VECTOR_SIZE}
+
+
 def create_point(client: QdrantClient, collection: str, pid: str) -> None:
     """Upsert a minimal fact-point into Qdrant for testing."""
     client.upsert(
@@ -69,7 +76,7 @@ def create_point(client: QdrantClient, collection: str, pid: str) -> None:
         points=[
             models.PointStruct(
                 id=pid,
-                vector=[0.0] * TEST_VECTOR_SIZE,
+                vector=_fact_vector(),
                 payload={"content": f"Test fact {pid}"},
             )
         ],
@@ -83,7 +90,7 @@ def create_fact_points(client: QdrantClient, collection: str, ids: list[str]) ->
         points=[
             models.PointStruct(
                 id=pid,
-                vector=[0.0] * TEST_VECTOR_SIZE,
+                vector=_fact_vector(),
                 payload={"content": f"Test fact {pid}"},
             )
             for pid in ids
@@ -110,11 +117,8 @@ def client(tmp_qdrant):
 @pytest.fixture
 def store(client):
     """EdgeStore with empty Qdrant (no fact-points)."""
-    client.create_collection(
-        collection_name=TEST_COLLECTION,
-        vectors_config=TEST_VECTOR_CONFIG,
-    )
-    s = EdgeStore(client=client, collection=TEST_COLLECTION)
+    binding = bind_test_collection(client, TEST_COLLECTION, TEST_VECTOR_SIZE)
+    s = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
     s.initialize()
     return s
 
@@ -122,11 +126,8 @@ def store(client):
 @pytest.fixture
 def store_with_points(client):
     """EdgeStore with pre-created fact-points."""
-    client.create_collection(
-        collection_name=TEST_COLLECTION,
-        vectors_config=TEST_VECTOR_CONFIG,
-    )
-    s = EdgeStore(client=client, collection=TEST_COLLECTION)
+    binding = bind_test_collection(client, TEST_COLLECTION, TEST_VECTOR_SIZE)
+    s = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
     s.initialize()
 
     create_fact_points(client, TEST_COLLECTION, [
@@ -298,20 +299,23 @@ class TestEdgeStore:
 
         # Instance 1
         c1 = QdrantClient(path=qdrant_path)
-        c1.create_collection(
-            collection_name=TEST_COLLECTION,
-            vectors_config=TEST_VECTOR_CONFIG,
-        )
+        s1 = EdgeStore(client=c1, collection=TEST_COLLECTION,
+                       binding=bind_test_collection(c1, TEST_COLLECTION,
+                                                    TEST_VECTOR_SIZE))
         create_point(c1, TEST_COLLECTION, F_F1)
         create_point(c1, TEST_COLLECTION, F_F2)
-        s1 = EdgeStore(client=c1, collection=TEST_COLLECTION)
         s1.initialize()
         s1.add_edge(F_F1, F_F2, "supersedes")
         s1.close()
 
         # Instance 2 (same path)
         c2 = QdrantClient(path=qdrant_path)
-        s2 = EdgeStore(client=c2, collection=TEST_COLLECTION)
+        # Same collection, same vector space: re-derive the named vector from
+        # Qdrant (a fresh binding against the existing collection), exactly as
+        # a second process would in production.
+        s2 = EdgeStore(client=c2, collection=TEST_COLLECTION,
+                       binding=bind_test_collection(c2, TEST_COLLECTION,
+                                                    TEST_VECTOR_SIZE))
         s2.initialize()
         assert s2.count_edges() == 1
         s2.close()

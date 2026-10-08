@@ -229,6 +229,7 @@ class RetrievalWatch:
             )
             return results, False
         client = self._store.client
+        vector_name = getattr(self._store, "vector_name", None)
         query_fn = getattr(client, "query_points", None)
         if query_fn is None:
             # ältere qdrant_client: search()-API
@@ -238,12 +239,15 @@ class RetrievalWatch:
                 limit=limit,
                 with_payload=True,
             ), True
-        return query_fn(
-            collection_name=self._collection,
-            query=vector,
-            limit=limit,
-            with_payload=True,
-        ).points, True
+        qp_kwargs = {
+            "collection_name": self._collection,
+            "query": vector,
+            "limit": limit,
+            "with_payload": True,
+        }
+        if vector_name:
+            qp_kwargs["using"] = vector_name
+        return query_fn(**qp_kwargs).points, True
 
     # ── daemon loop ───────────────────────────────────────────────────
     def start(self) -> None:

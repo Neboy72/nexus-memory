@@ -18,6 +18,8 @@ from nexus.discovery.dedup import filter_new_edges
 from nexus.graph.schema import EdgeRelation
 from nexus.graph.store import EdgeStore
 
+from conftest import bind_test_collection, test_vector_name
+
 
 def fact_id(name: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, name))
@@ -210,20 +212,19 @@ class TestDedup:
         with tempfile.TemporaryDirectory() as tmp:
             from qdrant_client import QdrantClient, models
             client = QdrantClient(path=os.path.join(tmp, "qdrant"))
-            client.create_collection(
-                collection_name="test-memory",
-                vectors_config=models.VectorParams(size=2, distance=models.Distance.COSINE),
-            )
+            collection = "test-memory"
+            binding = bind_test_collection(client, collection, 2)
             # Create needed fact-points
             all_ids = [F_A, F_B, F_C, F_D]
+            vec = {test_vector_name(2): [0.0, 0.0]}
             client.upsert(
-                collection_name="test-memory",
+                collection_name=collection,
                 points=[
-                    models.PointStruct(id=fid, vector=[0.0, 0.0], payload={"content": f"Test {fid}"})
+                    models.PointStruct(id=fid, vector=vec, payload={"content": f"Test {fid}"})
                     for fid in all_ids
                 ],
             )
-            store = EdgeStore(client=client, collection="test-memory")
+            store = EdgeStore(client=client, collection=collection, binding=binding)
             store.initialize()
             yield store
 

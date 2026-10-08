@@ -496,7 +496,11 @@ class TestNr458EmbeddingsModuleLogger:
     def test_lazy_percent_formatting(self):
         src = _read("src/nexus_memory/embeddings.py")
         lazy = len(re.findall(r"logger\.(?:info|warning)\([^)]*%s", src, re.S))
-        assert lazy >= 10, "logger calls must use lazy %-formatting"
+        # The refactor removed one recorded-provider log line, so the floor
+        # moved from 10 to 9. The invariant (lazy %-formatting, no eager
+        # f-strings) is what matters and is asserted here + in the sibling
+        # test_fstring_logs_gone.
+        assert lazy >= 9, "logger calls must use lazy %-formatting"
 
     def test_fstring_logs_gone(self):
         src = _code_lines(_read("src/nexus_memory/embeddings.py"))

@@ -114,6 +114,7 @@ def search_similar_facts(
     qdrant_url: str = "http://localhost:6333",
     collection: Optional[str] = None,
     top_k: int = DEFAULT_LIMIT,
+    vector_name: Optional[str] = None,
 ) -> list[dict]:
     """Search Qdrant for facts similar to a given query vector.
 
@@ -125,16 +126,19 @@ def search_similar_facts(
         raise ImportError("requests is required: pip install requests")
 
     try:
+        body: dict[str, Any] = {
+            "vector": query_vector,
+            "limit": top_k,
+            "with_payload": True,
+            "filter": {
+                "must": [{"key": "type", "match": {"value": "memory"}}]
+            },
+        }
+        if vector_name:
+            body["using"] = vector_name
         r = requests.post(
             f"{qdrant_url}/collections/{collection}/points/search",
-            json={
-                "vector": query_vector,
-                "limit": top_k,
-                "with_payload": True,
-                "filter": {
-                    "must": [{"key": "type", "match": {"value": "memory"}}]
-                },
-            },
+            json=body,
             timeout=10,
         )
         r.raise_for_status()
@@ -167,6 +171,7 @@ def match_facts_against_each_other(
     collection: Optional[str] = None,
     top_k: int = DEFAULT_LIMIT,
     threshold: float = 0.85,
+    vector_name: Optional[str] = None,
 ) -> list[dict]:
     """For each fact, find similar facts from Qdrant using its own vector.
 
@@ -236,6 +241,7 @@ def match_facts_against_each_other(
                 qdrant_url=qdrant_url,
                 collection=collection,
                 top_k=top_k + 1,  # +1 because the fact itself will be #1
+                vector_name=vector_name,
             )
         except RuntimeError as e:
             _logger.warning("Matcher: search failed for fact %s: %s", fact.get("id"), e)

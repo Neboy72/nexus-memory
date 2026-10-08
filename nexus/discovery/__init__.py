@@ -96,6 +96,7 @@ class AutoDiscovery:
         qdrant_url: str = DEFAULT_QDRANT_URL,
         collection: Optional[str] = DEFAULT_COLLECTION,
         top_k: int = DEFAULT_TOP_K,
+        vector_name: Optional[str] = None,
     ):
         if collection is None:
             raise ValueError(
@@ -107,6 +108,8 @@ class AutoDiscovery:
         self._qdrant_url = qdrant_url
         self._collection = collection
         self._top_k = top_k
+        # Regel B: named-vector collections need `using` on every search.
+        self._vector_name = vector_name
         self._store = store or EdgeStore(
             qdrant_url=qdrant_url,
             collection=collection,
@@ -205,6 +208,7 @@ class AutoDiscovery:
                         qdrant_url=self._qdrant_url,
                         collection=self._collection,
                         top_k=self._top_k + 1,  # +1 because self-match is #1
+                        vector_name=self._vector_name,
                     )
                 except RuntimeError as e:
                     # Review #46: record the outage, keep going with other facts.
@@ -373,6 +377,7 @@ class AutoDiscovery:
             qdrant_url=self._qdrant_url,
             collection=self._collection,
             top_k=self._top_k + 1,
+            vector_name=self._vector_name,
         )
 
         candidates = []

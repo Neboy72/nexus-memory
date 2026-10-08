@@ -31,7 +31,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Any, Optional
 
 from nexus.config import get_collection
 
@@ -213,6 +213,7 @@ def _fetch_chunks(
     qdrant_port: int = 6333,
     collection: Optional[str] = None,
     top_k: int = 5,
+    vector_name: Optional[str] = None,
 ) -> list[dict]:
     """Fetch top-K chunks from Qdrant (with full payload)."""
     collection = get_collection(collection)
@@ -220,16 +221,19 @@ def _fetch_chunks(
         return []
     try:
         url = f"http://{qdrant_host}:{qdrant_port}/collections/{collection}/points/search"
+        body: dict[str, Any] = {
+            "vector": query_embedding,
+            "limit": top_k,
+            "with_payload": True,
+            "filter": {
+                "must": [{"key": "type", "match": {"value": "memory"}}]
+            },
+        }
+        if vector_name:
+            body["using"] = vector_name
         r = requests.post(
             url,
-            json={
-                "vector": query_embedding,
-                "limit": top_k,
-                "with_payload": True,
-                "filter": {
-                    "must": [{"key": "type", "match": {"value": "memory"}}]
-                },
-            },
+            json=body,
             timeout=10,
         )
         # W37: without this a non-200 reply (server error, bad collection,
@@ -289,6 +293,7 @@ class GroundingScorer:
         qdrant_port: int = 6333,
         collection: Optional[str] = None,
         top_k: int = 5,
+        vector_name: Optional[str] = None,
     ):
         collection = get_collection(collection)
         self.embed_provider = embed_provider
@@ -296,6 +301,7 @@ class GroundingScorer:
         self.qdrant_port = qdrant_port
         self.collection = collection
         self.top_k = top_k
+        self.vector_name = vector_name
 
     # ─ Public API ──────────────────────────────────────────────────
 
@@ -334,6 +340,7 @@ class GroundingScorer:
                 qdrant_port=self.qdrant_port,
                 collection=self.collection,
                 top_k=self.top_k,
+                vector_name=self.vector_name,
             )
 
         if not chunks:

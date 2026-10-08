@@ -509,14 +509,20 @@ class Consolidator:
         from qdrant_client.models import Filter, FieldCondition, MatchValue
         vec = self._embed(fact)
         try:
-            res = self._store.client.query_points(
-                self._collection, query=vec, limit=3,
-                score_threshold=_CONFLICT_SIM_THRESHOLD,
-                query_filter=Filter(must=[
+            qp_kwargs = {
+                "collection_name": self._collection,
+                "query": vec,
+                "limit": 3,
+                "score_threshold": _CONFLICT_SIM_THRESHOLD,
+                "query_filter": Filter(must=[
                     FieldCondition(key="category", match=MatchValue(value="fact")),
                     FieldCondition(key="lifecycle_status", match=MatchValue(value="canonical")),
                 ]),
-            )
+            }
+            vector_name = getattr(self._store, "vector_name", None)
+            if vector_name:
+                qp_kwargs["using"] = vector_name
+            res = self._store.client.query_points(**qp_kwargs)
         except Exception as exc:
             log.warning("consolidation: similarity check failed (conservative store): %s", exc)
             return "ok", []
@@ -588,9 +594,9 @@ class Consolidator:
                 fact_scope = _infer_scope(vec, centroids.get()) or "default"
         except Exception as exc:
             log.info("consolidation: scope inference skipped (%s) — fail-open", exc)
-        self._store.client.upsert(
-            self._collection,
-            points=[PointStruct(
+        upsert_kwargs = {
+            "collection_name": self._collection,
+            "points": [PointStruct(
                 id=new_id, vector=vec,
                 payload={"content": fact, "category": "fact",
                          "access_level": access_level,
@@ -602,6 +608,13 @@ class Consolidator:
                                         "created_by": "consolidation-v1",
                                         "timestamp": now}},
             )],
+        }
+        vector_name = getattr(self._store, "vector_name", None)
+        # Writes carry the vector NAME inside each point (``using`` is read-only).
+        from nexus_memory.collection_vectors import upsert_named
+        upsert_named(
+            self._store.client, upsert_kwargs["collection_name"],
+            upsert_kwargs["points"], vector_name,
         )
         return new_id, fact_scope
 

@@ -111,18 +111,17 @@ def isolated_env(monkeypatch):
     ):
         monkeypatch.delenv(var, raising=False)
 
-    # The explicit provider choice has three sources: the env var above and two
+    # The explicit provider choice has two sources: the env var above and two
     # JSON config files (``$HERMES_HOME/nexus/config.json`` and
     # ``~/.nexus-memory/config.json``). A developer who pinned their own
     # provider there — exactly what the wizard writes — would otherwise leak
     # that choice into every test and break the default-path assertions.
-    # Both file readers are neutralised here so the tested default stays the
-    # default on every machine.
+    #
+    # Regel A/B: the only config the code still reads is the *preference*; the
+    # old ``collection_provider`` / ``_read_existing_collection_model`` path is
+    # gone (the collection model now lives in Qdrant as a named vector).
     monkeypatch.setattr(
         "nexus_memory.embeddings._read_preferred_provider", lambda: ""
-    )
-    monkeypatch.setattr(
-        "nexus_memory.embeddings._read_existing_collection_model", lambda: ""
     )
 
     # Force a stable collection name and pretend Qdrant is on localhost.
@@ -237,3 +236,68 @@ _requires_openclaw_dist = pytest.mark.skipif(
     not (Path(__file__).resolve().parent.parent / "plugins" / "openclaw" / "dist" / "index.js").exists(),
     reason="requires the built openclaw plugin bundle (plugins/openclaw/dist/index.js)",
 )
+
+# ---------------------------------------------------------------------------
+# 3. Regel B helper — create a collection with a NAMED vector.
+#
+# Since 08.10.2026 the collection model lives IN Qdrant as a named vector
+# (``<backend>__<model>__<dim>``). Test fixtures that used to pre-create a
+# bare ``VectorParams`` collection now produce a *legacy unnamed* collection,
+# which Regel B correctly refuses when it is not empty. These helpers build a
+# properly bound collection through the REAL CollectionBinding, so the tests
+# exercise the shipped path instead of a hand-rolled shortcut.
+# ---------------------------------------------------------------------------
+
+import uuid as _uuid  # noqa: E402
+
+
+class TestEmbedderStub:
+    """Minimal ``EmbeddingProvider`` stand-in for Regel B in tests.
+
+    Carries exactly the surface the binding reads: backend, model_name, dim
+    and the private preference marker used by the mismatch branch.
+    """
+
+    def __init__(self, dim: int = 2) -> None:
+        self.backend = "test"
+        self.model_name = "test-model"
+        self.dim = dim
+        self._preferred = ""
+
+    @property
+    def name(self) -> str:
+        return "test-model"
+
+    async def embed(self, text: str, is_query: bool = True):  # pragma: no cover
+        return [0.0] * self.dim
+
+
+def test_vector_name(dim: int = 2) -> str:
+    """The named vector a test collection is created with."""
+    from nexus_memory.embeddings import vector_fingerprint
+
+    return vector_fingerprint("test", "test-model", dim)
+
+
+def bind_test_collection(client, collection: str, dim: int = 2):
+    """Create/bind ``collection`` with a named vector, via the real binding.
+
+    Returns the live :class:`CollectionBinding` so callers can pass it into
+    ``EdgeStore(binding=...)`` and read ``binding.vector_name()``.
+    """
+    from nexus_memory.collection_vectors import CollectionBinding
+
+    binding = CollectionBinding(client, collection, TestEmbedderStub(dim))
+    binding.ensure()
+    return binding
+
+
+def named_vector(client, binding, vec: list):
+    """Wrap a raw vector list as a named-vector dict for upserts."""
+    name = binding.vector_name()
+    return {name: vec} if name else vec
+
+
+def fact_uuid(name: str) -> str:
+    """Deterministic UUID for a short test name (Qdrant needs UUIDs/ints)."""
+    return str(_uuid.uuid5(_uuid.NAMESPACE_DNS, name))
