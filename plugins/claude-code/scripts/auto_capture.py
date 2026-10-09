@@ -269,10 +269,18 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
         }]
     }).encode()
 
+    # Qdrant wants PUT for point creation, not POST. A bare
+    # ``urllib.request.Request`` defaults to POST, which this endpoint
+    # rejects with 400 "Format error in JSON body: missing field `ids`" —
+    # the error the surrounding ``except`` swallowed, so every capture
+    # vanished without a word. Verified against Qdrant 1.17: POST -> 400,
+    # PUT -> 200. The read paths (``/points/search``, ``/points/scroll``,
+    # ``/points`` with an ``ids`` body) do want POST and are left alone.
     req = urllib.request.Request(
         f"{QDRANT_URL}/collections/{COLLECTION}/points",
         data=point_data,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json"},
+        method="PUT",
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
