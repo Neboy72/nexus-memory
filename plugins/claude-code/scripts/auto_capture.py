@@ -220,6 +220,20 @@ def get_embedding(text: str) -> list:
         print(f"[nexus auto-capture] embedding failed: {exc}", file=sys.stderr)
         return None
 
+def _point_vector(embedding):
+    """The Qdrant point ``vector`` value: list for anonymous, {name: [...]} for named.
+
+    The write-side twin of ``_vector_body``: on a named collection a bare list is
+    rejected with 400 "Not existing vector name" and the surrounding except
+    swallowed it, so captures vanished without a word.
+    """
+    try:
+        import scope_auto as _scope_auto
+        return _scope_auto.point_vector_body(embedding, QDRANT_URL, COLLECTION)
+    except Exception:
+        return embedding
+
+
 def store_memory(text: str, category: str = "session", point_id: str = None):
     """Store a memory in Qdrant."""
     embedding = get_embedding(text)
@@ -233,7 +247,7 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
     point_data = json.dumps({
         "points": [{
             "id": point_id,
-            "vector": embedding,
+            "vector": _point_vector(embedding),
             "payload": {
                 "text": text,
                 "content": text,

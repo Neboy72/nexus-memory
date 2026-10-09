@@ -18,7 +18,7 @@ sys.path.insert(0, str(REPO))
 
 
 # ── 1. trust tiers: whole words, not substrings ────────────────────────────
-# The keywords used to be proper names ("kiosha", "nebo") which almost never
+# The keywords used to be proper names of a single deployment, which almost never
 # matched by accident. The generic words "agent"/"user" do: "user_agent" or
 # "TODO agent Remember" would have lifted arbitrary notes to tier1 (boost 1.2,
 # green trust label) and diluted the poisoning defence.
@@ -55,9 +55,9 @@ def test_trust_matcher_escapes_its_keywords():
 
 
 # ── 2. the backup marker must not depend on one plist filename ─────────────
-# The sweep renamed a hardcoded LaunchAgent path (com.kiosha… → com.nexus…) in a
-# functional marker check. A fixed name makes the check lie on whichever install
-# uses the other name; it now globs.
+# The sweep renamed a hardcoded LaunchAgent path (a personal plist name → a
+# product one) in a functional marker check. A fixed name makes the check lie on
+# whichever install uses the other name; it now globs.
 
 def test_backup_marker_locates_launchagents_by_glob():
     src = (REPO / "integrations" / "hermes-plugin" / "__init__.py").read_text(encoding="utf-8")
