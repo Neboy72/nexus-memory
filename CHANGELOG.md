@@ -1,3 +1,39 @@
+## [0.22.14] — 2026-10-10
+
+### Fixed
+
+- **A leak marker that could never fire.** In the OpenClaw thought filter the
+  pattern read `/^(so,|wait|hmm)\b[.,\s]/i`. The `\b` sat between a non-word
+  character (the comma) and the character class — a word boundary cannot exist
+  there by definition, so the `so,` branch was dead from the day it was written,
+  even though the comment above it named exactly that form as the marker. A
+  reasoning leak opening with *"So, hier ist meine Antwort"* went through
+  unfiltered; `wait`/`hmm` only worked because they end in word characters.
+  The marker now matches any real separator. (`plugins/openclaw/hooks/thought-filter.ts`)
+
+- **The addressee group was hardcoded to one deployment's names.** Every other
+  installation carried dead branches, and anyone reading the file could tell who
+  built it. The group is now generic and extendable through `NEXUS_AGENT_NAMES`
+  (comma-separated), so a deployment that wants its own names recognised sets the
+  variable while an untouched install stays generic. Both markers are covered.
+
+### Changed
+
+- **No deployment, agent or owner names in shipped code or docs.** Names left over
+  from the development history were replaced with neutral wording across `src/`,
+  `plugins/`, `docs/`, `benches/` and `dashboard/`; design decisions keep their
+  dates and are attributed to "the maintainer" where that carries meaning. The
+  public GitHub handle and the entry documenting the earlier pseudonymisation stay
+  as they are. Two guard tests that forbade hardcoded home paths previously carried
+  the very path they forbade; they now match any `/Users/<name>` — stricter than
+  before.
+
+- `NEXUS_OBSIDIAN_WIKI` configures the shared Obsidian wiki path
+  (default `~/ObsidianVault/NexusVault/wiki/entities`) instead of a fixed
+  personal path. (`nexus/health/__init__.py`)
+
+Versions: engine 0.22.14, Claude Code plugin 1.2.4, OpenClaw plugin 1.21.6.
+
 ## [Unreleased]
 
 ### Added
