@@ -20,6 +20,45 @@ EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
+
+def _central_env() -> dict:
+    """Read the shared ``~/.hermes/.env`` so the hook follows the host.
+
+    Hooks run under the app's environment, not a login shell, so they never
+    see an exported or sourced variable. Without this the hook silently reads
+    a different collection than the MCP server of the same install. Only the
+    three Nexus keys are honoured and a real env var always wins.
+    """
+    out = {}
+    path = os.environ.get("NEXUS_ENV_FILE",
+                          str(Path.home() / ".hermes" / ".env"))
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key.startswith("export "):
+                    key = key[7:].strip()
+                if key in ("NEXUS_COLLECTION", "NEXUS_EMBEDDING_PROVIDER",
+                           "NEXUS_EMBEDDING_MODEL"):
+                    out.setdefault(key, val.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+    return out
+
+
+_CENTRAL = _central_env()
+COLLECTION = os.getenv("NEXUS_COLLECTION") or _CENTRAL.get("NEXUS_COLLECTION") or COLLECTION
+EMBEDDING_PROVIDER = (os.getenv("NEXUS_EMBEDDING_PROVIDER")
+                      or _CENTRAL.get("NEXUS_EMBEDDING_PROVIDER")
+                      or EMBEDDING_PROVIDER)
+EMBEDDING_MODEL = (os.getenv("NEXUS_EMBEDDING_MODEL")
+                   or _CENTRAL.get("NEXUS_EMBEDDING_MODEL")
+                   or EMBEDDING_MODEL)
+
 def _resolve_trust_level() -> str:
     """Gatekeeper: resolve this agent's trust level from agents.json.
 

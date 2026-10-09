@@ -8,6 +8,11 @@ additional context for Claude to use.
 Output JSON with additionalContext field injects text into Claude's context.
 """
 
+# Hooks are started as `python3 <script>` with the app's PATH. On macOS that
+# is /usr/bin/python3 = 3.9, where `int | None` in an annotation is evaluated
+# at def time and raises TypeError. This file therefore stays 3.9-compatible.
+from __future__ import annotations
+
 import sys
 import json
 import logging
@@ -19,7 +24,6 @@ from pathlib import Path
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
-
 # Self-organizing memory (Nebo law 07.09: full automation): shared scope-auto
 # lib provides centroids + clear-match inference for recall gating.
 # H241: import guard. A missing/broken scope_auto (partial install, syntax
@@ -37,6 +41,47 @@ except Exception as _scope_import_exc:  # pragma: no cover - defensive
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
+
+
+def _central_env() -> dict:
+    """Read the shared ``~/.hermes/.env`` so the hook follows the host.
+
+    Hooks are started by the app, not by a login shell: they see neither the
+    shell's exports nor a sourced ``.env``. Without this the hook falls back
+    to its own defaults and reads a DIFFERENT collection than the MCP server
+    of the same install — silently, with zero hits and no error. Only the
+    three Nexus keys are honoured, and a real environment variable always
+    wins, so an explicit override is never overridden.
+    """
+    out = {}
+    path = os.environ.get("NEXUS_ENV_FILE",
+                          str(Path.home() / ".hermes" / ".env"))
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key.startswith("export "):
+                    key = key[7:].strip()
+                if key in ("NEXUS_COLLECTION", "NEXUS_EMBEDDING_PROVIDER",
+                           "NEXUS_EMBEDDING_MODEL"):
+                    out.setdefault(key, val.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+    return out
+
+
+_CENTRAL = _central_env()
+COLLECTION = os.getenv("NEXUS_COLLECTION") or _CENTRAL.get("NEXUS_COLLECTION") or COLLECTION
+EMBEDDING_PROVIDER = (os.getenv("NEXUS_EMBEDDING_PROVIDER")
+                      or _CENTRAL.get("NEXUS_EMBEDDING_PROVIDER")
+                      or EMBEDDING_PROVIDER)
+EMBEDDING_MODEL = (os.getenv("NEXUS_EMBEDDING_MODEL")
+                   or _CENTRAL.get("NEXUS_EMBEDDING_MODEL")
+                   or EMBEDDING_MODEL)
 
 
 def _env_int(name: str, default: int, minimum: int | None = None) -> int:

@@ -9,6 +9,12 @@ Deny output uses Claude Code's PreToolUse hook contract:
 hookSpecificOutput.permissionDecision = "deny" (+ permissionDecisionReason).
 """
 
+# Hooks are started as `python3 <script>` with the app's PATH. On macOS that
+# is /usr/bin/python3 = 3.9, where `str | None` / `list[dict] | None` in an
+# annotation raise TypeError at def time. A broken guardrail hook means a
+# destructive command goes through unchecked, so this file stays 3.9-safe.
+from __future__ import annotations
+
 import sys
 import json
 import os
@@ -20,6 +26,38 @@ from pathlib import Path
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
+
+
+def _central_env() -> dict:
+    """Read the shared ``~/.hermes/.env`` so the hook follows the host.
+
+    A guardrail that reads the wrong collection finds no protection rules and
+    would allow a destructive command. Only the three Nexus keys are honoured;
+    a real env var wins.
+    """
+    out = {}
+    path = os.environ.get("NEXUS_ENV_FILE",
+                          str(Path.home() / ".hermes" / ".env"))
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key.startswith("export "):
+                    key = key[7:].strip()
+                if key in ("NEXUS_COLLECTION", "NEXUS_EMBEDDING_PROVIDER",
+                           "NEXUS_EMBEDDING_MODEL"):
+                    out.setdefault(key, val.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+    return out
+
+
+_CENTRAL = _central_env()
+COLLECTION = os.getenv("NEXUS_COLLECTION") or _CENTRAL.get("NEXUS_COLLECTION") or COLLECTION
 
 # Destructive command patterns — (action, [compiled regex, ...]).
 #
