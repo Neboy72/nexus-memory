@@ -1,3 +1,44 @@
+## [0.22.17] — 2026-10-10
+
+### Fixed
+
+- **The memory provider could not embed at all when Hermes called it — remember
+  and recall both failed.** The provider's ``_Embedder.embed`` ran a bare
+  ``asyncio.run(coro)``. Hermes invokes a memory provider **from inside its own
+  running event loop**, where ``asyncio.run`` refuses outright:
+
+  ```
+  RuntimeError: asyncio.run() cannot be called from a running event loop
+  ```
+
+  Every ``nexus_remember`` and ``nexus_recall`` returned an error. The database was
+  healthy throughout — the defect was in the call shape, not the data. Users saw a
+  silent memory, not a crash.
+
+  The regression arrived with the Wave-38 cleanup (``5c2a50d``), which replaced a
+  hand-rolled ``new_event_loop``/``run_until_complete`` pair with ``asyncio.run``.
+  That earlier shape did **not** work either — running a second loop inside an
+  already-running one raises ``Cannot run the event loop while another loop is
+  running``. It differed only in the error message, so this is a real repair, not a
+  restoration of working code. Both shapes were exercised from a running loop before
+  the conclusion was drawn.
+
+  ``embed`` now detects a running loop and, when one is present, runs the coroutine
+  on its own loop in a separate thread. The plain, loop-free path keeps
+  ``asyncio.run`` unchanged. A separate thread is used rather than
+  ``run_coroutine_threadsafe``: the latter would run the coroutine on the **caller's**
+  loop and interleave it with the caller's own tasks, which a synchronous-looking
+  embed must not do.
+
+  Why it stayed hidden: a test run has no running loop, so ``asyncio.run`` works there.
+  The unit suite was green while the real path was broken.
+
+- ``tests/test_embedder_event_loop.py`` — calls the embedder once without and once
+  from inside a running loop, so this cannot regress unnoticed again. Red without the
+  fix, green with it.
+
+Versions: engine 0.22.17, Claude Code plugin 1.2.4, OpenClaw plugin 1.21.8.
+
 ## [0.22.16] — 2026-10-10
 
 ### Fixed
