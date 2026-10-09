@@ -832,7 +832,10 @@ def _store_sica_session(
         payload = {
             "id": eid,
             "content": summary,
-            "access_level": "public",
+            # A SICA summary is distilled from conversation — it carries the same
+            # content (decisions, names, amounts) and therefore the same privacy.
+            # Was "public" until 09.10.2026.
+            "access_level": "private",
             "category": "sica_session",
             "source": "sica",
             "source_url": "",
