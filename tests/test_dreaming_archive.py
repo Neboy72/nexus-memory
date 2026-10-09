@@ -11,15 +11,27 @@ from nexus_memory import dreaming, archive_forgetting
 
 
 class FakeStore:
-    def __init__(self, similar_score=0.0):
+    def __init__(self, similar_score=0.0, named_vectors=False,
+                 vector_count=1):
         self.collection = "nexus"
         self._similar_score = similar_score
         self.deleted = []
         self.client = self  # qdrant-style: store.client exposes the API
+        # Regel B: eine Sammlung kann einen BENANNTEN Vektorraum haben. Dann
+        # liefert Qdrant den Vektor als dict {name: liste} statt als Liste.
+        self._named = named_vectors
+        self._vector_count = vector_count
 
     class _Hit:
         def __init__(self, score):
             self.score = score
+
+    def _vector(self):
+        if not self._named:
+            return [0.1]
+        names = ["ollama__qwen3-embedding_0_6b__1024",
+                 "voyage__voyage-4__1024"][:self._vector_count]
+        return {n: [0.1] for n in names}
 
     def search(self, collection_name, query_vector, limit, query_filter):
         if self._similar_score:
@@ -27,7 +39,15 @@ class FakeStore:
         return []
 
     def scroll(self, collection_name, scroll_filter, limit,
-               with_payload, with_vector):
+               with_payload, with_vectors, **unknown):
+        # Doppel muss sich wie der ECHTE Client verhalten: ein falscher
+        # Argumentname ist ein harter Fehler, kein stiller Durchlauf.
+        # (Wurzel des Fundes vom 09.10.: der Doppel nahm with_vector klaglos
+        # an, deshalb blieb der Fehler wochenlang gruen im Test.)
+        if unknown:
+            raise AssertionError(
+                f"Unknown arguments: {sorted(unknown)}")
+        assert "with_vector" not in unknown
         stale_ts = time.time() - (archive_forgetting.MAX_AGE_DAYS + 5) * 86400
         points = []
         # Realistic ID mix: one UUID point, one numeric-ID point, one
@@ -44,7 +64,7 @@ class FakeStore:
             points.append(type("P", (), {"id": pid,
                                          "payload": {"category": cat,
                                                      "created_at": stale_ts},
-                                         "vector": [0.1]})())
+                                         "vector": self._vector()})())
         return (points, None)
 
     def delete(self, collection_name, points_selector):
@@ -196,6 +216,53 @@ def test_archive_mixed_id_types_deleted(monkeypatch, tmp_path):
     assert out["deleted"] == 3 and out["errors"] == 0
     kinds = {type(d).__name__ for d in store.deleted}
     assert "str" in kinds and "int" in kinds
+
+
+# ── Fund 09.10.2026: stiller Archiv-Ausfall + benannte Vektoren ─────
+
+def test_archive_scroll_uses_real_client_kwarg(monkeypatch, tmp_path):
+    """Der Doppel muss den echten Client abbilden.
+
+    Vorher uebergab der Code `with_vector` — der echte Qdrant-Client kennt
+    nur `with_vectors` und wirft, der Fehler wurde per fail-open verschluckt
+    (314x im Live-Log). Dieser Test allein haette den Ausfall sofort gezeigt.
+    """
+    monkeypatch.setattr(archive_forgetting, "BACKUP_DIR", tmp_path / "bk")
+    seen = {}
+
+    class _Strict(FakeStore):
+        def scroll(self, collection_name, scroll_filter, limit,
+                   with_payload, with_vectors, **unknown):
+            seen["with_vectors"] = with_vectors
+            seen["unknown"] = unknown
+            return super().scroll(collection_name, scroll_filter, limit,
+                                  with_payload, with_vectors, **unknown)
+
+    out = archive_forgetting.archive_once(_Strict(), "nexus", dry_run=True)
+    assert seen["unknown"] == {}, f"falsche Argumente: {seen['unknown']}"
+    assert seen["with_vectors"] is True
+    assert out["stale"] >= 1  # Beweis: es wird tatsaechlich gefunden
+
+
+def test_archive_named_vector_keeps_plain_list(monkeypatch, tmp_path):
+    """Regel B: benannter Vektorraum liefert dict — gesichert wird die Liste."""
+    monkeypatch.setattr(archive_forgetting, "BACKUP_DIR", tmp_path / "bk")
+    store = FakeStore(named_vectors=True)
+    out = archive_forgetting.archive_once(store, "nexus", dry_run=False)
+    assert out["deleted"] == out["backed_up"] >= 1
+    line = (tmp_path / "bk").glob("session-points-*.jsonl")
+    first = json.loads(next(iter(line)).read_text("utf-8").splitlines()[0])
+    assert isinstance(first["vector"], list), f"dict gesichert: {first['vector']}"
+    assert first["vector"] == [0.1]
+
+
+def test_archive_multivector_is_skipped_not_guessed(monkeypatch, tmp_path):
+    """Mehrere Vektoren = mehrdeutig: ueberspringen statt raten."""
+    monkeypatch.setattr(archive_forgetting, "BACKUP_DIR", tmp_path / "bk")
+    store = FakeStore(named_vectors=True, vector_count=2)
+    out = archive_forgetting.archive_once(store, "nexus", dry_run=False)
+    assert out["stale"] == 0 and out["deleted"] == 0
+    assert store.deleted == []
 
 
 # ── v0.22.1 review fixes: closing the gaps ────────────────────────
