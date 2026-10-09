@@ -25,6 +25,48 @@ EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
+
+def _central_env() -> dict:
+    """Read the shared ``~/.hermes/.env`` so the hook follows the host.
+
+    Hooks are started by the app, not by a login shell: they see neither the
+    shell's exports nor a ``.env`` the user sourced. Without this, the hook
+    falls back to its own defaults and silently writes to a different
+    collection / provider than the MCP server of the same install.
+
+    Only three keys are honoured, and the real environment always wins, so an
+    explicit override (settings.json, shell export) is never overridden.
+    """
+    out = {}
+    path = os.environ.get("NEXUS_ENV_FILE",
+                          str(Path.home() / ".hermes" / ".env"))
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key.startswith("export "):
+                    key = key[7:].strip()
+                if key in ("NEXUS_COLLECTION", "NEXUS_EMBEDDING_PROVIDER",
+                           "NEXUS_EMBEDDING_MODEL"):
+                    out.setdefault(key, val.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+    return out
+
+
+_CENTRAL = _central_env()
+COLLECTION = os.getenv("NEXUS_COLLECTION") or _CENTRAL.get("NEXUS_COLLECTION") or COLLECTION
+EMBEDDING_PROVIDER = (os.getenv("NEXUS_EMBEDDING_PROVIDER")
+                      or _CENTRAL.get("NEXUS_EMBEDDING_PROVIDER")
+                      or EMBEDDING_PROVIDER)
+EMBEDDING_MODEL = (os.getenv("NEXUS_EMBEDDING_MODEL")
+                   or _CENTRAL.get("NEXUS_EMBEDDING_MODEL")
+                   or EMBEDDING_MODEL)
+
 _SCOPE_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 

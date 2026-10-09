@@ -66,11 +66,131 @@ export class QdrantClient {
    *  single wrong-length vector could create the collection at the wrong
    *  size and brick every later (correct) upsert until manual intervention. */
   private configuredDimensions: number
+
+  /** Named vector to address, or null for an anonymous vector space.
+   *
+   *  A collection whose vector space is NAMED (the engine stores one name per
+   *  embedding fingerprint, e.g. ``ollama__qwen3-embedding_0_6b__1024``)
+   *  rejects a bare vector: ``POST /points/search {vector: [...]}`` answers
+   *  400 "Not existing vector name error". Reading and writing here must
+   *  therefore send ``{name, vector}`` instead. The name is read from the
+   *  collection itself on first contact — never guessed from the model id,
+   *  because a wrong guess is the same silent failure in the other direction.
+   */
+  private vectorName: string | null = null
+
   constructor(qdrantUrl: string, collection: string, dimensions: number) {
     this.qdrantUrl = qdrantUrl.replace(/\/+$/, "")
     this.collection = collection
     this.configuredDimensions = dimensions
     log.info(`Qdrant client initialized (url=${this.qdrantUrl}, collection=${collection}, dims=${dimensions})`)
+  }
+
+  /** Read dimension + vector name out of Qdrant's two possible layouts.
+   *
+   *  Anonymous: ``vectors = {size: 1024, distance: "Cosine"}``
+   *  Named:     ``vectors = {"name": {size: 1024, distance: "Cosine"}, ...}``
+   *
+   *  Returns the name (or null) and the dimension, and remembers the name for
+   *  later search/upsert calls. A multi-vector space is deliberately reported
+   *  as unnamed: picking one would be a guess, and the caller fails loudly on
+   *  the resulting dimension/vector mismatch instead of writing silently.
+   */
+  private readVectorLayout(
+    vectors: unknown,
+    expected: number,
+  ): { dim: number | undefined; name: string | null } {
+    if (!vectors || typeof vectors !== "object") {
+      return { dim: undefined, name: null }
+    }
+    const asRecord = vectors as Record<string, unknown>
+    if (typeof asRecord.size === "number") {
+      // Anonymous space — a bare vector is correct here.
+      this.vectorName = null
+      return { dim: asRecord.size, name: null }
+    }
+    const names = Object.keys(asRecord)
+    if (names.length === 1) {
+      const entry = asRecord[names[0]] as { size?: number } | undefined
+      this.vectorName = names[0]
+      return { dim: entry?.size, name: names[0] }
+    }
+    if (names.length > 1) {
+      // More than one vector: choose by matching the configured dimension.
+      const match = names.find((n) => {
+        const e = asRecord[n] as { size?: number } | undefined
+        return e?.size === expected
+      })
+      if (match) {
+        this.vectorName = match
+        return { dim: expected, name: match }
+      }
+      log.warn(
+        `collection "${this.collection}" carries ${names.length} vectors and none ` +
+        `matches the configured ${expected} dimensions — refusing to guess a vector name`,
+      )
+      this.vectorName = null
+      return { dim: undefined, name: null }
+    }
+    return { dim: undefined, name: null }
+  }
+
+  /** The vector field for a SEARCH body: named when the collection is named.
+   *
+   *  Search takes ``{"vector": {"name": "...", "vector": [...]}}``.
+   *  Upsert takes a DIFFERENT shape — see pointVector().
+   */
+  private vectorField(vector: number[]): unknown {
+    return this.vectorName === null ? vector : { name: this.vectorName, vector }
+  }
+
+  /** The vector field for an UPSERT point: ``{name: [...]}``.
+   *
+   *  Not the same as vectorField(). Qdrant's upsert expects the point vector
+   *  as a map of vector-name → values; sending the search shape here is
+   *  rejected with "data did not match any variant of untagged enum
+   *  VectorStruct". Both shapes were verified against a live named collection
+   *  (scripts/named-vector-proof.ts) — the two-format split is the point.
+   */
+  private pointVector(vector: number[]): unknown {
+    return this.vectorName === null ? vector : { [this.vectorName]: vector }
+  }
+
+  /** Make sure the vector layout is known BEFORE a read builds its body.
+   *
+   *  ``ensureCollection`` is started fire-and-forget at startup, so a recall
+   *  arriving early could still send a bare vector to a named collection and
+   *  take a 400. Waiting on the in-flight ensure, and falling back to a plain
+   *  layout probe (no create — a read must never create a collection), closes
+   *  that window without changing behaviour for an anonymous collection.
+   */
+  private async resolveLayout(): Promise<void> {
+    if (this.collectionReady) return
+    if (this.ensurePromise) {
+      try {
+        await this.ensurePromise
+      } catch {
+        // ensure failed (e.g. dimensions mismatch, Qdrant down) — the probe
+        // below still tries, and the real request surfaces any hard error.
+      }
+    }
+    if (this.collectionReady) return
+    try {
+      const resp = await fetchWithTimeout(
+        `${this.qdrantUrl}/collections/${this.collection}`,
+        { method: "GET" },
+      )
+      if (resp.ok) {
+        const data = await resp.json() as {
+          result?: { config?: { params?: { vectors?: unknown } } }
+        }
+        this.readVectorLayout(data.result?.config?.params?.vectors,
+                              this.configuredDimensions)
+      }
+    } catch {
+      // Leave vectorName untouched — an unknown layout is handled by the
+      // request itself (anonymous collections keep today's behaviour).
+    }
   }
 
   /**
@@ -137,17 +257,22 @@ export class QdrantClient {
     if (resp.ok) {
       const data = await resp.json() as {
         result?: {
-          config?: { params?: { vectors?: { size?: number } } }
+          config?: { params?: { vectors?: { size?: number } | Record<string, { size?: number }> } }
           vectors?: { size?: number }
         }
       }
       exists = true
-      // Qdrant returns dimensions at result.config.params.vectors.size
-      currentDim = data.result?.config?.params?.vectors?.size ?? data.result?.vectors?.size
+      // Qdrant returns dimensions at result.config.params.vectors.size for an
+      // ANONYMOUS vector space. A NAMED space (one entry per fingerprint) is a
+      // map {name: {size, distance}} instead — see readVectorName() below.
+      const vectors = data.result?.config?.params?.vectors
+      currentDim = this.readVectorLayout(vectors, dimensions).dim
+        ?? data.result?.vectors?.size
     } else if (resp.status === 404) {
       // The ONLY status that legitimately means "collection absent".
       exists = false
       currentDim = undefined
+      this.vectorName = null
     } else {
       // Any other error status (401/403/500/…) is NOT an absent collection.
       // Falling through to "create" here would either fail confusingly or
@@ -326,6 +451,7 @@ export class QdrantClient {
   }
 
   async search(queryVector: number[], limit: number, accessLevel: string): Promise<SearchResult[]> {
+    await this.resolveLayout()
     const levels = visibleAccessLevels(accessLevel)
 
     // W31-16: unknown level → levels=[] → fail-closed with NO Qdrant call.
@@ -349,13 +475,14 @@ export class QdrantClient {
         : undefined // agent sees every level — no filter needed
 
     const body: Record<string, unknown> = {
-      vector: queryVector,
+      vector: this.vectorField(queryVector),
       limit,
       with_payload: true,
     }
     if (filter) body.filter = filter
 
-    log.debugRequest("search", { collection: this.collection, limit, accessLevel, levels })
+    log.debugRequest("search", { collection: this.collection, limit, accessLevel, levels,
+                                 vectorName: this.vectorName })
 
     const resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points/search`,
@@ -392,7 +519,8 @@ export class QdrantClient {
    * { points: [{ id, vector, payload }] }
    */
   async upsert(id: string, vector: number[], payload: Record<string, unknown>): Promise<void> {
-    log.debugRequest("upsert", { id, payloadKeys: Object.keys(payload), vectorDim: vector.length })
+    log.debugRequest("upsert", { id, payloadKeys: Object.keys(payload), vectorDim: vector.length,
+                                 vectorName: this.vectorName })
 
     let resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points`,
@@ -400,7 +528,7 @@ export class QdrantClient {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          points: [{ id, vector, payload }],
+          points: [{ id, vector: this.pointVector(vector), payload }],
         }),
       },
     )
@@ -442,7 +570,7 @@ export class QdrantClient {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            points: [{ id, vector, payload }],
+            points: [{ id, vector: this.pointVector(vector), payload }],
           }),
         },
       )
@@ -723,6 +851,7 @@ export class QdrantClient {
     limit: number,
     accessLevel: string,
   ): Promise<SearchResult[]> {
+    await this.resolveLayout()
     const levels = visibleAccessLevels(accessLevel)
 
     // W31-16: same fail-closed early return as search() — never send an empty
@@ -744,7 +873,7 @@ export class QdrantClient {
         : undefined // agent sees every level — no filter needed
 
     const body: Record<string, unknown> = {
-      vector: queryVector,
+      vector: this.vectorField(queryVector),
       limit,
       with_payload: true,
     }
