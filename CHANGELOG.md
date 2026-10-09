@@ -11,6 +11,18 @@
 
 ### Fixed
 
+- **The archive pass had silently stopped working.** `archive_forgetting`
+  called `client.scroll(..., with_vector=True)`; the real qdrant client knows
+  only `with_vectors`, so every pass raised *Unknown arguments:
+  ['with_vector']* and the fail-open branch swallowed it — the archive
+  reported "nothing stale" while stale session points piled up (175 in a
+  live dry run, 314 failed passes in the serve error log). No test caught it
+  because the test double accepted any keyword argument; the double now
+  rejects unknown kwargs like the real client, and a strict-kwarg test locks
+  it. On a **named** vector space (Regel B) qdrant returns `{name: [...]}`
+  instead of `[...]`; the backup now stores the plain list, and a point with
+  several vectors is skipped rather than guessed.
+
 - **Local embeddings are the default; the cloud is now an explicit choice.**
   Auto-detection used to try cloud providers first, so a machine that merely had
   an API key exported (a key belonging to some other tool) silently sent turn
