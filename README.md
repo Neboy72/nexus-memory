@@ -200,6 +200,34 @@ python3 -m nexus_memory.wizard       # or: nexus-memory-init
 > 💡 **Think of it like this:** the tiny built-in model is fine for your first hundred memories. Once your agent remembers weeks of context in German/mixed languages, switch to qwen3-embedding:0.6b — the upgrade is one command, and your memories re-embed automatically in a few minutes, free.
 
 → Full provider table & details: [🧩 Embedding Providers](#embedding-providers) below.
+
+#### Upgrading an existing installation
+
+Since the collection model moved into Qdrant as a **named vector**, a collection
+created by an older version is *unnamed*, and the engine cannot tell which model
+built it — same dimension, different model is invisible to Qdrant. Rather than
+guess (which would silently mix two vector spaces), the engine stops with a clear
+error and asks who BUILT the collection.
+
+That question is answered for you:
+
+```bash
+python3 scripts/detect-legacy-collection.py
+```
+
+It reads your collection, works out the vector size, prints the exact
+`legacy_collections` entry to paste into `~/.hermes/nexus/config.json`, and does
+nothing else. A collection that is *empty* needs no entry at all — it is
+recreated correctly on the next start; a collection that is already *named*
+needs none either. The tool says so plainly in both cases.
+
+```json
+{ "legacy_collections": { "nexus": "voyage__voyage-4__1024" } }
+```
+
+The value is the **builder** (`<backend>__<model>__<dim>`), never the model you
+wish to use from now on.
+
 ### 🌐 Web Dashboard (optional)
 
 Nexus Memory ships with the current dashboard: connected agents, memory graph, inspector, drift status.

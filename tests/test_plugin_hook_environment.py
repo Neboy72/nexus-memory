@@ -114,27 +114,98 @@ def test_collection_default_is_overridden_by_the_env_file(tmp_path):
 # ── 2. the script actually starts on the system interpreter ──────────────
 
 def test_no_hook_relies_on_pep604_annotations_at_runtime():
-    """A 3.9 annotation crash at import time would kill the hook silently."""
+    """A 3.9 annotation crash at import time would kill the hook silently.
+
+    Checks the FUNCTION ANNOTATIONS only — that is where PEP 604 is evaluated
+    at runtime without ``from __future__ import annotations``. An earlier
+    version filtered on ``ast.BinOp`` nodes carrying a ``ctx``, which no BinOp
+    has, so the test passed vacuously and never asserted anything; the shape
+    below is verified by the sharp proof in the module docstring (break it and
+    this test goes red).
+    """
     for name in HOOK_SCRIPTS:
         src = _source(name)
         tree = ast.parse(src)
-        uses_pep604 = any(
-            isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)
-            for node in ast.walk(tree)
-            if isinstance(getattr(node, "ctx", None), ast.Load)
-        )
-        if not uses_pep604:
-            continue
         has_future = any(
             isinstance(node, ast.ImportFrom)
             and node.module == "__future__"
             and any(a.name == "annotations" for a in node.names)
             for node in tree.body
         )
-        assert has_future, (
+        if has_future:
+            continue
+        pep604 = False
+        for node in ast.walk(tree):
+            ann = None
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                ann = node.returns
+                for arg in (list(node.args.args) + list(node.args.kwonlyargs)
+                            + [node.args.vararg, node.args.kwarg]):
+                    if arg is not None and arg.annotation is not None:
+                        if _contains_pep604(arg.annotation):
+                            pep604 = True
+            if ann is not None and _contains_pep604(ann):
+                pep604 = True
+        assert not pep604, (
             f"{name} uses `X | None` in an annotation without "
             f"`from __future__ import annotations` — it raises TypeError on "
             f"Python 3.9, which is what macOS `python3` still is."
+        )
+
+
+def _contains_pep604(node: ast.AST) -> bool:
+    """True if a `X | Y` union appears anywhere inside an annotation."""
+    return any(
+        isinstance(n, ast.BinOp) and isinstance(n.op, ast.BitOr)
+        for n in ast.walk(node)
+    )
+
+
+def test_the_pep604_detector_actually_fires():
+    """Falsification for the detector above — a vacuous guard is worse than none."""
+    assert _contains_pep604(ast.parse("def f(x: int | None) -> None: ...")
+                            .body[0].args.args[0].annotation)
+    assert _contains_pep604(ast.parse("def f() -> list[int] | None: ...")
+                            .body[0].returns)
+    assert not _contains_pep604(ast.parse("def f(x: Optional[int]): ...")
+                                .body[0].args.args[0].annotation)
+
+
+def test_search_body_handles_both_vector_layouts():
+    """The hooks must speak to an anonymous AND a named collection.
+
+    A named space (what the engine creates for a fresh install) rejects a bare
+    vector with 400 "Not existing vector name error", which the caller turns
+    into an empty result — memory stops appearing, silently. Both hook scripts
+    therefore route their body through the shared helper.
+    """
+    for name in ("auto_recall.py", "session_start.py"):
+        src = _source(name)
+        assert "_vector_body(query_embedding)" in src, (
+            f"{name} still sends a bare vector — dead on a named collection"
+        )
+        assert "search_vector_body" in src or "_scope_auto" in src
+
+    shared = (SCRIPTS / "scope_auto.py").read_text(encoding="utf-8")
+    assert "def vector_field(" in shared
+    assert "def search_vector_body(" in shared
+    # The name is read from the collection, never derived from the model id.
+    assert "not existing vector name" in shared or "vector name error" in shared
+
+
+def test_shared_layout_reader_fails_open():
+    """An unreadable layout must fall back to today's behaviour, not raise."""
+    shared = (SCRIPTS / "scope_auto.py").read_text(encoding="utf-8")
+    assert "_LAYOUT_CACHE" in shared
+    assert "except Exception" in shared
+
+
+def test_search_body_used_to_be_a_bare_vector():
+    """Falsification: the old shape must NOT be what ships anymore."""
+    for name in ("auto_recall.py", "session_start.py"):
+        src = _source(name)
+        assert '"vector": query_embedding,' not in src, (
+            f"{name} is back to the bare vector that broke on named collections"
         )
 
 

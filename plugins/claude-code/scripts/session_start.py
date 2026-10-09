@@ -59,6 +59,21 @@ EMBEDDING_MODEL = (os.getenv("NEXUS_EMBEDDING_MODEL")
                    or _CENTRAL.get("NEXUS_EMBEDDING_MODEL")
                    or EMBEDDING_MODEL)
 
+
+def _vector_body(query_embedding):
+    """The Qdrant `vector` value: list for anonymous, {name, vector} for named.
+
+    A named collection (the engine stores one name per embedding fingerprint)
+    rejects a bare vector with 400 "Not existing vector name error", which the
+    caller turns into an empty result — memory simply stops appearing. The
+    shared scope_auto helper reads the layout from the collection itself.
+    """
+    try:
+        import scope_auto as _scope_auto
+        return _scope_auto.search_vector_body(query_embedding, QDRANT_URL, COLLECTION)
+    except Exception:
+        return query_embedding
+
 def _resolve_trust_level() -> str:
     """Gatekeeper: resolve this agent's trust level from agents.json.
 
@@ -200,7 +215,7 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
 
     fetch_n = limit * 8
     search_data = json.dumps({
-        "vector": query_embedding,
+        "vector": _vector_body(query_embedding),
         "limit": fetch_n,
         "with_payload": True,
         "score_threshold": 0.25,
