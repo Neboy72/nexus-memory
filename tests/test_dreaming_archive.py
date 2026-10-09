@@ -38,6 +38,21 @@ class FakeStore:
             return [self._Hit(self._similar_score)]
         return []
 
+    def query_points(self, collection_name=None, query=None, limit=1, using=None, **kw):
+        """Der Weg, den dreaming.py wirklich nimmt (Review-Fund 09.10.).
+
+        Vorher hatte der Doppel nur search() — dreaming ruft aber
+        query_points(). Der Aufruf lief in einen AttributeError, den der
+        fail-open verschluckte, und der Dedup-Test war vakuum-gruen.
+        """
+        if self._similar_score:
+            class _Resp:
+                points = [type("H", (), {"score": self._similar_score})]
+            return _Resp()
+        class _Empty:
+            points = []
+        return _Empty()
+
     def scroll(self, collection_name, scroll_filter, limit,
                with_payload, with_vectors, **unknown):
         # Doppel muss sich wie der ECHTE Client verhalten: ein falscher
@@ -47,7 +62,6 @@ class FakeStore:
         if unknown:
             raise AssertionError(
                 f"Unknown arguments: {sorted(unknown)}")
-        assert "with_vector" not in unknown
         stale_ts = time.time() - (archive_forgetting.MAX_AGE_DAYS + 5) * 86400
         points = []
         # Realistic ID mix: one UUID point, one numeric-ID point, one

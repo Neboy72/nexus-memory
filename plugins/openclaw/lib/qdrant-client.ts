@@ -519,6 +519,11 @@ export class QdrantClient {
    * { points: [{ id, vector, payload }] }
    */
   async upsert(id: string, vector: number[], payload: Record<string, unknown>): Promise<void> {
+    // A write has the same race as a read: ensureCollection is fire-and-forget,
+    // so an early auto-capture could still send a bare vector to a named
+    // collection (400). Resolve the layout before building the body — the
+    // retry path below re-resolves it only after a 404, which is too late here.
+    await this.resolveLayout()
     log.debugRequest("upsert", { id, payloadKeys: Object.keys(payload), vectorDim: vector.length,
                                  vectorName: this.vectorName })
 
