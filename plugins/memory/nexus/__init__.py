@@ -288,10 +288,39 @@ class _Embedder:
 
     def embed(self, text: str, is_query: bool = True) -> List[float]:
         import asyncio
-        # asyncio.run owns the loop lifecycle (creation, pending-task cleanup,
-        # close) instead of a hand-rolled new_event_loop/close pair on the hot
-        # embedding path.
-        return asyncio.run(self._impl.embed(text, is_query))
+
+        # ``asyncio.run`` owns the loop lifecycle (creation, pending-task
+        # cleanup, close) — but it REFUSES to run when a loop is already
+        # running in this thread, which is exactly how Hermes calls a memory
+        # provider (its own event loop is active). In that case the call
+        # raised RuntimeError: "asyncio.run() cannot be called from a running
+        # event loop", and both remember and recall failed.
+        #
+        # What stood here before the Wave-38 cleanup — a hand-rolled
+        # ``new_event_loop``/``close`` pair — did NOT work either: running that
+        # loop with ``run_until_complete`` inside an already-running loop
+        # raises "Cannot run the event loop while another loop is running".
+        # So this is a real repair, not a restoration of working code; the
+        # earlier shape only differed in its error message. Measured, not
+        # assumed: both shapes were exercised from a running loop.
+        #
+        # Hence a fresh loop in a SEPARATE THREAD, which has no loop of its
+        # own and therefore cannot collide. ``run_coroutine_threadsafe`` is not
+        # used: it would run the coroutine on the CALLER's loop and interleave
+        # it with the caller's own tasks, which a synchronous-looking embed
+        # must not do.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No loop running: the plain path stays as it was.
+            return asyncio.run(self._impl.embed(text, is_query))
+
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(
+                lambda: asyncio.run(self._impl.embed(text, is_query))
+            ).result()
 
     @property
     def dim(self) -> int: return self._impl.dim
