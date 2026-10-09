@@ -18,6 +18,7 @@ per call (no cache). The fetch is one scroll request; fine at hook cadence.
 import json
 import logging
 import os
+import sys
 import re
 import time
 import urllib.request
@@ -90,18 +91,30 @@ def vector_field(qdrant_url: str = QDRANT_URL, collection: str = COLLECTION,
     if key in _LAYOUT_CACHE:
         return _LAYOUT_CACHE[key]
     name = None
+    erfolg = False
     try:
         with urllib.request.urlopen(
                 f"{qdrant_url}/collections/{collection}", timeout=timeout) as resp:
             vectors = (json.loads(resp.read())
                        .get("result", {}).get("config", {})
                        .get("params", {}).get("vectors"))
+        erfolg = True
         if isinstance(vectors, dict) and "size" not in vectors:
             names = list(vectors.keys())
             name = names[0] if len(names) == 1 else None
-    except Exception:
-        name = None
-    _LAYOUT_CACHE[key] = name
+    except Exception as exc:
+        print(
+            f"[nexus scope_auto] vector layout of {collection!r} unreadable ({exc}) — "
+            "returning the anonymous shape for THIS call only, the next call retries",
+            file=sys.stderr,
+        )
+    # A FAILED probe must NEVER be cached. Caching it made one transient Qdrant
+    # hiccup permanent for the whole process: every later write sent the flat
+    # vector to a collection with a named one, Qdrant answered 400, and the memory
+    # was never stored — silently (measured 09.10.2026). Only a successful read is
+    # worth remembering; a failure must stay retryable.
+    if erfolg:
+        _LAYOUT_CACHE[key] = name
     return name
 
 
@@ -181,7 +194,7 @@ def fetch_centroids(qdrant_url: str = QDRANT_URL, collection: str = COLLECTION,
             if not offset:
                 break
     except Exception as exc:
-        logging.info("scope_auto: centroid fetch failed (%s) — fail-open", exc)
+        print(f"[nexus scope_auto] centroid fetch failed ({exc}) — fail-open", file=sys.stderr)
         return {}
 
     # Parsing/aggregation stays INSIDE a guard: a malformed point (non-dict
@@ -222,7 +235,7 @@ def fetch_centroids(qdrant_url: str = QDRANT_URL, collection: str = COLLECTION,
                 cents[scope] = [x / norm for x in total]  # normalized centroid
         return cents
     except Exception as exc:
-        logging.info("scope_auto: centroid parse failed (%s) — fail-open", exc)
+        print(f"[nexus scope_auto] centroid parse failed ({exc}) — fail-open", file=sys.stderr)
         return {}
 
 
@@ -260,7 +273,7 @@ def prefetch_allowed_scopes(vector, centroids: dict, manual_scope: str):
             allowed.add(manual_scope)
         return allowed
     except Exception as exc:
-        logging.info("scope_auto: prefetch inference failed (%s) — fail-open", exc)
+        print(f"[nexus scope_auto] prefetch inference failed ({exc}) — fail-open", file=sys.stderr)
         return None
 
 
@@ -278,5 +291,5 @@ def infer_scope(vector, centroids: dict) -> str:
         if top >= SIM_THRESHOLD and top - runner_up >= MARGIN:
             return top_scope
     except Exception as exc:
-        logging.info("scope_auto: inference failed (%s) — fail-open", exc)
+        print(f"[nexus scope_auto] inference failed ({exc}) — fail-open", file=sys.stderr)
     return "default"

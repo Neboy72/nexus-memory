@@ -187,9 +187,18 @@ export class QdrantClient {
         this.readVectorLayout(data.result?.config?.params?.vectors,
                               this.configuredDimensions)
       }
-    } catch {
-      // Leave vectorName untouched — an unknown layout is handled by the
-      // request itself (anonymous collections keep today's behaviour).
+    } catch (err) {
+      // A failed layout probe used to pass in total silence. ``vectorName`` then
+      // stayed at its initial value, and every later write sent the WRONG vector
+      // shape — a collection with a named vector rejects that with
+      // ``400 Not existing vector name``, which previously showed up only as
+      // "memory silently stopped appearing". Report it: an unknown layout is a
+      // defect to look at, not something to paper over.
+      log.warn(
+        `resolveLayout: could not read the vector layout of "${this.collection}" — ` +
+        `writes fall back to ${this.vectorName === null ? "the anonymous (flat) shape" : `vector name "${this.vectorName}"`}, ` +
+        `which Qdrant may reject with 400 Not existing vector name (${err})`,
+      )
     }
   }
 
@@ -442,7 +451,12 @@ export class QdrantClient {
       id: String(r.id),
       text: (r.payload?.text as string) ?? "",
       score: r.score,
-      access_level: (r.payload?.access_level as string) ?? "public",
+      // Labels for a RESULT, not values to be trusted as authority. A payload
+      // without an access_level is treated as "private" everywhere it matters
+      // (the MCP server's gate, recall.ts, forget.ts all fail closed on a missing
+      // value); labelling it "public" here would state the opposite of what the
+      // gate does. Callers that need to decide must read the payload, as they do.
+      access_level: (r.payload?.access_level as string) ?? "private",
       category: (r.payload?.category as string) ?? "fact",
       source: (r.payload?.source as string) ?? "conversation",
       created_at: (r.payload?.created_at as string) ?? "",
@@ -528,7 +542,13 @@ export class QdrantClient {
                                  vectorName: this.vectorName })
 
     let resp = await fetchWithTimeout(
-      `${this.qdrantUrl}/collections/${this.collection}/points`,
+      // ``?wait=true`` is not optional: without it Qdrant answers 200
+      // "acknowledged" and applies the write in the background, so a REJECTED
+      // write (wrong vector shape, missing vector name, bad payload) is reported
+      // as success and the memory silently stays missing. Measured in the sibling
+      // Claude Code plugin on 09.10.2026: a write acknowledged with 200 left the
+      // collection at zero points. An error that cannot be seen cannot be fixed.
+      `${this.qdrantUrl}/collections/${this.collection}/points?wait=true`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -570,7 +590,9 @@ export class QdrantClient {
       }
       this.ensurePromise = undefined
       resp = await fetchWithTimeout(
-        `${this.qdrantUrl}/collections/${this.collection}/points`,
+        // Same reason as the first attempt: without ``wait=true`` a rejected
+        // write is acknowledged with 200 and the memory is lost in silence.
+        `${this.qdrantUrl}/collections/${this.collection}/points?wait=true`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },

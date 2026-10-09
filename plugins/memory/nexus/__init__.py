@@ -1200,8 +1200,17 @@ class NexusMemoryProvider:
                   messages: Optional[List[Dict[str, Any]]] = None) -> None:
         if self._agent_context != "primary": return
         with self._write_lock:
+            # Access level for conversation history: PRIVATE, never public.
+            # Conversation is not public by any reading of the word: it contains
+            # invoices, tax numbers, addresses, family matters (measured 09.10.2026:
+            # of 1433 public conversation entries with text, 641 mention family,
+            # 507 an address, 241 tax or finance). "public" here does not mean "on the
+            # internet" — it means every agent attached to this memory may read it,
+            # including one connected tomorrow. Tightening later is always possible;
+            # un-ringing a bell is not. Narrowing the level per agent is a one-line
+            # change when a new agent arrives; exposure is not.
             self._write_queue.append({"text": f"User: {user_content}\nAssistant: {assistant_content}",
-                                       "category": "session", "access_level": "public",
+                                       "category": "session", "access_level": "private",
                                        "source": "hermes-plugin", "confidence": 0.5})
 
         # Auto entity detection (2026-08-30): store hardware facts as an entity
@@ -1973,7 +1982,12 @@ class NexusMemoryProvider:
                         self._upsert(
                             text=fact["text"],
                             category=fact["category"],
-                            access_level="public",
+                            # Facts extracted from a conversation inherit that
+                            # conversation's privacy: they carry the same content
+                            # (invoices, addresses, family matters). This wrote
+                            # "public" until 09.10.2026 — the same defect as
+                            # sync_turn, on a second path.
+                            access_level="private",
                             source="hermes-plugin-session-end",
                             confidence=fact["confidence"],
                             # Fable-calibration (2026-09-13): salience follows
@@ -2073,7 +2087,9 @@ class NexusMemoryProvider:
                         metadata: Optional[Dict[str, Any]] = None) -> None:
         if action in ("add", "replace") and content:
             try: self._upsert(text=content, category=(metadata or {}).get("category", "fact"),
-                              access_level="public", source="hermes-builtin")
+                              # Mirror of a built-in memory write: the same content,
+                              # so the same privacy. Was "public" until 09.10.2026.
+                              access_level="private", source="hermes-builtin")
             except Exception as exc: logger.warning("on_memory_write mirror failed: %s", exc)
 
     def _load_config(self) -> Dict[str, Any]:

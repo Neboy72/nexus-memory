@@ -84,7 +84,7 @@ def _resolve_capture_scope(embedding) -> str:
         cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
         return _scope_auto.infer_scope(embedding, cents)
     except Exception as exc:
-        logging.info("scope_auto: capture inference skipped (%s) — default", exc)
+        print(f"[nexus auto_capture] capture inference skipped ({exc}) — default", file=sys.stderr)
         return "default"
 
 
@@ -154,7 +154,15 @@ def _resolve_trust_level() -> str:
                     return trust
                 return "public"
         return "public"  # Agent not found in registry
-    except Exception:
+    except Exception as exc:
+        # Falling back to 'public' is the SAFE direction (no private memories are
+        # disclosed), so the default stays — but it must not happen in silence:
+        # a broken registry silently downgrades every write.
+        print(
+            f"[nexus auto-capture] could not read {AGENTS_FILE!r}, "
+            f"defaulting to the safest level 'public' ({exc})",
+            file=sys.stderr,
+        )
         return "public"
 
 def get_embedding(text: str) -> list:
@@ -226,11 +234,49 @@ def _point_vector(embedding):
     The write-side twin of ``_vector_body``: on a named collection a bare list is
     rejected with 400 "Not existing vector name" and the surrounding except
     swallowed it, so captures vanished without a word.
+
+    The import is made robust on purpose. Hooks are started from many different
+    working directories, so the sibling module is not always on ``sys.path``. The
+    bare ``except`` then fell back to the flat list — the very shape a named
+    collection rejects — and every capture failed silently. Measured 09.10.2026:
+    without the script directory on the path this returned a list, with it a dict.
     """
     try:
         import scope_auto as _scope_auto
+    except ImportError:
+        # Load the sibling by its own file path instead of giving up.
+        try:
+            import importlib.util
+            from pathlib import Path
+
+            _pfad = Path(__file__).resolve().parent / "scope_auto.py"
+            _spec = importlib.util.spec_from_file_location("scope_auto", _pfad)
+            _scope_auto = importlib.util.module_from_spec(_spec)
+            sys.modules.setdefault("scope_auto", _scope_auto)
+            _spec.loader.exec_module(_scope_auto)
+        except Exception as exc:
+            # NEVER fall back silently here. The flat list this used to return is
+            # the exact shape a collection with a named vector rejects with
+            # ``400 Not existing vector name`` — so every capture failed and the
+            # hook still reported success (measured 09.10.2026). Report instead:
+            # a wrong vector is worse than a visible failure.
+            print(
+                f"[nexus auto-capture] cannot load scope_auto, refusing to guess "
+                f"the vector layout ({exc})",
+                file=sys.stderr,
+            )
+            return embedding
+    try:
         return _scope_auto.point_vector_body(embedding, QDRANT_URL, COLLECTION)
-    except Exception:
+    except Exception as exc:
+        # Same reasoning: an unresolvable layout is a defect, not a reason to send
+        # a vector shape that may be wrong. Keep the flat list as the last resort
+        # (anonymous collections need it) but say so, loudly.
+        print(
+            f"[nexus auto-capture] vector layout unresolved, falling back to the "
+            f"flat protocol — captures may be rejected ({exc})",
+            file=sys.stderr,
+        )
         return embedding
 
 
@@ -276,8 +322,14 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
     # vanished without a word. Verified against Qdrant 1.17: POST -> 400,
     # PUT -> 200. The read paths (``/points/search``, ``/points/scroll``,
     # ``/points`` with an ``ids`` body) do want POST and are left alone.
+    #
+    # ``wait=true`` matters just as much: without it Qdrant answers 200
+    # "acknowledged" and applies the write in the background, so a rejected
+    # write (wrong vector shape, missing vector name) is reported as success
+    # and the memory silently stays missing. Measured 09.10.2026: a write
+    # acknowledged with 200 left the collection at zero points.
     req = urllib.request.Request(
-        f"{QDRANT_URL}/collections/{COLLECTION}/points",
+        f"{QDRANT_URL}/collections/{COLLECTION}/points?wait=true",
         data=point_data,
         headers={"Content-Type": "application/json"},
         method="PUT",
@@ -372,9 +424,18 @@ def extract_facts_from_transcript(transcript_path: str, session_id: str) -> list
                                     "category": "session"
                                 })
             except (json.JSONDecodeError, KeyError):
+                # A malformed transcript line is expected (streaming writes cut
+                # mid-line). Skipping it is correct and needs no alarm.
                 continue
-    except Exception:
-        pass
+    except Exception as exc:
+        # Unexpected trouble while reading the transcript. This USED to be a bare
+        # ``pass``, which meant captures silently stopped happening and nothing
+        # anywhere said why (measured 09.10.2026). A read failure is a defect.
+        print(
+            f"[nexus auto-capture] could not read the transcript {transcript_path!r}: "
+            f"{exc} — no memories captured from this turn",
+            file=sys.stderr,
+        )
 
     return facts[:3]  # Max 3 facts per turn to avoid noise
 

@@ -70,8 +70,34 @@ def _vector_body(query_embedding):
     """
     try:
         import scope_auto as _scope_auto
+    except ImportError:
+        try:
+            import importlib.util
+            from pathlib import Path
+
+            _pfad = Path(__file__).resolve().parent / "scope_auto.py"
+            _spec = importlib.util.spec_from_file_location("scope_auto", _pfad)
+            _scope_auto = importlib.util.module_from_spec(_spec)
+            sys.modules.setdefault("scope_auto", _scope_auto)
+            _spec.loader.exec_module(_scope_auto)
+        except Exception as exc:
+            # Do NOT return silently: the flat list this used to return is exactly
+            # what a collection with a named vector rejects (400), which the caller
+            # turns into an empty result — memory simply stops appearing.
+            print(
+                f"[nexus session-start] cannot load scope_auto, recall may return "
+                f"nothing ({exc})",
+                file=sys.stderr,
+            )
+            return query_embedding
+    try:
         return _scope_auto.search_vector_body(query_embedding, QDRANT_URL, COLLECTION)
-    except Exception:
+    except Exception as exc:
+        print(
+            f"[nexus session-start] vector layout unresolved, falling back to the "
+            f"flat protocol — recall may be rejected ({exc})",
+            file=sys.stderr,
+        )
         return query_embedding
 
 def _resolve_trust_level() -> str:
