@@ -8,13 +8,18 @@ Das Voyage-Embedding bleibt identisch; nur der Suchtext aendert sich.
 import os
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, '/Users/miosha/nexus-memory-test/src')
-sys.path.insert(0, '/Users/miosha/nexus-memory-test')
+# Pfade zur Laufzeit ableiten statt den eigenen Heimpfad einzutragen: das
+# Skript laeuft damit auf jeder Maschine. Ueberschreibbar per Umgebungsvariable.
+_TEST_CLONE = Path(os.environ.get(
+    "NEXUS_TEST_CLONE",
+    Path(__file__).resolve().parents[2].parent / "nexus-memory-test"))
+sys.path.insert(0, str(_TEST_CLONE / "src"))
+sys.path.insert(0, str(_TEST_CLONE))
 
 # .env laden (Voyage-Key) — gleicher Mechanismus wie bench_latency.py
-from pathlib import Path
-for env in [Path.home() / '.hermes' / '.env', Path('/Users/miosha/nexus-memory-test/.env')]:
+for env in [Path.home() / '.hermes' / '.env', _TEST_CLONE / '.env']:
     if env.exists():
         for line in env.read_text().splitlines():
             line = line.strip()
@@ -48,7 +53,7 @@ def embed(text):
     import importlib.util
     import threading
     spec = importlib.util.spec_from_file_location(
-        'nhp', '/Users/miosha/nexus-memory-test/plugins/memory/nexus/__init__.py')
+        'nhp', str(_TEST_CLONE / 'plugins/memory/nexus/__init__.py'))
     global _PLUGIN_MOD
     try:
         _PLUGIN_MOD

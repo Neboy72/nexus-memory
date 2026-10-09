@@ -3,7 +3,7 @@
  *
  * checkGuardrails() must lowercase params.command before matching against
  * PROTECTED_PATHS / the kill-ollama check. Before the fix, an uppercase
- * command such as `RM -RF /Users/miosha/.hermes` or `KILL ollama` slipped
+ * command such as `RM -RF /Users/someone/.hermes` or `KILL ollama` slipped
  * past the guardrail (it only matched lowercase literals).
  *
  * Wir importieren den TS-Handler direkt (Node type-stripping) und prüfen

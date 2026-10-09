@@ -4,8 +4,10 @@
 Exakte Original-Faelle aus dem 311er-Test-pyc (Konstanten ausgelesen).
 Schreibt den think-tag via String-Verkettung (heredoc-sicher).
 """
-import sys, os
-sys.path.insert(0, '/Users/miosha/nexus-memory-test/src')
+import sys
+from pathlib import Path, os
+sys.path.insert(0, str(Path(__file__).resolve().parents[2].parent
+                   / 'nexus-memory-test' / 'src'))
 from nexus_memory import query_rewrite as qr
 
 OPEN = '<' + 'think>'
