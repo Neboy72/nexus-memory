@@ -127,15 +127,20 @@ def search_similar_facts(
 
     try:
         body: dict[str, Any] = {
-            "vector": query_vector,
+            # Named-vector collections: the name travels INSIDE the vector object.
+            # A top-level "using" is not a valid HTTP body field for this endpoint
+            # (400 "Not existing vector name") — verified against Qdrant 1.17.
+            "vector": (
+                {"name": vector_name, "vector": query_vector}
+                if vector_name
+                else query_vector
+            ),
             "limit": top_k,
             "with_payload": True,
             "filter": {
                 "must": [{"key": "type", "match": {"value": "memory"}}]
             },
         }
-        if vector_name:
-            body["using"] = vector_name
         r = requests.post(
             f"{qdrant_url}/collections/{collection}/points/search",
             json=body,

@@ -229,6 +229,11 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     agent_idx = level_order.index(trust_level) if trust_level in level_order else 0
 
     fetch_n = limit * 8
+    # Regel B: auf einer BENANNTEN Sammlung muss der Vektorname MIT IN das Vektor-
+    # objekt — eine nackte Liste beantwortet Qdrant mit 400 "Not existing vector
+    # name", und der Hook verschluckt das still. _vector_body() unten liest das
+    # Layout aus der Sammlung selbst (scope_auto) und faellt auf das flache
+    # Protokoll zurueck, wenn die Sammlung anonym ist.
     search_data = json.dumps({
         "vector": _vector_body(query_embedding),
         "limit": fetch_n,

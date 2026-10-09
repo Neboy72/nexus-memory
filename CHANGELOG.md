@@ -1,3 +1,34 @@
+## [0.22.16] — 2026-10-10
+
+### Fixed
+
+- **Four engine fixes that existed only in the build copy never reached the shipped tree.**
+  All four share one failure mode: a named collection answers ``400 Not existing vector
+  name``, the surrounding ``except`` swallowed it, and the feature went quiet instead of
+  loud. They were verified against a live Qdrant (1.17) before and after.
+
+  - ``nexus/discovery/matcher.py`` and ``nexus/confidence.py`` set the vector name as a
+    top-level ``using`` field. That keyword belongs to the qdrant-client call
+    (``query_points``); this endpoint expects the name **inside** the vector object.
+    A REST body carrying ``using`` is rejected outright.
+  - ``nexus/retrieval/__init__.py`` had the same shape in its raw search path.
+  - the dimension guard in the same module read ``vectors["size"]``. A named collection
+    nests the size one level deeper (``{"<fingerprint>": {"size": N}}``), so the lookup
+    raised a ``KeyError`` that the handler swallowed — the guard was off exactly for the
+    collections Regel B introduced.
+
+  Client-side ``query_points`` callers (``retrieval_watch``, ``consolidation``, ``dreaming``,
+  ``mcp_server``) keep ``using``: that is the correct spelling there. Only the raw REST
+  bodies were wrong.
+
+### Added
+
+- ``scope_auto.point_vector_body()`` — the write-side twin of ``search_vector_body()``,
+  and ``auto_capture`` now uses it. Writing a bare list into a named collection failed the
+  same silent way, so captures vanished without a word.
+
+Versions: engine 0.22.16, Claude Code plugin 1.2.4, OpenClaw plugin 1.21.8.
+
 ## [0.22.15] — 2026-10-10
 
 ### Fixed
