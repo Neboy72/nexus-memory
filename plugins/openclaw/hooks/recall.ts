@@ -240,7 +240,11 @@ export function buildRecallHandler(
           score: null,
           category: "graph",
           source: "graph-boost",
-          access_level: "public",
+          // A LABEL on a search hit, never a stored value — graphBoost already
+          // filtered by effectiveAccessLevel above. It reads "public" only because
+          // these items carry no level of their own; labelling them "private" would
+          // be just as wrong and could mislead a future filter. Nothing is written here.
+          access_level: effectiveAccessLevel,
           created_at: "",
         } as unknown as SearchResult)
       }

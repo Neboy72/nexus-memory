@@ -93,8 +93,35 @@ def _vector_body(query_embedding):
     """
     try:
         import scope_auto as _scope_auto
+    except ImportError:
+        try:
+            import importlib.util
+            from pathlib import Path
+
+            _pfad = Path(__file__).resolve().parent / "scope_auto.py"
+            _spec = importlib.util.spec_from_file_location("scope_auto", _pfad)
+            _scope_auto = importlib.util.module_from_spec(_spec)
+            sys.modules.setdefault("scope_auto", _scope_auto)
+            _spec.loader.exec_module(_scope_auto)
+        except Exception as exc:
+            # Do NOT return silently: the flat list this used to return is exactly
+            # what a collection with a named vector rejects (400), which the caller
+            # turns into an empty result — memory simply stops appearing and nothing
+            # says why. A read failure must be visible.
+            print(
+                f"[nexus recall] cannot load scope_auto, search may return nothing "
+                f"({exc})",
+                file=sys.stderr,
+            )
+            return query_embedding
+    try:
         return _scope_auto.search_vector_body(query_embedding, QDRANT_URL, COLLECTION)
-    except Exception:
+    except Exception as exc:
+        print(
+            f"[nexus recall] vector layout unresolved, falling back to the flat "
+            f"protocol — the search may be rejected ({exc})",
+            file=sys.stderr,
+        )
         return query_embedding
 
 
@@ -141,7 +168,15 @@ def _resolve_trust_level() -> str:
                     return trust
                 return "public"
         return "public"  # Agent not found in registry
-    except Exception:
+    except Exception as exc:
+        # Same as the other two copies (auto_capture, session_start): 'public' is
+        # the safe direction and stays, but a broken registry silently downgrades
+        # every read — it must not do so in silence.
+        print(
+            f"[nexus auto_recall] could not read {AGENTS_FILE!r}, "
+            f"defaulting to the safest level 'public' ({exc})",
+            file=sys.stderr,
+        )
         return "public"
 
 def _get_trust_filter() -> dict:
@@ -267,7 +302,7 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
             cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
             allowed_scopes = _scope_auto.prefetch_allowed_scopes(query_embedding, cents, my_scope)
         except Exception as exc:
-            logging.info("scope_auto: recall gating skipped (%s) — fail-open", exc)
+            print(f"[nexus auto_recall] recall gating skipped ({exc}) — fail-open", file=sys.stderr)
     filtered = []
     for hit in results:
         payload = hit.get("payload") or {}
@@ -324,7 +359,7 @@ def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "publ
                 query_embedding, cents, my_scope
             )
         except Exception as exc:
-            logging.info("scope_auto: graph-boost gating skipped (%s) — fail-open", exc)
+            print(f"[nexus auto_recall] graph-boost gating skipped ({exc}) — fail-open", file=sys.stderr)
 
     boosted = []
     seen_ids = set()

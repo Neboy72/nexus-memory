@@ -1,3 +1,113 @@
+## [0.22.20] — 2026-10-10
+
+### Changed — conversation history is private
+
+- **Conversation history was stored as `public`.** `sync_turn` wrote every turn with
+  `access_level: "public"`, so any agent ever attached to this memory could read it —
+  including one connected tomorrow. "Public" here does not mean "on the internet"; it
+  means the lowest of the three visibility levels. What actually sat in those entries
+  was measured: of 1,433 public conversation entries carrying text, 641 mention family,
+  507 an address or postal code, 241 tax, invoice or bank matters, 13 concrete amounts.
+
+  Tightening later is always possible, per agent, in one line. Un-ringing a bell is not.
+  New turns are written as `private`; `NexusAccess` narrowing for a future agent is a
+  deliberate act rather than a default nobody chose.
+
+- **Existing entries moved to `private`**: 2,943 of them — every `session` entry plus
+  every fact matching a sensitive pattern (tax, IBAN, address, amount, family). A full
+  backup was taken first (`~/.hermes/backups/nexus-qwen-vor-privat-*.jsonl`,
+  38,952 points, 49.5 MB). Afterwards: 0 entries with sensitive content remain `public`.
+
+  `agents.json` is unchanged — hermes and openclaw stay `private`, claude-code stays
+  `trusted`. Claude Code no longer sees private conversation (decision of 2026-10-09).
+
+### Fixed — a failed layout probe poisoned the whole process
+
+- `scope_auto.vector_field` cached a **failed** probe in `_LAYOUT_CACHE`. One transient
+  Qdrant hiccup was therefore permanent: every later write resolved to `None` (the
+  anonymous shape), a collection with a named vector rejected it with
+  `400 Not existing vector name`, and the memory was never stored — silently. Only a
+  successful read is cached now; a failure is reported and retried on the next call.
+
+  This also explained a test file that failed in one order and passed in another: the
+  poisoned cache leaked from one test into the next.
+
+### Tests
+
+- `tests/test_zugriffsstufen.py` — the access-level contract, measured against the real
+  requests the code builds: rank order `public < trusted < private`, claude-code resolves
+  to `trusted`, three fallback paths land on `public`, a hand-edited `"admin"` in the
+  registry is refused, and every registered agent reads back as its recorded level.
+  Each check has a counter-test that turns it red.
+- `tests/test_layout_cache_ueberlebt_aussetzer.py` — a failed probe is not cached, the
+  next call recovers, a successful probe still is cached.
+- Full suite: **2271 passed, 2 skipped**.
+
+Versions: engine 0.22.20, Claude Code plugin 1.2.7.
+
+## [0.22.19] — 2026-10-10
+
+### Fixed
+
+- **Two more silent failures in the Claude Code write path.** The POST→PUT repair in
+  0.22.18 covered only the first of three layers. Both remaining ones are measured:
+
+  - `store_memory` wrote without `?wait=true`. Qdrant answers `200 acknowledged` and
+    applies the write in the background, so a **rejected** write was reported as
+    success: the collection stayed at zero points while the hook said "stored".
+    A write now waits for the result.
+  - `_point_vector` fell back to the **flat** vector list whenever `import scope_auto`
+    failed. Hooks start from arbitrary working directories, so that import fails
+    routinely — and a flat list is exactly the shape a collection with a named vector
+    rejects (`400 Not existing vector name`). The sibling module is now loaded by its
+    own file path.
+
+- **A rejected write is no longer reported as success.** With `wait=true` the real
+  status arrives, and the existing handler now reports it instead of swallowing it.
+
+- **Error paths that used to be silent now speak.** The same "swallow and pretend"
+  pattern sat on the read side too, where nothing had noticed it yet:
+
+  - `auto_recall._vector_body` and `session_start._vector_body` returned the wrong
+    vector shape on a failed import, which the caller turned into an empty result —
+    memory simply stopped appearing, with no explanation anywhere.
+  - The transcript reader swallowed every exception, so captures stopped happening
+    without a word.
+  - The trust-level resolver degraded to `public` in silence — in all three copies.
+  - Seven `logging.info(...)` calls in the hooks were **silent in practice**: without a
+    handler configured (and hooks configure none) `logging.info` writes nowhere at all.
+    They looked like reporting and were not. They now print to stderr.
+  - `resolveLayout` in the OpenClaw client kept a failed layout probe to itself; every
+    later write then sent the wrong vector shape with no warning.
+
+  Each now writes the cause to stderr. Reporting is a design requirement, not a
+  courtesy: an agent that cannot see its own failures cannot be trusted.
+
+### Fixed — OpenClaw plugin
+
+- Its `upsert` sent `PUT /points` **without `wait=true`** in both the first attempt and
+  the retry, so a rejected write was acknowledged with 200 and lost in the background —
+  the same defect the Claude Code plugin had. It now waits for the result.
+  (`lib/qdrant-client.ts`)
+
+### Tests
+
+- `tests/test_claude_code_write_path.py` — now measures behaviour instead of text.
+  Earlier versions matched source patterns and were bypassable five different ways
+  (address from a function call, annotated constant, string concatenation, import
+  alias, `getattr`); the file also poisoned its own environment by interrupting
+  `scope_auto` mid-call and caching a wrong layout. It now intercepts the requests
+  the code actually builds, restores every cache it touches, reads through the plugin's
+  own search path rather than the Qdrant client, and asserts the write carries
+  `wait=true` — polling in the read-back tests could not catch that one.
+- `plugins/openclaw/test-schreibfehler-meldet-sich.mjs` — four checks that a rejected
+  write becomes visible (wait parameter present, `upsert` throws on a bad status, a
+  failed layout probe warns, nothing is printed to stdout). Both counter-tests bite:
+  removing `wait=true` turns it red, silencing the warning turns it red.
+- Full suite: **2263 passed, 2 skipped** (Python); OpenClaw 32 green, `tsc` clean.
+
+Versions: engine 0.22.19, Claude Code plugin 1.2.6, OpenClaw plugin 1.21.9.
+
 ## [0.22.18] — 2026-10-10
 
 ### Fixed
