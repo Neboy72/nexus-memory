@@ -40,8 +40,8 @@ def test_synthesize_one_insight_per_contradiction_group():
         _issue("a3", "tgt-2", 0.9),
     ]
     points = [
-        _point("a1", "Kiosha uses voyage-4"),
-        _point("a2", "Kiosha uses voyage-3"),
+        _point("a1", "The agent uses voyage-4"),
+        _point("a2", "The agent uses voyage-3"),
         _point("a3", "Mac Mini has 32GB"),
     ]
     insights = _synthesize_insights(issues, points)

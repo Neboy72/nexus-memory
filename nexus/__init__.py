@@ -118,7 +118,7 @@ def nexus_update(
         point_id: The Qdrant point ID to update.
         new_content: New content text (None = keep existing).
         new_metadata: Dict of metadata fields to merge/update (None = keep existing).
-        modified_by: Who made this modification (e.g. "Kiosha", "Miosha", "Nebo").
+        modified_by: Who made this modification (e.g. "agent-a", "agent-b").
         qdrant_host: Qdrant host.
         qdrant_port: Qdrant port.
         collection_name: Qdrant collection name.

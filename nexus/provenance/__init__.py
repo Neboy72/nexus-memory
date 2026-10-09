@@ -11,7 +11,7 @@ Usage:
     from nexus.provenance import attach_source, find_corroboration, build_dependency_graph
 
     # Level 1: Automatically attached during nexus_remember
-    provenance = attach_source(session_id="abc", source_type="chat", created_by="Kiosha")
+    provenance = attach_source(session_id="abc", source_type="chat", created_by="agent-a")
 
     # Level 2: Find corroborating/corroboration entries for a fact
     results = find_corroboration("DeepSeek is our main model", qdrant_host="localhost")
@@ -254,7 +254,7 @@ def attach_source(
     Args:
         session_id: The Hermes session ID this fact came from.
         source_type: One of "chat", "ingest", "cron", "manual", "inferred", "unknown".
-        created_by: Who created this fact — "Kiosha", "Miosha", "Nebo", "System".
+        created_by: Who created this fact — "agent-a", "agent-b", "System".
         content: Optional content hint for source_tier resolution.
         source_tier: Optional explicit source_tier override ("tier1"|"tier2"|"tier3").
 
@@ -292,7 +292,7 @@ def format_source(provenance: dict | None) -> str:
         provenance: A provenance dict (or None for legacy entries).
 
     Returns:
-        Short string like "💬 Chat by Kiosha" or "📥 Ingest by System".
+        Short string like "💬 Chat by <agent>" or "📥 Ingest by System".
     """
     if not provenance:
         return "❓ Unknown origin (legacy entry)"

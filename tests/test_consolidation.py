@@ -187,7 +187,7 @@ class TestRun:
 
     def test_distill_and_store(self):
         q = FakeQdrant([_raw_point("raw-1")], similar_points=[])
-        c, prompts = _make(q, ['{"facts": ["Nebo uses Mac Mini M4 16GB"]}'])
+        c, prompts = _make(q, ['{"facts": ["The user uses Mac Mini M4 16GB"]}'])
         rep = c.run(batch_size=1)
         assert rep["scanned"] == 1
         assert rep["facts_created"] == 1
@@ -252,7 +252,7 @@ class TestConflictResolver:
     def test_supersede_path(self):
         q = FakeQdrant([_raw_point()], similar_points=[self._point()])
         c, prompts = _make(q, [
-            '{"facts": ["Nebo uses 32GB RAM now"]}',   # distill
+            '{"facts": ["The user uses 32GB RAM now"]}',   # distill
             '{"verdict": "supersede"}',                # classify
         ])
         rep = c.run(batch_size=1)
@@ -417,7 +417,7 @@ class TestAccessInheritance:
         p = FakePoint("raw-1", {"content": "User: x", "category": "session",
                                 "access_level": "public"})
         q = FakeQdrant([p], similar_points=[])
-        c, prompts = _make(q, ['{"facts": ["Nebo uses Mac Mini M4"]}'])
+        c, prompts = _make(q, ['{"facts": ["The user uses Mac Mini M4"]}'])
         c.run(batch_size=1)
         assert self._stored_fact(q)["access_level"] == "public"
 
@@ -578,7 +578,7 @@ class TestConflictAccessBoundary:
 
     @staticmethod
     def _run(q):
-        c, prompts = _make(q, ['{"facts": ["Nebo uses 16GB RAM"]}',
+        c, prompts = _make(q, ['{"facts": ["The user uses 16GB RAM"]}',
                                '{"verdict": "supersede"}'])
         rep = c.run(batch_size=1)
         return rep, prompts
@@ -597,7 +597,7 @@ class TestConflictAccessBoundary:
     def test_public_fact_never_suppresses_private_as_duplicate(self):
         q = FakeQdrant([self._source("public")],
                        similar_points=[self._cand("old-p", "private")])
-        c, prompts = _make(q, ['{"facts": ["Nebo uses 16GB RAM"]}',
+        c, prompts = _make(q, ['{"facts": ["The user uses 16GB RAM"]}',
                                '{"verdict": "duplicate"}'])
         rep = c.run(batch_size=1)
         assert rep["duplicates"] == 0
@@ -645,7 +645,7 @@ class TestConflictAccessBoundary:
         priv = self._cand("old-priv", "private")
         pub = self._cand("old-pub", "public")
         q = FakeQdrant([self._source("public")], similar_points=[priv, pub])
-        c, prompts = _make(q, ['{"facts": ["Nebo uses 16GB RAM"]}',
+        c, prompts = _make(q, ['{"facts": ["The user uses 16GB RAM"]}',
                                '{"verdict": "supersede"}'])
         rep = c.run(batch_size=1)
         # exactly one classify call — the private candidate is invisible

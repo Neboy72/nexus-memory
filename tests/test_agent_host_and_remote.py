@@ -1,6 +1,6 @@
 """Tests for strict detection signals, host annotations, remote registration.
 
-Context (31.08.2026, Nebo's dashboard UX spec):
+Context (31.08.2026, the dashboard UX spec):
 - "Available" must list only harnesses actually found on the machine —
   kilo-code and cursor produced false positives via ~/.vscode/extensions
   and our own ~/.cursor skill-deploy folder.
@@ -99,7 +99,7 @@ def test_env_overrides_host_label(monkeypatch):
 
 
 def test_host_label_prettifies_raw_hostname(monkeypatch):
-    """Universal fallback (Nebo, 07.09.): users who never set NEXUS_HOST_LABEL
+    """Universal fallback (07.09.): users who never set NEXUS_HOST_LABEL
     still get a readable badge, not the raw technical hostname."""
     cases = {
         "Mac-mini-von-Alex.local": "Mac Mini von Alex",

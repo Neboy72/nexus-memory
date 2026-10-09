@@ -104,7 +104,7 @@ class TestNr502DuplicateCommentRemoved:
 
     def test_source_single_occurrence(self):
         src = _read("plugins/openclaw/index.ts")
-        n = len(re.findall(r"Self-organizing memory \(Nebo law", src))
+        n = len(re.findall(r"Self-organizing memory \(project rule", src))
         assert n == 1, f"{n} occurrences"
 
     def test_remaining_one_sits_at_centroid_cache(self):

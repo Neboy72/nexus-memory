@@ -247,7 +247,7 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
                 # scope centroids, which breaks the self-organizing feedback
                 # loop (parity with the mcp_server.py writer).
                 "lifecycle_status": "canonical",
-                # Scope (self-organizing memory, Nebo law 07.09): explicit
+                # Scope (self-organizing memory, project rule 07.09): explicit
                 # NEXUS_SCOPE wins; else infer from scoped centroids on a
                 # CLEAR match; else 'default'. Fail-open, zero config.
                 "scope": _resolve_capture_scope(embedding),

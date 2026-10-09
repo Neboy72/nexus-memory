@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """consolidation.py — in-process ingestion consolidation for Nexus Memory.
 
-Moves the heavy work from RETRIEVAL time to INGESTION time (Kiosha benchmark
+Moves the heavy work from RETRIEVAL time to INGESTION time (an internal benchmark
 findings 2026-09-05, LongMemEval phase-1/2): raw turn dumps ("User: ...\n
 Assistant: ...", category=session) get distilled into atomic, self-contained
 facts with resolved references (pronouns -> names, relative times -> absolute
@@ -12,7 +12,7 @@ Runs as an in-process daemon thread inside the MCP server
 (HealthAuditor/TrustService pattern, harness-independent: no external cron,
 works after plain `pip install` on any host).
 
-Design rules (agreed with Nebo 2026-09-05):
+Design rules (agreed with the maintainer 2026-09-05):
   - Kill-switch: NEXUS_CONSOLIDATION=0 disables the daemon (default ON).
   - Every per-memory exception is logged and skipped; the daemon never dies.
   - No deletes, EVER — superseded facts stay in Qdrant with lifecycle fields
@@ -51,7 +51,7 @@ _CONFLICT_SIM_THRESHOLD = float(os.environ.get("NEXUS_CONSOLIDATION_SIM", "0.75"
 _CONSOLIDATED_BY = "consolidation-v1"
 _MAX_CONV_CHARS = 8000
 
-# ── Auto-Scope folder creation (Nebo GO 07.09., Startlücken-Fix) ──────
+# ── Auto-Scope folder creation (the maintainer's GO 07.09., Startlücken-Fix) ──────
 # When a distilled fact-cluster forms a CLEAR new topic that fits NO
 # existing scope, the distill-LLM may found a new folder itself. The
 # ride-along fuel chain provides the LLM for every user type (Ollama =
@@ -767,7 +767,7 @@ class Consolidator:
         self._save_pending_supersedes([i for i in pending if i not in done_ids])
         return retried, done_ids
 
-    # ── auto-scope folder creation (Startlücken-Fix, Nebo GO 07.09.) ──
+    # ── auto-scope folder creation (Startlücken-Fix, the maintainer's GO 07.09.) ──
     def _scope_create_state_path(self):
         import pathlib
         base = os.environ.get("NEXUS_HOME", str(pathlib.Path.home() / ".nexus-memory"))
@@ -1006,7 +1006,7 @@ class Consolidator:
                     self.run()
                 except Exception as exc:
                     log.warning("Consolidation pass failed: %s", exc)
-                # v0.22.0 (Nebo-GO 25.09.): dreaming + archive-forgetting
+                # v0.22.0 (the maintainer's GO 25.09.): dreaming + archive-forgetting
                 # piggyback on the consolidation loop (additive, fail-open).
                 try:
                     from nexus_memory.dreaming import dream_once

@@ -1,7 +1,7 @@
 """OCR review wave 22 - fixes for findings Nr 381-402.
 
 One test class per finding: source-inspection plus behavior tests.
-Written by Kiosha (CC was contractually not allowed to touch this file).
+Written in-house (the external coding agent was not allowed to touch this file).
 Nr 386 is a documented false positive (log IS used in runtime.ts:175) —
 assertion pins that decision so a future dead-import removal is deliberate.
 """

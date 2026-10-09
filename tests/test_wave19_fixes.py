@@ -1,7 +1,7 @@
 """OCR review wave 19 - fixes for findings Nr 291-321 (no 311).
 
 One test class per finding, source-inspection plus behavior tests.
-Written by Kiosha (CC was contractually not allowed to touch this file).
+Written in-house (the external coding agent was not allowed to touch this file).
 """
 import importlib.util
 import json

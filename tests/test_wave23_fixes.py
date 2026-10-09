@@ -1,7 +1,7 @@
 """OCR review wave 23 (low A) - fixes for findings Nr 407-437.
 
 One test class per finding: source-inspection plus behavior tests.
-Written by Kiosha (CC was contractually not allowed to touch this file).
+Written in-house (the external coding agent was not allowed to touch this file).
 CC documented two justified skips (Nr 411: imports actually used - false
 alarm; Nr 408: versions already consistent). Nr 409 was already done.
 """

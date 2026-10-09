@@ -144,7 +144,7 @@ def _check_explicit_reference(
                 "confidence": 0.95,
                 "reason": f"Explicit wikilink [[{link}]] → depends_on",
             }
-        # Wortgrenzen-Match (Miosha Review: verhindert "Open" in "OpenAir")
+        # Wortgrenzen-Match (internal review: verhindert "Open" in "OpenAir")
         link_escaped = re.escape(link_lower)
         if re.search(rf"(?<!\w){link_escaped}(?!\w)", target_lower):
             return {

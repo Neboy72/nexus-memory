@@ -138,7 +138,7 @@ def test_full_content_duplicates_merge_despite_long_text(temp_coll, tmp_path, mo
     """Real duplicates well beyond 300 chars still merge (full-content hash works)."""
     client, coll = temp_coll
     aud = _auditor(client, coll, tmp_path, monkeypatch)
-    content = "Kiosha deployt den Nexus Server auf dem Mac Mini. " * 14  # ~660 chars
+    content = "Der Agent deployt den Nexus Server auf dem Mac Mini. " * 14  # ~660 chars
     old_id, new_id = str(uuid.uuid4()), str(uuid.uuid4())
     _upsert(client, coll, old_id, content, _iso(90))
     _upsert(client, coll, new_id, "  " + content.replace(" ", "   ") + "  ", _iso(2))
@@ -277,7 +277,7 @@ def test_private_and_public_same_text_not_merged(temp_coll, tmp_path, monkeypatc
                 {"text": t, "created_at": _iso(30), "category": "fact", "access_level": "public"})
     _upsert_raw(client, coll, priv_id,
                 {"text": t, "created_at": _iso(5), "category": "fact",
-                 "access_level": "private", "entity_attributes": {"email": "k@nebo.dev"}})
+                 "access_level": "private", "entity_attributes": {"email": "agent@example.invalid"}})
 
     sweep = aud._dedup_sweep()
 
@@ -286,7 +286,7 @@ def test_private_and_public_same_text_not_merged(temp_coll, tmp_path, monkeypatc
     assert remaining == {pub_id, priv_id}
     for p in aud._collect_points():
         if str(p.id) == priv_id:
-            assert (p.payload.get("entity_attributes") or {}).get("email") == "k@nebo.dev"
+            assert (p.payload.get("entity_attributes") or {}).get("email") == "agent@example.invalid"
 
 
 def test_owner_context_prevents_cross_agent_merge(temp_coll, tmp_path, monkeypatch):
@@ -312,14 +312,14 @@ def test_guardrail_audit_entries_excluded_from_dedup(temp_coll, tmp_path, monkey
     """Identical guardrail-override audit entries are never deleted, normal dups are."""
     client, coll = temp_coll
     aud = _auditor(client, coll, tmp_path, monkeypatch)
-    audit_text = "GUARDRAIL OVERRIDE by kiosha at 2026-09-01\nCommand: rm -rf /tmp/x\n"
+    audit_text = "GUARDRAIL OVERRIDE at 2026-09-01\nCommand: rm -rf /tmp/x\n"
     audit1, audit2 = str(uuid.uuid4()), str(uuid.uuid4())
     _upsert_raw(client, coll, audit1,
                 {"content": audit_text, "created_at": _iso(9), "category": "session",
-                 "access_level": "private", "guardrail_override": True, "agent_id": "kiosha"})
+                 "access_level": "private", "guardrail_override": True, "agent_id": "agent-a"})
     _upsert_raw(client, coll, audit2,
                 {"content": audit_text, "created_at": _iso(1), "category": "session",
-                 "access_level": "private", "guardrail_override": True, "agent_id": "kiosha"})
+                 "access_level": "private", "guardrail_override": True, "agent_id": "agent-a"})
     dup_id, dup2 = str(uuid.uuid4()), str(uuid.uuid4())
     _upsert_raw(client, coll, dup_id,
                 {"text": "Plain duplicate memory that may be merged", "created_at": _iso(30),

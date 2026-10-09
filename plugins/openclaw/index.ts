@@ -224,7 +224,7 @@ export default {
       throw new Error("nexus: memory capability could not be registered")
     }
 
-    // Self-organizing memory (Nebo law 07.09: full automation): one shared
+    // Self-organizing memory (project rule 07.09: full automation): one shared
     // centroid cache feeds auto-recall gating + auto-capture tagging.
     const centroidCache = new ScopeCentroidCache(cfg.qdrantUrl, cfg.collection)
 

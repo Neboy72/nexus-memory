@@ -69,7 +69,7 @@ def _get_cross_encoder() -> "CrossEncoder | None":
 
 SOURCE_TIERS = {
     "tier1": {  # Highest trust — agent itself, user, config, official docs
-        "keywords": ["kiosha", "nebo", "hermes-config", "official", "skill"],
+        "keywords": ["agent", "user", "hermes-config", "official", "skill"],
         "boost": 1.2,
         "emoji": "🟢",
     },

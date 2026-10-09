@@ -9,7 +9,7 @@ no external scheduler required). Produces:
      so the connected agent SEES them on its next health check and can tell the user
   3. optional webhook POST (NEXUS_WEBHOOK_URL) — Discord/Telegram/n8n/whatever
 
-DESIGN RULES (agreed with Nebo 2026-08-31, hardened after the 2026-09 review):
+DESIGN RULES (agreed with the maintainer 2026-08-31, hardened after the 2026-09 review):
   - READ-ONLY by default. This module NEVER deletes or modifies memories.
     Repair happens via the established backup->prune->verify workflow.
   - The in-process dedup sweep is DESTRUCTIVE and therefore OPT-IN ONLY:
@@ -226,7 +226,7 @@ class HealthAuditor:
             # report that still lacked the dedup_sweep/agent_cleanup keys.
             if agent_cleanup is not None:
                 report["agent_cleanup"] = agent_cleanup
-            # 2026-09-02 (Nebo-GO): in-process dedup sweep — DESTRUCTIVE and
+            # 2026-09-02 (the maintainer's GO): in-process dedup sweep — DESTRUCTIVE and
             # therefore OPT-IN ONLY (NEXUS_DEDUP_SWEEP=1; default = off, the
             # audit stays read-only). It runs BEFORE the report write and the
             # webhook so the notification reports the actual behavior

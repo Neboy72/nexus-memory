@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """fuel_chain.py — multi-provider LLM fuel discovery for the consolidation daemon.
 
-Nebo's tank-station design (2026-09-06): the daemon is a MITFAHRER — it never
+The tank-station design (2026-09-06): the daemon is a MITFAHRER — it never
 needs its own account or setup step. At fuel time it tries stations in
 cheapness order, skipping dead ones, waiting (fail-safe) if all are closed:
 
@@ -259,7 +259,7 @@ def budget_exhausted() -> bool:
 
 
 def fuel_exhausted_info() -> dict:
-    """Status for the user-facing notice (Nebo GO 07.09.: the user's agent
+    """Status for the user-facing notice (the maintainer's GO 07.09.: the user's agent
     tells them IN CHAT when the budget is reached — in the user's language,
     because the agent speaks it).
 

@@ -54,7 +54,7 @@ const RECALL_KEYWORDS = new Set([
 ])
 
 // Terminal-Kommandos die Plan-Zwang erfordern (destruktive Eingriffe only)
-// 27.08.2026: verengt nach Kiosha-Request — Routine-Installs (brew/pip/npm/npx)
+// 27.08.2026: verengt nach a maintainer request — Routine-Installs (brew/pip/npm/npx)
 // und nicht-destruktive git-ops (checkout/stash) sind jetzt plan-frei.
 const PLAN_REQUIRED_COMMANDS = new Set([
   "launchctl load", "launchctl unload", "launchctl bootstrap", "launchctl kickstart",
@@ -275,7 +275,7 @@ function checkGuardrails(toolName: string, params: Record<string, unknown>): Gua
     if (/\b(?:kill|pkill|killall)\b/i.test(command) && /\bollama\b/i.test(command)) {
       return {
         block: true,
-        reason: "BLOCKED: Ollama killen = alle Agenten tot. Erst Nexus Memory lesen, Config-Chain prüfen, Nebo GO holen.",
+        reason: "BLOCKED: Ollama killen = alle Agenten tot. Erst Nexus Memory lesen, Config-Chain prüfen, the maintainer's GO holen.",
       }
     }
   }

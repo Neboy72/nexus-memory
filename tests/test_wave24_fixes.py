@@ -1,11 +1,11 @@
 """OCR review wave 24 (low B) - fixes for findings Nr 438-467.
 
 One test class per finding: source-inspection plus behavior tests.
-Written by Kiosha (CC was contractually not allowed to touch this file).
+Written in-house (the external coding agent was not allowed to touch this file).
 CC documented two justified deviations: Nr 443 (_SCOPE_RE IS used, 4 refs;
 no dead `import time` exists) and Nr 458 (13 logger calls, not 14 - the
 13th+14th were one two-line call). Nr 451 was implemented as a coalescing
-delta buffer by CC but REVIEW-REJECTED by Kiosha (per-process buffer loses
+delta buffer by CC but REVIEW-REJECTED in-house (per-process buffer loses
 subprocess stats on exit; corrupt registry would surface at flush time, not
 immediately - fail-closed broken). Final fix: atomic replace kept, fsync
 skipped on the stats path only.

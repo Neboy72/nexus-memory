@@ -24,7 +24,7 @@ from pathlib import Path
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
-# Self-organizing memory (Nebo law 07.09: full automation): shared scope-auto
+# Self-organizing memory (project rule 07.09: full automation): shared scope-auto
 # lib provides centroids + clear-match inference for recall gating.
 # H241: import guard. A missing/broken scope_auto (partial install, syntax
 # error) must NOT kill the whole hook — fail-open means recall without a scope
@@ -252,7 +252,7 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     # Scope gating (project/agent areas): skip memories scoped to a different
     # area. Core principle: scopes steer AUTOMATIC recall only — explicit
     # search (MCP recall tool) is NEVER scope-filtered. Self-organizing
-    # memory (Nebo law 07.09): the allowed set comes from the query itself
+    # memory (project rule 07.09): the allowed set comes from the query itself
     # (clear match against scoped centroids) — manual NEXUS_SCOPE overrides.
     # Fail-open: no centroids / ambiguous query → no filtering (old behavior).
     my_scope = os.getenv("NEXUS_SCOPE", "").strip().lower()

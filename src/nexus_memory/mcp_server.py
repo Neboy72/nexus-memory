@@ -730,7 +730,7 @@ class MemoryStore:
             logging.info("Health audit daemon active")
         except Exception as e:
             logging.warning(f"Health audit daemon unavailable: {e}")
-        # 2026-09-02 (v0.14.1, Nebo-GO '100% selbstversorgend'): trust recompute +
+        # 2026-09-02 (v0.14.1, the maintainer's GO '100% selbstversorgend'): trust recompute +
         # retrieval watch als in-process daemons — letzte externen Wartungs-Crons
         # ersetzt. Kill-switches: NEXUS_TRUST_SWEEP=0 / NEXUS_RETRIEVAL_WATCH=0.
         self._trust_service = None
@@ -764,7 +764,7 @@ class MemoryStore:
             self._self_report.start()
         except Exception as e:
             logging.warning(f"Self-report daemon unavailable: {e}")
-        # 2026-09-05 (Nebo-GO, benchmark-driven): ingestion consolidation — raw
+        # 2026-09-05 (the maintainer's GO, benchmark-driven): ingestion consolidation — raw
         # session dumps get distilled into atomic facts + contradictions
         # superseded at write time. In-process daemon (no cron dependency).
         # Kill-switch: NEXUS_CONSOLIDATION=0.
@@ -1031,7 +1031,7 @@ class MemoryStore:
         created_at = datetime.now(timezone.utc).isoformat()
         vector = await self._embed(text, is_query=False)  # stored doc, not a query
 
-        # ── Auto-scoping (self-organizing memory, Nebo law 07.09: full
+        # ── Auto-scoping (self-organizing memory, project rule 07.09: full
         # automation or useless): when the caller leaves scope at 'default',
         # infer the area from existing scope centroids and inherit it
         # automatically. Conservative margins (scope_auto) — under-tagging is
@@ -1933,7 +1933,7 @@ async def _check_for_update() -> dict:
 
 
 def dashboard_success_moment() -> None:
-    """Boot the dashboard detached after a successful update (Nebo law 09.09).
+    """Boot the dashboard detached after a successful update (project rule 09.09).
     Never blocks the MCP loop, never raises — the update result must reach the
     agent even if the dashboard can't start (headless, port busy, missing deps)."""
     def _boot():
@@ -2051,7 +2051,7 @@ async def _do_update(confirm: bool = False) -> dict:
                 "Serve daemon re-assert skipped (non-fatal): %s", daemon_exc
             )
 
-        # Success moment (Nebo law 09.09): every update shows the dashboard like
+        # Success moment (project rule 09.09): every update shows the dashboard like
         # a fresh install. Reset the once-marker and boot the dashboard detached;
         # its banner + browser-open are the update's confirmation moment.
         dashboard_success_moment()
@@ -2226,7 +2226,7 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "modified_by": {
                         "type": "string",
-                        "description": "Who made this modification (e.g. 'Kiosha', 'Miosha', 'Nebo')",
+                        "description": "Who made this modification (e.g. 'agent-a', 'agent-b')",
                         "default": "",
                     },
                     "effective_from": {
@@ -2661,7 +2661,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             if guardrails:
                 response["warnings"] = guardrails
 
-            # Fuel notice (Nebo GO 07.09.): when the paid-fuel budget is
+            # Fuel notice (the maintainer's GO 07.09.): when the paid-fuel budget is
             # freshly exhausted this month, tell the AGENT — it reports to
             # the user in the user's language. Exactly once per month
             # (budget_notification_pending latches), never on free stations'
@@ -3087,7 +3087,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 payload = p.get("payload") or {}
                 vec = p.get("vector")
 
-                # E-24 (24.09., Nebo-GO): a backup point WITHOUT payload and a
+                # E-24 (24.09., the maintainer's GO): a backup point WITHOUT payload and a
                 # stored vector restores as an empty-payload "ghost" (only the
                 # 1024d vector survives) — 2145 such ghosts accumulated in the
                 # nexus collection and surfaced as empty auto-recall entries.

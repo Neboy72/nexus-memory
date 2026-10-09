@@ -1,6 +1,6 @@
 # Bench-Spec: Lost-in-the-Middle (LitM) Adaption
 
-Stand: 13.09.2026 · Autor: Kiosha · Status: Bau läuft (GO erteilt)
+Stand: 13.09.2026 · Status: Bau läuft (GO erteilt)
 Repo: ~/nexus-memory-test (Test-Repo, KEIN Produktions-Code)
 Plan: ~/.hermes/plans/memory-adaption-litm.md
 
@@ -73,7 +73,7 @@ im Bench), Volltext-Kürzung wie Produktion.
 2. **B — Messung:** BASE messen (checkpoint alle 10 Fragen), B1 messen,
    wenn litm_gap(BASE) >= 5 Punkte: auch B2 messen; sonst B2 entfallen
 3. **C — Auswertung:** results.json + bericht.md, verifier prüft Zahlen
-   (Kimi K3), Kiosha fasst für Nebo zusammen
+   (Kimi K3), der Agent fasst zusammen
 
 ## 5. Erfolgskriterien (HART, für Produktion)
 
@@ -88,9 +88,9 @@ im Bench), Volltext-Kürzung wie Produktion.
 
 1. haus-betrieb: fixtures.jsonl (45x8 Fake-Memories + Needles + Fragen)
 2. Claude Code (coder, DeepSeek-Kette): run_bench.py + Varianten + Checkpoint
-3. Kiosha: Messung starten, überwachen, auswerten
+3. Messung starten, überwachen, auswerten
 4. verifier (Kimi K3): Zahlen gegenprüfen
-5. Kiosha: Bericht an Nebo + GO-Frage Produktion
+5. Bericht + GO-Frage Produktion
 
 ## 7. Kehrregeln
 

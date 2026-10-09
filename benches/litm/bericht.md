@@ -1,6 +1,6 @@
 # LitM-Bench: Bericht (13.09.2026)
 
-Autor: Kiosha · Plan: ~/.hermes/plans/memory-adaption-litm.md · Spec: benches/litm/SPEC.md
+Plan: ~/.hermes/plans/memory-adaption-litm.md · Spec: benches/litm/SPEC.md
 
 ## Frage
 Fand das Modell die wichtige Info seltener, wenn sie in der Blockmitte stand

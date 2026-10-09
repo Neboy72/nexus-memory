@@ -207,7 +207,7 @@ export function buildRecallHandler(
       // 'default'-scoped memories plus the CURRENTLY allowed area. Allowed
       // set comes from (1) manual cfg.scope override (static, old behavior)
       // or (2) auto-inference from the query itself (self-organizing memory,
-      // Nebo law: full automation — the query steers, no user ever configures).
+      // project rule: full automation — the query steers, no user ever configures).
       // Explicit search (nexus_search tool) is NEVER scope-filtered.
       // Fail-open: centroids empty/ambiguous → no gating at all.
       let allowed: Set<string> | null = null

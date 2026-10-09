@@ -179,7 +179,7 @@ class TestH3ProvenanceConfidenceLine:
 
         report = format_provenance_report({
             "source_stats": {"chat": 3},
-            "creator_stats": {"Kiosha": 3},
+            "creator_stats": {"agent": 3},
             "confidence_avg": 0.85,
             "confidence_min": 0.7,
             "confidence_max": 1.0,

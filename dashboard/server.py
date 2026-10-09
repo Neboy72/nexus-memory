@@ -347,7 +347,7 @@ async def get_system_status():
     except Exception as e:
         _logger.debug("get_system_status: fuel spend read failed: %s", e)
 
-    # Echter Modellname (z.B. "voyage-4", "qwen3-embedding") statt nur Provider-Label — Nebo-Regel: volle Transparenz
+    # Echter Modellname (z.B. "voyage-4", "qwen3-embedding") statt nur Provider-Label — Regel: volle Transparenz
     embed_model = embed_provider
     try:
         from nexus_memory.embeddings import EmbeddingProvider
@@ -825,7 +825,7 @@ async def trigger_backup():
 async def connect_agent(agent_id: str):
     """One-click connect: write the nexus MCP entry into the agent's own config.
 
-    Connection (Nebo semantics) — Nexus registers itself in a detected agent.
+    Connection (maintainer semantics) — Nexus registers itself in a detected agent.
     Every config write is preceded by a timestamped .bak backup (Regel 1),
     the operation is idempotent (already connected → no-op success).
     """
@@ -898,7 +898,7 @@ async def connect_agent(agent_id: str):
 async def disconnect_agent(agent_id: str):
     """Toggle Off: remove the nexus MCP entry from the agent's own config.
 
-    Reverse of connect (Nebo toggle semantics). Guards:
+    Reverse of connect (maintainer toggle semantics). Guards:
     - only pure-MCP agents are disconnectable via the dashboard; agents
       whose install_type contains "plugin" are wired into the host core
       and must never be touched by a web click (Regel 1 spirit).
@@ -1046,7 +1046,7 @@ if assets_dir.exists():
     app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 
-# Success moment (Nebo law 07.09/09.09: a finished install AND every update must
+# Success moment (project rule 07.09/09.09: a finished install AND every update must
 # SHOW the dashboard): after boot, open the browser ONCE per installation/update
 # (marker file prevents re-opening on every start) and ALWAYS print the URL +
 # bookmark hint — headless systems get the hint instead of the browser.

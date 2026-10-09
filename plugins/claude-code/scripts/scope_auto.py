@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Nexus Memory — Scope Auto-Inference (shared lib for Claude-Code hooks).
 
-Self-organizing memory areas (Nebo law 07.09: full automation or useless).
+Self-organizing memory areas (project rule 07.09: full automation or useless).
 No user ever types a scope: centroids are read from existing scoped canonical
 points, and a memory/prompt is only tagged/filtered on a CLEAR match.
 

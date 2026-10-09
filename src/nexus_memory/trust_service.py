@@ -2,10 +2,10 @@
 """
 trust_service.py — in-process Belief-Trust-Recompute service for Nexus Memory.
 
-Portiert aus scripts/trust_recompute.py (Kiosha, 2026) als in-process daemon
+Portiert aus scripts/trust_recompute.py (2026) als in-process daemon
 (HealthAuditor-Pattern): lebt im MCP-Server, kein externer Scheduler nötig.
 
-Nebo-Grundentscheidung (02.09.2026): 'Nexus Memory ist unabhängig — es bringt
+Grundentscheidung (02.09.2026): 'Nexus Memory ist unabhängig — es bringt
 alles mit was es braucht.' Wartung = daemon-threads im Server, nie externe Scheduler.
 
 WAS DIESER DIENST TUT (und nur er darf schreiben):

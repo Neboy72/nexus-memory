@@ -1,7 +1,7 @@
 """OCR review wave 20 - fixes for findings Nr 322-352 (no 339) + 339.
 
 One test class per finding: source-inspection plus behavior tests.
-Written by Kiosha (CC was contractually not allowed to touch this file).
+Written in-house (the external coding agent was not allowed to touch this file).
 """
 import asyncio
 import json

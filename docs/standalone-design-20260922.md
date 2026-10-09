@@ -1,17 +1,17 @@
 # Design-Blatt: Full Standalone Independence (v0.21-Kandidat)
 
-Stand: 22.09.2026, 20:10 Uhr · Autor: Kiosha · Status: WARTET AUF NEBOS BLICK
+Stand: 22.09.2026, 20:10 Uhr · Status: WARTET AUF BLICK
 Baseline: ae37787 · OpenClaw 26/26 grün · Pytest 1945 passed / 3 skipped / 0 failed
 
 ---
 
-## Klartext für Nebo (dieser Abschnitt zählt)
+## Klartext (dieser Abschnitt zählt)
 
 **Was ändert sich für dich: NICHTS.** Der Butler (Auto-Injection) arbeitet genau wie heute.
 Nexus bekommt zusätzlich ein eigenes Leben: Er läuft künftig als eigener Dienst im Haus,
 startet beim Einschalten von selbst und lebt, auch wenn gerade kein Bot wach ist.
 
-**Die zwei obersten Gesetze (Nebo, 22.09.):**
+**Die zwei obersten Gesetze (22.09.):**
 
 1. **Beim Plugin ändert sich nichts.** Alles bleibt wie bisher. Es wird höchstens besser.
    Wird auch nur EINE Sache schlechter: Projekt Abbruch. Kein Workaround.
@@ -71,7 +71,7 @@ startet beim Einschalten von selbst und lebt, auch wenn gerade kein Bot wach ist
 2. Alt-Weg: frische Testumgebung, Bot-Sag-Install nach AGENTS.md, funktioniert ohne
    den Dienst. (Gesetz 2)
 3. Kill-Test: Dienst stoppen → KeepAlive holt ihn zurück → Health meldet wieder grün.
-4. Nebo-Abnahme: "Läuft Nexus, ohne dass Hermes ihn anfasst?" (Ohr-Test)
+4. Abnahme: "Läuft Nexus, ohne dass Hermes ihn anfasst?" (Ohr-Test)
 
 ### Rollback
 
@@ -81,7 +81,7 @@ startet beim Einschalten von selbst und lebt, auch wenn gerade kein Bot wach ist
 ### Wer baut
 
 - Claude Code Workers (DeepSeek V4.1 Flash, localhost:11434) bauen Bausteine A bis C
-  je mit Quellen-Pflicht (decision-gate bleibt aktiv). Kiosha reviewt jeden Baustein,
+  je mit Quellen-Pflicht (decision-gate bleibt aktiv). Der Agent reviewt jeden Baustein,
   Replika-Container-Gegenprobe vor jedem Push.
 
 ### Zeit (Schätzung, keine Zusage)

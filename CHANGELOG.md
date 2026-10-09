@@ -669,7 +669,7 @@ green, gitleaks clean.
 
 # v0.18.6 — Auto-Scoping Parity: All Three Plugins
 
-**Auto-scoping now works identically on every integration path** — Hermes native plugin, OpenClaw TS plugin, and Claude Code hooks. v0.18.5 shipped self-organizing memory server-side (auto-tagging in the MCP server worked for all agents) but the client-side pieces (auto-recall gating, auto-capture tagging, store-tool tagging) lived only in the Hermes plugin. Now every plugin infers areas from scoped centroids with the same clear-match rule — no user config anywhere (Nebo law: full automation or useless; no release without plugin parity).
+**Auto-scoping now works identically on every integration path** — Hermes native plugin, OpenClaw TS plugin, and Claude Code hooks. v0.18.5 shipped self-organizing memory server-side (auto-tagging in the MCP server worked for all agents) but the client-side pieces (auto-recall gating, auto-capture tagging, store-tool tagging) lived only in the Hermes plugin. Now every plugin infers areas from scoped centroids with the same clear-match rule — no user config anywhere (project rule: full automation or useless; no release without plugin parity).
 
 ## New
 - **`plugins/openclaw/lib/scope-auto.ts`** — TypeScript port of `scope_auto.py`: centroid cache with TTL + inflight dedup, conservative `inferScope()` (clear-closest only: ≥0.72 absolute AND ≥0.05 margin over runner-up), `prefetchFilterScopes()` with manual-scope-as-addition semantics. Wired into auto-recall gating, auto-capture tagging, and the `nexus_store` tool (explicit scope param wins → cfg scope → auto-infer → default).
@@ -679,7 +679,7 @@ green, gitleaks clean.
 ## Tests
 - 1076 passed (1063 previous + 13 parity tests)
 
-**The memory now assigns its own areas — full automation, zero user setup (Nebo law: automate or it's useless).** Scope labels exist since v0.18.4, but they required a config value per agent. Now the memory infers the area itself: when a new memory is stored, it compares the content vector against the centroids of existing scoped areas and inherits the matching scope automatically. And at recall time, a question that clearly belongs to one area gets that area's memories plus the shared ones — no configuration anywhere in the loop.
+**The memory now assigns its own areas — full automation, zero user setup (project rule: automate or it's useless).** Scope labels exist since v0.18.4, but they required a config value per agent. Now the memory infers the area itself: when a new memory is stored, it compares the content vector against the centroids of existing scoped areas and inherits the matching scope automatically. And at recall time, a question that clearly belongs to one area gets that area's memories plus the shared ones — no configuration anywhere in the loop.
 
 ## New
 - **`scope_auto.py` — scope centroids + conservative inference**: centroid per scope from canonical scoped points (60s TTL cache, fail-open to "no areas"). `infer_scope()`: only tags a memory when its vector is CLEARLY closest to one area (margin ≥ 0.05 to runner-up AND ≥ 0.72 absolute similarity) — under-tagging is harmless, over-tagging is what we avoid. Zero LLM cost: pure vector math.
@@ -991,7 +991,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deterministic entity IDs: uuid5 instead of uuid4 (no duplicates across sessions)
 - Relationship storage: extracted relationships now stored as graph edges (was silently dropped)
 - BFS performance: deque.popleft() instead of list.pop(0) (O(n) → O(1))
-- OpenClaw KG tools adapted to SDK API by Miosha (TypeBox schemas, registerTool pattern)
+- OpenClaw KG tools adapted to the SDK API (TypeBox schemas, registerTool pattern)
 
 ## [v0.6.0] — 2026-07-25
 

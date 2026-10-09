@@ -32,7 +32,7 @@ for env in [Path.home() / '.hermes' / '.env', _TEST_CLONE / '.env']:
 from qdrant_client import QdrantClient
 
 # ── 12 Anfragen mit Ground-Truth (Substring im Text eines bekannnten Punkts) ──
-# Formuliert wie NEBO formuliert (salopp, Pronomen), GT = Suchbegriff der im Memory stehen muss.
+# Formuliert wie ein Nutzer formuliert (salopp, Pronomen), GT = Suchbegriff der im Memory stehen muss.
 QUERIES = [
     ("wies das thema mit dem hund", "spaziergange"),
     ("das ding fur das auto ladens", "wallbox"),

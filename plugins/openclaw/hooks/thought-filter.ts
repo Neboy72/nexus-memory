@@ -29,19 +29,37 @@ const MIN_LEN_SEND = 12
 // cap a single leak could eat an unbounded numbered tail.
 const MAX_CONTINUATION = 2
 
+// Adressatengruppe: wer im Text als "fragend/denkend" angesprochen wird.
+// Generisch vorbelegt und per NEXUS_AGENT_NAMES erweiterbar (","-getrennt) —
+// ein fest eingetragener Eigenname stünde in fremden Installationen sonst als
+// toter Zweig und würde jedem Leser verraten, wer den Filter gebaut hat.
+// (Fund 10.10.2026: zuvor standen hier drei Namen fest verdrahtet.)
+const AGENT_NAMES = ["the user", "user", "the assistant", "assistant",
+                     "the human", "human"]
+for (const extra of (process.env.NEXUS_AGENT_NAMES ?? "").split(",")) {
+  const name = extra.trim()
+  if (name && !AGENT_NAMES.includes(name)) AGENT_NAMES.push(name)
+}
+const ADDRESSEE = AGENT_NAMES.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+
 // Muster, die eindeutig internes Reasoning markieren (verifizierte Leaks).
 const REASONING_MARKERS: RegExp[] = [
-  // Reflex-/Übergangs-Adverbien am Blockanfang (Miosha-leak-typisch)
-  // "So"-False-Positive geschärft (08.09.): Nur "So, …" mit Komma = Leak-Marker,
-  // "So gehen wir vor:" / "So läuft's" bleibt legitime Antwort.
-  // W29-6: hier stehen nur noch die STARKEN Reflex-Formen. Die schwachen
-  // Adverbien (now/then/okay/alright/actually/ok) sind nach
-  // WEAK_ADVERB_MARKER unten verschoben — sie allein sind kein Leak.
-  /^(so,|wait|hmm)\b[,.\s]/i,
+  // Reflex-/Übergangs-Adverbien am Blockanfang (leak-typisch)
+  // "So"-False-Positive geschärft (08.09.): Nur "So" MIT folgendem Komma bzw.
+  // "wait"/"hmm" mit Trenner = Leak-Marker, "So gehen wir vor:" bleibt legitime
+  // Antwort.
+  // Fund 09.10.2026: hier stand `/^(so,|wait|hmm)\b[.,\s]/`. Das `\b` stand
+  // zwischen einem NICHT-Wortzeichen (Komma) und der Zeichenklasse `[.,\s]` —
+  // dort kann per Definition keine Wortgrenze liegen, also griff der Zweig
+  // "so," NIE. Verifiziert: "So, hier ist meine Antwort" wurde nicht erkannt,
+  // obwohl der Kommentar genau diese Form als Marker nennt. Jetzt greift jedes
+  // der drei Wörter nur noch auf einen echten Trenner.
+  /^(?:so,|wait|hmm)[\s,.;:—–-]/i,
   // DE/EN Selbststart-Marker
   /^\s*(let me (parse|think|work through|analyze|check|consider)|hmm[,.]|okay,? let'?s|i should|i need to)\b/i,
-  /^(the user|nebo|miosha|kiosha)\s+(asks|is asking|wrote|sent)\b/i,
-  // Englische Analyse-Blöcke über dem deutschen Final (Miosha-Realität):
+  // Adressat + Denk-Verb (Adressatengruppe siehe ADDRESSEE oben).
+  new RegExp(`^(${ADDRESSEE})\\s+(asks|is asking|wrote|sent|wants|asked)\\b`, "i"),
+  // Englische Analyse-Blöcke über dem deutschen Final:
   /^(he'?s|she'?s|he is|she is)\s+(asking|wondering|reacting)\b/i,
   /^(this|that|it) (is|was)\s+a (personal|warm|curious|natural|joke|meta)\b/i,
   /^wait[,\s—-]/i,
@@ -72,11 +90,13 @@ const REASONING_MARKERS: RegExp[] = [
   // Re-Orientierungs-Varianten (08.09., geschärft): nur die echten Leak-Formen —
   // ein generisches "This message contains X" in einer LEGITIMEN Antwort darf
   // nicht gefiltert werden (False-Positive-Gefahr des ersten Entwurfs).
-  /^(the current|this) (user )?message is (an internal|an? context|nebo|miosha)\b/i,
+  // Adressatengruppe generisch, wie im Muster oben.
+  // Adressatengruppe wie oben (NEXUS_AGENT_NAMES erweitert sie).
+  new RegExp(`^(the current|this) (user )?message is (an internal|an? context|a note to myself|${ADDRESSEE})\\b`, "i"),
   /^(the current|this) (user )?message contains\s*(:|$)/im,
   /^the current user message\s*:/i,
   /^(the current|this) turn (is|contains|says)\b/i,
-  // Zitat-/Verweis-Öffner ("The last message: Nebo's message at …", "THE CURRENT USER MESSAGE: …")
+  // Zitat-/Verweis-Öffner ("The last message: <name>'s message at …", "THE CURRENT USER MESSAGE: …")
   /^the (last|current) (user )?message\b/i,
   // Cron-/Heartbeat-Selbstplanung (Release Tracker, Memory-Cron — 08.09.-Leak-Welle)
   /^let me (parse this heartbeat|work through this task|analyze what i got|start by fetching)\b/i,

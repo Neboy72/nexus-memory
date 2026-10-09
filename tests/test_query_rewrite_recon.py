@@ -50,7 +50,7 @@ check('runaway rejected', qr._acceptable('x' * 500, 'x') is False)
 check('len-2 accepted in acceptable', qr._acceptable('ab', 'x') is True)
 check('empty rejected', qr._acceptable('', 'x') is False)
 
-# v0.19.0: Default ist AN (Nebo-Entscheidung 13.09.); Notbremse ist NEXUS_REWRITE=0.
+# v0.19.0: Default ist AN (Entscheidung 13.09.); Notbremse ist NEXUS_REWRITE=0.
 os.environ.pop('NEXUS_REWRITE', None)
 check('on by default (unset env)', qr.enabled() is True)
 os.environ['NEXUS_REWRITE'] = '0'

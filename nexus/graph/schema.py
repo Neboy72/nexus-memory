@@ -3,7 +3,7 @@
 v2.2.0: SQLite entfernt. Edges leben direkt in Qdrant-Point-Payloads.
 Jeder Fact-Point hat ein ``edges``-Feld (Array von Edge-Objekten).
 
-Design decisions (v2.0.0 review by Miosha, migrated to Qdrant in v2.2.0):
+Design decisions (v2.0.0 internal review, migrated to Qdrant in v2.2.0):
   - relation and status are separate fields (never mixed).
   - edge_id is a UUID primary key.
   - Edges are stored ONCE in the source-fact's payload (not duplicated on target).

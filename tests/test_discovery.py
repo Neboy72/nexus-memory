@@ -38,8 +38,8 @@ class TestClassifier:
     def test_same_category_references(self):
         """Same category → references."""
         result = classify_relation(
-            source_content="Kiosha is the lead agent",
-            target_content="Kiosha manages the system",
+            source_content="The lead agent leads the team",
+            target_content="The lead agent manages the system",
             source_category="agent",
             target_category="agent",
             source_id=F_A,
@@ -52,8 +52,8 @@ class TestClassifier:
     def test_wikilink_depends_on(self):
         """[[Wikilink]] → depends_on with high confidence."""
         result = classify_relation(
-            source_content="See [[Kiosha Agent]] for details",
-            target_content="Kiosha Agent is the lead system",
+            source_content="See [[Lead Agent]] for details",
+            target_content="The lead agent is the system",
             source_category="docs",
             target_category="docs",
             source_id=F_A,
@@ -148,8 +148,8 @@ class TestClassifier:
     def test_keyword_overlap_eighty_percent_references(self):
         """High keyword overlap → references."""
         result = classify_relation(
-            source_content="Kiosha manages memory Kiosha handles search Kiosha routes",
-            target_content="Kiosha manages memory Kiosha handles search Kiosha routes",
+            source_content="the lead manages memory the lead handles search the lead routes",
+            target_content="the lead manages memory the lead handles search the lead routes",
             source_category="agent",
             target_category="agent",
             source_id=F_A,

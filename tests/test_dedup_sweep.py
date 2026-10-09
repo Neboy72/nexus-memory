@@ -1,7 +1,7 @@
 """
 Tests für den in-process Dedup-Sweep (health_audit.HealthAuditor._dedup_sweep).
 
-Nebo-Grundentscheidung (02.09.): Nexus Memory ist unabhängig — Wartung läuft
+Grundentscheidung (02.09.): Nexus Memory ist unabhängig — Wartung läuft
 in-process, kein externer Scheduler. Der Sweep ist die erste schreibende
 Selbstpflege-Funktion und braucht deshalb harte Tests:
 
@@ -85,8 +85,8 @@ class _FakeStore:
 def test_dedup_sweep_merges_exact_duplicates(temp_coll, tmp_path, monkeypatch):
     client, coll = temp_coll
     aud = _auditor(client, coll, tmp_path, monkeypatch)
-    t1 = "Kiosha nutzt glm-5.3-flash als Main-Modell"
-    t2 = "  kiosha   nutzt glm-5.3-flash als main-modell  "  # gleicher normalized key (Whitespace+Case)
+    t1 = "Der Agent nutzt glm-5.3-flash als Main-Modell"
+    t2 = "  der agent   nutzt glm-5.3-flash als main-modell  "  # gleicher normalized key (Whitespace+Case)
     unique = "Rex ist ein Puli und wohnt beim Nutzer"
     client.upsert(coll, [PointStruct(id=str(uuid.uuid4()), vector=[0.1]*DIM, payload={"text": t1, "created_at": _iso(90)})])
     client.upsert(coll, [PointStruct(id=str(uuid.uuid4()), vector=[0.2]*DIM, payload={"text": t2, "created_at": _iso(10)})])
@@ -120,20 +120,20 @@ def test_keeper_is_oldest(temp_coll, tmp_path, monkeypatch):
 def test_attribute_rescue(temp_coll, tmp_path, monkeypatch):
     client, coll = temp_coll
     aud = _auditor(client, coll, tmp_path, monkeypatch)
-    text = "Synology DSM Login per SSH kiosha"
+    text = "Synology DSM Login per SSH agent"
     old_id = str(uuid.uuid4())
     new_id = str(uuid.uuid4())
     client.upsert(coll, [PointStruct(id=old_id, vector=[0.1]*DIM, payload={
         "text": text, "created_at": _iso(100), "entity_attributes": {"ip": "192.168.31.40"}})])
     client.upsert(coll, [PointStruct(id=new_id, vector=[0.1]*DIM, payload={
-        "text": text, "created_at": _iso(1), "entity_attributes": {"ssh_user": "kiosha", "ip": "192.168.31.40"}})])
+        "text": text, "created_at": _iso(1), "entity_attributes": {"ssh_user": "agent", "ip": "192.168.31.40"}})])
 
     sweep = aud._dedup_sweep()
     assert sweep["merged"] == 1
     assert sweep["rescued_attributes"] >= 1
     keeper = [p for p in aud._collect_points() if str(p.id) == old_id][0]
     attrs = keeper.payload.get("entity_attributes") or {}
-    assert attrs.get("ssh_user") == "kiosha" and attrs.get("ip") == "192.168.31.40"
+    assert attrs.get("ssh_user") == "agent" and attrs.get("ip") == "192.168.31.40"
 
 
 def test_backup_written_before_delete(temp_coll, tmp_path, monkeypatch):

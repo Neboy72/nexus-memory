@@ -4,7 +4,7 @@ One test class per finding (incl. documented SKIPs with their evidence).
 Source-inspection (ast/grep on the repo files) + behavior checks against
 the real modules where cheap. No Qdrant, no network.
 
-Written by Kiosha (CC was contractually not allowed to touch this file).
+Written in-house (the external coding agent was not allowed to touch this file).
 """
 
 import ast

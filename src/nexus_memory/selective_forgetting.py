@@ -10,7 +10,7 @@ Nexus-Adaptation (ehrlich dokumentiert):
 - access frequency: Nexus loggt keine Zugriffe pro Memory -> Komponente entfällt (weight 0)
 - degree centrality: Graph-Degree wäre teuer; für v1 entfällt
 
-STANDALONE-REGEL (Nebo, 02.09.2026): Dieses Modul läuft IN-PROCESS als Teil des
+STANDALONE-REGEL (02.09.2026): Dieses Modul läuft IN-PROCESS als Teil des
 HealthAuditor-Daemon-Threads im MCP-Server — auf JEDEM Host, mit JEDEM Harness,
 ohne externen Scheduler (kein Agent-Cron, kein LaunchAgent, kein host-cron).
 Ein User, der nexus-memory installiert, bekommt dieses Audit automatisch mit.

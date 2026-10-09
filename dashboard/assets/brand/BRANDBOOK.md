@@ -261,8 +261,8 @@ Die rechte Gehirnhaelfte hat 4-8 Circuit-Nodes die ueber die aeussere Kontur hin
 
 ## 9. Quellen und Credits
 
-- **Design:** Nebo (ChatGPT-generiert)
-- **Vektorisierung/Anpassung:** Kiosha (Hermes Agent)
+- **Design:** extern erstellt (ChatGPT-generiert)
+- **Vektorisierung/Anpassung:** Agent (Hermes)
 - **Quelle:** Desktop-SVG (NexusMemory_SVG-Vertikal.svg)
 - **Lizenz:** Proprietär - Nexus Memory Projekt
 

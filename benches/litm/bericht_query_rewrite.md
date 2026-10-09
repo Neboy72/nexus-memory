@@ -1,6 +1,6 @@
 # Query-Rewriting: Bericht (13.09.2026)
 
-Autor: Kiosha · Plan: Wiederaufbau + Verkabelung + Messung · Status: **Test-Repo fertig, wartet auf Produktiv-GO**
+Plan: Wiederaufbau + Verkabelung + Messung · Status: **Test-Repo fertig, wartet auf Produktiv-GO**
 
 ## 1. Der Fund
 Das Feature war schon einmal gebaut (v0.19.0, GO 07.09.) und beim v0.18-Rollback aus dem
@@ -39,7 +39,7 @@ Recall@5 ohne Rewrite: 67% | mit Rewrite: 75% (+8 Punkte, enge Ground-Truth)
 1. query_rewrite.py + Plugin-Patch in Prod-Repo uebernehmen (Feature-Branch)
 2. simplify-code + Verifier
 3. Release + 3 Plugins + Doku
-4. NEXUS_REWRITE=1 im Hermes-Env setzen (nur Kiosha/Gateway)
+4. NEXUS_REWRITE=1 im Hermes-Env setzen (nur der Dienst)
 
 ## Feinschliff-Review (13.09., simplify-review + Verifier)
 

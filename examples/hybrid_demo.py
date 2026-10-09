@@ -17,7 +17,7 @@ def main() -> None:
         {"id": "2", "text": "Fallback chain: Kimi K2.6 → Gemini Flash → GPT-5.5 (last resort)."},
         {"id": "3", "text": "Ollama Cloud Pro plan shows percentage, not hours. Session reset ~5h."},
         {"id": "4", "text": "Medium subscription expires November 2026. RSS feeds work without auth."},
-        {"id": "5", "text": "Mac Mini M4 16GB — Kiosha and Miosha exclusive. Headless via NoMachine."},
+        {"id": "5", "text": "Mac Mini M4 16GB — agent workstations. Headless via NoMachine."},
     ]
 
     # Build retriever (no Qdrant needed for this demo)

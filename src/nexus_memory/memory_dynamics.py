@@ -1,6 +1,6 @@
 """Memory Dynamics — gehirn-inspirierte Ranking-Dynamik für Nexus Memory.
 
-Konzept (Nebo/Kiosha 03.09.2026):
+Konzept (03.09.2026):
 - F1 Reinforcement: recall erhöht use_count + last_accessed (via Qdrant set_payload)
 - F2 Salience: float 0.0-1.0, hohe Werte sind immun gegen Decay
 - F3 Decay: zustandslos berechnetes Ranking-Gewicht, nie Löschung

@@ -2,8 +2,8 @@
 """
 retrieval_watch.py — in-process retrieval-quality watchdog for Nexus Memory.
 
-Portiert aus scripts/nexus-retrieval-watch.py (Kiosha/Nebo 30.08.2026) als
-in-process daemon (HealthAuditor-Pattern). Nebo-Grundentscheidung 02.09.2026:
+Portiert aus scripts/nexus-retrieval-watch.py (30.08.2026) als
+in-process daemon (HealthAuditor-Pattern). Grundentscheidung 02.09.2026:
 'Nexus Memory ist unabhängig — Wartung läuft im Server, nie extern.'
 
 TÄGLICHER CHECK: kritische Entities müssen im Prefetch/Semantic-Search gefunden

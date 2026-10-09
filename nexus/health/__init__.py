@@ -1092,7 +1092,7 @@ def find_wikilink_orphans(workspace: str | None = None) -> list[dict]:
     - ``workspace/wiki/*.md`` — wiki entity files
     - ``workspace/MEMORY.md`` — headings in the main memory file
     - ``workspace/memory/202*.md`` — date-named memory files
-    - ``~/ObsidianVault/Miosha/Wiki/entities/*.md`` — shared Obsidian wiki
+    - ``$NEXUS_OBSIDIAN_WIKI`` (default ``~/ObsidianVault/NexusVault/wiki/entities``) — shared Obsidian wiki
 
     Args:
         workspace: Path to workspace directory. Defaults to
@@ -1149,7 +1149,8 @@ def find_wikilink_orphans(workspace: str | None = None) -> list[dict]:
         }
 
     # Also check shared Obsidian Wiki
-    obsidian_wiki = os.path.expanduser("~/ObsidianVault/Miosha/Wiki/entities")
+    obsidian_wiki = os.path.expanduser(os.environ.get(
+        "NEXUS_OBSIDIAN_WIKI", "~/ObsidianVault/NexusVault/wiki/entities"))
     if os.path.isdir(obsidian_wiki):
         wiki_files.update({
             fn[:-3].lower()

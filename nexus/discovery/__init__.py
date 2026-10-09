@@ -39,7 +39,7 @@ DEFAULT_QDRANT_URL = "http://localhost:6333"
 DEFAULT_COLLECTION = None  # Kein Default — muss aus Config kommen
 DEFAULT_TOP_K = 5
 
-# Confidence thresholds (from Miosha review, confirmed 27.05.2026)
+# Confidence thresholds (from internal review, 27.05.2026)
 AUTO_ACTIVE_THRESHOLD = 0.85  # ≥ 0.85 → insert as active
 MIN_DISCOVERY_THRESHOLD = 0.70  # < 0.70 → skip (too noisy)
 

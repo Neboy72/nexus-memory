@@ -6,7 +6,7 @@ Core data model for v1.8.0+.
 Every fact lives through a state machine:
     pending → canonical | deprecated | rolled_back
 
-Key design decisions (verified by Miosha 26.05.2026):
+Key design decisions (verified 26.05.2026):
   - supersedes on version_id (not fact_id) — precise chains for replay/audit
   - content_hash locks payload at creation — no silent drift between staging/promote
   - decision_event is mandatory — every status change must have a reason

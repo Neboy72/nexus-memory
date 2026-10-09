@@ -550,8 +550,8 @@ the State-Prefixing pattern from Agentic Design Patterns (Ch8):
 | Level | Description | Visible to |
 |-------|-------------|-----------|
 | `public` | General knowledge | All agents |
-| `trusted` | Personal data | Trusted agents (e.g. Kiosha) |
-| `private` | Sensitive data | Owner only (Nebo) |
+| `trusted` | Personal data | Trusted team agents |
+| `private` | Sensitive data | Owner only |
 
 ## Provenance
 

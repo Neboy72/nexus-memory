@@ -683,7 +683,7 @@ def _local_host_label() -> str:
     ``NEXUS_HOST_LABEL`` wins (explicit config), else the macOS hostname.
     Used to auto-annotate locally-detected agents in the registry.
 
-    Universal fallback (Nebo, 07.09.): a raw technical hostname like
+    Universal fallback (maintainer, 07.09.): a raw technical hostname like
     "Mac-mini-von-Alex.local" is prettified for the badge — suffixes
     (.local/.lan) stripped, dashes/underscores become spaces, first
     letters capitalised. A user who never set NEXUS_HOST_LABEL still
@@ -697,7 +697,7 @@ def _local_host_label() -> str:
         if not name:
             return "this machine"
         # Prettify: strip mDNS/DNS suffixes, split camel-case + separators.
-        # Device-core rule (Nebo, 07.09.): collect LEADING device words only —
+        # Device-core rule (maintainer, 07.09.): collect LEADING device words only —
         # "Mac-mini-von-Alex.local" → "Mac Mini" (owner suffix dropped, the
         # badge shows the machine TYPE like every other card in the fleet).
         name = name.split(".")[0]
@@ -744,7 +744,7 @@ def annotate_host(agent: dict, host_type: Optional[str] = None,
     """
     agent.setdefault("host_type", host_type or "local")
     agent.setdefault("host_label", host_label or _local_host_label())
-    # Universal self-heal (Nebo, 07.09.): registry entries that carry a raw
+    # Universal self-heal (maintainer, 07.09.): registry entries that carry a raw
     # technical hostname (with .local/.lan suffix) get prettified too — a
     # user who connected BEFORE the prettify-fix existed still sees a
     # readable badge.
