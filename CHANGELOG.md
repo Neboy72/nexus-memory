@@ -1,3 +1,31 @@
+## [0.22.18] — 2026-10-10
+
+### Fixed
+
+- **The Claude Code plugin could read from memory but never write to it.** Its
+  `store_memory` built a `urllib.request.Request` with no `method=`, which urllib sends
+  as POST. Qdrant wants **PUT** for point creation and rejects POST on that endpoint
+  with `400 Format error in JSON body: missing field 'ids'`. Measured against the
+  running Qdrant 1.17: `POST` → 400, `PUT` → 200.
+
+  Every capture therefore failed, the surrounding `except` swallowed the error, and the
+  hook reported only to stderr — invisible in normal operation. Nothing looked wrong:
+  recall kept working, because the read paths (`/points/search`, `/points/scroll`, and
+  `/points` with an `ids` body) do want POST and were correct all along. Only the write
+  path was broken, and only for this plugin: OpenClaw uses its own Qdrant client and
+  Hermes uses the official one.
+
+  Read paths are deliberately left as POST — switching them to PUT would break search
+  and scroll.
+
+- `tests/test_claude_code_write_path.py` — exercises the real path (write, read back with
+  the official client, clean up) and pins the method on both sides: PUT on the write
+  call, POST on the read calls. Red without the fix, green with it. It also asserts the
+  written point carries `access_level: trusted`, since Claude Code must never see or
+  create private memories (decision of 2026-09-02).
+
+Versions: engine 0.22.18, Claude Code plugin 1.2.5, OpenClaw plugin 1.21.8.
+
 ## [0.22.17] — 2026-10-10
 
 ### Fixed
