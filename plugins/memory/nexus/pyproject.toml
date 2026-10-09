@@ -10,7 +10,7 @@
 # an index would install a stranger's code. The dependency resolves through
 # `[tool.uv.sources]` to our own repository at a pinned commit instead.
 name = "hermes-nexus-provider"
-version = "0.22.12"
+version = "0.22.13"
 description = "Hermes MemoryProvider runtime for Nexus Memory."
 requires-python = ">=3.11"
 
