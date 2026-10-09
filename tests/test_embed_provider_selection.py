@@ -99,13 +99,13 @@ def test_qwen3_query_gets_instruct_prefix(monkeypatch):
     p._backend = "ollama"
     p._client = {"base_url": "http://localhost:11434"}
     vec = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
-        p.embed("wo ist Bleki geboren"))
+        p.embed("wo ist Rex geboren"))
     assert len(vec) == 1024
     sent = captured["json"]
     assert sent["model"] == "qwen3-embedding:0.6b"
     assert sent["input"][0].startswith(
         "Instruct: retrieve the relevant memory for the user query. Query: ")
-    assert "wo ist Bleki geboren" in sent["input"][0]
+    assert "wo ist Rex geboren" in sent["input"][0]
 
 
 def test_non_qwen3_model_gets_no_instruct_prefix(monkeypatch):
