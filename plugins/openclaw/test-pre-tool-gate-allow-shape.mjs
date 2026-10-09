@@ -147,7 +147,7 @@ await t("Default-Lock-Pfad ist portabel (os.tmpdir + generischer Dateiname)", as
   assert.strictEqual(DEFAULT_PLAN_LOCK_PATH, join(os.tmpdir(), "nexus-plan-gate.lock"))
   assert.strictEqual(basename(DEFAULT_PLAN_LOCK_PATH), "nexus-plan-gate.lock", "generischer Dateiname erwartet")
   assert.ok(
-    !/miosha|think-gate/.test(basename(DEFAULT_PLAN_LOCK_PATH)),
+    !/\bthink-gate\b/.test(basename(DEFAULT_PLAN_LOCK_PATH)),
     `Dateiname darf kein Deployment-Literal enthalten: ${DEFAULT_PLAN_LOCK_PATH}`,
   )
 })
@@ -156,7 +156,10 @@ await t("Quelle: kein hartcodiertes Deployment-Literal mehr (Portabilitäts-Bewe
   // Bewusst an der QUELLE geprüft: os.tmpdir() löst zur Laufzeit legitim auf einen
   // Per-User-Pfad auf (hier ~/.openclaw/tmp) — Portabilität heißt: kein Literal im Code.
   const src = readFileSync(new URL("./hooks/pre-tool-gate.ts", import.meta.url), "utf8")
-  assert.ok(!src.includes("miosha-think-gate"), "alter hartcodierter Lock-Pfad muss entfernt sein")
+  assert.ok(
+    !/(?:^|[/"\'])think-gate\.lock/.test(src) && !src.includes("-think-gate"),
+    "hartcodierter Lock-Pfad (Deployment-Literal) muss entfernt sein",
+  )
   assert.ok(
     !src.includes('\"/tmp/'),
     "kein hartcodierter /tmp-Literalpfad (existiert auf Windows nicht)",
