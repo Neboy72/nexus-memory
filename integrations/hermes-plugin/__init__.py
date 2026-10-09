@@ -289,10 +289,17 @@ class NexusMemoryProvider:
         markers = [
             Path.home() / ".hermes/scripts/backup-macmini.sh",
             Path.home() / ".hermes/scripts/backup.sh",
-            Path.home() / "Library/LaunchAgents/com.nexus.backup-macmini.plist",
-            Path.home() / "Library/LaunchAgents/com.nexus.backup.plist",
         ]
         try:
+            # LaunchAgents werden per Glob gesucht, nicht über feste Dateinamen:
+            # die plist heisst auf bestehenden Installationen anders als auf
+            # neuen, und ein fest eingetragener Name liesse den Check auf einer
+            # der beiden still danebenliegen (Review-Fund 10.10.2026).
+            launch_agents = Path.home() / "Library/LaunchAgents"
+            try:
+                markers.extend(sorted(launch_agents.glob("*backup*.plist")))
+            except Exception:
+                pass
             for m in markers:
                 if m.exists():
                     try:

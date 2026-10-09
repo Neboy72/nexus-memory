@@ -45,16 +45,18 @@ const ADDRESSEE = AGENT_NAMES.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"
 // Muster, die eindeutig internes Reasoning markieren (verifizierte Leaks).
 const REASONING_MARKERS: RegExp[] = [
   // Reflex-/Übergangs-Adverbien am Blockanfang (leak-typisch)
-  // "So"-False-Positive geschärft (08.09.): Nur "So" MIT folgendem Komma bzw.
-  // "wait"/"hmm" mit Trenner = Leak-Marker, "So gehen wir vor:" bleibt legitime
-  // Antwort.
+  // "So"-False-Positive geschärft (08.09.): Nur "So" MIT folgendem Komma =
+  // Leak-Marker, "So gehen wir vor:" bleibt legitime Antwort.
   // Fund 09.10.2026: hier stand `/^(so,|wait|hmm)\b[.,\s]/`. Das `\b` stand
   // zwischen einem NICHT-Wortzeichen (Komma) und der Zeichenklasse `[.,\s]` —
   // dort kann per Definition keine Wortgrenze liegen, also griff der Zweig
   // "so," NIE. Verifiziert: "So, hier ist meine Antwort" wurde nicht erkannt,
-  // obwohl der Kommentar genau diese Form als Marker nennt. Jetzt greift jedes
-  // der drei Wörter nur noch auf einen echten Trenner.
-  /^(?:so,|wait|hmm)[\s,.;:—–-]/i,
+  // obwohl der Kommentar genau diese Form als Marker nennt.
+  // Der Trenner bleibt bewusst auf `[.,\s]` beschränkt: ein Ausbau auf `;`/`:`
+  // oder ein blosses Leerzeichen nach "wait"/"hmm" würde legitime Antworten
+  // wie "So; deshalb…" oder "Wait for me at the station…" verschlucken
+  // (Review-Fund 10.10.2026). Nur die Wortgrenze war der Fehler, nicht die Klasse.
+  /^(?:so,|wait|hmm)[.,\s]/i,
   // DE/EN Selbststart-Marker
   /^\s*(let me (parse|think|work through|analyze|check|consider)|hmm[,.]|okay,? let'?s|i should|i need to)\b/i,
   // Adressat + Denk-Verb (Adressatengruppe siehe ADDRESSEE oben).
