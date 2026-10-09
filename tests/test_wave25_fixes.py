@@ -393,7 +393,9 @@ class TestNr491PortablePaths:
 
     def test_pre_tool_gate_no_dev_home(self):
         src = _read("plugins/openclaw/hooks/pre-tool-gate.ts")
-        assert "/Users/miosha" not in src
+        # Generisches Muster (siehe wave24): jeder Heimpfad, nicht nur unserer.
+        assert not re.search(r"/Users/[A-Za-z0-9._-]+", src), (
+            "hartkodierter Heimpfad in pre-tool-gate.ts")
         assert "os.homedir()" in src
 
 

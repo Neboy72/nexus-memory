@@ -276,7 +276,10 @@ class TestNr445LegacyTestMcpGuard:
 class TestNr446SessionDumpPortablePath:
     def test_no_hardcoded_home(self):
         src = _code_lines(_read("scripts/session_dump.py"))
-        assert "/Users/miosha" not in src
+        # Generisches Muster statt des eigenen Heimpfads: faengt JEDEN
+        # Benutzerpfad und traegt den eigenen Namen nicht im oeffentlichen Repo.
+        assert not re.search(r"/Users/[A-Za-z0-9._-]+", src), (
+            "hartkodierter Heimpfad in session_dump.py")
         assert "NEXUS_STATE_DB" in src
         assert "expanduser" in src
 

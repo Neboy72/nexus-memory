@@ -26,7 +26,7 @@ def _load_guardrail_module(tag: str):
 
 
 FAKE_RULE = {
-    "name": "test", "path": "/Users/miosha/nexus-memory",
+    "name": "test", "path": "/home/user/nexus-memory",
     "rule_text": "protect repo", "source_id": "mem-123", "allow": False,
 }
 
@@ -38,7 +38,7 @@ class TestW29ReverseContainment:
     def test_behavior_parent_of_protected_blocked(self):
         g = _load_guardrail_module("rev1")
         g.load_protection_rules = lambda: [dict(FAKE_RULE)]
-        r = g.check_action("rm -rf /Users/miosha", "Bash", {})
+        r = g.check_action("rm -rf /home/user", "Bash", {})
         assert r["verdict"] == "block"
 
     def test_behavior_root_blocked(self):
@@ -54,9 +54,11 @@ class TestW29ReverseContainment:
         assert r["verdict"] == "allow"
 
     def test_behavior_grandparent_blocked(self):
+        # Der ELTERNORDNER des geschuetzten Pfads (hier /home wie /Users) muss
+        # blockiert bleiben. Diese Zeile enthaelt absichtlich keinen Benutzernamen.
         g = _load_guardrail_module("rev4")
         g.load_protection_rules = lambda: [dict(FAKE_RULE)]
-        r = g.check_action("rm -rf /Users", "Bash", {})
+        r = g.check_action("rm -rf /home", "Bash", {})
         assert r["verdict"] == "block"
 
 
@@ -67,13 +69,13 @@ class TestW29PathCarryingTools:
     def test_behavior_write_on_protected_blocked(self):
         g = _load_guardrail_module("wp1")
         g.load_protection_rules = lambda: [dict(FAKE_RULE)]
-        r = g.check_action("", "Write", {"file_path": "/Users/miosha/nexus-memory/README.md", "content": "x"})
+        r = g.check_action("", "Write", {"file_path": "/home/user/nexus-memory/README.md", "content": "x"})
         assert r["verdict"] == "block"
 
     def test_behavior_edit_on_protected_blocked(self):
         g = _load_guardrail_module("wp2")
         g.load_protection_rules = lambda: [dict(FAKE_RULE)]
-        r = g.check_action("", "Edit", {"file_path": "/Users/miosha/nexus-memory/x.py"})
+        r = g.check_action("", "Edit", {"file_path": "/home/user/nexus-memory/x.py"})
         assert r["verdict"] == "block"
 
     def test_behavior_write_outside_allowed(self):
