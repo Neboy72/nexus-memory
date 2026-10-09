@@ -68,6 +68,25 @@ def _parse_ts(payload: Dict[str, Any]) -> float:
     return 0.0
 
 
+def _point_vector(point) -> Optional[list]:
+    """Nimm den Vektor eines Punkts, gleich ob die Sammlung anonym oder
+    benannt ist.
+
+    Qdrant gibt bei einem anonymen Vektorraum eine Liste zurueck, bei einem
+    benannten ein dict {vektor_name: liste}. Fuer das Sichern brauchen wir
+    immer die Liste. Bei mehreren Vektoren ist es mehrdeutig -> None (der
+    Aufrufer ueberspringt den Punkt, statt Muell zu sichern).
+    """
+    vec = getattr(point, "vector", None)
+    if isinstance(vec, dict):
+        if len(vec) == 1:
+            return next(iter(vec.values()))
+        log.warning("archive: Punkt mit %d Vektoren — mehrdeutig, "
+                    "wird uebersprungen", len(vec))
+        return None
+    return vec
+
+
 def _stale_candidates(store, collection: str, cutoff: float,
                       limit: int) -> tuple:
     """Scroll session-category points, keep stale ones.
@@ -92,15 +111,17 @@ def _stale_candidates(store, collection: str, cutoff: float,
             scroll_filter=flt,
             limit=limit,
             with_payload=True,
-            with_vector=True)
+            with_vectors=True)
         points, _ = res
         scanned_real = len(points)
         for p in points:
             pl = p.payload or {}
             created = _parse_ts(pl)
             if created and created < cutoff:
-                out.append({"id": p.id, "payload": pl,
-                            "vector": p.vector})
+                vec = _point_vector(p)
+                if vec is None:
+                    continue  # mehrdeutig — nie ungeprueft sichern/loeschen
+                out.append({"id": p.id, "payload": pl, "vector": vec})
     except Exception as exc:
         log.warning("archive: scroll failed (%s) — fail-open", exc)
         return out, 0
