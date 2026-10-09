@@ -119,6 +119,23 @@ def search_vector_body(query_embedding, qdrant_url: str = QDRANT_URL,
     return {"name": name, "vector": query_embedding}
 
 
+def point_vector_body(embedding, qdrant_url: str = QDRANT_URL,
+                      collection: str = COLLECTION):
+    """The ``vector`` value for a point in an upsert body.
+
+    The write side mirrors :func:`search_vector_body`: a named collection wants
+    ``{name: […]}}``, an anonymous one a bare list. Writing a bare list into a
+    named collection answers 400 "Not existing vector name" — and both the
+    Claude Code hooks and the OpenClaw plugin wrapped that in a bare
+    ``except``, so memories stopped being stored without a single warning.
+    Fail-open: an unresolvable layout keeps the flat protocol.
+    """
+    name = vector_field(qdrant_url, collection)
+    if not name:
+        return embedding
+    return {name: embedding}
+
+
 def fetch_centroids(qdrant_url: str = QDRANT_URL, collection: str = COLLECTION,
                     timeout: float = 3.0) -> dict:
     """Read scope centroids from Qdrant. Returns {scope: centroid_vector}.

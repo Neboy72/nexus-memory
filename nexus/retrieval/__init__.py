@@ -753,7 +753,22 @@ class HybridRetriever:
                     timeout=5,
                 )
                 r_dim_resp.raise_for_status()
-                r_dim = r_dim_resp.json()["result"]["config"]["params"]["vectors"]["size"]
+                _vectors = (
+                    r_dim_resp.json()["result"]["config"]["params"]["vectors"]
+                )
+                # Regel B: a named collection nests the size one level deeper
+                # ({"<fingerprint>": {"size": N}}). Reading only the flat
+                # ["size"] raised a KeyError that the except below swallowed —
+                # silently DISABLING the dimension guard for exactly the
+                # collections this feature introduced.
+                if "size" in _vectors:
+                    r_dim = _vectors["size"]
+                else:
+                    r_dim = next(
+                        (v["size"] for v in _vectors.values()
+                         if isinstance(v, dict) and "size" in v),
+                        None,
+                    )
                 self._collection_dim = r_dim
             except Exception:
                 r_dim = None  # Qdrant unreachable — let the search attempt decide
@@ -765,15 +780,20 @@ class HybridRetriever:
             )
 
         body: dict[str, Any] = {
-            "vector": query_vector,
+            # Named-vector collections: the name travels INSIDE the vector object.
+            # A top-level "using" is not a valid HTTP body field for this endpoint
+            # (400 "Not existing vector name") — verified against Qdrant 1.17.
+            "vector": (
+                {"name": self._vector_name, "vector": query_vector}
+                if getattr(self, "_vector_name", None)
+                else query_vector
+            ),
             "limit": top_k,
             "with_payload": True,
             "filter": {
                 "must": [{"key": "type", "match": {"value": "memory"}}]
             },
         }
-        if getattr(self, "_vector_name", None):
-            body["using"] = self._vector_name
         r = requests.post(
             f"{self.qdrant_url}/collections/{self.collection}/points/search",
             json=body,

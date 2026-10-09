@@ -222,15 +222,20 @@ def _fetch_chunks(
     try:
         url = f"http://{qdrant_host}:{qdrant_port}/collections/{collection}/points/search"
         body: dict[str, Any] = {
-            "vector": query_embedding,
+            # Named-vector collections: the name travels INSIDE the vector
+            # object. A top-level "using" is not accepted by this endpoint
+            # (400 "Not existing vector name") — verified against Qdrant 1.17.
+            "vector": (
+                {"name": vector_name, "vector": query_embedding}
+                if vector_name
+                else query_embedding
+            ),
             "limit": top_k,
             "with_payload": True,
             "filter": {
                 "must": [{"key": "type", "match": {"value": "memory"}}]
             },
         }
-        if vector_name:
-            body["using"] = vector_name
         r = requests.post(
             url,
             json=body,
