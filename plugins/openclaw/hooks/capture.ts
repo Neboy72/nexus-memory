@@ -169,7 +169,7 @@ export function buildCaptureHandler(
       // Embed the captured content
       const vector = await embedder.embed(content)
 
-      // Scope (self-organizing memory, Nebo law 07.09): infer the area from
+      // Scope (self-organizing memory, project rule 07.09): infer the area from
       // existing scoped centroids on a CLEAR match; explicit cfg.scope wins;
       // else 'default'. Fail-open, zero config, zero LLM cost.
       payload = {

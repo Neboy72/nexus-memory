@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Nexus Memory — Scope Auto-Inference (self-organizing memory areas).
 
-Das Gedächtnis ordnet sich selbst (Nebo-Gesetz 07.09.: volle Automatik oder
+Das Gedächtnis ordnet sich selbst (Projektregel 07.09.: volle Automatik oder
 useless). Kein User tippt je NEXUS_SCOPE — dieses Modul ist der Produkt-Pfad.
 
 Zentren-Prinzip: Jeder existierende Scope bekommt ein Schwerpunkt-Profil
@@ -47,7 +47,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Conservative thresholds (Spec /tmp/kiosha-think-gate.lock):
+# Conservative thresholds (Spec: the gate's plan file):
 # - Under-tagging is harmless (everything visible, like today).
 # - Over-tagging is dangerous (apparent forgetting) → require a clear margin.
 SCOPE_MATCH_THRESHOLD = _env_float("NEXUS_SCOPE_AUTO_THRESHOLD", 0.65)

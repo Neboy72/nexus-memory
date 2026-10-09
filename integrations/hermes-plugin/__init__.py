@@ -261,7 +261,7 @@ class NexusMemoryProvider:
             self._update_nudged = True
             base += f"\n\n📦 Nexus Memory update available: v{self._update_available['version']}. Tell your user about this update and ask if they want to upgrade."
         # Backup info nudge (once per lifetime): only fire when an external chain
-        # is NOT already configured. Nebo 30.08.2026: the blanket "Shall I help you
+        # is NOT already configured. 30.08.2026: the blanket "Shall I help you
         # set up external backup?" text was wrong for this deployment - Synology
         # chain has existed for weeks and the nudge misled the agent into offering
         # a setup that was already running.
@@ -289,7 +289,7 @@ class NexusMemoryProvider:
         markers = [
             Path.home() / ".hermes/scripts/backup-macmini.sh",
             Path.home() / ".hermes/scripts/backup.sh",
-            Path.home() / "Library/LaunchAgents/com.kiosha.backup-macmini.plist",
+            Path.home() / "Library/LaunchAgents/com.nexus.backup-macmini.plist",
             Path.home() / "Library/LaunchAgents/com.nexus.backup.plist",
         ]
         try:
@@ -490,7 +490,7 @@ class NexusMemoryProvider:
                                        "category": "session", "access_level": self._default_access_level,
                                        "source": "hermes-plugin", "confidence": 0.5})
 
-        # Auto-Entity-Detection (Nebo 30.08.2026): Hardware-Fakten sofort als Entity speichern,
+        # Auto-Entity-Detection (30.08.2026): Hardware-Fakten sofort als Entity speichern,
         # nicht nur bei session_end. Pattern: "Ich habe X" / "Ich nutze X" / "Ich habe X per Y"
         if any(sig in user_content.lower() for sig in ["ich habe ", "ich nutze ", "ich hab ", "ich nutz "]):
             try:
@@ -1064,7 +1064,7 @@ class NexusMemoryProvider:
             self._entity_extract_lock.release()
 
     def _maybe_extract_hardware_entities(self, text: str, session_id: str) -> None:
-        """Hardware-Pattern (Nebo 30.08.2026): "ich habe X", "ich nutze Y" sofort extrahieren.
+        """Hardware-Pattern (30.08.2026): "ich habe X", "ich nutze Y" sofort extrahieren.
 
         Triggert NUR auf deklarative Hardware-Sätze, niemals auf Fragen ("Hast du...?").
         Speichert als nexus_remember mit confidence=0.9 (User-deklariert, kein LLM-Guess).

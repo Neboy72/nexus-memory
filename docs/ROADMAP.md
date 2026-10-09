@@ -50,7 +50,7 @@ Diese Nexus-Features hat Tencent (Stand 20.09.2026) nicht — das bleibt unser V
 - **Quelle:** `hermes plugins`-System (Katalog + Install-Weg) in Hermes v0.21.3; Plugin besteht `hermes plugins validate` komplett grün (geprüft 20.09.).
 - **Was:** Verpackung, kein Neubau: (1) Install per `hermes plugins install neboy72/nexus-memory` testen und Repo-Layout nötigenfalls anpassen, (2) Katalog-YAML-Eintrag schreiben (auf exakten 40-Zeichen-Commit gepinnt, Kategorie `memory`), (3) Logo aus raw.githubusercontent.com hinterlegen, (4) PR an NousResearch/hermes-agent.
 - **Aufwand:** 2-4 Stunden unsere Seite; danach Review durch Nous (Tage bis Wochen, außerhalb unserer Kontrolle). Vor Katalog-Aufnahme funktioniert Repo-Shorthand-Install bereits.
-- **Status:** GO von Nebo, Start sobald er anklopft (morgen/übermorgen) — frische Session dafür.
+- **Status:** GO erteilt, Start sobald angefragt (morgen/übermorgen) — frische Session dafür.
 
 ## Prüfregeln für Adaptions-Kandidaten
 

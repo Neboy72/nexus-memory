@@ -1,6 +1,6 @@
 """Tests for scope_auto — self-organizing memory areas (full automation).
 
-Nebo law 07.09.: the memory must organize itself; no user ever types a scope.
+Project rule 07.09.: the memory must organize itself; no user ever types a scope.
 Conservative inference: clear match + clear margin, else 'default' (fail-open).
 """
 
