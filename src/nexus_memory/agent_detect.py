@@ -684,10 +684,10 @@ def _local_host_label() -> str:
     Used to auto-annotate locally-detected agents in the registry.
 
     Universal fallback (Nebo, 07.09.): a raw technical hostname like
-    "Mac-mini-von-Nebojsa.local" is prettified for the badge — suffixes
+    "Mac-mini-von-Alex.local" is prettified for the badge — suffixes
     (.local/.lan) stripped, dashes/underscores become spaces, first
     letters capitalised. A user who never set NEXUS_HOST_LABEL still
-    gets a readable "Mac Mini Von Nebojsa" instead of the raw mDNS name.
+    gets a readable "Mac Mini Von Alex" instead of the raw mDNS name.
     """
     env = os.environ.get("NEXUS_HOST_LABEL", "").strip()
     if env:
@@ -698,7 +698,7 @@ def _local_host_label() -> str:
             return "this machine"
         # Prettify: strip mDNS/DNS suffixes, split camel-case + separators.
         # Device-core rule (Nebo, 07.09.): collect LEADING device words only —
-        # "Mac-mini-von-Nebojsa.local" → "Mac Mini" (owner suffix dropped, the
+        # "Mac-mini-von-Alex.local" → "Mac Mini" (owner suffix dropped, the
         # badge shows the machine TYPE like every other card in the fleet).
         name = name.split(".")[0]
         name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)          # camelCase

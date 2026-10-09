@@ -87,7 +87,7 @@ def test_dedup_sweep_merges_exact_duplicates(temp_coll, tmp_path, monkeypatch):
     aud = _auditor(client, coll, tmp_path, monkeypatch)
     t1 = "Kiosha nutzt glm-5.3-flash als Main-Modell"
     t2 = "  kiosha   nutzt glm-5.3-flash als main-modell  "  # gleicher normalized key (Whitespace+Case)
-    unique = "Bleki ist ein Puli und wohnt bei Nebo"
+    unique = "Rex ist ein Puli und wohnt beim Nutzer"
     client.upsert(coll, [PointStruct(id=str(uuid.uuid4()), vector=[0.1]*DIM, payload={"text": t1, "created_at": _iso(90)})])
     client.upsert(coll, [PointStruct(id=str(uuid.uuid4()), vector=[0.2]*DIM, payload={"text": t2, "created_at": _iso(10)})])
     client.upsert(coll, [PointStruct(id=str(uuid.uuid4()), vector=[0.2]*DIM, payload={"text": unique, "created_at": _iso(5)})])

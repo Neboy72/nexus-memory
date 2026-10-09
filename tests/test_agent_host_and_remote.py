@@ -102,7 +102,7 @@ def test_host_label_prettifies_raw_hostname(monkeypatch):
     """Universal fallback (Nebo, 07.09.): users who never set NEXUS_HOST_LABEL
     still get a readable badge, not the raw technical hostname."""
     cases = {
-        "Mac-mini-von-Nebojsa.local": "Mac Mini von Nebojsa",
+        "Mac-mini-von-Alex.local": "Mac Mini von Alex",
         "DESKTOP-AB12CD3": "DESKTOP AB12CD3",
         "MacBook-Pro-von-Anna.lan": "Mac Book Pro von Anna",
         "MacBookPro": "Mac Book Pro",
@@ -112,7 +112,7 @@ def test_host_label_prettifies_raw_hostname(monkeypatch):
         "": "this machine",
     }
     monkeypatch.delenv("NEXUS_HOST_LABEL", raising=False)
-    monkeypatch.setattr(agent_detect.socket, "gethostname", lambda: "Mac-mini-von-Nebojsa.local")
+    monkeypatch.setattr(agent_detect.socket, "gethostname", lambda: "Mac-mini-von-Alex.local")
     assert _local_host_label() == "Mac Mini"
 
 
@@ -120,7 +120,7 @@ def test_host_label_device_core_fleet(monkeypatch):
     """Device-core rule: owner suffixes are dropped, badge shows machine type —
     same clean label for every card in a fleet."""
     cases = {
-        "Mac-mini-von-Nebojsa.local": "Mac Mini",
+        "Mac-mini-von-Alex.local": "Mac Mini",
         "MacBook-Pro-von-Anna.lan": "Mac Book Pro",
         "MacBookPro": "Mac Book Pro",
         "DESKTOP-AB12CD3": "Desktop",

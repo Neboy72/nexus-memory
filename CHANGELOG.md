@@ -1210,7 +1210,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Privacy** — author name `Nebojsa Kacavenda` → `Nebo` in all public files
+- **Privacy** — the author's full name was replaced by the short form `Nebo` in all public files
 - **Headline** — "One brain for all your agents" (pain-first positioning)
 
 ### Removed
