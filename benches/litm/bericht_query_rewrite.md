@@ -86,7 +86,7 @@ Schalter nie, Feature waere sinnlos eingepackt. Umgestellt:
 
 - enabled(): Default AN — NEXUS_REWRITE=0 ist die NOTBREMSE (nicht der An-Schalter)
 - User ohne erreichbare Fuel-Station: fail-open zur Original-Frage, null Kosten
-- Prompt-Beispiele + alle Tests neutralisiert (privater Hundename "bleki"
+- Prompt-Beispiele + alle Tests neutralisiert (privater Name einer Bezugsperson
   KOMPLETT aus Push-Kandidaten entfernt: query_rewrite.py, recon-Tests, 2 Bench-
   Skripte, 2 pyc-Caches, Log-Datei)
 - recon-Tests angepasst: 'on by default' + 'brake =0 -> original' + 'no env ->

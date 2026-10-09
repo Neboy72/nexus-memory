@@ -1,3 +1,45 @@
+## [0.22.15] — 2026-10-10
+
+### Fixed
+
+- **The trust heuristic became looser, not just more generic.** Replacing the
+  deployment names in the tier keywords with the generic words `agent`/`user`
+  changed the matching behaviour: the names almost never matched by accident as
+  substrings, the generic words do. `"user_agent"` or `"TODO agent Remember"`
+  lifted arbitrary text to tier1 — boost 1.2 and a green trust label — and so
+  diluted the poisoning defence. The matcher now requires whole words
+  (`\b`-delimited), which is stricter than the state before the privacy sweep.
+  (`nexus/retrieval/__init__.py`)
+
+- **A functional marker check depended on one LaunchAgent filename.** The sweep
+  renamed a hardcoded plist path inside `_external_backup_configured()`; a fixed
+  name makes the check silently miss installations whose agent is named
+  differently (and would have nudged the user towards setting up a backup chain
+  that already exists). It now globs `*backup*.plist`.
+  (`integrations/hermes-plugin/__init__.py`)
+
+- **A widened separator class would have eaten legitimate answers.** The leak
+  marker was briefly extended to `[\s,.;:—–-]`, which also swallowed openings like
+  `So; deshalb …` / `Wait: hier …`. Only the impossible `\b` was the defect, not
+  the class; the pattern is back to `[.,\s]` and the accepted floor is frozen in
+  the tests. (`plugins/openclaw/hooks/thought-filter.ts`)
+
+- **A set-but-empty `NEXUS_OBSIDIAN_WIKI` fell through silently** —
+  `expanduser("")` resolves to the working directory, so the orphan check simply
+  stopped looking. It now falls back to the default explicitly and logs when the
+  directory is missing. (`nexus/health/__init__.py`)
+
+- **Two version strings lagged behind.** The README footer still said `v0.22.6`
+  and the `__version__` fallback `0.22.4`. A guard test now compares both against
+  `pyproject.toml`, so a forgotten site fails the suite.
+
+### Added
+
+- `tests/test_review_findings_20261010.py` — regression guards for the above,
+  each backed by a sharp proof (restore the old behaviour and the test goes red).
+
+Versions: engine 0.22.15, Claude Code plugin 1.2.4, OpenClaw plugin 1.21.7.
+
 ## [0.22.14] — 2026-10-10
 
 ### Fixed

@@ -34,16 +34,25 @@ FILTER = REPO / "plugins" / "openclaw" / "hooks" / "thought-filter.ts"
 # Cases that MUST be recognised as a leak, and cases that must NOT.
 LEAK_CASES = [
     "So, hier ist die Antwort auf deine Frage:",
-    "Wait up, das stimmt so nicht ganz",
+    "Wait, das stimmt so nicht ganz",
     "Hmm, lass mich kurz nachdenken darueber",
     "let me think about this whole problem first",
     "the user wrote something to check",
     "the assistant asks back for clarity",
     "The current user message is an internal note here",
 ]
+# The separator class stays deliberately narrow. An earlier revision widened it
+# to ``[\s,.;:—–-]``, which ate legitimate answers such as "So; deshalb …" or
+# "So fertig, …" (review finding 10.10.2026). These cases freeze the accepted
+# false-negative floor: only the impossible ``\b`` was the defect, not the class.
 NON_LEAK_CASES = [
     "So gehen wir vor: erst pruefen, dann bauen",
     "So laeuft das hier bei uns im Betrieb",
+    "So; deshalb habe ich das anders gemacht",
+    "So fertig, die Datei liegt unter /tmp",
+    "Wait: hier die Antwort auf deine Frage in Kurzform",
+    "Wait; hier die Antwort auf deine Frage in Kurzform",
+    "Hmm—das ist ein guter Punkt, den behalten wir",
     "Hier ist deine Zusammenfassung der Ergebnisse",
     "Die Datei liegt unter /tmp und ist fertig",
 ]
@@ -117,12 +126,21 @@ def test_addressee_group_is_generic_and_extendable():
 
 
 def test_no_deployment_names_in_the_filter():
-    """The shipped filter must not name any specific agent or owner."""
+    """The shipped filter must not carry any proper name.
+
+    Stated as a *shape* rule (the allowed vocabulary) rather than a blocklist of
+    particular names: a blocklist would list the very names it forbids and so
+    leak them itself — which an earlier revision of this file actually did.
+    """
     src = FILTER.read_text(encoding="utf-8")
-    for name in ("nebo", "kiosha", "miosha"):
-        assert name not in src.lower(), (
-            f"the filter still names {name!r} — it belongs in NEXUS_AGENT_NAMES"
-        )
+    match = re.search(r"const AGENT_NAMES = \[(.*?)\]", src, re.S)
+    assert match, "AGENT_NAMES defaults not found"
+    entries = re.findall(r'"([^"]+)"', match.group(1))
+    allowed = {"the user", "user", "the assistant", "assistant", "the human", "human"}
+    assert all(e.lower() in allowed for e in entries), (
+        "the filter names something other than a role — deployment names belong "
+        "in NEXUS_AGENT_NAMES"
+    )
 
 
 @needs_node
@@ -133,3 +151,24 @@ def test_configured_names_are_recognised_without_changing_the_source():
     assert verdicts == [True], "a configured name is not recognised"
     # And without the variable the same text is NOT a leak.
     assert _run_filter(["Mimir asks about the deployment status today"]) == [False]
+
+
+def test_default_addressee_group_is_generic():
+    """The built-in group must contain role words only — no proper names.
+
+    A hardcoded deployment name would be a dead branch for every other install
+    and would tell any reader who built the filter. Checking the *allowed shape*
+    keeps this test itself free of the names it forbids, so the guard does not
+    leak what it guards against.
+    """
+    src = FILTER.read_text(encoding="utf-8")
+    match = re.search(r"const AGENT_NAMES = \[(.*?)\]", src, re.S)
+    assert match, "AGENT_NAMES defaults not found"
+    entries = re.findall(r'"([^"]+)"', match.group(1))
+    assert entries, "AGENT_NAMES defaults are empty"
+    allowed = {"the user", "user", "the assistant", "assistant", "the human", "human"}
+    unknown = [e for e in entries if e.lower() not in allowed]
+    assert not unknown, (
+        f"AGENT_NAMES carries entries that are not generic role words: {unknown}. "
+        "Deployment-specific names belong in NEXUS_AGENT_NAMES, not in the source."
+    )

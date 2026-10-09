@@ -1148,15 +1148,21 @@ def find_wikilink_orphans(workspace: str | None = None) -> list[dict]:
             if fn.endswith(".md")
         }
 
-    # Also check shared Obsidian Wiki
-    obsidian_wiki = os.path.expanduser(os.environ.get(
-        "NEXUS_OBSIDIAN_WIKI", "~/ObsidianVault/NexusVault/wiki/entities"))
+    # Also check shared Obsidian Wiki.
+    # Ein leerer, aber gesetzter Wert wurde früher zu `expanduser("")` = cwd und
+    # liess den Check still durchfallen (Review-Fund 10.10.2026); jetzt faellt er
+    # ausdruecklich auf den Standard zurueck, und ein nicht gefundener Ordner
+    # wird geloggt, damit eine Fehlkonfiguration nicht stumm bleibt.
+    _raw_wiki = os.environ.get("NEXUS_OBSIDIAN_WIKI", "").strip()
+    obsidian_wiki = os.path.expanduser(_raw_wiki or "~/ObsidianVault/NexusVault/wiki/entities")
     if os.path.isdir(obsidian_wiki):
         wiki_files.update({
             fn[:-3].lower()
             for fn in os.listdir(obsidian_wiki)
             if fn.endswith(".md")
         })
+    else:
+        _logger.debug("shared Obsidian wiki not found at %s — skipping", obsidian_wiki)
 
     # Scan all memory files for wikilinks
     texts: dict[str, str] = {}
