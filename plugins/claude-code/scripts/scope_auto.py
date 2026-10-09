@@ -15,10 +15,12 @@ Note: Claude-Code hooks are short-lived processes — centroids are fetched
 per call (no cache). The fetch is one scroll request; fine at hook cadence.
 """
 
+import json
 import logging
 import os
 import re
 import time
+import urllib.request
 
 QDRANT_URL = "http://localhost:6333"
 COLLECTION = "nexus"
@@ -65,6 +67,56 @@ def _cosine(a, b):
 # Scroll pagination guard: hooks are short-lived, so cap the work hard.
 _PAGE_LIMIT = 1000
 _MAX_PAGES = 3
+
+# Vector layout cache: one probe per process (hooks are short-lived anyway).
+_LAYOUT_CACHE: dict = {}
+
+
+def vector_field(qdrant_url: str = QDRANT_URL, collection: str = COLLECTION,
+                 timeout: float = 3.0):
+    """Name of the collection's vector, or None for an anonymous space.
+
+    The collection model lives IN Qdrant as a NAMED vector (one entry per
+    embedding fingerprint). A named space rejects a bare vector with
+    ``400 Not existing vector name error``; search must then send
+    ``{"name": …, "vector": […]}}`` instead. Read here once per process, never
+    guessed from the model id — a wrong guess is the same silent failure in the
+    other direction.
+
+    Fail-open: an unreadable layout returns None, i.e. today's (anonymous)
+    behaviour, so a Qdrant hiccup never makes the hook send garbage.
+    """
+    key = (qdrant_url, collection)
+    if key in _LAYOUT_CACHE:
+        return _LAYOUT_CACHE[key]
+    name = None
+    try:
+        with urllib.request.urlopen(
+                f"{qdrant_url}/collections/{collection}", timeout=timeout) as resp:
+            vectors = (json.loads(resp.read())
+                       .get("result", {}).get("config", {})
+                       .get("params", {}).get("vectors"))
+        if isinstance(vectors, dict) and "size" not in vectors:
+            names = list(vectors.keys())
+            name = names[0] if len(names) == 1 else None
+    except Exception:
+        name = None
+    _LAYOUT_CACHE[key] = name
+    return name
+
+
+def search_vector_body(query_embedding, qdrant_url: str = QDRANT_URL,
+                       collection: str = COLLECTION):
+    """The ``vector`` value for a Qdrant REST search body.
+
+    Returns the plain list for an anonymous collection and the
+    ``{"name": …, "vector": […]}}`` object for a named one, so callers do not
+    each have to know which kind they are talking to.
+    """
+    name = vector_field(qdrant_url, collection)
+    if not name:
+        return query_embedding
+    return {"name": name, "vector": query_embedding}
 
 
 def fetch_centroids(qdrant_url: str = QDRANT_URL, collection: str = COLLECTION,

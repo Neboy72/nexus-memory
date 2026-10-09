@@ -83,6 +83,21 @@ EMBEDDING_MODEL = (os.getenv("NEXUS_EMBEDDING_MODEL")
                    or _CENTRAL.get("NEXUS_EMBEDDING_MODEL")
                    or EMBEDDING_MODEL)
 
+def _vector_body(query_embedding):
+    """The Qdrant `vector` value: list for anonymous, {name, vector} for named.
+
+    A named collection (the engine stores one name per embedding fingerprint)
+    rejects a bare vector with 400 "Not existing vector name error", which the
+    caller turned into an empty result — memory simply stopped appearing. The
+    shared scope_auto helper reads the layout from the collection itself.
+    """
+    try:
+        import scope_auto as _scope_auto
+        return _scope_auto.search_vector_body(query_embedding, QDRANT_URL, COLLECTION)
+    except Exception:
+        return query_embedding
+
+
 
 def _env_int(name: str, default: int, minimum: int | None = None) -> int:
     """Read an integer env var defensively (H242).
@@ -215,7 +230,7 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
 
     fetch_n = limit * 8
     search_data = json.dumps({
-        "vector": query_embedding,
+        "vector": _vector_body(query_embedding),
         "limit": fetch_n,
         "with_payload": True,
         "score_threshold": 0.3,
