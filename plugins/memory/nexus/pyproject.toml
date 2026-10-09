@@ -32,4 +32,4 @@ package = false
 # `nexus/` packages, which are NOT part of this plugin subdirectory. Point uv
 # at our own repository at the reviewed commit so the engine arrives with the
 # plugin; a bare index lookup would fetch the unrelated PyPI project.
-nexus-memory = { git = "https://github.com/Neboy72/nexus-memory.git", rev = "1d32768add6a31b64adc859768193bd9337b103f" }
+nexus-memory = { git = "https://github.com/Neboy72/nexus-memory.git", rev = "1fa4206ed2e4f66e5c4b45a9b5703299668c6ac7" }
