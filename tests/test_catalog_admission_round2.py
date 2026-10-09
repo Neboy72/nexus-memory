@@ -529,10 +529,24 @@ def test_engine_pin_carries_the_reviewed_fixes():
     # the user opts in. This must hold for the engine users actually receive —
     # a pin that lags main reintroduces the cloud-first auto-detection the
     # scanner flagged, which is exactly what happened on 07.10.2026.
+    #
+    # Asserted by BEHAVIOUR SHAPE, not by one expression: the named-vector rebuild
+    # replaced `self._detect_auto(allow_cloud=False)` with a `_detect_auto()` that
+    # simply never calls the cloud candidates. Pinning the old spelling made the
+    # guard fail against a still-correct engine (found 09.10.2026) — while a guard
+    # that only greps the new spelling would pass a cloud-first refactor just as
+    # happily. Both halves are required: the auto path must not reach cloud code,
+    # and the explicit choice must still work.
     embeddings = at_pin("src/nexus_memory/embeddings.py")
-    assert "self._detect_auto(allow_cloud=False)" in embeddings, (
-        "the pinned engine auto-detects cloud providers first — the pin is "
-        "behind the local-first default"
+    auto_body = embeddings[embeddings.index("def _detect_auto"):
+                            embeddings.index("def _try_voyage")]
+    for cloud in ("_try_voyage", "_try_openai", "_try_google", "_try_jina"):
+        assert cloud not in auto_body, (
+            f"the pinned engine's auto-detection reaches {cloud} — a fresh "
+            f"install would leave the machine without an explicit opt-in"
+        )
+    assert "local-first" in auto_body.lower() or "local first" in auto_body.lower(), (
+        "the pinned engine's auto-detection carries no local-first marker"
     )
 
 
