@@ -182,19 +182,44 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "default": false },
-          "titles": { "type": "array", "items": { "type": "string" } },
-          "maxLines": { "type": "number", "minimum": 1, "maximum": 50 },
-          "maxChars": { "type": "number", "minimum": 50, "maximum": 5000 }
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "titles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maxLines": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "maxChars": {
+            "type": "number",
+            "minimum": 50,
+            "maximum": 5000
+          }
         }
       },
       "planGate": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "default": false },
-          "lockPath": { "type": "string" },
-          "maxAgeSeconds": { "type": "number", "minimum": 30, "maximum": 3600 }
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "lockPath": {
+            "type": "string"
+          },
+          "maxAgeSeconds": {
+            "type": "number",
+            "minimum": 30,
+            "maximum": 3600
+          }
         }
       },
       "debug": {
@@ -208,5 +233,6 @@
       }
     },
     "required": []
-  }
+  },
+  "version": "1.21.5"
 }
