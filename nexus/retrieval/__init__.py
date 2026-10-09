@@ -95,10 +95,17 @@ def _resolve_tier(content: str, metadata: dict | None = None) -> tuple[str, floa
         tier_name = metadata["source_tier"]
         if tier_name in SOURCE_TIERS:
             return tier_name, SOURCE_TIERS[tier_name]["boost"]
-    # Fallback: keyword matching
+    # Fallback: keyword matching.
+    # Wortgrenzen statt Substring (Review-Fund 10.10.2026): die Keywords waren
+    # früher die Eigennamen eines einzelnen Deployments und trafen als Substring
+    # praktisch nie versehentlich. Die generischen Begriffe "agent"/"user"
+    # dagegen stecken in häufigen Wörtern — "user_agent" oder "TODO agent
+    # Remember" hätten jede beliebige Notiz auf tier1 (Boost 1.2, grünes
+    # Vertrauens-Label) gehoben und damit die Poisoning-Abwehr verwässert.
+    # `\b` verlangt das Wort als Ganzes.
     text = content.lower()
     for tier_name, cfg in SOURCE_TIERS.items():
-        if any(kw in text for kw in cfg["keywords"]):
+        if any(re.search(rf"\b{re.escape(kw)}\b", text) for kw in cfg["keywords"]):
             return tier_name, cfg["boost"]
     return "tier3", SOURCE_TIERS["tier3"]["boost"]
 

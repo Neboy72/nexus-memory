@@ -393,7 +393,7 @@ class TestNr304QueryDocMode:
         p._client = {"base_url": "http://localhost:11434"}
         import asyncio
         vec = asyncio.new_event_loop().run_until_complete(
-            p.embed("wo ist bleki geboren"))
+            p.embed("wo ist der hund geboren"))
         assert captured["json"]["input"][0].startswith("Instruct:")
 
     def test_cache_keys_differ_per_mode(self):
