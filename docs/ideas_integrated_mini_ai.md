@@ -1,6 +1,6 @@
 # IDEE: Eingebaute Mini-KI für Konsolidierung (Nexus-brain)
 
-Stand: 09.09.2026 — Status: IDEENSAMMLUNG, NICHT gebaut. Wird mit Nebo gemeinsam entschieden.
+Stand: 09.09.2026 — Status: IDEENSAMMLUNG, NICHT gebaut. Wird gemeinsam entschieden.
 
 ## Die Vision (Nebos Bild)
 Nexus Memory bringt sein eigenes kleines Gehirn mit. Sortieren/fassen funktioniert
@@ -38,7 +38,7 @@ Stufe 2: wenn User-Ollama da → das nutzen (oft besser als Mini)
 Stufe 3: wenn User Cloud-Keys da + Dashboard-Schalter AN → Cloud-Boost (Cap 5 $)
 → Jeder Nutzer hat GARANTIE auf Sortierung (Stufe 1), Boost optional.
 
-## Offene Fragen fürs Gespräch mit Nebo
+## Offene Fragen fürs Gespräch
 1. Ist 2-4 GB Installationsgröße akzeptabel für unser Zielpublikum?
 2. Bündeln wir ins Installationspaket (pip size!) oder Nachladen bei Erststart?
 3. Welches Modell (Lizenz! Qwen/Llama/Phi haben unterschiedliche)?

@@ -1,7 +1,7 @@
 /**
  * Nexus Memory — Scope Auto-Inference (TypeScript port of scope_auto.py).
  *
- * Self-organizing memory areas (Nebo law 07.09: full automation or useless).
+ * Self-organizing memory areas (project rule 07.09: full automation or useless).
  * No user ever types a scope: centroids are computed from scoped canonical
  * points; a new memory inherits its area automatically on a CLEAR closest
  * match; a query that clearly belongs to one area unlocks that area.

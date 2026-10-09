@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests: Auto-Scope folder creation in consolidation (Startlücken-Fix,
-Nebo GO 07.09.) + fuel budget default $5 + one-shot chat notice."""
+GO 07.09.) + fuel budget default $5 + one-shot chat notice."""
 import json
 import os
 import sys

@@ -1,6 +1,6 @@
 """Tests for scope (project/agent areas, unreleased feature).
 
-Core principle (Nebo 07.09.): scope labels steer AUTOMATIC prefetch only —
+Core principle (07.09.): scope labels steer AUTOMATIC prefetch only —
 explicit recall() is NEVER scope-filtered. Fail-open everywhere: invalid
 values degrade to 'default'; missing NEXUS_SCOPE means old behavior.
 """
@@ -126,7 +126,7 @@ class TestRememberStoresScope:
         assert captured["payload"]["scope"] == "default"
 
 
-# ── Plugin prefetch scope gating (Nebo's acceptance scenario) ────
+# ── Plugin prefetch scope gating (the acceptance scenario) ────
 
 class _FakePoint:
     def __init__(self, payload, score=0.9):

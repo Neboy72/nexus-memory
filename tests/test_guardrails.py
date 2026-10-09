@@ -480,7 +480,7 @@ class TestPathlessRuleNoKeyError:
         override_id = engine.record_override(
             command="rm -rf testgelände-alpha",
             matched_rules=result.matched_rules,
-            reasoning="Backup verified, deletion explicitly authorized by Nebo",
+            reasoning="Backup verified, deletion explicitly authorized by the owner",
         )
         assert override_id is not None
         assert engine.client.upsert.called
@@ -506,7 +506,7 @@ class TestOverrideRecording:
                 "action": "delete",
             }],
             reasoning="User explicitly authorized cleanup of sandbox after backup",
-            agent_id="kiosha",
+            agent_id="agent-a",
         )
         assert override_id is not None
         # Verify upsert was called with audit entry
@@ -518,7 +518,7 @@ class TestOverrideRecording:
             if points:
                 payload = points[0].payload if hasattr(points[0], 'payload') else points[0].get("payload", {})
                 assert payload.get("guardrail_override") is True
-                assert payload.get("agent_id") == "kiosha"
+                assert payload.get("agent_id") == "agent-a"
 
     def test_override_returns_uuid(self):
         client = MagicMock()
