@@ -424,7 +424,11 @@ class NexusMemoryProvider:
                     # own private memories; every other level is dropped).
                     _allowed_levels = {"public", "trusted",
                                        getattr(self, "_default_access_level", "private")}
-                    _pt_level = pt_payload.get("access_level", "public")
+                    # Fail CLOSED on a missing level: this used to default to
+                    # "public", so a legacy or corrupt entry bypassed the filter and
+                    # leaked into recall. The MCP server's gate treats a missing
+                    # level as private; this must match it.
+                    _pt_level = pt_payload.get("access_level") or "private"
                     if _pt_level not in _allowed_levels:
                         continue
                     text = pt_payload.get("content", "")

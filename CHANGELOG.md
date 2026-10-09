@@ -1,3 +1,37 @@
+## [0.22.21] — 2026-10-10
+
+### Fixed — five access-level gaps found by the external review of v0.22.20
+
+Every one of these reads a missing or unknown level as the **most** restrictive one, to
+match what the MCP server's gate has always done. A value that is absent must never look
+like permission.
+
+- **The graph walk did not check access at all.** `_graph_boost` filtered neighbours by
+  `lifecycle_status` only, so a private memory reached the prefetch as a graph-boosted
+  hit — the one place in the recall path with no gate. It now filters through the same
+  `_visible_levels()` boundary everything else uses.
+- **`guardrails._extract_protection_rules` read a missing level as `"public"`** and
+  attached it to protection rules whose text is echoed back to callers. A rule built
+  from a private conversation could therefore be handed out as public. Now
+  `_level_or_private()`, matching `consolidation.py` exactly (case-normalised, unknown
+  values fail closed).
+- **Two graph-boost labels claimed `"public"`** (`plugins/memory/nexus`, and
+  `integrations/hermes-plugin`). Nothing is stored by them, but the label stated the
+  opposite of what the gate does with a missing level. Both now read `"private"`.
+- **`integrations/hermes-plugin/__init__.py`** — an older sibling copy that ships in the
+  repository, with its own `pt_payload.get("access_level", "public")` in the graph walk.
+  Fixed the same way, so the two copies cannot drift apart again.
+
+### Tests
+
+- `tests/test_zugriff_review_funde.py` — pins each of the five: the guardrail fallback
+  (including `"PUBLIC"` and `"admin"`), the graph walk's access filter, the visibility
+  boundary itself, and that no write path sets a literal `"public"`.
+- Counter-test: removing the graph filter turns the file red.
+- Full suite: **2276 passed, 2 skipped**.
+
+Versions: engine 0.22.21, Claude Code plugin 1.2.7, OpenClaw plugin 1.21.9.
+
 ## [0.22.20] — 2026-10-10
 
 ### Changed — conversation history is private

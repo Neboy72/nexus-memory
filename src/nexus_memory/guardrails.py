@@ -224,6 +224,23 @@ def extract_targets(command: str) -> list[str]:
 # Guardrail engine
 # ---------------------------------------------------------------------------
 
+def _level_or_private(payload: dict) -> str:
+    """The access level of a payload, failing CLOSED to "private".
+
+    A missing or unknown level must never read as "public". These values are
+    attached to protection rules that are echoed back to callers, and a rule text
+    can quote a private conversation — treating it as public would hand that text
+    out. Same direction as the MCP server's gate (``mcp_server.py`` -> ACCESS_PRIVATE).
+    """
+    if not isinstance(payload, dict):
+        return "private"
+    # Match consolidation.py exactly: normalise case, then require a known value.
+    # Both write the same field, so both must read "PUBLIC" the same way — as the
+    # level it names, and anything unrecognised as "private".
+    level = str(payload.get("access_level") or "").strip().lower()
+    return level if level in ("public", "trusted", "private") else "private"
+
+
 class GuardrailEngine:
     """Core guardrail engine - checks actions against protected resources.
 
@@ -337,9 +354,13 @@ class GuardrailEngine:
                             path_norm = os.path.expanduser(path)
                             rules.append({
                                 "path": path_norm,
+                                # A rule built from a memory inherits that memory's
+                                # privacy. Missing/unknown levels fail CLOSED to
+                                # "private" — a rule text can quote a private
+                                # conversation, and it is echoed back to callers.
                                 "rule_text": text[:200],
                                 "source_memory_id": str(point.id),
-                                "access_level": payload.get("access_level", "public"),
+                                "access_level": _level_or_private(payload),
                             })
                     else:
                         # Path-less protection rules: extract collection names
@@ -350,7 +371,7 @@ class GuardrailEngine:
                                 "collection": coll,
                                 "rule_text": text[:200],
                                 "source_memory_id": str(point.id),
-                                "access_level": payload.get("access_level", "public"),
+                                "access_level": _level_or_private(payload),
                             })
                         # Protection rule with no path AND no collection: treat
                         # the bare target it names as unknown-but-protected via
@@ -362,7 +383,7 @@ class GuardrailEngine:
                                 "text": text[:200].lower(),
                                 "rule_text": text[:200],
                                 "source_memory_id": str(point.id),
-                                "access_level": payload.get("access_level", "public"),
+                                "access_level": _level_or_private(payload),
                             })
 
                 pages += 1

@@ -907,6 +907,20 @@ class NexusMemoryProvider:
                 self._skill_graph.initialize()
             return self._skill_graph
 
+    def _visible_levels(self) -> set:
+        """The access levels THIS agent may see.
+
+        The provider runs inside Hermes (the owner's own agent), which is entitled
+        to every level — its own private memories included. The set is derived from
+        the process's agent context rather than assumed: a non-primary context sees
+        only what a foreign caller may see.
+
+        Returns a set so callers fail CLOSED: an unknown level is never in it.
+        """
+        if getattr(self, "_agent_context", "primary") == "primary":
+            return {"public", "trusted", "private"}
+        return {"public"}
+
     def _graph_boost(self, top_points: list, max_boost: int = 3,
                      out_pids: Optional[set] = None, max_depth: int = 2) -> List[str]:
         """Fetch graph neighbors for the top vector search results.
@@ -952,6 +966,16 @@ class NexusMemoryProvider:
                     pt_payload = pt.get("payload") or {}
                     # 4.6: deprecated neighbors never surface as graph-boost
                     if (pt_payload.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
+                        continue
+                    # Access gate — without it a graph neighbour was boosted
+                    # regardless of its level, so a PRIVATE memory reached an agent
+                    # that must not see it (measured 09.10.2026). The MCP server's
+                    # gate and the OpenClaw hook both fail closed on a missing level;
+                    # this walk did not check at all.
+                    _nb_level = str(pt_payload.get("access_level") or "").strip().lower()
+                    if _nb_level not in ("public", "trusted", "private"):
+                        _nb_level = "private"  # fail closed, same as the gate
+                    if _nb_level not in self._visible_levels():
                         continue
                     text = pt_payload.get("content", "")
                     if text:
@@ -1421,7 +1445,12 @@ class NexusMemoryProvider:
         vector_results = results[:limit]
         for gi in graph_items:
             vector_results.append({"id": "", "text": gi, "score": 0.0, "source": "graph-boost",
-                            "source_url": "", "access_level": "public",
+                            "source_url": "",
+                            # A LABEL on a graph-boosted hit, never a stored value —
+                            # _graph_boost already filtered by _visible_levels above.
+                            # "public" here would state the opposite of what the gate
+                            # does with a missing level (it fails closed to private).
+                            "access_level": "private",
                             "category": "graph", "confidence": None,
                             "created_at": ""})
         return vector_results
