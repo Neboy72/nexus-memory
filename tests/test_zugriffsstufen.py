@@ -89,16 +89,34 @@ def test_claude_code_schreibt_trusted():
 
     Nebo-Entscheid 02.09.2026: Claude Code sieht keine privaten Erinnerungen.
     Ein 'private' aus diesem Plugin waere ein Datenschutzverstoss.
+
+    Der Test legt eine EIGENE Registry an, statt die des Rechners zu benutzen.
+    Eine fruehere Fassung verliess sich darauf, dass `agents.json` vorhanden ist —
+    auf dem Build-Server gibt es sie nicht, der Rueckfall griff, und der Test
+    schlug fehl (gemessen 09.10.2026 im Audit-Lauf zu 4765218). Ein Test darf nicht
+    von der Umgebung abhaengen, die er pruefen soll.
     """
+    import json as _json
+    import tempfile
+
     modul = _lade(SKRIPTE / "auto_capture.py", "_zugriff_capture")
-    echter = modul.get_embedding
+
+    # Eigene Registry: claude-code = trusted, ein Fremder = public.
+    eigen = pathlib.Path(tempfile.mkdtemp()) / "agents.json"
+    eigen.write_text(
+        _json.dumps({
+            "agents": [
+                {"id": "claude-code", "trust_level": "trusted"},
+                {"id": "fremd", "trust_level": "public"},
+            ]
+        })
+    )
+    alt_datei = modul.AGENTS_FILE
+    modul.AGENTS_FILE = str(eigen)
+
+    echter_embedder = modul.get_embedding
     modul.get_embedding = lambda *a, **k: [0.0] * 1024
     marke = f"zugriff-{uuid.uuid4().hex[:10]}"
-    # NEXUS_AGENT_ID ausdruecklich setzen UND danach wiederherstellen. Ohne das
-    # erbte dieser Test die Umgebung des Aufrufers, und ein vorheriger Test, der
-    # die Variable gesetzt hatte, verfaelschte das Ergebnis — bzw. dieser Test
-    # hinterliess einen Zustand, an dem spaetere Tests scheiterten (gemessen
-    # 09.10.2026: die Testdatei fiel in einer Reihenfolge durch, in der anderen nicht).
     alt_id = os.environ.get("NEXUS_AGENT_ID")
     os.environ["NEXUS_AGENT_ID"] = "claude-code"
     try:
@@ -106,7 +124,8 @@ def test_claude_code_schreibt_trusted():
             lambda: modul.store_memory(f"Zugriffspruefung {marke}", category="temp")
         )
     finally:
-        modul.get_embedding = echter
+        modul.get_embedding = echter_embedder
+        modul.AGENTS_FILE = alt_datei
         if alt_id is None:
             os.environ.pop("NEXUS_AGENT_ID", None)
         else:
