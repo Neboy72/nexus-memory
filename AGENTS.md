@@ -86,7 +86,7 @@ This script:
 1. Detects your OpenClaw installation
 2. Adds the plugin to `plugins.load.paths` in `~/.openclaw/openclaw.json`
 3. Sets `plugins.slots.memory = "nexus-memory"`
-4. Auto-detects your embedding provider. Cloud keys win if present (Voyage > OpenAI > Google > Jina); otherwise it uses a **local Ollama model** (`qwen3-embedding:0.6b`, 1024d, multilingual) with no API key at all.
+4. Sets up your embedding provider. The default is **local through HuggingFace** (`sentence-transformers`, model `Qwen/Qwen3-Embedding-0.6B`, 1024d, multilingual) — no key, no extra software and no Ollama. Ollama is used only when you choose it explicitly, and a cloud provider (Voyage > OpenAI > Google > Jina) only when you name one and its key is set.
 5. Restarts OpenClaw gateway
 
 Want to choose the provider yourself? The interactive picker knows every option and what is already installed on your machine:
@@ -228,14 +228,14 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
   | Provider | Type | Dimensions | How to get |
   |----------|------|-----------|------------|
   | **HuggingFace** 🏠 *(default)* | Local | 1024d | `sentence-transformers` ships with the package and downloads `Qwen/Qwen3-Embedding-0.6B` (~600 MB) on first use — no key, no extra software |
-  | **Ollama** 🦙 *(bonus)* | Local | 1024d | Used automatically **only if it is already running** with an embedding model (`ollama pull qwen3-embedding:0.6b`) — never required |
+  | **Ollama** 🦙 | Local | 1024d | Only on explicit choice: `NEXUS_EMBEDDING_PROVIDER=ollama` + `ollama pull qwen3-embedding:0.6b` — never picked automatically |
   | **Voyage** ☁️ | Cloud | 1024d | `VOYAGE_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=voyage`) |
   | **OpenAI** ☁️ | Cloud | 1536d | `OPENAI_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=openai`) |
   | **Google/Vertex AI** 💚 | Cloud | 768d | `GOOGLE_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=google`) |
   | **Jina** 💜 | Cloud | 1024d | `JINA_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=jina`) |
   | **bge-m3** 🏠 *(legacy override)* | Local | 1024d | `NEXUS_HF_BGE3=1` or `NEXUS_HF_MODEL=BAAI/bge-m3` via HuggingFace |
 
-  > **Zero-setup:** a fresh install embeds locally through HuggingFace — the first start downloads `Qwen/Qwen3-Embedding-0.6B` (~600 MB, cached afterwards). No API key, and **Ollama is not needed**. A running Ollama is picked up automatically as a bonus. Cloud providers are used **only** when one is named explicitly; a key alone is not enough.
+  > **Zero-setup:** a fresh install embeds locally through HuggingFace — the first start downloads `Qwen/Qwen3-Embedding-0.6B` (~600 MB, cached afterwards). No API key, and **Ollama is not needed**. Cloud providers are used **only** when one is named explicitly; a key alone is not enough.
 
 ### 1. Install
 
@@ -269,7 +269,7 @@ Set your preferred embedding provider's API key. Pick **one** of these options �
 echo 'VOYAGE_API_KEY="vo-your-key-here"' >> ~/nexus-memory/.env
 ```
 
-> 💡 **No API key?** If you have Ollama running locally with an embedding model (e.g. `bge-m3`), skip config entirely — the server detects it automatically.
+> 💡 **No API key?** Nothing to do — the default embedder is local and ships with the package. If you run Ollama and want that instead, select it explicitly with `NEXUS_EMBEDDING_PROVIDER=ollama`.
 
 ### 3. Run MCP Server
 
@@ -632,8 +632,9 @@ MCP Client ← stdio → nexus-memory (MCP Server)
 > **Auto-detection (`auto`, the default):** local-first. **sentence-transformers
 > (HuggingFace) is tried first** — it ships as a normal dependency, and its
 > default model is `Qwen/Qwen3-Embedding-0.6B` (1024d, fetched on first use).
-> **Ollama is only a bonus**: it is tried second, and only if it is already
-> running with an embedding model. Cloud providers (Voyage → OpenAI → Google →
+> **Ollama is not part of the automatic path**: it is extra software that not
+> every machine has, so `auto` never depends on it — choosing it is explicit
+> (`NEXUS_EMBEDDING_PROVIDER=ollama`). Cloud providers (Voyage → OpenAI → Google →
 > Jina) are **never** picked in `auto` mode — they require an explicit choice
 > (`NEXUS_EMBEDDING_PROVIDER` or a configured preference).
 
