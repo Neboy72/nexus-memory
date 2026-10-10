@@ -249,7 +249,7 @@ def _memory_injection_score(text: str) -> int:
 # Tool schemas (OpenAI function-calling format)
 RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
                   "as_of": {"type": "string", "description": "Point-in-time: YYYY-MM-DD - only memories created on/before this date.", "default": ""}}, "required": ["query"]}}
-REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "public"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}, "salience": {"type": "number", "description": "Importance 0.0-1.0. >= 0.8 is immune to decay. Default: depends on category."}}, "required": ["text"]}}
+REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "private"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}, "salience": {"type": "number", "description": "Importance 0.0-1.0. >= 0.8 is immune to decay. Default: depends on category."}}, "required": ["text"]}}
 FORGET_SCHEMA = {"name": "nexus_forget", "description": "Delete a memory from Nexus Memory by ID.", "parameters": {"type": "object", "properties": {"memory_id": {"type": "string", "description": "The memory ID to delete."}}, "required": ["memory_id"]}}
 GUARDRAIL_CHECK_SCHEMA = {"name": "nexus_guardrail_check", "description": "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (a recursive delete, a table drop, a process kill, an overwrite).", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command string to check (e.g. a recursive delete of a project directory)"}, "tool_name": {"type": "string", "description": "The tool being called (e.g. 'terminal', 'write_file')", "default": ""}, "tool_input": {"type": "object", "description": "Full tool input dict for path-based checks", "default": {}}}, "required": ["command"]}}
 GUARDRAIL_OVERRIDE_SCHEMA = {"name": "nexus_guardrail_override", "description": "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command that was blocked"}, "reasoning": {"type": "string", "description": "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters."}, "matched_rules": {"type": "array", "items": {"type": "object"}, "description": "The matched_rules array from the guardrail_check response", "default": []}, "agent_id": {"type": "string", "description": "Agent identifier for audit trail", "default": "unknown"}}, "required": ["command", "reasoning"]}}
@@ -273,9 +273,13 @@ _MIN_KEEP_LEN = 2  # rewritten/empty below this falls back to the original query
 class _Embedder:
     """Auto-detect embedding provider — reuses the shared EmbeddingProvider.
 
-    Priority: Voyage (1024d) → OpenAI (1536d) → Google (768d) → Jina (1024d)
-    → Ollama (768d) → sentence-transformers (384d). Same logic as the MCP
-    server so both paths produce compatible vectors for the same collection.
+    Local-first: ``sentence-transformers`` (Hugging Face) by default, then
+    Ollama. A cloud provider (Voyage 1024d / OpenAI 1536d / Google 768d /
+    Jina 1024d) is used only when it is explicitly preferred —
+    ``NEXUS_EMBEDDING_PROVIDER`` or ``embedding_provider`` in the Nexus config —
+    and its API key is present. A key that merely sits in the environment does
+    NOT select a provider on its own. Same logic as the MCP server so both
+    paths produce compatible vectors for the same collection.
     """
     def __init__(self) -> None:
         self._impl: Any = None
@@ -1276,7 +1280,7 @@ class NexusMemoryProvider:
                     _refresh_selfcheck_if_needed()
             else: time.sleep(0.5)
 
-    def _upsert(self, text: str, category: str = "fact", access_level: str = "public",
+    def _upsert(self, text: str, category: str = "fact", access_level: str = "private",
                 source: str = "", confidence: float = 0.7, salience: Optional[float] = None,
                 source_url: str = "", scope: str = "default", **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
@@ -1758,7 +1762,7 @@ class NexusMemoryProvider:
                 # source_url through — the tool schema promises them, and they
                 # were previously ignored silently.
                 result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
-                                      access_level=args.get("access_level", "public"),
+                                      access_level=args.get("access_level", "private"),
                                       source=args.get("source", ""),
                                       confidence=args.get("confidence", 0.7),
                                       salience=args.get("salience"),
@@ -1913,7 +1917,7 @@ class NexusMemoryProvider:
             logger.warning("Hardware-auto-extract failed: %s", exc)
 
     def _extract_entities_from_text(self, text: str, source: str = "nexus_remember",
-                                     access_level: str = "public") -> Dict[str, Any]:
+                                     access_level: str = "private") -> Dict[str, Any]:
         """Roadmap 1.1/4.1: extract entities + edges from text and store them.
 
         Shared by auto-enrich (nexus_remember) and session-end extraction.
@@ -2060,7 +2064,7 @@ class NexusMemoryProvider:
         except Exception as exc:
             logger.warning("on_session_end extraction failed: %s", exc)
 
-    def _upsert_entity(self, entity: Any, access_level: str = "public",
+    def _upsert_entity(self, entity: Any, access_level: str = "private",
                        source: str = "hermes-plugin-session-end") -> Dict[str, Any]:
         """Store an entity as a Qdrant point with category='entity'.
 

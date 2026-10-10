@@ -253,7 +253,7 @@ def _install_mcp(agent_id: str) -> dict:
     return {"agent_id": agent_id, "install_type": "mcp", "status": "installed", "message": f"MCP server configured for {agent_id} at {mcp_file}"}
 
 
-def install_agent(agent_id: str, trust_level: str = "public") -> dict:
+def install_agent(agent_id: str, trust_level: str = "private") -> dict:
     """Install Nexus Memory for an agent and register it.
 
     Plugin first when a plugin installer exists; whenever the plugin part is
@@ -578,13 +578,13 @@ def cli_interactive():
         name = agent["name"]
         icon = agent.get("icon", "")
 
-        # Suggest default trust level
-        if agent_id in ("hermes", "openclaw"):
-            suggested = "private"
-        elif agent.get("plugin_available"):
-            suggested = "trusted"
-        else:
-            suggested = "public"
+        # Suggest default trust level.
+        # Rule (10.10.2026): an agent the user installs on their OWN machine is
+        # the owner of this memory. It starts with full read access ("private");
+        # the user narrows it down deliberately with the dashboard switches.
+        # Starting closed would make the first run look broken: conversations are
+        # stored as "private", so a "public" agent would not see its own memories.
+        suggested = "private"
 
         print(f"  {icon} {name} ({agent_id})")
         print(f"    Plugin: {'✅' if agent.get('plugin_available') else '❌'}  MCP: {'✅' if agent.get('mcp_available') else '❌'}")
@@ -652,7 +652,7 @@ def json_mode(args: list[str]):
         if len(args) < 2:
             result = {"error": "Usage: setup --json install_agent <agent_id> [trust_level]"}
         else:
-            trust_level = args[2] if len(args) > 2 else "public"
+            trust_level = args[2] if len(args) > 2 else "private"
             result = install_agent(args[1], trust_level)
     else:
         result = {"error": f"Unknown command: {command}"}

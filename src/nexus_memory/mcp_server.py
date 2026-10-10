@@ -991,7 +991,7 @@ class MemoryStore:
     async def remember(
         self,
         text: str,
-        access_level: str = ACCESS_PUBLIC,
+        access_level: str = ACCESS_PRIVATE,
         category: str = "fact",
         source: str = "",
         source_url: str = "",
@@ -2092,7 +2092,7 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "string",
                         "enum": ALL_ACCESS_LEVELS,
                         "description": "Who can see this: public (all agents), trusted (approved agents), private (only owner)",
-                        "default": ACCESS_PUBLIC,
+                        "default": ACCESS_PRIVATE,
                     },
                     "category": {
                         "type": "string",
@@ -2616,7 +2616,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
     if name == "remember":
         try:
             text = arguments["text"]
-            access_level = arguments.get("access_level", ACCESS_PUBLIC)
+            access_level = arguments.get("access_level", ACCESS_PRIVATE)
             # State-prefixing: category is required by the tool schema, but the
             # server applies "fact" as a backward-compatible default when an
             # older client omits the field. We also coerce unknown / invalid
