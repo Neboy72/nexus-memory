@@ -45,13 +45,13 @@ HF_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 DIM = 1024
 SCROLL_BATCH = 256
 BUFFER_TARGET = 2048
-SHORT_LIMIT = 500        # Zeichen: darunter zählt der Text als "kurz"
+SHORT_LIMIT = 500        # characters: below this the text counts as "short"
 BATCH_SHORT = 32
 BATCH_LONG = 8
 PROGRESS_EVERY = 256
-# Textgrenze: Median 156 Zeichen, p99 7016. Nur 94 Punkte (0.23 %) sind laenger,
-# darunter einzelne Dokumente bis 140 000 Zeichen. Fuer die Aehnlichkeitssuche
-# traegt der Anfang den Inhalt; die Grenze wird im Bericht genannt.
+# Text limit: median 156 characters, p99 7016. Only 94 points (0.23 %) are longer,
+# some documents up to 140 000 characters. For similarity search the beginning
+# carries the content; the limit is stated in the report.
 TEXT_LIMIT = 4000
 
 
@@ -59,36 +59,36 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default="nexus_qwen")
     ap.add_argument("--target", default="nexus_hf")
-    ap.add_argument("--limit", type=int, default=0, help="0 = alle Punkte")
+    ap.add_argument("--limit", type=int, default=0, help="0 = all points")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--buffer", type=int, default=BUFFER_TARGET)
     args = ap.parse_args()
 
     fp = vector_fingerprint(HF_BACKEND, HF_MODEL, DIM)
-    print(f"Ziel-Fingerprint: {fp}", flush=True)
+    print(f"Target fingerprint: {fp}", flush=True)
 
     client = QdrantClient(url=QDRANT_URL)
     existing = [c.name for c in client.get_collections().collections]
     if args.target not in existing:
-        print(f"Lege '{args.target}' an (named vector, {DIM}d, Cosine) …", flush=True)
+        print(f"Creating '{args.target}' (named vector, {DIM}d, cosine) ...", flush=True)
         if not args.dry_run:
             client.create_collection(
                 collection_name=args.target,
                 vectors_config={fp: qm.VectorParams(size=DIM, distance=qm.Distance.COSINE)},
             )
     else:
-        print(f"'{args.target}' existiert bereits — wird wiederverwendet.", flush=True)
-    print(f"Quelle: {args.source} ({client.get_collection(args.source).points_count} Punkte)",
+        print(f"'{args.target}' already exists, reusing it.", flush=True)
+    print(f"Source: {args.source} ({client.get_collection(args.source).points_count} points)",
           flush=True)
 
     model = None
     if not args.dry_run:
         from sentence_transformers import SentenceTransformer
 
-        print(f"Lade {HF_MODEL} …", flush=True)
+        print(f"Loading {HF_MODEL} ...", flush=True)
         t0 = time.time()
         model = SentenceTransformer(HF_MODEL)
-        print(f"  geladen in {time.time() - t0:.1f}s", flush=True)
+        print(f"  loaded in {time.time() - t0:.1f}s", flush=True)
 
     stats = {"scroll": 0.0, "skip": 0.0, "embed": 0.0, "upsert": 0.0}
     seen = written = skipped = already = 0
@@ -113,8 +113,8 @@ def main() -> int:
             for it, vec in zip(items, vectors)
         ]
         t0 = time.time()
-        # wait=True ist Pflicht: ohne das meldet Qdrant "acknowledged" und die
-        # Punkte sind beim naechsten Lesen noch nicht da (stiller Fehler).
+        # wait=True is mandatory: without it Qdrant answers "acknowledged" and
+        # the points are not there on the next read (a silent failure).
         client.upsert(collection_name=args.target, points=points, wait=True)
         stats["upsert"] += time.time() - t0
         written += len(points)
@@ -185,11 +185,11 @@ def main() -> int:
     process_buffer()
 
     dt = time.time() - started
-    print(f"\nFertig: {seen} gelesen, {written} geschrieben, {skipped} ohne Text, "
-          f"{already} schon vorhanden, {dt/60:.1f} min", flush=True)
-    print("Phasenzeit: " + ", ".join(f"{k} {v:.1f}s" for k, v in stats.items()), flush=True)
+    print(f"\nDone: {seen} read, {written} written, {skipped} without text, "
+          f"{already} already present, {dt/60:.1f} min", flush=True)
+    print("Phase times: " + ", ".join(f"{k} {v:.1f}s" for k, v in stats.items()), flush=True)
     if not args.dry_run:
-        print("Ziel-Punkte laut Qdrant:", client.get_collection(args.target).points_count,
+        print("Target points per Qdrant:", client.get_collection(args.target).points_count,
               flush=True)
     return 0
 
