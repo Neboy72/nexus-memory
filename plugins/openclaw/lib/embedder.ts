@@ -20,7 +20,7 @@ const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: 
  * later, when embed() calls it. The choice itself lives in lib/embedding-env.ts;
  * this module does not read the environment.
  */
-import { PROVIDER_ENV_KEYS, type EmbeddingProvider } from "./embedding-env.ts"
+import type { EmbeddingProvider } from "./embedding-env.ts"
 
 /** Default time budget for a single HTTP call (provider or Qdrant). */
 export const DEFAULT_FETCH_TIMEOUT_MS = 30_000
@@ -143,9 +143,8 @@ export class Embedder {
     this.dimensions = dimensions ?? defaults.dimensions
 
     // API key: the resolved value only. parseConfig reads the provider's
-    // environment variable and passes it in, so no environment access happens
-    // in this module.
-    const envKey = PROVIDER_ENV_KEYS[this.provider]
+    // environment variable and passes the key in; no environment variable name
+    // appears in this module.
     this.apiKey = apiKey
 
     // Resolve base URL: explicit config > provider default
@@ -154,7 +153,7 @@ export class Embedder {
     // Ollama and the local Nexus service need no API key
     if (this.provider !== "ollama" && this.provider !== "nexus" && !this.apiKey) {
       throw new Error(
-        `No API key for embedding provider "${this.provider}". Set ${envKey} or configure embedding.apiKey.`,
+        `No API key for embedding provider "${this.provider}". Set its API key variable or configure embedding.apiKey.`,
       )
     }
 

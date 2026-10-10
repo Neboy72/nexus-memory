@@ -6,6 +6,7 @@
  * unbegrenzt sein. Jetzt: toBool/toClampedInt + Schema-Bounds minimum/maximum.
  */
 import assert from "node:assert"
+import fs from "node:fs"
 import { parseConfig, nexusConfigSchema } from "./lib/config.ts"
 import { localEmbeddingProvider } from "./lib/embedding-env.ts"
 
@@ -174,6 +175,17 @@ await t("localEmbeddingProvider: Umgebung wird hereingereicht, nicht im Modul ge
   assert.strictEqual(localEmbeddingProvider({}), "nexus")
   assert.strictEqual(localEmbeddingProvider({ OLLAMA_HOST: "http://127.0.0.1:11434" }), "ollama")
   assert.strictEqual(localEmbeddingProvider({ OLLAMA_BASE_URL: "http://127.0.0.1:11434" }), "ollama")
+})
+
+await t("Manifest: accessLevel-Vorgabe ist private, wie das README sagt", () => {
+  const manifest = JSON.parse(fs.readFileSync("./openclaw.plugin.json", "utf8"))
+  const walk = (o) => {
+    if (!o || typeof o !== "object") return undefined
+    if (o.accessLevel && typeof o.accessLevel === "object" && "default" in o.accessLevel) return o.accessLevel.default
+    for (const v of Object.values(o)) { const hit = walk(v); if (hit !== undefined) return hit }
+    return undefined
+  }
+  assert.strictEqual(walk(manifest), "private")
 })
 
 process.exitCode = failed ? 1 : 0
