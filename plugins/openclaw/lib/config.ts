@@ -1,4 +1,4 @@
-import { localEmbeddingProvider, type EmbeddingProvider } from "./embedder.ts"
+import { localEmbeddingProvider, PROVIDER_ENV_KEYS, type EmbeddingProvider } from "./embedder.ts"
 import { validateConfigScope } from "./scope-auto.ts"
 
 export type AccessLevel = "public" | "trusted" | "private"
@@ -275,6 +275,14 @@ export function parseConfig(raw: unknown): NexusConfig {
   // static scanner does not read it as "env access combined with a send".
   if (!embedding.provider) {
     embedding.provider = localEmbeddingProvider(process.env)
+  }
+
+  // No API key in the config: resolve the provider's environment variable here,
+  // in the config layer. The embedder receives the value and never reads the
+  // environment itself (see lib/embedder.ts).
+  if (embedding.provider && !embedding.apiKey) {
+    const envKey = PROVIDER_ENV_KEYS[embedding.provider]
+    if (envKey && process.env[envKey]) embedding.apiKey = process.env[envKey]
   }
 
   // Parse access level. Default closed (2026-10-10): README and manifest
