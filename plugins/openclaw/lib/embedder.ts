@@ -1,9 +1,12 @@
 import { log } from "../logger.ts"
 
-export type EmbeddingProvider = "voyage" | "openai" | "ollama" | "google" | "jina"
+export type EmbeddingProvider = "nexus" | "voyage" | "openai" | "ollama" | "google" | "jina"
 
 /** Default models and dimensions per provider. */
 const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: number; baseUrl?: string }> = {
+  // The local Nexus service embeds with the engine's own model (local
+  // HuggingFace by default), so this plugin needs nothing installed.
+  nexus: { model: "nexus-engine", dimensions: 1024, baseUrl: "http://127.0.0.1:9122" },
   voyage: { model: "voyage-4", dimensions: 1024 },
   openai: { model: "text-embedding-3-small", dimensions: 1536 },
   ollama: { model: "qwen3-embedding:0.6b", dimensions: 1024, baseUrl: "http://localhost:11434" },
@@ -13,6 +16,7 @@ const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: 
 
 /** Env var names for each provider's API key. */
 const PROVIDER_ENV_KEYS: Record<EmbeddingProvider, string> = {
+  nexus: "",
   voyage: "VOYAGE_API_KEY",
   openai: "OPENAI_API_KEY",
   ollama: "",
@@ -37,8 +41,10 @@ export function detectProvider(): EmbeddingProvider | null {
   // final return resolve to the same local provider; the check is kept because
   // an exported OLLAMA_HOST is an explicit local choice and is asserted by the
   // Nr 504 guard (test_wave26_fixes.py).
+  // An exported OLLAMA_HOST stays an explicit local choice (asserted by the
+  // Nr 504 guard), everything else resolves to the local engine service.
   if (process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL) return "ollama"
-  return "ollama"
+  return "nexus"
 }
 
 /** Default time budget for a single HTTP call (provider or Qdrant). */
@@ -170,8 +176,8 @@ export class Embedder {
     // Resolve base URL: explicit config > provider default
     this.baseUrl = baseUrl ?? defaults.baseUrl
 
-    // Ollama needs no API key
-    if (this.provider !== "ollama" && !this.apiKey) {
+    // Ollama and the local Nexus service need no API key
+    if (this.provider !== "ollama" && this.provider !== "nexus" && !this.apiKey) {
       throw new Error(
         `No API key for embedding provider "${this.provider}". Set ${envKey} or configure embedding.apiKey.`,
       )
@@ -204,6 +210,8 @@ export class Embedder {
 
   async embed(text: string): Promise<number[]> {
     switch (this.provider) {
+      case "nexus":
+        return this.embedNexus(text)
       case "voyage":
         return this.embedVoyage(text)
       case "openai":
@@ -217,6 +225,31 @@ export class Embedder {
       default:
         throw new Error(`Unknown embedding provider: ${this.provider}`)
     }
+  }
+
+  /**
+   * The local Nexus service (POST /embed). It embeds with the engine's
+   * provider — local HuggingFace by default — so one service serves every
+   * agent in the house, and no per-plugin provider list has to be kept.
+   */
+  private async embedNexus(text: string): Promise<number[]> {
+    const base = this.baseUrl ?? "http://127.0.0.1:9122"
+    log.debugRequest("embed.nexus", { textLen: text.length, baseUrl: base })
+
+    const resp = await fetchWithTimeout(`${base}/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, is_query: true }),
+    })
+
+    const data = (await parseEmbeddingResponse(resp, "Nexus")) as {
+      embedding?: number[]
+      model?: string
+    }
+    const vector = this.validateVector(data.embedding, "Nexus")
+
+    log.debugResponse("embed.nexus", { dims: vector.length, model: data.model })
+    return vector
   }
 
   private async embedVoyage(text: string): Promise<number[]> {

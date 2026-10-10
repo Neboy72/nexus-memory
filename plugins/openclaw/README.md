@@ -38,6 +38,7 @@ cp -r ~/nexus-memory/plugins/openclaw ~/.openclaw/plugins/nexus-memory
 
    | Provider | Env Var | Default Model | Dimensions |
    |----------|---------|---------------|------------|
+   | **(default) Nexus service** | — (no key needed) | the engine's model (local HuggingFace) | 1024 |
    | **Voyage** | `VOYAGE_API_KEY` | `voyage-4` | 1024 |
    | **OpenAI** | `OPENAI_API_KEY` | `text-embedding-3-small` | 1536 |
    | **Google** | `GOOGLE_API_KEY` | `text-embedding-004` | 768 |
@@ -48,7 +49,11 @@ cp -r ~/nexus-memory/plugins/openclaw ~/.openclaw/plugins/nexus-memory
    export VOYAGE_API_KEY="vo-your-key-here"
    ```
 
-   > **No API key?** If you have Ollama running locally with `qwen3-embedding`, it works out of the box.
+   > **No API key?** Nothing to do. Embeddings come from the local Nexus
+   > service (`nexus-memory serve`, `http://127.0.0.1:9122`), which embeds with
+   > the engine's model — local HuggingFace, nothing to install. Override the
+   > address with `NEXUS_SERVE_URL`, or name a provider explicitly:
+   > `NEXUS_EMBEDDING_PROVIDER=ollama|voyage|openai|google|jina`.
 
 ## Configuration
 

@@ -189,6 +189,19 @@ nexus-memory serve                     # HTTP on 127.0.0.1:9122
 curl http://127.0.0.1:9122/healthz     # {"status":"ok","qdrant":true,"version":...}
 ```
 
+The service also answers `POST /embed` — `{"text": "...", "is_query": true}`
+returns `{"embedding": [...], "model": ..., "dim": 1024}`. That is how the two
+plugins that talk to Qdrant directly (Claude Code, OpenClaw) embed: they use the
+engine's provider — local HuggingFace by default — instead of keeping their own
+provider list, so a machine with nothing installed still gets memory. Their own
+default is `NEXUS_EMBEDDING_PROVIDER=auto`; naming a provider (`ollama`, `voyage`,
+`openai`, `google`, `jina`) still works, it is just never automatic.
+
+```bash
+curl -s -X POST http://127.0.0.1:9122/embed -H 'Content-Type: application/json' \
+     -d '{"text":"hello"}' | head -c 120
+```
+
 ## Shared Store: One Qdrant, Two Access Paths
 
 Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. The Hermes native plugin, the OpenClaw native plugin, and the MCP server all read/write the **same store** — same vectors, same metadata, same access levels.

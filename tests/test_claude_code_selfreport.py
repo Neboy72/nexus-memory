@@ -65,6 +65,10 @@ def _run(sc, monkeypatch, tmp_path, agent_id="claude-code", healthy=True):
     """Run the script's main() with controlled env and urlopen."""
     monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("NEXUS_AGENT_ID", agent_id)
+    # Der Vorgabewert des Hooks ist "auto" (der lokale Dienst). Hier wird ein
+    # Provider fest gewaehlt: der Test prueft den Selbstbericht, nicht ob
+    # nebenher ein Dienst laeuft.
+    monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
     if healthy:
         _patch_urlopen_healthy(monkeypatch, sc)
         monkeypatch.setenv("VOYAGE_API_KEY", "x")
