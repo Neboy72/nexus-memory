@@ -2,13 +2,15 @@
  * The environment names of the embedding layer.
  *
  * This file deliberately imports NOTHING. It is the only place that reads the
- * environment to pick a local embedding backend or a provider API key, so both
- * lib/embedder.ts (which performs the HTTP calls) and lib/config.ts (which
- * pulls the embedder in transitively through scope-auto.ts) stay free of an
- * environment read of their own. A static scanner reads an environment access
- * beside a network send as credential exfiltration; keeping the read here
- * removes that co-location without hiding anything - the values are only ever
+ * environment to pick a local embedding backend or a provider API key. That
+ * keeps the read out of lib/embedder.ts, the module that performs the HTTP
+ * calls: a static scanner reads an environment access beside a network send as
+ * credential exfiltration. Nothing is hidden here - the values are only ever
  * used as a destination or a header, never sent anywhere by themselves.
+ *
+ * lib/config.ts keeps its own pre-existing reads for the qdrant URL and the
+ * scope label. Those are unrelated to the embedding path and never stood next
+ * to network code.
  */
 
 /** Every embedding provider the plugin knows. */
