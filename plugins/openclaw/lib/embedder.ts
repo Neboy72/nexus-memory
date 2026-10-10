@@ -15,7 +15,7 @@ const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: 
 }
 
 /** Env var names for each provider's API key. */
-const PROVIDER_ENV_KEYS: Record<EmbeddingProvider, string> = {
+export const PROVIDER_ENV_KEYS: Record<EmbeddingProvider, string> = {
   nexus: "",
   voyage: "VOYAGE_API_KEY",
   openai: "OPENAI_API_KEY",
@@ -34,11 +34,11 @@ export function localEmbeddingProvider(
   // OLLAMA_HOST/OLLAMA_BASE_URL, it resolves to the local Nexus service.
   //
   // The environment is passed IN, never read in this module. Reason: this file
-  // also performs the HTTP calls, and a static scanner reads
-  // "process.env.<NAME> beside a network send" as credential exfiltration.
-  // Moving the read into the config layer (which contains no network code)
-  // removes that false signal without hiding anything: the value is only ever
-  // used as a destination address, never sent anywhere.
+  // also performs the HTTP calls, and a static scanner reads an environment
+  // access beside a network send as credential exfiltration. Moving the read
+  // into the config layer (which contains no network code) removes that false
+  // signal without hiding anything: the value is only ever used as a
+  // destination address, never sent anywhere.
   //
   // Ollama needs no key. Reachability is NOT probed here and an unreachable
   // Ollama does NOT fail the constructor (the constructor only resolves
@@ -150,27 +150,26 @@ export class Embedder {
     baseUrl: string | undefined,
     dimensions: number | undefined,
   ) {
-    // Resolve provider: explicit config > env auto-detect > throw
-    if (provider) {
-      this.provider = provider
-    } else {
-      const detected = localEmbeddingProvider(process.env)
-      if (!detected) {
-        throw new Error(
-          "No embedding provider configured. Set VOYAGE_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, JINA_API_KEY, or configure Ollama.",
-        )
-      }
-      this.provider = detected
+    // Resolve provider: the config layer always resolves one (parseConfig maps
+    // an unset provider through localEmbeddingProvider) and passes it in. This
+    // module never reads the environment itself.
+    if (!provider) {
+      throw new Error(
+        "No embedding provider configured. Set embedding.provider in the plugin config (see the README).",
+      )
     }
+    this.provider = provider
 
     const defaults = PROVIDER_DEFAULTS[this.provider]
 
     this.model = model ?? defaults.model
     this.dimensions = dimensions ?? defaults.dimensions
 
-    // Resolve API key: explicit config > env var
+    // API key: the resolved value only. parseConfig reads the provider's
+    // environment variable and passes it in, so no environment access happens
+    // in this module.
     const envKey = PROVIDER_ENV_KEYS[this.provider]
-    this.apiKey = apiKey ?? (envKey ? process.env[envKey] : undefined)
+    this.apiKey = apiKey
 
     // Resolve base URL: explicit config > provider default
     this.baseUrl = baseUrl ?? defaults.baseUrl
