@@ -104,7 +104,7 @@ nexus-memory                           # or: nexus-memory serve (daemon), nexus-
 
 ### 🛠️ Embedding Provider (default: local, no key, no extra software)
 
-**The default is local — and it works on a machine with nothing installed.** Nexus embeds locally through **HuggingFace**: `sentence-transformers` ships as a normal dependency and downloads `Qwen/Qwen3-Embedding-0.6B` (~600 MB, cached after the first use) — 1024d, multilingual. Nothing leaves your machine, no account, no API key. **Ollama is not required.**
+**The default is local — and it works on a machine with nothing installed.** Nexus embeds locally through **HuggingFace**: `sentence-transformers` ships as a normal dependency and downloads `Qwen/Qwen3-Embedding-0.6B` (~1.2 GB, cached after the first use) — 1024d, multilingual. Nothing leaves your machine, no account, no API key. **Ollama is not required.**
 
 - **Ollama is not part of the automatic path.** It is extra software that not every machine has, so the automatic path never depends on it. If you run Ollama and want to use it, choose it explicitly: `NEXUS_EMBEDDING_PROVIDER=ollama` (then `ollama pull qwen3-embedding:0.6b`).
 - **A cloud provider** (Voyage, OpenAI, Google, Jina) is only used when you name it explicitly — `NEXUS_EMBEDDING_PROVIDER=<name>` plus its key. A key alone is not enough, and there is no silent cloud fallback.
@@ -271,7 +271,7 @@ Nexus is not the only memory project — it is the one that keeps everything in 
 
 ## 🧩 Embedding Providers
 
-One server, several backends, same API. The **automatic path is local** — HuggingFace, installed with the package (`sentence-transformers`), model `Qwen/Qwen3-Embedding-0.6B`, 1024d, ~600 MB on first use. Ollama is **not** automatic; it is available when chosen explicitly. Cloud providers are only ever used on explicit choice (`NEXUS_EMBEDDING_PROVIDER=<name>` **plus** the key).
+One server, several backends, same API. The **automatic path is local** — HuggingFace, installed with the package (`sentence-transformers`), model `Qwen/Qwen3-Embedding-0.6B`, 1024d, ~1.2 GB on first use. Ollama is **not** automatic; it is available when chosen explicitly. Cloud providers are only ever used on explicit choice (`NEXUS_EMBEDDING_PROVIDER=<name>` **plus** the key).
 
 | Provider | Type | How to enable | Dims |
 |----------|------|---------------|------|
@@ -395,7 +395,7 @@ pytest tests/ -q     # the full suite (see the badge above for the current count
 - Python 3.11+
 - Qdrant v1.12+ on `localhost:6333`
 - One embedding provider — **the default is local, needs no key and no extra software**:
- - **🏠 HuggingFace (default)**: ships with the package, downloads `Qwen/Qwen3-Embedding-0.6B` on first use (1024d, multilingual, ~600 MB, then cached)
+ - **🏠 HuggingFace (default)**: ships with the package, downloads `Qwen/Qwen3-Embedding-0.6B` on first use (1024d, multilingual, ~1.2 GB, then cached)
  - **🦙 Ollama (explicit choice only)**: `NEXUS_EMBEDDING_PROVIDER=ollama` after `ollama pull qwen3-embedding:0.6b` (1024d)
  - Cloud instead of local (only when named explicitly, together with its key): Voyage (1024d), OpenAI (1536d), Google/Vertex AI (768d), Jina (1024d)
 - Want to pick interactively? `python3 -m nexus_memory.wizard` scans your machine and recommends one.
