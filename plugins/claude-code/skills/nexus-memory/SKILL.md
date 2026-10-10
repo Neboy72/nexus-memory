@@ -42,11 +42,13 @@ Stored memories also resurface later, where they can be mistaken for
 something just said.
 
 **2. Where the text goes depends on your embedding provider - and the
-default is local.** Out of the box this plugin embeds with Ollama on your
-own machine, so memory text does not leave it. Only if you deliberately
-configure the cloud provider (Voyage) is the text of your memories sent to
-that provider's API. Choose deliberately - and if you switch providers
-later, re-embed, because vectors from different models are not comparable.
+default is local.** Out of the box the plugin embeds through the local
+Nexus service (`nexus-memory serve`), which runs the engine with its local
+HuggingFace model: nothing has to be installed and memory text does not
+leave your machine. Only if you deliberately name a cloud provider
+(Voyage, OpenAI, Google, Jina) is the text of your memories sent to that
+provider's API. If you switch providers later, re-embed, because vectors
+from different models are not comparable.
 
 **3. A shared collection is readable across agents.** If Claude Code,
 Hermes Agent and OpenClaw point at the same Qdrant collection (the common
@@ -60,8 +62,8 @@ project when contexts must not mix.
   plugin's hook configuration (`hooks/nexus-hooks.json`, or Claude Code's
   hooks settings) - that hook is what captures facts after each turn. The
   manual `remember` / `recall` / `forget` tools keep working without it.
-- **Keep memory local:** this is already the default (Ollama, on your
-  machine) - just do not set a cloud provider.
+- **Keep memory local:** this is already the default (the local Nexus
+  service, on your machine) - just do not set a cloud provider.
 - **Keep memory separate:** set a distinct `NEXUS_COLLECTION` per project.
 - **Remove something:** use the `forget` tool on the memory you do not want.
 
@@ -73,7 +75,7 @@ Environment variables (set in `.env` or shell):
 |----------|---------|-------------|
 | `NEXUS_QDRANT_URL` | `http://localhost:6333` | Qdrant server URL |
 | `NEXUS_COLLECTION` | `nexus` | Qdrant collection name |
-| `NEXUS_EMBEDDING_PROVIDER` | `ollama` | `ollama` (local, default) or `voyage` (cloud) - only these two are supported |
+| `NEXUS_EMBEDDING_PROVIDER` | `auto` | `auto` (local Nexus service, default), `ollama` (local), or a cloud provider (`voyage`, `openai`, `google`, `jina`) |
 | `NEXUS_EMBEDDING_MODEL` | `voyage-4` | Model used when the provider is `voyage` |
 | `VOYAGE_API_KEY` | - | Required only if you choose the Voyage provider |
 | `NEXUS_OLLAMA_EMBED_MODEL` | `qwen3-embedding:0.6b` | Model used when the provider is `ollama` |
@@ -81,21 +83,26 @@ Environment variables (set in `.env` or shell):
 
 ## Embeddings
 
-The plugin supports **two** embedding providers and defaults to the local
-one - no API key, no account, nothing leaving your machine:
+The plugin defaults to the **local Nexus service** - no API key, no account,
+nothing leaving your machine, and nothing to install:
 
 | Provider | Where | Setup | Default model |
 |----------|-------|-------|---------------|
-| `ollama` | **Local (default)** - nothing leaves the machine | `ollama pull qwen3-embedding:0.6b` | `qwen3-embedding:0.6b` |
+| *(default)* `auto` | **Local** - the service embeds with the engine's model | run `nexus-memory serve` (the installer registers it as a service) | local HuggingFace, e.g. `Qwen/Qwen3-Embedding-0.6B` (1024d) |
+| `ollama` | **Local** (needs Ollama running) | `NEXUS_EMBEDDING_PROVIDER=ollama` + `ollama pull qwen3-embedding:0.6b` | `qwen3-embedding:0.6b` (1024d) |
 | `voyage` | Cloud (text is sent to Voyage) | set `NEXUS_EMBEDDING_PROVIDER=voyage` and `VOYAGE_API_KEY` | `voyage-4` |
 
-**Setup (once):**
+**Setup (once):** run the service - the wizard/installer already registers it:
 
 ```bash
-ollama pull qwen3-embedding:0.6b        # 639 MB, 1024d, multilingual
+nexus-memory serve        # http://127.0.0.1:9122, installed as a user service
 ```
 
-That is the whole setup for the default path. `qwen3-embedding:0.6b` is
+Point the plugin elsewhere with `NEXUS_SERVE_URL` if the service listens
+somewhere else. If it is not reachable, the hooks say so on stderr and skip
+their work instead of storing or recalling nothing in silence.
+
+The explicit Ollama path is the whole setup then: `qwen3-embedding:0.6b` is
 multilingual and instruction-aware, which matters if your memory is not
 English-only.
 

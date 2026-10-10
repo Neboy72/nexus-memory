@@ -17,12 +17,17 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+# The shared embedding path: automatic = the local Nexus service (HuggingFace),
+# explicit = the provider you name. See _embedding.py for the rule.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _embedding  # noqa: E402
+
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
-EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
+EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "auto")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
 
@@ -172,6 +177,9 @@ def get_embedding(text: str) -> list:
     misconfiguration is now reported on stderr instead of silently returning
     None, which made auto-capture quietly store nothing.
     """
+    if _embedding.is_serve_provider(EMBEDDING_PROVIDER):
+        # Automatic path: the local Nexus service embeds the document side.
+        return _embedding.embed_via_serve(text, is_query=False)
     try:
         if EMBEDDING_PROVIDER == "voyage":
             if not VOYAGE_API_KEY:

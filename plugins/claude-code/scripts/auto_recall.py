@@ -21,6 +21,11 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+# The shared embedding path: automatic = the local Nexus service (HuggingFace),
+# explicit = the provider you name. See _embedding.py for the rule.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _embedding  # noqa: E402
+
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
@@ -38,7 +43,7 @@ except Exception as _scope_import_exc:  # pragma: no cover - defensive
         "recalling without scope filter",
         file=sys.stderr,
     )
-EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
+EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "auto")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
 
@@ -209,6 +214,11 @@ def get_embedding(text: str, input_type: str = "query") -> list:
     query as a document too degrades every score. The default here is
     therefore "query"; auto_capture keeps "document" for the write path.
     """
+    if _embedding.is_serve_provider(EMBEDDING_PROVIDER):
+        # Automatic path: ask the local Nexus service, which runs the engine
+        # with its local HuggingFace model. No Ollama, no key, and one shared
+        # vector space across every agent in the house.
+        return _embedding.embed_via_serve(text, is_query=(input_type == "query"))
     try:
         if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
             req_data = json.dumps({
