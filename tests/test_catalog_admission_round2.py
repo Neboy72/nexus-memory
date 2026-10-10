@@ -458,17 +458,26 @@ def test_sentence_transformers_bound_is_the_same_in_every_manifest():
 # never drift apart again.
 
 def _pinned_revs():
-    """Return (rev in plugin pyproject, rev in the provider's repair command)."""
+    """Return (rev in plugin pyproject, rev in the provider's repair command).
+
+    The ref is a vX.Y.Z TAG NAME (round 4, 10.10.2026). It used to be a literal
+    40-hex sha, which cannot work: a commit hashes its own content, so a sha
+    written into the tree is stale the moment it lands — the file would have to
+    name a commit that does not exist yet. The tag name resolves to a full sha,
+    and `test_pins_resolve_to_a_full_commit_and_are_not_moving_refs` plus the
+    pin-chain test assert that it does exactly that, immutably.
+    """
     import re as _re
 
+    ref = r'(?:[0-9a-f]{7,40}|v\d+\.\d+\.\d+)'
     toml = (_REPO / "plugins" / "memory" / "nexus" / "pyproject.toml").read_text(
         encoding="utf-8")
-    m_toml = _re.search(r'rev\s*=\s*"([0-9a-f]{40})"', toml)
+    m_toml = _re.search(r'rev\s*=\s*"(' + ref + r')"', toml)
 
     provider = (_REPO / "plugins" / "memory" / "nexus" / "__init__.py").read_text(
         encoding="utf-8")
     m_prov = _re.search(
-        r'nexus-memory @ git\+https://github\.com/Neboy72/nexus-memory\.git"\s*\n?\s*"@([0-9a-f]{40})',
+        r'nexus-memory @ git\+https://github\.com/Neboy72/nexus-memory\.git"\s*\n?\s*"@(' + ref + r')',
         provider)
 
     assert m_toml, "no pinned rev found in the plugin pyproject.toml"
@@ -585,12 +594,37 @@ def test_engine_pin_carries_the_fail_closed_access_levels():
     )
 
 
-def test_both_pins_are_full_commit_shas():
-    """A short sha or a branch name in a pin makes an install non-reproducible."""
-    toml_rev, provider_rev = _pinned_revs()
-    for name, rev in (("pyproject.toml", toml_rev), ("repair command", provider_rev)):
-        assert len(rev) == 40, f"{name} pins a short sha ({rev}) — use the full commit"
-        assert all(c in "0123456789abcdef" for c in rev), f"{name} pins a non-sha value"
+def test_pins_resolve_to_a_full_commit_and_are_not_moving_refs():
+    """A branch name or a short sha in a pin makes an install non-reproducible.
+
+    Round 4 (10.10.2026): the pin is a TAG NAME now — a commit cannot contain its
+    own sha, so a literal sha in the tree goes stale as soon as it lands (that is
+    how the 10.10. drift started). The guarantee this test protects is unchanged:
+    the pin must resolve to one immutable full commit. It is now asserted by
+    resolving the ref instead of by matching its spelling, and an annotated tag
+    is required so the target cannot silently move.
+    """
+    import subprocess
+
+    for name, rev in (("pyproject.toml", _pinned_revs()[0]),
+                      ("repair command", _pinned_revs()[1])):
+        assert rev != "main" and not rev.startswith("refs/"), (
+            f"{name} pins a moving ref ({rev}) — a branch is not reproducible"
+        )
+        result = subprocess.run(["git", "rev-parse", f"{rev}^{{commit}}"],
+                                cwd=_REPO, capture_output=True, text=True)
+        assert result.returncode == 0, f"{name} pins {rev!r}, which does not resolve"
+        sha = result.stdout.strip()
+        assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), (
+            f"{name} resolved to {sha!r}, which is not a full commit sha"
+        )
+        if not all(c in "0123456789abcdef" for c in rev):
+            kind = subprocess.run(["git", "cat-file", "-t", rev], cwd=_REPO,
+                                  capture_output=True, text=True).stdout.strip()
+            assert kind == "tag", (
+                f"{name} pins the tag-like ref {rev!r}, but it is a {kind or 'missing'} "
+                "ref — only an annotated tag can be relied on not to move"
+            )
 
 
 # ── 4. the own-venv fallback must stay a LAST resort ──────────────────────────
