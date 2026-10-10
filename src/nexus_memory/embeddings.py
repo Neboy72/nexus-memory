@@ -299,15 +299,17 @@ class EmbeddingProvider:
     def _detect_auto(self):
         """Auto-detect providers — LOCAL FIRST (Regel A.3).
 
-        Order: HuggingFace (sentence-transformers) default, then Ollama.
+        The ONE automatic path is HuggingFace (sentence-transformers): it ships
+        with the package, so a machine with nothing installed still gets a
+        local memory. Ollama is deliberately NOT part of the automatic path —
+        it is extra software that not every user has, and if it ever dropped
+        the model, an install that had landed on it would silently move to a
+        different provider. Choosing Ollama stays possible, but only
+        explicitly: ``NEXUS_EMBEDDING_PROVIDER=ollama``.
         Cloud is NEVER used when the preference is "auto".
         """
-        # 1. HuggingFace local default
+        # The single local-first default: HuggingFace.
         if self._try_sentence_transformers():
-            return
-        self._reset_provider_state()
-        # 2. Ollama (optional, only if already running)
-        if self._try_ollama():
             return
         self._reset_provider_state()
 

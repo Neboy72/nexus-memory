@@ -227,15 +227,15 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
 
   | Provider | Type | Dimensions | How to get |
   |----------|------|-----------|------------|
-  | **Ollama** 🦙 *(default)* | Local | 1024d | `ollama pull qwen3-embedding:0.6b` — free, private, no key |
-  | **Voyage** ☁️ | Cloud | 1024d | `VOYAGE_API_KEY` |
-  | **OpenAI** ☁️ | Cloud | 1536d | `OPENAI_API_KEY` |
-  | **Google/Vertex AI** 💚 | Cloud | 768d | `GOOGLE_API_KEY` |
-  | **Jina** 💜 | Cloud | 1024d | `JINA_API_KEY` |
-  | **Ollama** 🦙 | Local | 1024d (bge-m3) | Auto-detected — `ollama pull bge-m3` (recommended, 1.2 GB) or any `embed` model |
-  | **sentence-transformers** 🏠 | Local | 384d | `pip install sentence-transformers` |
+  | **HuggingFace** 🏠 *(default)* | Local | 1024d | `sentence-transformers` ships with the package and downloads `Qwen/Qwen3-Embedding-0.6B` (~600 MB) on first use — no key, no extra software |
+  | **Ollama** 🦙 *(bonus)* | Local | 1024d | Used automatically **only if it is already running** with an embedding model (`ollama pull qwen3-embedding:0.6b`) — never required |
+  | **Voyage** ☁️ | Cloud | 1024d | `VOYAGE_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=voyage`) |
+  | **OpenAI** ☁️ | Cloud | 1536d | `OPENAI_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=openai`) |
+  | **Google/Vertex AI** 💚 | Cloud | 768d | `GOOGLE_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=google`) |
+  | **Jina** 💜 | Cloud | 1024d | `JINA_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=jina`) |
+  | **bge-m3** 🏠 *(legacy override)* | Local | 1024d | `NEXUS_HF_BGE3=1` or `NEXUS_HF_MODEL=BAAI/bge-m3` via HuggingFace |
 
-  > **Zero-setup:** If you have Ollama running with an embedding model, it works out of the box — no API key needed. Recommended local model: `ollama pull bge-m3` (1.2 GB, 1024d, multilingual, best local quality). Smaller alternative: `nomic-embed-text` (274 MB, English-focused).
+  > **Zero-setup:** a fresh install embeds locally through HuggingFace — the first start downloads `Qwen/Qwen3-Embedding-0.6B` (~600 MB, cached afterwards). No API key, and **Ollama is not needed**. A running Ollama is picked up automatically as a bonus. Cloud providers are used **only** when one is named explicitly; a key alone is not enough.
 
 ### 1. Install
 
@@ -625,11 +625,17 @@ MCP Client ← stdio → nexus-memory (MCP Server)
            (1024d)      (1536d)     (768d)
               │            │            │
             Jina        Ollama     sentence-
-           (1024d)      (768d)    transformer
-                                    (384d)
+           (1024d)     (1024d)    transformer
+                                    (1024d)
 ```
 
-> **Auto-detection:** The server tries Voyage → OpenAI → Google → Jina → Ollama (prefers bge-m3) → sentence-transformers. First available wins. No manual selection needed.
+> **Auto-detection (`auto`, the default):** local-first. **sentence-transformers
+> (HuggingFace) is tried first** — it ships as a normal dependency, and its
+> default model is `Qwen/Qwen3-Embedding-0.6B` (1024d, fetched on first use).
+> **Ollama is only a bonus**: it is tried second, and only if it is already
+> running with an embedding model. Cloud providers (Voyage → OpenAI → Google →
+> Jina) are **never** picked in `auto` mode — they require an explicit choice
+> (`NEXUS_EMBEDDING_PROVIDER` or a configured preference).
 
 ### Key Components
 

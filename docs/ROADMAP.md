@@ -30,7 +30,7 @@
 ## 4. Lokale Embedding-Fallback-Strategie
 
 - **Quelle:** Tencent läuft default komplett lokal (node-llama-cpp, embeddinggemma-300m GGUF) mit Auto-Fallback-Kette.
-- **Warum für Nexus:** Unsere Kette (Voyage → OpenAI → Google → Jina → Ollama → sentence-transformers) hat keinen echten "komplett offline"-Zustand ohne Qualitätseinbruch-Dokumentation. Idea: lokalen Fallback als bewussten Tier mit Qualitätsangabe führen.
+- **Warum für Nexus:** Im Auto-Modus ist Nexus heute lokal-zuerst (HuggingFace `sentence-transformers` → Ollama nur als Bonus); die Cloud-Kette (Voyage → OpenAI → Google → Jina) läuft nur auf ausdrückliche Wahl. Offen bleibt: Qualitätsangabe je lokalem Tier dokumentieren.
 - **Status:** Offen.
 
 ## Nicht adaptieren (Differenzierung behalten)
