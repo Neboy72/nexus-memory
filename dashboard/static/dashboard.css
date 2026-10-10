@@ -139,6 +139,15 @@ header {
   letter-spacing: -0.02em;
 }
 
+/* Modell-/Anzeigename statt einer Zahl: kleiner als die KPI-Zahlen, damit ein
+   laengerer Name nicht umbricht und die Kachel nicht abschneidet. */
+.stat-value--name {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .stat-value--multi {
   font-size: 15px;
   font-weight: 600;
