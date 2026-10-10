@@ -64,6 +64,21 @@ REMOTE_TAG_VER="${REMOTE_TAG#v}"
 
 if [ "$LOCAL_VER" = "$REMOTE_TAG_VER" ]; then
     echo "GATE-GRUEN: pyproject=$LOCAL_VER == Tag=$REMOTE_TAG"
+    # Ziel-Commit des Tags: ein Tag, der remote auf einen ANDEREN Commit zeigt,
+    # laesst eine Katalog-Installation eine andere Engine laden als der dort
+    # gepinnte Sha beschreibt. Der Versionsvergleich oben sieht das nicht — er
+    # liest nur Namen. Nicht pruefbar (kein lokales Tag, Netz, flacher Klon) ist
+    # eine Warnung, ein Widerspruch ist rot.
+    LOCAL_TAG_SHA="$(git -C "$REPO_DIR" rev-parse "${REMOTE_TAG}^{commit}" 2>/dev/null || true)"
+    REMOTE_TAG_SHA="$(git -C "$REPO_DIR" ls-remote --tags origin "refs/tags/${REMOTE_TAG}^{}" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+    if [ -z "$LOCAL_TAG_SHA" ]; then
+        echo "GATE-WARN: $REMOTE_TAG existiert remote, aber nicht lokal — Ziel-Commit nicht pruefbar"
+    elif [ -z "$REMOTE_TAG_SHA" ]; then
+        echo "GATE-WARN: $REMOTE_TAG konnte nicht vom Remote gelesen werden (Netz? origin?) — Ziel-Commit nicht pruefbar"
+    elif [ "$LOCAL_TAG_SHA" != "$REMOTE_TAG_SHA" ]; then
+        echo "GATE-ROT: $REMOTE_TAG zeigt remote auf $REMOTE_TAG_SHA, lokal auf $LOCAL_TAG_SHA — Installation bekaeme eine andere Engine als der gepinnte Commit"
+        exit 1
+    fi
     # HEAD-tagged check: alarm-only. A normal commit between releases is
     # untagged, so this must not turn the gate red (and a shallow clone / CI
     # without local tags simply yields the warning, never a failure).

@@ -745,12 +745,26 @@ def test_readme_describes_local_first_embeddings():
     # The local default must be stated.
     assert "sentence-transformers" in body, "the local default is not named"
 
-    # Denylist: the obsolete cloud-first wording must not come back, neither in
-    # the README nor in the plugin's own docstring.
+    # Denylist: the obsolete wording must not come back — not in the README, not
+    # in the plugin's own docstring, and not in the manifest a catalog install
+    # reads first.
     plugin_init = (_REPO / "plugins" / "memory" / "nexus" / "__init__.py").read_text(
         encoding="utf-8")
-    for text, where in ((readme, "README"), (plugin_init, "__init__.py")):
-        for stale in ("cloud keys first", "cloud-first", "Priority: Voyage"):
+    plugin_manifest = (_REPO / "plugins" / "memory" / "nexus" / "plugin.yaml").read_text(
+        encoding="utf-8")
+    stale_wording = (
+        "cloud keys first",
+        "cloud-first",
+        "Priority: Voyage",
+        # Round 4 (10.10.2026): the manifest still advertised "Ollama or
+        # sentence-transformers" as the local path while the engine has exactly
+        # ONE automatic path (HuggingFace). A docstring in the same class sat in
+        # the exact lines a catalog review pointed at.
+        "Ollama or sentence-transformers",
+    )
+    for text, where in ((readme, "README"), (plugin_init, "__init__.py"),
+                        (plugin_manifest, "plugin.yaml")):
+        for stale in stale_wording:
             assert stale not in text, (
                 f"stale cloud-first wording is back in {where}: {stale!r}"
             )
