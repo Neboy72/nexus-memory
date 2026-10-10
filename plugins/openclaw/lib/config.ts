@@ -270,9 +270,9 @@ export function parseConfig(raw: unknown): NexusConfig {
     }
   }
 
-  // If provider not set in config, resolve the local backend. The environment
-  // read belongs to this layer: this module contains no network code, so a
-  // static scanner does not read it as "env access combined with a send".
+  // If provider not set in config, resolve the local backend. The read itself
+  // happens in lib/embedding-env.ts, which imports nothing; this module calls
+  // into it and never names an embedding environment variable.
   if (!embedding.provider) {
     embedding.provider = localEmbeddingProvider()
   }
