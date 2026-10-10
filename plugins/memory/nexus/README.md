@@ -15,8 +15,10 @@ Cursor, etc.) see the same memories.
 
 **Nothing, out of the box — but "out of the box" means *no key present*.** A
 fresh install on a machine with no embedding key runs entirely locally:
-embeddings use a **local** model (Ollama, or `sentence-transformers` as
-fallback), query rewriting and paid stations are off, and Qdrant plus all state
+embeddings use a **local** model — HuggingFace via `sentence-transformers`
+(installed with the package; default model `Qwen/Qwen3-Embedding-0.6B`).
+Ollama is only used if it happens to be running; it is never required.
+Query rewriting and paid stations are off, and Qdrant plus all state
 stay local under `~/.nexus-memory`.
 
 Read the next paragraph before you conclude "nothing leaves" for *your* machine:
@@ -42,10 +44,13 @@ before adding one.
 | `NEXUS_FUEL_PAID=1` + provider keys | Consolidation prompts | The configured fuel stations |
 | Session end / entity extraction | Conversation text, for fact extraction | The model endpoint in the Hermes `config.yaml` |
 
-Embedding is **auto-detected**: cloud keys first (Voyage → OpenAI → Google →
-Jina), then Ollama with `qwen3-embedding` (1024d, preferred local), then
-`bge-m3` (1024d). The local path is the recommended default — it is the only
-one that needs no key at all.
+Embedding is **auto-detected, and the automatic path is local**: HuggingFace via
+`sentence-transformers` (ships with the package, model `Qwen/Qwen3-Embedding-0.6B`,
+1024d) — no key and no extra software, and no Ollama needed. Ollama is used only
+when it is chosen explicitly (`NEXUS_EMBEDDING_PROVIDER=ollama`); its model
+remains `qwen3-embedding` (1024d). Cloud providers (Voyage → OpenAI → Google →
+Jina) are **never** picked automatically — they need `NEXUS_EMBEDDING_PROVIDER`
+plus the matching key.
 
 ### Files this plugin reads
 

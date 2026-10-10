@@ -43,3 +43,6 @@ plugins/openclaw/reports/
 
 # Qdrant marker (created on first run)
 .qdrant-initialized
+
+# Agent worktrees (local agent copies, never part of the repo)
+.claude/
