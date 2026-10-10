@@ -884,7 +884,10 @@ async def connect_agent(agent_id: str):
             agent_id=agent_id,
             name=meta.get("name") or agent_id,
             icon=meta.get("icon") or "🔌",
-            trust_level="trusted",
+            # Rule (10.10.2026): the user connected this agent themselves on this
+            # machine, so it is the owner — full read access by default. Narrowing
+            # it down (trusted/public) stays a deliberate dashboard choice.
+            trust_level="private",
             install_type="mcp",
             config_dir=meta.get("config_dir") or str(cfg_path.parent),
         )

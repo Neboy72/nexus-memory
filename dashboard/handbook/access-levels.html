@@ -44,11 +44,25 @@ footer .star a{color:var(--cyan)}
 <p><b>It doesn't guess, you (or your agent) decide at save time.</b> Every memory is stored with
 its access level as an explicit label. Rules of the road:</p>
 <ul>
-<li>If nothing is specified, memories are saved as <b>public</b>, so treat "unlabeled" as "visible to all my agents".</li>
+<li>If nothing is specified, memories are saved as <b>private</b> — closed by default. Opening one up
+(<b>trusted</b> or <b>public</b>) is a deliberate choice made at save time.</li>
 <li>Nexus <b>helps</b> you: it automatically detects patterns like e-mail addresses and phone numbers in a memory and then warns: "this looks sensitive, consider private."</li>
 <li>When facts get merged or summarized later, they <b>inherit</b> the strictest level involved, consolidation can never degrade a private memory into something more visible.</li>
 <li>If a memory has an unknown or missing level, it is treated as <b>private</b> (fail-closed), never as public.</li>
 </ul>
+
+<h2>Two levels: the memory, and the agent</h2>
+<p>Access is decided by two things that work together — and they are easy to mix up:</p>
+<ul>
+<li><b>The level on a memory</b> (above): how sensitive this single entry is.</li>
+<li><b>The level of an agent</b> (Dashboard → Agents): how much that agent is allowed to read.
+<b>private</b> reads public + trusted + private, <b>trusted</b> reads public + trusted, <b>public</b> reads
+public only.</li>
+</ul>
+<p><b>Every agent you connect yourself starts as the owner level (<em>private</em>)</b> — that is on purpose:
+conversations are stored as private, so an agent that started closed would not see its own memories and
+the first run would look broken. Narrowing an agent down to <b>trusted</b> or <b>public</b> is a deliberate
+step in the dashboard, and it takes effect immediately, for old and new memories alike.</p>
 
 <h2>Rules that protect you automatically</h2>
 <ul>

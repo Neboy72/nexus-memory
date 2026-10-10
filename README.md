@@ -204,6 +204,10 @@ Every MCP-compatible agent uses the same stdio config — only the file differs:
 
 Enforced at the MCP tool level. (Store real credentials in a secret manager, not in memory.) A missing or unknown level is always read as the **most** restrictive one, never as `public`.
 
+**Default: `private`.** An entry is stored closed unless a level is named at save time, and every agent
+you connect yourself is registered as `private` (the owner level). Narrowing an agent down to `trusted`
+or `public` is a deliberate step in the dashboard — and it applies immediately, to old and new memories alike.
+
 ---
 
 ## ✨ What it does

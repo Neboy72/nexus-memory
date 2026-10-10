@@ -550,6 +550,41 @@ def test_engine_pin_carries_the_reviewed_fixes():
     )
 
 
+def test_engine_pin_carries_the_fail_closed_access_levels():
+    """A claim in the catalog entry must be checked at the rev users install.
+
+    Round 3 (10.10.2026): the entry promises that the access-level paths fail
+    closed, but the engine rev the plugin still fetched defaulted them to
+    "public". The sibling test above covers the host guard, the mcp floor and the
+    local-first default — not this promise, and that gap is exactly what shipped.
+    """
+    import shutil
+    import subprocess
+
+    toml_rev, _ = _pinned_revs()
+    if not (_REPO / ".git").exists() or shutil.which("git") is None:
+        pytest.skip("no git history/binary in this tree — cannot read the pinned commit")
+
+    out = subprocess.run(
+        ["git", "show", f"{toml_rev}:src/nexus_memory/guardrails.py"],
+        cwd=_REPO, capture_output=True, text=True)
+    assert out.returncode == 0, f"guardrails.py is not readable at {toml_rev[:12]}"
+    src = out.stdout
+
+    assert 'payload.get("access_level", "public")' not in src, (
+        "the pinned engine still defaults access_level to 'public' — a catalog "
+        "install would not fail closed"
+    )
+    closed = src.count("_level_or_private(")
+    assert closed >= 3, (
+        f"only {closed} fail-closed access-level site(s) at the pin — the entry "
+        "promises more than that"
+    )
+    assert '"access_level": "private"' in src, (
+        "the pinned engine carries no explicit private fallback"
+    )
+
+
 def test_both_pins_are_full_commit_shas():
     """A short sha or a branch name in a pin makes an install non-reproducible."""
     toml_rev, provider_rev = _pinned_revs()
@@ -644,27 +679,44 @@ def test_own_venv_fallback_still_heals_a_broken_host_venv(tmp_path, monkeypatch)
     assert str(site) in _sys.path, "the own venv was never put on sys.path"
 
 
-# ── 5. the README must not overclaim "nothing leaves" ─────────────────────────
-# Finding 06.10.2026: an embedding key the host already exports (e.g.
-# OPENAI_API_KEY, present for other tools) turns on cloud embedding of turn
-# text. "Nothing, out of the box" invited reading that as "unless I add a key
-# for Nexus", which is wrong.
+# ── 5. the README must describe the REAL embedding order (local-first) ───────
+# Round 2 (06.10.2026): "Nothing, out of the box" had to be qualified, because a
+# key the host already exported (e.g. OPENAI_API_KEY, present for other tools)
+# turned on cloud embedding of turn text.
+# Round 3 (10.10.2026): the engine became LOCAL-FIRST — a key alone no longer
+# selects a cloud provider; the provider must be named explicitly. The old
+# assertion therefore codified behaviour that no longer exists, and the README
+# still said "cloud keys first". Both are corrected here, together with a
+# denylist so the stale wording cannot come back.
 
-def test_readme_discloses_that_a_preexisting_key_enables_egress():
-    """The egress section must name the pre-existing-key case explicitly."""
+def test_readme_describes_local_first_embeddings():
+    """The egress section must name BOTH conditions for cloud embedding."""
     readme = (_REPO / "plugins" / "memory" / "nexus" / "README.md").read_text(
         encoding="utf-8")
     section = readme.split("## What Leaves Your Machine", 1)
     assert len(section) == 2, "the egress section disappeared"
     body = section[1].split("\n## ", 1)[0]
 
-    assert "already has in its environment" in body, (
-        "the README does not say a pre-existing key enables cloud embedding"
+    # The explicit choice is what enables cloud embedding …
+    assert "NEXUS_EMBEDDING_PROVIDER" in body, (
+        "the README does not name the switch that selects a cloud provider"
+    )
+    # … and a key that merely exists must NOT be described as sufficient.
+    assert "does **not** select a cloud provider" in body, (
+        "the README does not say that a pre-existing key alone is not enough"
     )
     assert "OPENAI_API_KEY" in body, (
         "the README does not name a concrete example key"
     )
-    # The absolute claim must not stand unqualified.
-    assert 'out of the box" means' in body or "means *no key present*" in body, (
-        "the 'Nothing, out of the box' claim is unqualified again"
-    )
+    # The local default must be stated.
+    assert "sentence-transformers" in body, "the local default is not named"
+
+    # Denylist: the obsolete cloud-first wording must not come back, neither in
+    # the README nor in the plugin's own docstring.
+    plugin_init = (_REPO / "plugins" / "memory" / "nexus" / "__init__.py").read_text(
+        encoding="utf-8")
+    for text, where in ((readme, "README"), (plugin_init, "__init__.py")):
+        for stale in ("cloud keys first", "cloud-first", "Priority: Voyage"):
+            assert stale not in text, (
+                f"stale cloud-first wording is back in {where}: {stale!r}"
+            )
