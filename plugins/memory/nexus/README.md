@@ -21,25 +21,23 @@ Ollama is used only when it is chosen explicitly; it is never required.
 Query rewriting and paid stations are off, and Qdrant plus all state
 stay local under `~/.nexus-memory`.
 
-Read the next paragraph before you conclude "nothing leaves" for *your* machine:
-an embedding key that Hermes **already has in its environment** — for instance
-`OPENAI_API_KEY`, which many setups carry for other tools — is auto-detected and
-turns on cloud embedding of your turn text. It is not necessary to add a key
-*for Nexus* for that to happen; a pre-existing one is enough. Run
-`env | grep -E 'VOYAGE|OPENAI|GOOGLE|JINA'` to see what your agent would pick up.
+Cloud embedding is **opt-in and needs two things**: an explicit choice —
+`NEXUS_EMBEDDING_PROVIDER=voyage|openai|google|jina` or `embedding_provider` in
+the Nexus config — **and** the matching API key in the environment. A key that
+is merely present (for example `OPENAI_API_KEY`, which many setups carry for
+other tools) does **not** select a cloud provider on its own, and turn text is
+never sent to one until you have made that choice.
 
-The picture changes as soon as such a **cloud key** is present — that is the
-operator's choice, and the paths below are what it enables. Read this list
-before adding one.
+Read the table below before opting in — it lists what each setting enables.
 
 ### Egress paths, per setting
 
 | Setting | What leaves the machine | Destination |
 |---|---|---|
-| `VOYAGE_API_KEY` set | Turn text (user + assistant), for embedding | Voyage AI (`api.voyageai.com`) |
-| `OPENAI_API_KEY` set | Turn text, for embedding | OpenAI (`api.openai.com`) |
-| `GOOGLE_API_KEY` set | Turn text, for embedding | Google (`generativelanguage.googleapis.com`) |
-| `JINA_API_KEY` set | Turn text, for embedding | Jina (`api.jina.ai`) |
+| `NEXUS_EMBEDDING_PROVIDER=voyage` **and** `VOYAGE_API_KEY` | Turn text (user + assistant), for embedding | Voyage AI (`api.voyageai.com`) |
+| `NEXUS_EMBEDDING_PROVIDER=openai` **and** `OPENAI_API_KEY` | Turn text, for embedding | OpenAI (`api.openai.com`) |
+| `NEXUS_EMBEDDING_PROVIDER=google` **and** `GOOGLE_API_KEY` | Turn text, for embedding | Google (`generativelanguage.googleapis.com`) |
+| `NEXUS_EMBEDDING_PROVIDER=jina` **and** `JINA_API_KEY` | Turn text, for embedding | Jina (`api.jina.ai`) |
 | `NEXUS_REWRITE=1` | The search query, for rewriting | The rewrite station (Ollama, local first) |
 | `NEXUS_FUEL_PAID=1` + provider keys | Consolidation prompts | The configured fuel stations |
 | Session end / entity extraction | Conversation text, for fact extraction | The model endpoint in the Hermes `config.yaml` |
