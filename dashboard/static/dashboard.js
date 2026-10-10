@@ -74,7 +74,10 @@ async function loadStatus() {
   document.getElementById('version').textContent = `v${status.version}`;
   document.getElementById('stat-memories').textContent = status.points_count?.toLocaleString() || '0';
   const ep = (status.embedding_provider || 'unknown');
-  const epPretty = ep.split('-').map(w => /^(bge|llm|api)$/i.test(w) ? w.toUpperCase() : (w.charAt(0).toUpperCase() + w.slice(1))).join('-');
+  // Das Label der Kachel lautet schon "Embedding Provider", deshalb faellt das
+  // Wort im Wert weg; die Modellgroesse bleibt ("qwen3-embedding:0.6b" -> "Qwen3:0.6b").
+  const epShort = ep.replace(/-?\s*embedding\s*-?/gi, '').replace(/^[-:\s]+/, '');
+  const epPretty = epShort.split('-').map(w => /^(bge|llm|api)$/i.test(w) ? w.toUpperCase() : (w.charAt(0).toUpperCase() + w.slice(1))).join('-');
   document.getElementById('stat-provider').textContent = epPretty;
 
   // Fuel-Zeile: eine Zeile, alles Wichtige drin (Modell · verbraucht von Cap)
