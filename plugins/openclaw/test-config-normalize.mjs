@@ -178,7 +178,8 @@ await t("localEmbeddingProvider: Umgebung wird hereingereicht, nicht im Modul ge
 })
 
 await t("Manifest: accessLevel-Vorgabe ist private, wie das README sagt", () => {
-  const manifest = JSON.parse(fs.readFileSync("./openclaw.plugin.json", "utf8"))
+  const manifestPath = new URL("./openclaw.plugin.json", import.meta.url)
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
   const walk = (o) => {
     if (!o || typeof o !== "object") return undefined
     if (o.accessLevel && typeof o.accessLevel === "object" && "default" in o.accessLevel) return o.accessLevel.default

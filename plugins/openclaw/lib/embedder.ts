@@ -1,6 +1,6 @@
 import { log } from "../logger.ts"
 
-export type { EmbeddingProvider } from "./embedding-env.ts"
+import type { EmbeddingProvider } from "./embedding-env.ts"
 
 /** Default models and dimensions per provider. */
 const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: number; baseUrl?: string }> = {
@@ -20,7 +20,7 @@ const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: 
  * later, when embed() calls it. The choice itself lives in lib/embedding-env.ts;
  * this module does not read the environment.
  */
-import type { EmbeddingProvider } from "./embedding-env.ts"
+
 
 /** Default time budget for a single HTTP call (provider or Qdrant). */
 export const DEFAULT_FETCH_TIMEOUT_MS = 30_000
