@@ -5,7 +5,10 @@ Rule A (resolve intent; pure function, reads only config/ENV):
      ``embedding_provider`` > ``"auto"``.
   2. Cloud is allowed EXACTLY when P is a cloud provider AND its key is present.
      No fallback to a different cloud provider. No other consent source.
-  3. ``auto`` = local, first available (HF default, then Ollama). NEVER cloud.
+  3. ``auto`` = local, and there is exactly ONE automatic path: HuggingFace
+     (sentence-transformers ships with the package, so a machine with nothing
+     installed still gets a local memory). Ollama is never chosen automatically
+     — only when named explicitly. NEVER cloud.
   4. P explicit but unavailable -> hard error, no detection behind it.
 
 The collection model is stored IN Qdrant as a named vector. The binding logic
@@ -179,9 +182,10 @@ def vector_fingerprint(backend: str, model_name: str, dim: int) -> str:
 class EmbeddingProvider:
     """Auto-detect best embedding provider according to Regel A.
 
-    Priority: explicit preference > auto (local-first: HF default, then Ollama).
-    Cloud is used only when the user explicitly preferred a cloud provider and
-    its key is present. No silent fallback to another provider.
+    Priority: explicit preference > auto, where auto is HuggingFace — the one
+    automatic path. Ollama is used only when named explicitly. Cloud is used
+    only when the user explicitly preferred a cloud provider and its key is
+    present. No silent fallback to another provider.
     """
 
     def __init__(self, preferred: str = ""):
