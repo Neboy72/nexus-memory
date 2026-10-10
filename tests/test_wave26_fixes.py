@@ -144,9 +144,14 @@ class TestNr504OllamaCommentTruthful:
         # static scanner read "process.env.<NAME> beside a network send" as
         # credential exfiltration. The function now takes the environment in,
         # and the embedder module must not read OLLAMA_HOST itself any more.
-        src = _read("plugins/openclaw/lib/embedder.ts")
-        assert 'return env.OLLAMA_HOST || env.OLLAMA_BASE_URL ? "ollama" : "nexus"' in src
-        assert "process.env.OLLAMA_HOST" not in src
+        src = _read("plugins/openclaw/lib/embedding-env.ts")
+        assert "OLLAMA_HOST" in src and "OLLAMA_BASE_URL" in src
+        assert '"ollama"' in src and '"nexus"' in src
+        embedder = _read("plugins/openclaw/lib/embedder.ts")
+        assert "process.env" not in embedder
+        assert "OLLAMA_HOST" not in embedder
+        config = _read("plugins/openclaw/lib/config.ts")
+        assert "OLLAMA_HOST" not in config
 
 
 # ---------------------------------------------------------------- Nr 506

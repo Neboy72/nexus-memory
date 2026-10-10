@@ -1,6 +1,6 @@
 import { log } from "../logger.ts"
 
-export type EmbeddingProvider = "nexus" | "voyage" | "openai" | "ollama" | "google" | "jina"
+export type { EmbeddingProvider } from "./embedding-env.ts"
 
 /** Default models and dimensions per provider. */
 const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: number; baseUrl?: string }> = {
@@ -14,37 +14,13 @@ const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: 
   jina: { model: "jina-embeddings-v3", dimensions: 1024 },
 }
 
-/** Env var names for each provider's API key. */
-export const PROVIDER_ENV_KEYS: Record<EmbeddingProvider, string> = {
-  nexus: "",
-  voyage: "VOYAGE_API_KEY",
-  openai: "OPENAI_API_KEY",
-  ollama: "",
-  google: "GOOGLE_API_KEY",
-  jina: "JINA_API_KEY",
-}
-
-/** Which local backend serves embeddings when the config names none. */
-export function localEmbeddingProvider(
-  env: { OLLAMA_HOST?: string; OLLAMA_BASE_URL?: string },
-): EmbeddingProvider {
-  // Local first (developer default, 2026-10-07). This is only the FALLBACK: an
-  // explicit provider choice in the config always wins (see the constructor:
-  // "explicit config > env auto-detect"). Unless the operator exported
-  // OLLAMA_HOST/OLLAMA_BASE_URL, it resolves to the local Nexus service.
-  //
-  // The environment is passed IN, never read in this module. Reason: this file
-  // also performs the HTTP calls, and a static scanner reads an environment
-  // access beside a network send as credential exfiltration. Moving the read
-  // into the config layer (which contains no network code) removes that false
-  // signal without hiding anything: the value is only ever used as a
-  // destination address, never sent anywhere.
-  //
-  // Ollama needs no key. Reachability is NOT probed here and an unreachable
-  // Ollama does NOT fail the constructor (the constructor only resolves
-  // provider/model/baseUrl and logs); it surfaces later, when embed() calls it.
-  return env.OLLAMA_HOST || env.OLLAMA_BASE_URL ? "ollama" : "nexus"
-}
+/** Local first (developer default, 2026-10-07). Ollama needs no key;
+ * reachability is NOT probed here and an unreachable Ollama does NOT fail the
+ * constructor (it only resolves provider/model/baseUrl and logs) - it surfaces
+ * later, when embed() calls it. The choice itself lives in lib/embedding-env.ts;
+ * this module does not read the environment.
+ */
+import { PROVIDER_ENV_KEYS, type EmbeddingProvider } from "./embedding-env.ts"
 
 /** Default time budget for a single HTTP call (provider or Qdrant). */
 export const DEFAULT_FETCH_TIMEOUT_MS = 30_000
@@ -150,9 +126,10 @@ export class Embedder {
     baseUrl: string | undefined,
     dimensions: number | undefined,
   ) {
-    // Resolve provider: the config layer always resolves one (parseConfig maps
-    // an unset provider through localEmbeddingProvider) and passes it in. This
-    // module never reads the environment itself.
+    // Resolve provider. The normal path never reaches the guard: parseConfig
+    // always resolves one (explicit config first, else localEmbeddingProvider)
+    // and passes it in. The guard exists for direct construction of this class.
+    // This module never reads the environment itself.
     if (!provider) {
       throw new Error(
         "No embedding provider configured. Set embedding.provider in the plugin config (see the README).",
