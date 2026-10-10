@@ -19,6 +19,14 @@
   one that was missing — the tree a catalog install actually receives was never asked what
   it installs, which is why every content test stayed green through three review rounds.
 
+### Fixed
+
+- **Two docstrings still described an Ollama fallback that no longer exists.**
+`_detect_auto()` chooses HuggingFace as the single automatic path; the module
+header and the `EmbeddingProvider` docstring still said "HF default, then
+Ollama", which is what the code did up to v0.22.20. Both now name the one
+automatic path, so neither can be read as a promise the code breaks.
+
 ## [0.22.21] — 2026-10-10
 
 ### Fixed — five access-level gaps found by the external review of v0.22.20
