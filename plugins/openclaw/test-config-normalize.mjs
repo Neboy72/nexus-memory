@@ -7,7 +7,7 @@
  */
 import assert from "node:assert"
 import { parseConfig, nexusConfigSchema } from "./lib/config.ts"
-import { localEmbeddingProvider } from "./lib/embedder.ts"
+import { localEmbeddingProvider } from "./lib/embedding-env.ts"
 
 let failed = 0
 const t = (name, fn) =>
