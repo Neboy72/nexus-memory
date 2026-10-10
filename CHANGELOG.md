@@ -21,11 +21,19 @@
 
 ### Fixed
 
-- **Two docstrings still described an Ollama fallback that no longer exists.**
-`_detect_auto()` chooses HuggingFace as the single automatic path; the module
-header and the `EmbeddingProvider` docstring still said "HF default, then
-Ollama", which is what the code did up to v0.22.20. Both now name the one
-automatic path, so neither can be read as a promise the code breaks.
+- **Three docstrings still described an Ollama fallback that no longer exists.**
+  `_detect_auto()` chooses HuggingFace as the single automatic path; the engine's
+  module header, the `EmbeddingProvider` docstring and the Hermes plugin's
+  `_Embedder` docstring still said "HF default, then Ollama", which is what the
+  code did up to v0.22.20. All three now name the one automatic path, so none of
+  them can be read as a promise the code breaks — the plugin docstring sat in the
+  exact lines a catalog review pointed at.
+- **The first-use download was stated as about 600 MB; it is about 1.2 GB.**
+  Measured against the Hugging Face file list for `Qwen/Qwen3-Embedding-0.6B`
+  (`model.safetensors` 1191.6 MB, 1207.5 MB in total) and against the local
+  cache. The README, the `embeddings.py` comment and a test comment now carry
+  the measured figure. The old number matched the quantised Ollama model
+  (639 MB), not the Hugging Face download.
 
 ## [0.22.21] — 2026-10-10
 

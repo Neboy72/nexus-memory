@@ -273,8 +273,10 @@ _MIN_KEEP_LEN = 2  # rewritten/empty below this falls back to the original query
 class _Embedder:
     """Auto-detect embedding provider — reuses the shared EmbeddingProvider.
 
-    Local-first: ``sentence-transformers`` (Hugging Face) by default, then
-    Ollama. A cloud provider (Voyage 1024d / OpenAI 1536d / Google 768d /
+    Local-first: ``sentence-transformers`` (Hugging Face) is the ONE automatic
+    path (it ships with the package). Ollama is used only when it is chosen
+    explicitly (``NEXUS_EMBEDDING_PROVIDER=ollama``), never as an automatic
+    fallback. A cloud provider (Voyage 1024d / OpenAI 1536d / Google 768d /
     Jina 1024d) is used only when it is explicitly preferred —
     ``NEXUS_EMBEDDING_PROVIDER`` or ``embedding_provider`` in the Nexus config —
     and its API key is present. A key that merely sits in the environment does
