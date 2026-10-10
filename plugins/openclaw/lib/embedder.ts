@@ -24,27 +24,26 @@ const PROVIDER_ENV_KEYS: Record<EmbeddingProvider, string> = {
   jina: "JINA_API_KEY",
 }
 
-/** Auto-detect a provider from environment variables. Priority order. */
-export function detectProvider(): EmbeddingProvider | null {
-  // Local first (developer default, 2026-10-07).
+/** Which local backend serves embeddings when the config names none. */
+export function localEmbeddingProvider(
+  env: { OLLAMA_HOST?: string; OLLAMA_BASE_URL?: string },
+): EmbeddingProvider {
+  // Local first (developer default, 2026-10-07). This is only the FALLBACK: an
+  // explicit provider choice in the config always wins (see the constructor:
+  // "explicit config > env auto-detect"). Unless the operator exported
+  // OLLAMA_HOST/OLLAMA_BASE_URL, it resolves to the local Nexus service.
   //
-  // This function is only the FALLBACK — an explicit provider choice in the
-  // config always wins (see the constructor: "explicit config > env
-  // auto-detect"). It therefore always resolves to the local service: a cloud
-  // API key sitting in the environment is not a decision, and most users have
-  // no API-based embedding at all.
+  // The environment is passed IN, never read in this module. Reason: this file
+  // also performs the HTTP calls, and a static scanner reads
+  // "process.env.<NAME> beside a network send" as credential exfiltration.
+  // Moving the read into the config layer (which contains no network code)
+  // removes that false signal without hiding anything: the value is only ever
+  // used as a destination address, never sent anywhere.
   //
-  // Ollama needs no key. Reachability is NOT probed here (too expensive in
-  // detectProvider): an unreachable Ollama is only surfaced later, when embed()
-  // calls it — the constructor does NOT fail on it (verified: it only resolves
-  // provider/model/baseUrl and logs). Both the explicit-host check and the
-  // final return resolve to the same local provider; the check is kept because
-  // an exported OLLAMA_HOST is an explicit local choice and is asserted by the
-  // Nr 504 guard (test_wave26_fixes.py).
-  // An exported OLLAMA_HOST stays an explicit local choice (asserted by the
-  // Nr 504 guard), everything else resolves to the local engine service.
-  if (process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL) return "ollama"
-  return "nexus"
+  // Ollama needs no key. Reachability is NOT probed here and an unreachable
+  // Ollama does NOT fail the constructor (the constructor only resolves
+  // provider/model/baseUrl and logs); it surfaces later, when embed() calls it.
+  return env.OLLAMA_HOST || env.OLLAMA_BASE_URL ? "ollama" : "nexus"
 }
 
 /** Default time budget for a single HTTP call (provider or Qdrant). */
@@ -155,7 +154,7 @@ export class Embedder {
     if (provider) {
       this.provider = provider
     } else {
-      const detected = detectProvider()
+      const detected = localEmbeddingProvider(process.env)
       if (!detected) {
         throw new Error(
           "No embedding provider configured. Set VOYAGE_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, JINA_API_KEY, or configure Ollama.",

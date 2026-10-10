@@ -172,7 +172,7 @@
           "trusted",
           "private"
         ],
-        "default": "public"
+        "default": "private"
       },
       "scope": {
         "type": "string",
@@ -235,5 +235,5 @@
     },
     "required": []
   },
-  "version": "1.21.10"
+  "version": "1.21.11"
 }
