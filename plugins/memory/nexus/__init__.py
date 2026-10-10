@@ -2278,7 +2278,7 @@ def _repair_command() -> str:
     # is pinned so a repair fetches exactly the reviewed revision and not
     # whatever happens to be on main.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
-            "@0828dff4acc31c8b7df66c0efa5c0f964bae0d4c")
+            "@da39ca4f052e54f11292c5503117d8557150825e")
     # A checkout of THIS repository may be reinstalled in editable mode — handy
     # while developing. It has to prove it is that repository, though: for a
     # catalog-installed plugin `__file__` lives under the Hermes plugin dir and
