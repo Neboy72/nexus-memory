@@ -110,7 +110,7 @@ nexus-memory                           # or: nexus-memory serve (daemon), nexus-
 - **A cloud provider** (Voyage, OpenAI, Google, Jina) is only used when you name it explicitly — `NEXUS_EMBEDDING_PROVIDER=<name>` plus its key. A key alone is not enough, and there is no silent cloud fallback.
 - **Not sure?** `python3 -m nexus_memory.wizard` scans your machine, lists every provider with its status and recommends one.
 
-> **One exception, stated plainly:** the two native plugins that talk to Qdrant *directly* — Claude Code and OpenClaw — embed on their own instead of going through the engine. They use **Ollama when it runs locally, or a cloud key**; the HuggingFace path above belongs to the engine (Hermes plugin, MCP server, `nexus-memory serve`). If you plan to use those two plugins, have one of the two ready.
+> **The two plugins that talk to Qdrant *directly*** — Claude Code and OpenClaw — ask the local service for their vectors (`POST /embed` on `nexus-memory serve`), so they embed with the same model as everything else: local HuggingFace, nothing to install. If you want a different provider, name it explicitly (`NEXUS_EMBEDDING_PROVIDER=ollama|voyage|openai|google|jina`).
 
 → Full provider table: [🧩 Embedding Providers](#embedding-providers).
 
@@ -272,6 +272,7 @@ One server, several backends, same API. The **automatic path is local** — Hugg
 | Provider | Type | How to enable | Dims |
 |----------|------|---------------|------|
 | **HuggingFace** 🏠 | Local | default — nothing to configure (override the model with `NEXUS_HF_MODEL`, e.g. `BAAI/bge-m3`) | 1024 |
+| **Local service** 🔌 | Local | what the two direct-Qdrant plugins (Claude Code, OpenClaw) use: `POST /embed` on `nexus-memory serve` — same model, no setup | 1024 |
 | **Ollama** 🦙 | Local | `NEXUS_EMBEDDING_PROVIDER=ollama` + `ollama pull qwen3-embedding:0.6b` | 1024 |
 | **Voyage** ☁️ | Cloud | `NEXUS_EMBEDDING_PROVIDER=voyage` + `VOYAGE_API_KEY` | 1024 |
 | **OpenAI** ☁️ | Cloud | `NEXUS_EMBEDDING_PROVIDER=openai` + `OPENAI_API_KEY` | 1536 |

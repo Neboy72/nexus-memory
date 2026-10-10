@@ -3385,6 +3385,11 @@ def _qdrant_reachable(host: Optional[str] = None, port: Optional[int] = None,
         return False
 
 
+# One /embed request carries one text; this bound keeps a single call bounded
+# (a book chapter, not a book). The plugins embed per turn, not in bulk.
+MAX_EMBED_CHARS = 32000
+
+
 def build_serve_app():
     """Build the Starlette ASGI app served by `serve`.
 
@@ -3436,9 +3441,63 @@ def build_serve_app():
             "self_report": self_report,
         })
 
+    async def embed(request):
+        """POST /embed — the engine's embeddings, for the local plugins.
+
+        The two native plugins that talk to Qdrant directly (Claude Code,
+        OpenClaw) used to embed on their own, each with its own provider list —
+        so a machine without Ollama had no way in. This endpoint hands them the
+        engine's provider instead: whatever model this service uses is the one
+        model, and the default (local HuggingFace) needs nothing installed.
+
+        Request:  {"text": "...", "is_query": true}
+        Response: {"embedding": [...], "model": "...", "dim": 1024}
+
+        Loopback-only: `serve` binds to 127.0.0.1 by design (see serve()).
+        """
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return JSONResponse(
+                {"error": "field 'text' must be a non-empty string"}, status_code=400)
+        if len(text) > MAX_EMBED_CHARS:
+            return JSONResponse(
+                {"error": f"text is longer than {MAX_EMBED_CHARS} characters"},
+                status_code=413)
+        is_query = bool(payload.get("is_query", True))
+
+        # get_store() opens Qdrant + resolves the provider: real I/O, so it runs
+        # off the event loop (the same rule /healthz follows).
+        try:
+            store = await asyncio.to_thread(get_store)
+            embedder = store._embedder
+        except Exception:
+            embedder = None
+        if embedder is None or not getattr(embedder, "available", False):
+            return JSONResponse({
+                "error": "this service has no embedding provider available",
+                "hint": "the default is local (HuggingFace); check the service log",
+            }, status_code=503)
+        try:
+            vector = await embedder.embed(text, is_query)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"embedding failed: {type(exc).__name__}"}, status_code=500)
+        return JSONResponse({
+            "embedding": vector,
+            "model": embedder.name,
+            "dim": len(vector),
+        })
+
     return Starlette(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
+            Route("/embed", embed, methods=["POST"]),
             # Mount("/") not Mount("/mcp"): a mount at a subpath makes
             # Starlette 307-redirect the exact "/mcp" path to "/mcp/", and
             # real MCP clients POST to "/mcp" without following redirects.

@@ -16,8 +16,12 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+# The shared embedding path (automatic = local Nexus service / HuggingFace).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _embedding  # noqa: E402
+
 DEFAULT_QDRANT_URL = "http://localhost:6333"
-DEFAULT_PROVIDER = "ollama"
+DEFAULT_PROVIDER = "auto"
 DEFAULT_AGENT_ID = "claude-code"
 PLUGIN_MANIFEST = (
     Path(__file__).resolve().parent.parent / ".claude-plugin" / "plugin.json"
@@ -110,6 +114,14 @@ def _probe() -> tuple[bool, str, str]:
         )
 
     provider = os.environ.get("NEXUS_EMBEDDING_PROVIDER", "").strip() or DEFAULT_PROVIDER
+    if provider in _embedding.SERVE_PROVIDERS:
+        # Automatic path: the local service embeds, so there is no key to
+        # check — only whether it answers.
+        if not _embedding.serve_reachable():
+            return (False,
+                    f"the local Nexus service at {_embedding.serve_url()} is not reachable",
+                    "nexus-memory serve")
+        return True, "", ""
     var = _required_env_var(provider)
     if var and not os.environ.get(var, "").strip():
         return (

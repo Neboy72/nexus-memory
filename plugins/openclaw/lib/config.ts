@@ -83,7 +83,7 @@ const ALLOWED_EMBEDDING_KEYS = [
 
 const VALID_ACCESS_LEVELS: AccessLevel[] = ["public", "trusted", "private"]
 
-const VALID_PROVIDERS: EmbeddingProvider[] = ["voyage", "openai", "ollama", "google", "jina"]
+const VALID_PROVIDERS: EmbeddingProvider[] = ["nexus", "voyage", "openai", "ollama", "google", "jina"]
 
 const ALLOWED_GATE_KEYS = ["enabled", "titles", "maxLines", "maxChars"]
 

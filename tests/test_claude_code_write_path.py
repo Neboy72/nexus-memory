@@ -52,6 +52,12 @@ pytestmark = pytest.mark.skipif(
 def capture_modul():
     if not (SKRIPTE / "auto_capture.py").exists():
         pytest.skip("Claude-Code-Plugin nicht vorhanden")
+    # Diese Tests messen den Schreib- und Leseweg des Hooks, nicht die Wahl des
+    # Embedding-Providers. Der Hook-Vorgabewert ist 'auto' (der lokale Dienst);
+    # hier wird ein Provider fest gewaehlt, damit der Test nicht davon abhaengt,
+    # ob nebenher ein Dienst laeuft. Die Fixture ist module-scoped, deshalb
+    # os.environ statt monkeypatch (der Hook liest den Wert beim Import).
+    os.environ.setdefault("NEXUS_EMBEDDING_PROVIDER", "ollama")
     sys.path.insert(0, str(SKRIPTE))
     import importlib.util
 
