@@ -139,10 +139,14 @@ class TestNr504OllamaCommentTruthful:
         assert "does NOT fail" in src
 
     def test_behavior_detect_returns_ollama_on_env(self):
-        # env presence alone decides (unchanged); verify via source that the
-        # return line still exists unmodified
+        # env presence alone still decides, but the read moved out of the
+        # embedder module (10.10.2026): the module performs the HTTP calls, so a
+        # static scanner read "process.env.<NAME> beside a network send" as
+        # credential exfiltration. The function now takes the environment in,
+        # and the embedder module must not read OLLAMA_HOST itself any more.
         src = _read("plugins/openclaw/lib/embedder.ts")
-        assert 'if (process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL) return "ollama"' in src
+        assert 'return env.OLLAMA_HOST || env.OLLAMA_BASE_URL ? "ollama" : "nexus"' in src
+        assert "process.env.OLLAMA_HOST" not in src
 
 
 # ---------------------------------------------------------------- Nr 506

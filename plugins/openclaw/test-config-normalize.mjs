@@ -7,6 +7,7 @@
  */
 import assert from "node:assert"
 import { parseConfig, nexusConfigSchema } from "./lib/config.ts"
+import { localEmbeddingProvider } from "./lib/embedder.ts"
 
 let failed = 0
 const t = (name, fn) =>
@@ -162,6 +163,17 @@ await t("Schema deklariert planGate (Objekt, additionalProperties false)", () =>
   assert.ok(pg && typeof pg === "object", "properties.planGate fehlt — Schema-Shape hat sich geändert")
   assert.strictEqual(pg.additionalProperties, false)
   assert.ok(pg.properties?.maxAgeSeconds, "properties.planGate.maxAgeSeconds fehlt")
+})
+
+await t("accessLevel: Vorgabe ist private, nicht public (Concern 10.10.2026)", () => {
+  assert.strictEqual(parseConfig({}).accessLevel, "private")
+  assert.strictEqual(parseConfig({ accessLevel: "public" }).accessLevel, "public")
+})
+
+await t("localEmbeddingProvider: Umgebung wird hereingereicht, nicht im Modul gelesen", () => {
+  assert.strictEqual(localEmbeddingProvider({}), "nexus")
+  assert.strictEqual(localEmbeddingProvider({ OLLAMA_HOST: "http://127.0.0.1:11434" }), "ollama")
+  assert.strictEqual(localEmbeddingProvider({ OLLAMA_BASE_URL: "http://127.0.0.1:11434" }), "ollama")
 })
 
 process.exitCode = failed ? 1 : 0
