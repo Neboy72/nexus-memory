@@ -1,3 +1,24 @@
+## [0.22.22] — 2026-10-10
+
+### Changed — one embedding path, one pinned engine revision
+
+- **Every plugin embeds through the local service.** The Claude Code and OpenClaw plugins
+  each carried their own provider list: a machine without Ollama had no way in, and a
+  machine with a cloud key in its environment could leave the machine without anyone
+  choosing that. Both now ask the engine (`POST /embed` on the local serve daemon), so one
+  model and one vector space serve a collection — the same vectors the engine writes.
+  (The OpenClaw manifest needed the provider name in its config schema for this; it was
+  missing there while the code already had it.)
+- **The engine revision is a tag name, not a sha.** `plugins/memory/nexus/pyproject.toml`
+  (`[tool.uv.sources]`) and the repair path in `plugins/memory/nexus/__init__.py` pinned a
+  commit the catalog entry did not describe, so a catalog install received an engine that
+  did not carry the promise the entry made. Both now pin `v0.22.22`.
+- **A guard test closes the chain** (`tests/test_pin_chain_is_closed.py`): the two refs must
+  agree, the ref must be a resolvable annotated tag, the advertised versions must match it,
+  and reading the two files AT the tag must name the same tag again. The last check is the
+  one that was missing — the tree a catalog install actually receives was never asked what
+  it installs, which is why every content test stayed green through three review rounds.
+
 ## [0.22.21] — 2026-10-10
 
 ### Fixed — five access-level gaps found by the external review of v0.22.20
