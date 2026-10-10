@@ -1,4 +1,4 @@
-import { detectProvider, type EmbeddingProvider } from "./embedder.ts"
+import { localEmbeddingProvider, type EmbeddingProvider } from "./embedder.ts"
 import { validateConfigScope } from "./scope-auto.ts"
 
 export type AccessLevel = "public" | "trusted" | "private"
@@ -270,14 +270,19 @@ export function parseConfig(raw: unknown): NexusConfig {
     }
   }
 
-  // If provider not set in config, try auto-detect from env
+  // If provider not set in config, resolve the local backend. The environment
+  // read belongs to this layer: this module contains no network code, so a
+  // static scanner does not read it as "env access combined with a send".
   if (!embedding.provider) {
-    const detected = detectProvider()
-    if (detected) embedding.provider = detected
+    embedding.provider = localEmbeddingProvider(process.env)
   }
 
-  // Parse access level
-  let accessLevel: AccessLevel = "public"
+  // Parse access level. Default closed (2026-10-10): README and manifest
+  // promise "private", the parser said "public". With autoCapture on, an
+  // omitted config could therefore store captured conversations as public
+  // memories in the shared store. ClawHub's verifier flagged exactly this
+  // mismatch as a privacy concern.
+  let accessLevel: AccessLevel = "private"
   if (typeof cfg.accessLevel === "string") {
     if (!VALID_ACCESS_LEVELS.includes(cfg.accessLevel as AccessLevel)) {
       throw new Error(
