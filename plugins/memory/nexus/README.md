@@ -17,7 +17,7 @@ Cursor, etc.) see the same memories.
 fresh install on a machine with no embedding key runs entirely locally:
 embeddings use a **local** model — HuggingFace via `sentence-transformers`
 (installed with the package; default model `Qwen/Qwen3-Embedding-0.6B`).
-Ollama is only used if it happens to be running; it is never required.
+Ollama is used only when it is chosen explicitly; it is never required.
 Query rewriting and paid stations are off, and Qdrant plus all state
 stay local under `~/.nexus-memory`.
 
