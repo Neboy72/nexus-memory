@@ -756,7 +756,7 @@ def test_readme_describes_local_first_embeddings():
         "cloud keys first",
         "cloud-first",
         "Priority: Voyage",
-        # Round 4 (10.10.2026): the manifest still advertised "Ollama or
+        # Catalog review 10.10.2026: the manifest still advertised "Ollama or
         # sentence-transformers" as the local path while the engine has exactly
         # ONE automatic path (HuggingFace). A docstring in the same class sat in
         # the exact lines a catalog review pointed at.

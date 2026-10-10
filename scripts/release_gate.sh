@@ -64,19 +64,23 @@ REMOTE_TAG_VER="${REMOTE_TAG#v}"
 
 if [ "$LOCAL_VER" = "$REMOTE_TAG_VER" ]; then
     echo "GATE-GRUEN: pyproject=$LOCAL_VER == Tag=$REMOTE_TAG"
-    # Ziel-Commit des Tags: ein Tag, der remote auf einen ANDEREN Commit zeigt,
-    # laesst eine Katalog-Installation eine andere Engine laden als der dort
-    # gepinnte Sha beschreibt. Der Versionsvergleich oben sieht das nicht — er
-    # liest nur Namen. Nicht pruefbar (kein lokales Tag, Netz, flacher Klon) ist
-    # eine Warnung, ein Widerspruch ist rot.
+    # Tag TARGET, not just the tag name: a tag that points at another commit on
+    # the remote makes an install fetch an engine the pinned sha never
+    # described, and the version comparison above cannot see it - it reads names
+    # only. Unverifiable (no local tag, no network) is a warning; a mismatch is
+    # red. The peeled ref is tried first; a lightweight tag has none, so the
+    # plain ref is the fallback.
     LOCAL_TAG_SHA="$(git -C "$REPO_DIR" rev-parse "${REMOTE_TAG}^{commit}" 2>/dev/null || true)"
     REMOTE_TAG_SHA="$(git -C "$REPO_DIR" ls-remote --tags origin "refs/tags/${REMOTE_TAG}^{}" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+    if [ -z "$REMOTE_TAG_SHA" ]; then
+        REMOTE_TAG_SHA="$(git -C "$REPO_DIR" ls-remote --tags origin "refs/tags/${REMOTE_TAG}" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+    fi
     if [ -z "$LOCAL_TAG_SHA" ]; then
-        echo "GATE-WARN: $REMOTE_TAG existiert remote, aber nicht lokal — Ziel-Commit nicht pruefbar"
+        echo "GATE-WARN: $REMOTE_TAG exists on the remote but not locally - target commit not verifiable"
     elif [ -z "$REMOTE_TAG_SHA" ]; then
-        echo "GATE-WARN: $REMOTE_TAG konnte nicht vom Remote gelesen werden (Netz? origin?) — Ziel-Commit nicht pruefbar"
+        echo "GATE-WARN: $REMOTE_TAG could not be read from the remote (network? origin?) - target commit not verifiable"
     elif [ "$LOCAL_TAG_SHA" != "$REMOTE_TAG_SHA" ]; then
-        echo "GATE-ROT: $REMOTE_TAG zeigt remote auf $REMOTE_TAG_SHA, lokal auf $LOCAL_TAG_SHA — Installation bekaeme eine andere Engine als der gepinnte Commit"
+        echo "GATE-ROT: $REMOTE_TAG points at $REMOTE_TAG_SHA on the remote but at $LOCAL_TAG_SHA locally - an install would get an engine the pinned commit never described"
         exit 1
     fi
     # HEAD-tagged check: alarm-only. A normal commit between releases is
