@@ -44,7 +44,7 @@ QUALITY_BASIC = "basic"
 
 # Developer default for the local HuggingFace route: the model a fresh install
 # uses when there is no Ollama and no cloud key. Qwen3-Embedding-0.6B is
-# fetched by sentence-transformers itself (~600 MB, cached after first use).
+# fetched by sentence-transformers itself (~1.2 GB, cached after first use).
 LOCAL_HF_DEFAULT = "Qwen/Qwen3-Embedding-0.6B"
 
 # Unified boolean-env vocabulary (review fix MEDIUM :305): one consistent

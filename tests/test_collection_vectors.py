@@ -640,7 +640,7 @@ class TestCallerAdoptsSwitchedProvider:
         monkeypatch.setattr(mcp, "QdrantClient", _FakeClient)
         monkeypatch.setattr(mcp, "CollectionBinding", _FakeBinding)
         # Hermetic: never let the real provider try sentence-transformers
-        # (up to ~600 MB download / network probe in auto mode).
+        # (up to ~1.2 GB download / network probe in auto mode).
         monkeypatch.setattr(mcp, "EmbeddingProvider", lambda *a, **k: switched)
         monkeypatch.setattr(mcp.MemoryStore, "_init_hybrid", lambda self: None)
         monkeypatch.setattr(mcp.MemoryStore, "_init_skill_graph", lambda self: None)
