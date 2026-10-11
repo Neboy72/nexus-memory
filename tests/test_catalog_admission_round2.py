@@ -460,12 +460,13 @@ def test_sentence_transformers_bound_is_the_same_in_every_manifest():
 def _pinned_revs():
     """Return (rev in plugin pyproject, rev in the provider's repair command).
 
-    The ref is a vX.Y.Z TAG NAME (round 4, 10.10.2026). It used to be a literal
-    40-hex sha, which cannot work: a commit hashes its own content, so a sha
-    written into the tree is stale the moment it lands — the file would have to
-    name a commit that does not exist yet. The tag name resolves to a full sha,
-    and `test_pins_resolve_to_a_full_commit_and_are_not_moving_refs` plus the
-    pin-chain test assert that it does exactly that, immutably.
+    The ref is the FULL 40-hex sha of the engine commit (round 4 fix, 11.10.2026,
+    after the catalog review asked for it). It was a vX.Y.Z tag name for one day:
+    that reads nicer, but a tag can be moved, and a moved tag changes the engine
+    for every new install and every repair run without another review. Both refs
+    are written in the "Commit B" of a re-pin, which changes no engine file over
+    that sha — `tests/test_pin_chain_is_closed.py` proves it with `git diff A B
+    -- src nexus pyproject.toml`.
     """
     import re as _re
 
@@ -597,12 +598,14 @@ def test_engine_pin_carries_the_fail_closed_access_levels():
 def test_pins_resolve_to_a_full_commit_and_are_not_moving_refs():
     """A branch name or a short sha in a pin makes an install non-reproducible.
 
-    Round 4 (10.10.2026): the pin is a TAG NAME now — a commit cannot contain its
-    own sha, so a literal sha in the tree goes stale as soon as it lands (that is
-    how the 10.10. drift started). The guarantee this test protects is unchanged:
-    the pin must resolve to one immutable full commit. It is now asserted by
-    resolving the ref instead of by matching its spelling, and an annotated tag
-    is required so the target cannot silently move.
+    Round 4 (11.10.2026): the pin is a full 40-hex sha of the engine commit, and
+    the two refs are written in a commit that changes no engine file (the
+    pin-chain test proves `git diff A B` is empty over the engine paths). It was a
+    tag name for a day, on the argument "a commit cannot contain its own sha" —
+    true, but it does not force a tag, and a tag can be moved to another commit
+    without a new review. The guarantee this test protects is unchanged: the pin
+    resolves to one immutable full commit. A tag-like ref would at least have to
+    be an annotated tag.
     """
     import subprocess
 
@@ -623,7 +626,8 @@ def test_pins_resolve_to_a_full_commit_and_are_not_moving_refs():
                                   capture_output=True, text=True).stdout.strip()
             assert kind == "tag", (
                 f"{name} pins the tag-like ref {rev!r}, but it is a {kind or 'missing'} "
-                "ref — only an annotated tag can be relied on not to move"
+                "ref — a tag-like ref must at least be an annotated tag; pinning "
+                "the full 40-character sha is the safer spelling"
             )
 
 
