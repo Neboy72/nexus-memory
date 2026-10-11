@@ -449,7 +449,9 @@ export class QdrantClient {
   }): SearchResult {
     return {
       id: String(r.id),
-      text: (r.payload?.text as string) ?? "",
+      // entity points carry their label in content, the Python side
+      // already falls back, both readers must share one contract.
+      text: ((r.payload?.text ?? r.payload?.content) as string) ?? "",
       score: r.score,
       // Labels for a RESULT, not values to be trusted as authority. A payload
       // without an access_level is treated as "private" everywhere it matters
