@@ -71,6 +71,62 @@ def _plugin_venv_site_packages(venv: Path) -> "Optional[Path]":
     return None
 
 
+def _ensure_plugin_venv_on_path() -> None:
+    """Put the plugin's OWN venv on sys.path — early, and for EVERY dependency.
+
+    Finding 2026-10-11 (the four-day bug). Two separate faults made the
+    agent's own memory unreachable while everything *looked* healthy:
+
+    1. The venv was attached inside the qdrant repair branch only. On a host
+       that HAS qdrant_client but NOT sentence-transformers — Hermes' own
+       plugin environment — that branch never ran at all.
+
+    2. ``sys.path.append`` puts the directory on the search path but does NOT
+       process the venv's ``.pth`` files, so the editable-installed
+       ``nexus_memory`` package itself stayed invisible
+       ("No module named 'nexus_memory'"). ``site.addsitedir`` handles both.
+
+    Ordering: a dependency the package manager installed still wins — but ONLY
+    when the host can serve this path at all. If it cannot (no
+    sentence-transformers), taking the venv as a *mixture* is worse than taking
+    it whole: sentence-transformers would come from the venv while its siblings
+    still came from the host, and a sibling that is *present but incompatible*
+    is the worst case of all. Here the host carried huggingface_hub 1.24.0 —
+    importable, but too old for sentence-transformers 6.1.0
+    ("cannot import name 'ResolvedRevision'"). The provider then fell
+    fail-closed, every recall returned an empty list, and an empty list is
+    indistinguishable from an empty memory. So: no local backend in the host →
+    the venv goes FIRST, as one consistent set.
+
+    Fail-open: a broken venv must not kill the module import.
+    """
+    try:
+        site_pkgs = _plugin_venv_site_packages(_plugin_venv_dir())
+        if site_pkgs is None:
+            return
+        target = str(site_pkgs)
+        if target in sys.path:
+            return
+        try:
+            import importlib.util as _ilu
+            host_can_embed = _ilu.find_spec("sentence_transformers") is not None
+        except Exception:
+            host_can_embed = False
+        if host_can_embed:
+            try:
+                import site as _site
+                _site.addsitedir(target)
+            except Exception:
+                sys.path.append(target)
+            return
+        sys.path.insert(0, target)
+    except Exception:
+        pass
+
+
+_ensure_plugin_venv_on_path()
+
+
 def _try_import_qdrant() -> bool:
     """Import or reload qdrant_client — package-manager copy first, own venv last.
 
@@ -1352,7 +1408,23 @@ class NexusMemoryProvider:
     def _recall(self, query: str, limit: int = 5, as_of: str = "") -> List[Dict[str, Any]]:
         """Roadmap 4.5: as_of='YYYY-MM-DD' limits recall to memories
         created on/before that date (point-in-time view). Empty = no filter."""
-        if not self._embedder or not self._qdrant: return []
+        if not self._embedder or not self._qdrant:
+            # Fail loud (2026-10-11): without a working provider this used to
+            # return [] — indistinguishable from an honest "nothing found".
+            # A silent empty recall produced false answers. Never again.
+            reason = ""
+            try:
+                reason = self.unavailable_reason()
+            except Exception:
+                pass
+            logger.error(
+                "nexus_recall ohne arbeitsfaehiges Gedaechtnis aufgerufen — "
+                "frueher waere das still als leere Trefferliste zurueckgekommen. %s",
+                reason or "Provider not initialized",
+            )
+            raise RuntimeError(
+                "Provider not initialized" + (f" — {reason}" if reason else "")
+            )
         try: self._bump_agent_stats(read=True)
         except Exception: pass
         # H209: single (correct) annotation — the appended values are tuples
