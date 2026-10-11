@@ -136,25 +136,52 @@ class TestLocalModelDefault:
 class TestOpenClawDefaults:
     """OpenClaw must resolve to a local provider with no key present."""
 
-    def test_detect_provider_resolves_to_the_local_service(self) -> None:
-        src = _read(OPENCLAW_LIB / "embedder.ts")
-        match = re.search(r"export function detectProvider\(\)[^{]*\{(.*?)\n\}", src, re.S)
-        assert match, "detectProvider() not found in embedder.ts"
+    def test_default_provider_resolves_to_the_local_service(self) -> None:
+        """The default provider is resolved in lib/embedding-env.ts.
+
+        The environment read moved out of embedder.ts on 10.10.2026 (that module
+        performs the HTTP calls, so a static scanner read "process.env.<NAME>
+        beside a network send" as credential exfiltration), so this guard follows
+        it: the default must be exactly one of the two LOCAL providers — "nexus"
+        unless an explicit local Ollama endpoint is exported — and never null or a
+        cloud provider. A null here reaches the Embedder constructor, which throws
+        "No embedding provider configured": an OpenClaw user with no cloud key
+        then cannot use memory at all.
+        """
+        src = _read(OPENCLAW_LIB / "embedding-env.ts")
+        match = re.search(
+            r"export function localEmbeddingProvider\((.*?)\n\}", src, re.S
+        )
+        assert match, "localEmbeddingProvider() not found in embedding-env.ts"
         body = match.group(1)
-        assert 'return "nexus"' in body, (
-            "detectProvider() must fall back to 'nexus' (the local Nexus "
-            "service). Returning null makes the Embedder constructor throw "
-            "'No embedding provider configured', so an OpenClaw user with no "
-            "cloud key cannot use memory at all."
+        assert "LOCAL_ENDPOINT_VARS.some" in body, (
+            "the default must be decided by the explicit local endpoint variables "
+            "(OLLAMA_HOST/OLLAMA_BASE_URL) — never by an API key being present"
+        )
+        assert ': "nexus"' in body, (
+            'localEmbeddingProvider() must resolve to "nexus" (the local Nexus '
+            "service) when nothing is configured."
+        )
+        assert '? "ollama"' in body, (
+            "an explicitly exported local Ollama endpoint must still win; the "
+            "provider is otherwise unreachable for whoever names it"
         )
         assert "return null" not in body, (
-            "detectProvider() still returns null on the no-key path; that is "
-            "the hard-failure mode this guard exists to prevent."
+            "the no-configuration path returns null; that is the hard-failure "
+            "mode this guard exists to prevent."
         )
         for cloud in CLOUD_PROVIDERS:
-            assert f'return "{cloud}"' not in body, (
-                f"detectProvider() falls back to the cloud provider {cloud!r}"
+            assert f'"{cloud}"' not in body, (
+                f"localEmbeddingProvider() can resolve to the cloud provider "
+                f"{cloud!r}; the default must stay on this machine."
             )
+
+        config = _read(OPENCLAW_LIB / "config.ts")
+        assert "embedding.provider = localEmbeddingProvider()" in config, (
+            "config.ts does not resolve an unset provider through "
+            "localEmbeddingProvider(): the embedder would receive undefined and "
+            "throw 'No embedding provider configured'."
+        )
 
     def test_openclaw_knows_the_local_service_and_its_endpoint(self) -> None:
         src = _read(OPENCLAW_LIB / "embedder.ts")

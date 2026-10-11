@@ -176,6 +176,87 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
     return resolve_llm_config(hermes_home)
 
 
+def _ollama_native_base(base_url: str) -> str:
+    """Liefert die Basis fuer Ollama's /api/chat, wenn der Dienst lokal laeuft (Port 11434).
+
+    WARUM (gemessen 11.10.2026, echter Speichertext 1385 Zeichen):
+    Auf der OpenAI-Schiene (/v1) wird ``think: false`` NICHT durchgereicht. Das Denk-Modell
+    verbrennt dann das komplette Token-Budget im versteckten ``reasoning`` und liefert
+    leeren ``content`` -> ``json.loads("")`` -> "Expecting value: line 1 column 1 (char 0)".
+    Folge: 313 gemessene Extraktionen zwischen 01.10. und 11.10.2026 fielen still auf
+    die Heuristik zurueck (Gateway-Fehlerprotokoll, 267 davon mit leerer Antwort), und die
+    Heuristik liefert 0 Beziehungen. Auf ``/api/chat`` greift ``think: false``:
+    dieselbe Extraktion 1,9 s und 0 Reasoning-Token statt 15,5 s und 6531 Completion-Token.
+
+    Andere Anbieter bleiben unberuehrt: leerer Rueckgabewert = OpenAI-Schiene wie bisher.
+    """
+    try:
+        p = urlparse(base_url)
+        if p.port == 11434:
+            return f"{p.scheme}://{p.netloc}"
+    except Exception:
+        pass
+    return ""
+
+
+def _ollama_chat(base_url: str, model: str, prompt: str) -> str:
+    """Eine Extraktion ueber Ollama's /api/chat (dort greift think: false)."""
+    import urllib.request
+
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "think": False,
+        "options": {"temperature": 0.3, "num_predict": 4000},
+    }
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/api/chat",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        resp = json.loads(r.read().decode("utf-8"))
+    msg = resp.get("message") or {}
+    return msg.get("content") or ""
+
+
+def _note_health(hermes_home: str, *, ok: bool, n_ent: int = 0, n_rel: int = 0, grund: str = "") -> None:
+    """Schreibt einen sichtbaren Zaehler fuer die Extraktion (Zustandsdatei).
+
+    WARUM: Vom 01.10. bis 11.10.2026 fielen 313 Extraktionen still auf die Heuristik
+    zurueck — die liefert laut eigenem Zaehler 0 BEZIEHUNGEN, also keine Kanten. Unbemerkt
+    blieb das, weil nur eine Logzeile entstand. Diese Datei macht Erfolg und Rueckfall
+    zaehlbar, damit eine Wache den Ausfall sieht, statt ihn zu erraten.
+
+    Bewusst best effort: ein Fehler hier darf das Speichern einer Erinnerung NIE stoppen.
+    """
+    try:
+        from pathlib import Path
+        import time
+
+        p = Path(hermes_home) / "state" / "entity-extractor-health.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(d, dict):
+                d = {}
+        except Exception:
+            d = {}
+        if ok:
+            d["llm_ok_total"] = int(d.get("llm_ok_total") or 0) + 1
+            d["llm_letzte_entitaeten"] = int(n_ent)
+            d["llm_letzte_beziehungen"] = int(n_rel)
+            d["llm_letzte_zeit"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        else:
+            d["fallback_total"] = int(d.get("fallback_total") or 0) + 1
+            d["fallback_letzter_grund"] = str(grund)[:200]
+            d["fallback_letzte_zeit"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        p.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _llm_extract_entities(
     text: str,
     hermes_home: str,
@@ -183,38 +264,53 @@ def _llm_extract_entities(
     """Use LLM to extract entities. Returns empty result on failure."""
     config = _load_llm_config(hermes_home)
     if not config["model"]:
+        # Also counted: a missing model has the same effect as a broken call
+        # (no entities, no relationships) and used to be silent.
+        _note_health(hermes_home, ok=False, grund="kein Modell konfiguriert")
         return ExtractionResult([], [])
 
     if not _quick_health_check(config["base_url"]):
-        logger.debug("EntityExtractor: LLM endpoint unreachable, using heuristic")
+        # 11.10.2026: this early return was silent (debug log). It is the same
+        # failure family as the 313 counted ones — an extraction that produces
+        # nothing and leaves no trace — so it is counted and named too.
+        _note_health(hermes_home, ok=False,
+                     grund=f"Endpunkt nicht erreichbar: {config['base_url']}")
+        logger.warning(
+            "EntityExtractor: FALLBACK auf Heuristik (LLM-Endpunkt nicht "
+            "erreichbar, 0 Beziehungen): %s", config["base_url"],
+        )
         return ExtractionResult([], [])
 
     prompt = _ENTITY_EXTRACTION_PROMPT + text[:_MAX_TEXT_CHARS]
 
     try:
-        from openai import OpenAI
-        client = OpenAI(
-            base_url=config["base_url"],
-            api_key=config["api_key"],
-            timeout=10,
-        )
-        response = client.chat.completions.create(
-            model=config["model"],
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            # max_tokens includes the hidden reasoning field: glm-5.3-flash "thinks"
-            # even with think:false (reasoning moved to separate field, but tokens
-            # still count). 800 was exhausted by reasoning alone on long texts ->
-            # empty content -> JSON parse fail. 4000 verified 29.08 (worst-case
-            # reasoning beobachtet). Unused budget costs nothing.
-            max_tokens=4000,
-            extra_body={"think": False},
-            timeout=30,
-        )
-        if response.choices:
-            raw = response.choices[0].message.content or ""
+        raw = ""
+        native_base = _ollama_native_base(config["base_url"])
+        if native_base:
+            # Lokaler Ollama: ueber /api/chat, weil dort think:false greift (siehe oben).
+            raw = _ollama_chat(native_base, config["model"], prompt)
         else:
-            raw = ""
+            from openai import OpenAI
+            client = OpenAI(
+                base_url=config["base_url"],
+                api_key=config["api_key"],
+                timeout=10,
+            )
+            response = client.chat.completions.create(
+                model=config["model"],
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                # max_tokens includes the hidden reasoning field: glm-5.3-flash "thinks"
+                # even with think:false (reasoning moved to separate field, but tokens
+                # still count). 800 was exhausted by reasoning alone on long texts ->
+                # empty content -> JSON parse fail. 4000 verified 29.08 (worst-case
+                # reasoning beobachtet). Unused budget costs nothing.
+                max_tokens=4000,
+                extra_body={"think": False},
+                timeout=30,
+            )
+            if response.choices:
+                raw = response.choices[0].message.content or ""
 
         raw = raw.strip()
         if "```" in raw:
@@ -347,10 +443,15 @@ def _llm_extract_entities(
             "EntityExtractor: LLM extracted %d entities, %d relationships",
             len(entities), len(relationships),
         )
+        _note_health(hermes_home, ok=True, n_ent=len(entities), n_rel=len(relationships))
         return ExtractionResult(entities, relationships)
 
     except Exception as exc:
-        logger.warning("EntityExtractor: LLM extraction failed: %s", exc)
+        _note_health(hermes_home, ok=False, grund=str(exc))
+        logger.warning(
+            "EntityExtractor: FALLBACK auf Heuristik (LLM-Extraktion fehlgeschlagen, "
+            "0 Beziehungen): %s", exc,
+        )
         return ExtractionResult([], [])
 
 
