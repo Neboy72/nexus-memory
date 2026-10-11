@@ -414,6 +414,23 @@ def named_point_vector(vector_name: Optional[str], vec: Any) -> Any:
     return {vector_name: vec} if vector_name else vec
 
 
+def _normalize_text_content(payload: dict) -> dict:
+    """Keep the text/content contract intact at write time.
+
+    Callers still store the primary text in ``content``; readers already fall
+    back from ``text`` to ``content``. By mirroring the two fields on every
+    write, both old and new lookup paths see a value without needing to know
+    which field the point was originally created with.
+    """
+    text = payload.get("text")
+    content = payload.get("content")
+    if text and not content:
+        payload["content"] = text
+    elif content and not text:
+        payload["text"] = content
+    return payload
+
+
 def upsert_named(
     client: Any,
     collection_name: str,
@@ -428,10 +445,17 @@ def upsert_named(
     and a stray ``using=`` kwarg is rejected too — both silently turn the
     write into a no-op with a warning. Legacy collections (vector_name None)
     keep plain vectors.
+
+    Also normalizes ``text`` / ``content`` so every point carries both fields
+    when at least one is present — readers can then use either key.
     """
     if vector_name:
         for p in points:
             vec = getattr(p, "vector", None)
             if vec is not None and not isinstance(vec, dict):
                 p.vector = {vector_name: vec}
+    for p in points:
+        payload = getattr(p, "payload", None)
+        if isinstance(payload, dict):
+            p.payload = _normalize_text_content(payload)
     return client.upsert(collection_name=collection_name, points=points)

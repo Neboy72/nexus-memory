@@ -410,6 +410,91 @@ class TestSharpProofForeignVectorName:
         assert named_point_vector(None, [1, 2]) == [1, 2]
 
 
+class TestUpsertNormalizesTextContent:
+    """Writer unification: every point carries both ``text`` and ``content``.
+
+    Most engine writers store the primary text in ``content`` only; readers
+    already fall back from ``text`` to ``content``. The write helper now
+    mirrors the two fields so the payload is self-describing for both old and
+    new lookup paths.
+    """
+
+    def test_content_only_gets_text_mirror(self):
+        c = _client()
+        b = CollectionBinding(c, "content-only", _StubProvider())
+        b.ensure()
+
+        upsert_named(
+            c, "content-only",
+            [models.PointStruct(id=1, vector=[0.1] * 4,
+                                payload={"content": "the fact"})],
+            b.vector_name(),
+        )
+
+        rec = c.retrieve("content-only", ids=[1], with_payload=True)[0]
+        assert rec.payload["content"] == "the fact"
+        assert rec.payload["text"] == "the fact"
+
+    def test_text_only_gets_content_mirror(self):
+        c = _client()
+        b = CollectionBinding(c, "text-only", _StubProvider())
+        b.ensure()
+
+        upsert_named(
+            c, "text-only",
+            [models.PointStruct(id=2, vector=[0.1] * 4,
+                                payload={"text": "the rule"})],
+            b.vector_name(),
+        )
+
+        rec = c.retrieve("text-only", ids=[2], with_payload=True)[0]
+        assert rec.payload["text"] == "the rule"
+        assert rec.payload["content"] == "the rule"
+
+    def test_both_fields_unchanged(self):
+        c = _client()
+        b = CollectionBinding(c, "both-fields", _StubProvider())
+        b.ensure()
+
+        upsert_named(
+            c, "both-fields",
+            [models.PointStruct(id=3, vector=[0.1] * 4,
+                                payload={"text": "old", "content": "new"})],
+            b.vector_name(),
+        )
+
+        rec = c.retrieve("both-fields", ids=[3], with_payload=True)[0]
+        assert rec.payload["text"] == "old"
+        assert rec.payload["content"] == "new"
+
+    def test_empty_payload_untouched(self):
+        c = _client()
+        b = CollectionBinding(c, "empty-payload", _StubProvider())
+        b.ensure()
+
+        upsert_named(
+            c, "empty-payload",
+            [models.PointStruct(id=4, vector=[0.1] * 4, payload={})],
+            b.vector_name(),
+        )
+
+        rec = c.retrieve("empty-payload", ids=[4], with_payload=True)[0]
+        assert rec.payload == {}
+
+    def test_no_payload_attr_untouched(self):
+        """A point without a payload attribute must not gain one."""
+        c = _client()
+        b = CollectionBinding(c, "no-payload", _StubProvider())
+        b.ensure()
+
+        point = models.PointStruct(id=5, vector=[0.1] * 4)
+        upsert_named(c, "no-payload", [point], b.vector_name())
+
+        rec = c.retrieve("no-payload", ids=[5], with_payload=True)[0]
+        # Qdrant stores absent payload as empty dict on retrieval.
+        assert rec.payload == {}
+
+
 # ===========================================================================
 # P0 regressions (from the K3 review, 09.10.2026)
 # ===========================================================================

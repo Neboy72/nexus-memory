@@ -34,20 +34,43 @@ function formatRelativeTime(isoTimestamp: string): string {
   }
 }
 
+// Per-category text caps for the injected recall block. Search tools still
+// return the full payload; this only limits what is rendered into the prompt.
+const CATEGORY_TEXT_CAP: Record<string, number> = {
+  entity: 400,
+  preference: 600,
+  rule: 800,
+  fact: 1200,
+  session: 2500,
+}
+const DEFAULT_TEXT_CAP = 1200
+const TOTAL_BLOCK_CAP = 12000
+
+function textCapFor(category?: string): number {
+  // Object.hasOwn is not the point here: `category` comes from an unvalidated
+  // payload, so a value like "constructor" would resolve to an inherited
+  // Object.prototype member. The typeof check treats anything that is not a
+  // plain number as "no cap known" and falls back to the default.
+  const cap = category ? CATEGORY_TEXT_CAP[category] : undefined
+  return typeof cap === "number" ? cap : DEFAULT_TEXT_CAP
+}
+
+function truncateAtWordBoundary(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  let cut = maxLen
+  while (cut > 0 && !/[\s]/.test(text[cut])) cut--
+  if (cut <= 0) cut = maxLen
+  return text.slice(0, cut) + " [...]"
+}
+
 function formatMemories(results: SearchResult[], maxResults: number): string | null {
   if (results.length === 0) return null
 
-  const memories = results.slice(0, maxResults)
-
-  const lines = memories.map((r) => {
-    const timeStr = r.created_at ? formatRelativeTime(r.created_at) : ""
-    const pct = r.score != null ? `[${Math.round(r.score * 100)}%]` : ""
-    const prefix = timeStr ? `[${timeStr}]` : ""
-    const category = r.category ? `[${r.category}]` : ""
-    // Neutralize a stored closing tag before interpolation: a memory must
-    // never be able to terminate the wrapper and leak the rest as prompt text.
+  // Per-memory cap first, applied after neutralizing a stored closing tag.
+  const memories = results.slice(0, maxResults).map((r) => {
+    const cap = textCapFor(r.category)
     const text = neutralizeContextClose(r.text ?? "")
-    return `- ${prefix}${category} ${text} ${pct}`.trim()
+    return { ...r, text: truncateAtWordBoundary(text, cap) }
   })
 
   const intro =
@@ -55,9 +78,33 @@ function formatMemories(results: SearchResult[], maxResults: number): string | n
   const disclaimer =
     "Do not proactively bring up memories. Only use them when the conversation naturally calls for it."
 
-  const section = `## Relevant Memories (with relevance %)\n${lines.join("\n")}`
+  // Global cap: if the whole block exceeds 12 000 chars, drop the worst-scored
+  // hits from the back until it fits. Vector results are already sorted by
+  // score descending; graph-boost items are appended last and fall off first.
+  let keep = memories.length
+  let block = ""
+  while (keep > 0) {
+    const kept = memories.slice(0, keep)
+    const lines = kept.map((r) => {
+      const timeStr = r.created_at ? formatRelativeTime(r.created_at) : ""
+      const pct = r.score != null ? `[${Math.round(r.score * 100)}%]` : ""
+      const prefix = timeStr ? `[${timeStr}]` : ""
+      const category = r.category ? `[${r.category}]` : ""
+      return `- ${prefix}${category} ${r.text} ${pct}`.trim()
+    })
 
-  return `<nexus-context>\n${intro}\n\n${section}\n\n${disclaimer}\n</nexus-context>`
+    const section = `## Relevant Memories (with relevance %)\n${lines.join("\n")}`
+    block = `<nexus-context>\n${intro}\n\n${section}\n\n${disclaimer}\n</nexus-context>`
+    if (block.length <= TOTAL_BLOCK_CAP) break
+    keep--
+  }
+
+  const dropped = memories.length - keep
+  log.info(
+    `nexus: recall block ${block.length} chars — kept ${keep}/${memories.length} memories, dropped ${dropped} lowest-scored hits`
+  )
+
+  return block
 }
 
 // stripInboundMetadata moved to lib/prompt-safety.ts (stripNexusContextBlock)
@@ -258,7 +305,7 @@ export function buildRecallHandler(
         return
       }
 
-      log.info(`nexus: injecting context (${memoryContext.length} chars, ${allItems.length} memories, ${graphItems.length} graph-boosted)`)
+      log.info(`nexus: injecting context (${allItems.length} raw memories, ${graphItems.length} graph-boosted)`)
       return { prependContext: memoryContext }
     } catch (err) {
       log.error("recall failed", err)
