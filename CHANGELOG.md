@@ -1,3 +1,32 @@
+## [0.22.23] — 2026-10-11
+
+### Fixed — the plugin reaches its own venv for every dependency again
+
+- **The agent's memory could be unreachable while every surface looked healthy.** Since the
+  second review round (06.10.) the plugin's own venv was attached inside the qdrant repair
+  branch only — and there with `sys.path.append`, which does *not* process a venv's `.pth`
+  files. On a host that **has** `qdrant_client` but **not** a local embedding backend
+  (Hermes' own plugin environment), that branch never ran. The embedding provider then fell
+  fail-closed, every recall returned an empty list, and an empty list is indistinguishable
+  from an empty memory. The health endpoint stayed green the whole time.
+- **The venv is attached at module import now, for every dependency**, via
+  `site.addsitedir` so the editable-installed engine package is visible too.
+- **Ordering is preserved deliberately.** A dependency the package manager installed still
+  wins — but only while the host can serve the embedding path at all. When it cannot, taking
+  the venv as a *mixture* is worse than taking it whole: the model would come from the venv
+  while its siblings still came from the host, and a sibling that is *present but
+  incompatible* is the worst case of all (the host carried `huggingface_hub` 1.24.0 —
+  importable, but too old for `sentence-transformers` 6.1.0, `cannot import name
+  'ResolvedRevision'`). In that case the venv goes first. The review's concern — no
+  shadowing of a managed install — is unchanged for every healthy host.
+- **Four tests pin it** (`tests/test_plugin_venv_import_path.py`): the venv goes first when
+  the host cannot embed, is only appended when it can, stays idempotent and fail-open, and
+  `addsitedir` (not a bare append) is what attaches it.
+
+Verified end to end in the real agent interpreter: no local backend in the host before,
+`Qwen/Qwen3-Embedding-0.6B` (1024d) available and a live recall returning hits after, with
+both agent self-reports back to `ok: true`.
+
 ## [0.22.22] — 2026-10-10
 
 ### Changed — one embedding path, one pinned engine revision
