@@ -26,6 +26,36 @@
 
 ### Fixed
 
+- **Three silent exits of the entity extraction are counted and named now.** The
+  extractor prefers an LLM call and falls back to a heuristic that yields **zero
+  relationships**. Between 01.10. and 11.10.2026 it ran 313 times without anyone
+  noticing (counted on this machine in `~/.hermes/logs/gateway.error.log`: lines
+  of 01.10.-11.10.2026 carrying "LLM extraction failed"; 267 of those are the
+  empty-answer error described next, the remaining 46 other causes): on the OpenAI-compatible path (`/v1`) the field
+  `think: false` is not passed through, so a reasoning model spent the whole
+  token budget in its hidden `reasoning` field and returned an empty answer —
+  `json.loads("")` → "Expecting value: line 1 column 1 (char 0)". The only trace
+  was one warning line. Now the local endpoint (port 11434) is called through
+  `/api/chat`, where `think: false` works (measured on a real 1.385-character
+  memory text: 1,9 s and 0 reasoning tokens instead of 15,5 s and 6531 completion
+  tokens, answer complete with 7 entities and 6 relationships), and every
+  fallback — empty answer, unreachable endpoint, missing model — increments a
+  counter and stores its reason verbatim under
+  `~/.hermes/state/entity-extractor-health.json`, so a watch can see it instead
+  of guessing from a log nobody reads. `tests/test_entity_extraction_path.py`
+  pins the routing and all three exits.
+- **The legacy `__version__` fallback lagged one release behind.** `nexus/__init__.py`
+  reads the installed package version and keeps a literal for a bare checkout —
+  that literal still said 0.22.21 while the manifests said 0.22.22, which
+  `test_review_findings_20261010` caught on main. It now reads 0.22.22.
+- **The OpenClaw default-provider guard followed a function that had moved.**
+  `test_embed_default_is_local` still looked for `detectProvider()` in
+  `lib/embedder.ts`; the environment read was moved to `lib/embedding-env.ts` on
+  10.10.2026 (a static scanner read "environment beside network send" as
+  credential exfiltration) and the function is now `localEmbeddingProvider()`,
+  called from `lib/config.ts`. The guard was updated to the new place and keeps
+  the same promise: no configuration → the local Nexus service, never null and
+  never a cloud provider.
 - **Three docstrings still described an Ollama fallback that no longer exists.**
   `_detect_auto()` chooses HuggingFace as the single automatic path; the engine's
   module header, the `EmbeddingProvider` docstring and the Hermes plugin's
