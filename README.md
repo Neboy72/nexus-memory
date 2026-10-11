@@ -291,7 +291,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
-| **v0.22.22** | 2026-10-10 | One embedding path for every plugin (the local service), and the engine revision is now a tag name a guard test resolves |
+| **v0.22.22** | 2026-10-10 | One embedding path for every plugin (the local service), and the engine revision is one full commit sha a guard test closes the chain around |
 | **v0.22.21** | 2026-10-10 | Five access-level gaps closed from the external review — every missing or unknown level now reads as the *most* restrictive one |
 | **v0.22.20** | 2026-10-10 | Conversation history is private: `sync_turn` had stored every turn as `public` |
 | **v0.22.19** | 2026-10-10 | Two more silent failures in the Claude Code write path (POST→PUT repair) |
