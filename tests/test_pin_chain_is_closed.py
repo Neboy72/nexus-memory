@@ -1,25 +1,43 @@
-"""The engine revision is ONE value, named the same everywhere, and it resolves.
+"""The engine revision is ONE immutable value, named the same everywhere, and it resolves.
 
-Round 4 (10.10.2026). The catalog entry pinned `v0.22.21`, while two places inside the
-repository still fetched an older engine revision. A user installing through the catalog
-therefore received an engine that did not carry the access-level promise the entry made.
-Every content test was green: they read the WORKING TREE, which had long moved on, not
-the tree the pin describes.
+Fassung 2 (11.10.2026). Der Reviewer hat den Tag-Namen abgelehnt: ein Tag laesst sich
+verschieben, und ein verschobener Tag wuerde die Engine fuer jede Neuinstallation und
+jeden Reparaturlauf still veraendern, ohne dass es jemand erneut prueft. Verlangt ist
+stattdessen ein voller 40-stelliger Commit-Hash, mit dem Zwei-Commit-Rezept:
 
-What this file guards, in order of who breaks it:
+  Commit A: die Engine fertig.
+  Commit B: NUR die zwei Revisionsstellen auf A's vollen Hash (plus Versionsnummern).
+  Dieser Test beweist, dass zwischen A und B nichts an der Engine passiert ist.
 
-1. `plugins/memory/nexus/pyproject.toml` (`[tool.uv.sources]`) and
-   `plugins/memory/nexus/__init__.py` (`_repair_command`) must name the SAME revision.
-   They drifted apart twice.
-2. That revision is a TAG NAME, never a bare sha. A commit cannot contain its own sha,
-   so a sha in the tree is stale the moment it is written; a tag name can be resolved.
-3. The tag exists, is annotated, and its version matches the version the manifest,
-   `pyproject.toml` and the README badge advertise.
-4. **Self-consistency at the pin**: read the same two files AT the tag and they must
-   name the same tag again. This is the check that would have caught the 10.10. case —
-   the pinned tree was not asked what it installed.
-5. The tag is an ancestor of HEAD, so the pin is reachable and cannot be a dangling
-   orphan commit.
+Warum Fassung 1 falsch war: sie VERLANGTE einen Tag-Namen ("ein Commit kann seinen
+eigenen Hash nicht enthalten"). Das war bequem, aber es liess genau die Hintertuer
+offen, die der Reviewer schliesst. Ein Commit kann seinen eigenen Hash nicht nennen —
+deshalb nennt der Pin den letzten ENGINE-Commit, und der Ketten-Beweis unten zeigt,
+dass HEAD seither keine Engine-Aenderung mehr enthaelt.
+
+Was diese Datei bewacht, in der Reihenfolge, in der es kaputtgeht:
+
+1. `plugins/memory/nexus/pyproject.toml` (`[tool.uv.sources]`) und
+   `plugins/memory/nexus/__init__.py` (`_repair_command`) nennen DIESELBE Revision.
+   Sie sind zweimal auseinandergelaufen.
+2. Diese Revision ist ein VOLLER Commit-Hash (40 Hexzeichen), kein Tag-Name.
+3. Der Hash existiert (lokal; und ist von einem entfernten Ref erreichbar, sobald
+   das Repository einen kennt).
+4. **Ketten-Beweis:** `git diff <pin> HEAD -- src nexus pyproject.toml` ist LEER.
+   Das ist der Satz des Reviewers in Pruefform: B aendert nur die Revisionsstellen
+   und die Versionsnummern, nicht die Engine. Beim Pruefen ist HEAD der Pin-Commit
+   B, also ist `git diff <pin> HEAD` genau das geforderte `git diff A B`. Jeder
+   spaetere Engine-Commit macht ihn rot, solange kein neues Paar A'/B' gebaut wird
+   — das ist der Zweck dieses Waechters.
+5. Die Versionsangaben (Manifest, Plugin-pyproject, Root-pyproject, README-Badge)
+   nennen alle dieselbe Version; haengt am gepinnten Hash ein vX.Y.Z-Tag, muss es
+   genau diese Version sein.
+6. Der gepinnte Hash ist ein Vorfahr von HEAD — erreichbar, kein Waisencommit.
+
+Die Lehre vom 10.10.2026 bleibt eingebaut: alle inhaltlichen Tests waren gruen, weil
+sie den ARBEITSSTAND gelesen haben, nicht den Stand, auf den der Pin zeigt. Deshalb
+liest Punkt 4 ausdruecklich gegen den gepinnten Commit und nicht gegen die Datei im
+Verzeichnis.
 """
 
 from __future__ import annotations
@@ -37,8 +55,24 @@ PLUGIN_YAML = "plugins/memory/nexus/plugin.yaml"
 ROOT_PYPROJECT = "pyproject.toml"
 README = "README.md"
 
+# Der Ketten-Beweis laeuft ueber genau diese Pfade (Reviewer-Wortlaut). Sie sind
+# WURZEL-bezogen: `nexus` trifft `nexus/…` an der Wurzel, nicht
+# `plugins/memory/nexus/…`; `pyproject.toml` die Wurzeldatei, nicht die des
+# Plugins; `src` den Wurzelbaum. Die zwei Revisionsstellen sind bewusst NICHT in
+# dieser Liste — B muss sie aendern duerfen, sonst waere der Beweis unmoeglich
+# ("aendere nur diese zwei Stellen, aber beruehre die Engine nicht"). Als
+# unabhaengige Probe, gemessen am 11.10.2026 an einem veroeffentlichten Commit,
+# der BEIDE Arten von Datei angefasst hat:
+#   git diff --name-only bc00e65^ bc00e65 -- src nexus pyproject.toml
+#   -> pyproject.toml            (nur die Wurzeldatei)
+#   git diff --name-only bc00e65^ bc00e65 -- plugins/memory/nexus
+#   -> plugins/memory/nexus/pyproject.toml, __init__.py, plugin.yaml
+# Die Plugin-Dateien liegen also ausserhalb der drei Pfade, obwohl sie
+# `pyproject.toml` heissen.
+ENGINE_PATHS = ["src", "nexus", "pyproject.toml"]
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
-SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def git(*args: str) -> str:
@@ -70,6 +104,13 @@ def refs_in_working_tree() -> tuple[str, str]:
             ref_from_init((REPO / PLUGIN_INIT).read_text()))
 
 
+def pinned_ref() -> str:
+    uv_rev, _ = refs_in_working_tree()
+    return uv_rev
+
+
+# ─── 1 + 2: dieselbe Revision, und zwar ein voller Hash ─────────────────────
+
 def test_both_engine_refs_name_the_same_revision() -> None:
     uv_rev, init_rev = refs_in_working_tree()
     assert uv_rev == init_rev, (
@@ -78,23 +119,74 @@ def test_both_engine_refs_name_the_same_revision() -> None:
     )
 
 
-def test_engine_ref_is_a_tag_name_not_a_sha() -> None:
-    uv_rev, _ = refs_in_working_tree()
-    assert not SHA_RE.match(uv_rev), (
-        f"the engine ref is the bare sha {uv_rev!r}. A commit cannot name itself, so a "
-        "sha written into the tree is stale the moment it lands; pin the tag name."
+def test_engine_ref_is_a_full_commit_sha_not_a_tag() -> None:
+    rev = pinned_ref()
+    assert not TAG_RE.match(rev), (
+        f"the engine ref is the tag name {rev!r}. A tag can be moved, and a moved tag "
+        "would change the engine for every new install and every repair run without "
+        "another review. Pin the full 40-character commit sha instead."
     )
-    assert TAG_RE.match(uv_rev), (
-        f"the engine ref {uv_rev!r} is not a vX.Y.Z tag name."
+    assert SHA_RE.match(rev), (
+        f"the engine ref {rev!r} is neither a vX.Y.Z tag nor a full 40-character commit "
+        "sha. Short hashes are not accepted: they are ambiguous by construction."
+    )
+
+
+# ─── 3: der Hash existiert und ist erreichbar ───────────────────────────────
+
+def test_engine_ref_exists_as_a_commit() -> None:
+    rev = pinned_ref()
+    probe = subprocess.run(["git", "cat-file", "-e", f"{rev}^{{commit}}"],
+                           cwd=REPO, capture_output=True, text=True)
+    assert probe.returncode == 0, (
+        f"the pinned revision {rev!r} is not a commit in this repository. A pin that "
+        "does not resolve installs nothing for everybody."
     )
 
 
-def test_engine_ref_tag_exists_and_matches_the_advertised_version() -> None:
-    tag, _ = refs_in_working_tree()
-    assert git("cat-file", "-t", tag) == "tag", (
-        f"{tag} is not an annotated tag — a lightweight tag can silently move."
+def test_engine_ref_is_reachable_from_a_remote_ref() -> None:
+    """The pin must survive outside this checkout — otherwise a fresh clone fails."""
+    rev = pinned_ref()
+    remote_ref = None
+    for candidate in ("origin/main", "origin/HEAD", "origin/master"):
+        probe = subprocess.run(["git", "rev-parse", "--verify", "--quiet", candidate],
+                               cwd=REPO, capture_output=True, text=True)
+        if probe.returncode == 0:
+            remote_ref = candidate
+            break
+    if remote_ref is None:
+        pytest.skip("no remote-tracking ref in this checkout — cannot prove reachability here")
+    probe = subprocess.run(["git", "merge-base", "--is-ancestor", rev, remote_ref],
+                           cwd=REPO, capture_output=True, text=True)
+    assert probe.returncode == 0, (
+        f"the pinned revision {rev!r} is not reachable from {remote_ref}. It exists only "
+        "locally, so nobody else can install it."
     )
 
+
+# ─── 4: der Ketten-Beweis (der Satz des Reviewers in Pruefform) ─────────────
+
+def test_chain_is_closed_no_engine_change_after_the_pin() -> None:
+    rev = pinned_ref()
+    changed = git("diff", "--name-only", rev, "HEAD", "--", *ENGINE_PATHS)
+    assert changed == "", (
+        f"the engine changed after the pin: {changed.splitlines()}. The pin names "
+        f"{rev!r}, but HEAD carries engine edits on top of it, so an install from the "
+        "catalog would receive different code than the reviewed one. Put engine changes "
+        "into the pinned commit (Commit A), and let the ref commit (B) change nothing "
+        "but the two revision lines and the version numbers."
+    )
+
+
+def test_pin_is_an_ancestor_of_head() -> None:
+    rev = pinned_ref()
+    subprocess.run(["git", "merge-base", "--is-ancestor", rev, "HEAD"],
+                   cwd=REPO, capture_output=True, check=True)
+
+
+# ─── 5: die Versionen sagen dasselbe ───────────────────────────────────────
+
+def test_advertised_versions_agree() -> None:
     manifest = (REPO / PLUGIN_YAML).read_text()
     plugin_toml = (REPO / PLUGIN_PYPROJECT).read_text()
     root_toml = (REPO / ROOT_PYPROJECT).read_text()
@@ -106,35 +198,19 @@ def test_engine_ref_tag_exists_and_matches_the_advertised_version() -> None:
         ROOT_PYPROJECT: re.search(r'^version\s*=\s*"([^"]+)"', root_toml, re.M).group(1),
         README: re.search(r"badge/version-([0-9.]+)-", readme).group(1),
     }
-    expected = tag.lstrip("v")
-    for where, value in advertised.items():
-        assert value == expected, (
-            f"{where} advertises {value!r} while the engine ref names tag {tag!r} "
-            f"({expected!r}). A pin whose version strings disagree is the same defect "
-            "one layer up."
-        )
-
-
-def test_engine_ref_is_self_consistent_at_the_pin() -> None:
-    """Read the two ref files AT the tag: they must name the same tag again.
-
-    This is the guard for the failure class found on 10.10.2026 — the tree that a
-    catalog install actually receives was never asked what it installs.
-    """
-    tag, _ = refs_in_working_tree()
-    at_pin_pyproject = git("show", f"{tag}:{PLUGIN_PYPROJECT}")
-    at_pin_init = git("show", f"{tag}:{PLUGIN_INIT}")
-
-    pinned_uv = ref_from_pyproject(at_pin_pyproject)
-    pinned_init = ref_from_init(at_pin_init)
-    assert pinned_uv == pinned_init == tag, (
-        f"at {tag} the refs say pyproject={pinned_uv!r} and _repair_command="
-        f"{pinned_init!r}, but the tag itself is {tag!r}. Whoever installs this tag "
-        "gets a different engine than the tag promises."
+    values = set(advertised.values())
+    assert len(values) == 1, (
+        f"the advertised version strings disagree: {advertised}. A pin whose version "
+        "strings disagree is the same defect one layer up."
     )
 
-
-def test_engine_ref_tag_is_an_ancestor_of_head() -> None:
-    tag, _ = refs_in_working_tree()
-    subprocess.run(["git", "merge-base", "--is-ancestor", tag, "HEAD"],
-                   cwd=REPO, capture_output=True, check=True)
+    # Wenn am gepinnten Commit ein Versions-Tag haengt, muss es diese Version sein.
+    rev = pinned_ref()
+    tags = [t for t in git("tag", "--points-at", rev).splitlines() if TAG_RE.match(t)]
+    if tags:
+        expected = next(iter(values))
+        assert any(t.lstrip("v") == expected for t in tags), (
+            f"the pinned commit {rev[:10]} carries the tag(s) {tags}, but the advertised "
+            f"version is {expected!r}. Whoever checks out the pin sees a different version "
+            "than the catalog promises."
+        )
