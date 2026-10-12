@@ -5,7 +5,30 @@
    `const CC = NEXUS_CATEGORY_COLORS` threw a ReferenceError while this file
    was parsed if colors.js had not run first (or failed to load), taking the
    whole graph feature down instead of falling back to the grey default. */
-const GRAPH_NODE_FALLBACK_COLOR = '#6b7280';
+/* W38: eigener, heller Ersatzton. Vorher war es exakt die Temp-Farbe —
+   jede Kategorie ohne Eintrag in der Palette sah damit aus wie "Temp". */
+const GRAPH_NODE_FALLBACK_COLOR =
+  (typeof NEXUS_CATEGORY_FALLBACK_COLOR !== 'undefined' && NEXUS_CATEGORY_FALLBACK_COLOR) || '#e5e7eb';
+function _renderLegend(counts) {
+  /* Die Legende kommt aus dem BESTAND, nicht aus einer festen Liste im HTML.
+     Eine feste Liste behauptete zuletzt "grau = Temp", waehrend grau in
+     Wahrheit neun Kategorien mit 6.024 Eintraegen bedeutete. */
+  const box = document.getElementById('graphLegend');
+  if (!box) return;
+  box.textContent = '';
+  const entries = Object.entries(counts || {}).sort((a, b) => b[1] - a[1]);
+  for (const [cat, n] of entries) {
+    const item = document.createElement('span');
+    item.className = 'legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'legend-dot';
+    dot.style.background = _categoryColor(cat);
+    item.appendChild(dot);
+    item.appendChild(document.createTextNode(cat + ' ' + n));
+    box.appendChild(item);
+  }
+}
+
 function _categoryColor(category) {
   const palette = (typeof NEXUS_CATEGORY_COLORS !== 'undefined' && NEXUS_CATEGORY_COLORS) || {};
   return palette[category] || GRAPH_NODE_FALLBACK_COLOR;
@@ -58,7 +81,8 @@ const MemoryGraph = {
     this.sim.alpha(0.3).restart();
   },
 
-  load(memories, edges) {
+  load(memories, edges, categoryCounts) {
+    _renderLegend(categoryCounts);
     // A previous simulation keeps ticking (and mutating detached nodes)
     // unless it is stopped explicitly.
     if (this.sim) this.sim.stop();

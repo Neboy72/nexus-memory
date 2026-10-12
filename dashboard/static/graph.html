@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#050810">
 <title>Nexus Memory - Graph</title>
-<link rel="stylesheet" href="/static/webui-style.css?v=20260907b">
+<link rel="stylesheet" href="/static/webui-style.css?v=20261012a">
 <link rel="icon" type="image/png" href="/assets/brand/nexus-icon.png">
 </head>
 <body>
@@ -55,14 +55,10 @@
           </button>
         </div>
       </div>
-      <div class="graph-controls__legend" id="graphLegend">
-        <span class="legend-item"><span class="legend-dot legend-dot--fact"></span>Fact</span>
-        <span class="legend-item"><span class="legend-dot legend-dot--belief"></span>Belief</span>
-        <span class="legend-item"><span class="legend-dot legend-dot--session"></span>Session</span>
-        <span class="legend-item"><span class="legend-dot legend-dot--rule"></span>Rule</span>
-        <span class="legend-item"><span class="legend-dot legend-dot--preference"></span>Preference</span>
-        <span class="legend-item"><span class="legend-dot legend-dot--temp"></span>Temp</span>
-      </div>
+      <!-- Die Legende wird aus dem echten Bestand gebaut (graph.js, _renderLegend).
+           Eine feste Liste stand hier zuletzt auf "grau = Temp", waehrend grau in
+           Wahrheit neun Kategorien mit 6.024 Eintraegen bedeutete. -->
+      <div class="graph-controls__legend" id="graphLegend"></div>
     </div>
 
     <div class="graph-container" id="graphContainer">
@@ -109,9 +105,9 @@
   </aside>
 
   <script src="https://d3js.org/d3.v7.min.js"></script>
-  <script src="/static/webui-js/colors.js?v=20260915"></script>
-  <script src="/static/webui-js/api.js?v=20260907b"></script>
-  <script src="/static/webui-js/graph.js?v=20260907b"></script>
-  <script src="/static/webui-js/app.js?v=20260907b"></script>
+  <script src="/static/webui-js/colors.js?v=20261012a"></script>
+  <script src="/static/webui-js/api.js?v=20261012a"></script>
+  <script src="/static/webui-js/graph.js?v=20261012a"></script>
+  <script src="/static/webui-js/app.js?v=20261012a"></script>
 </body>
 </html>

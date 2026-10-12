@@ -14,6 +14,7 @@ vergifteten Zwischenspeicher hinterliess.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import urllib.request
 import pathlib
@@ -45,6 +46,38 @@ def _qdrant_erreichbar() -> bool:
         return False
 
 
+def _stelle_sammlung_sicher() -> bool:
+    """Die beobachtete Sammlung selbst anlegen, statt sie vorauszusetzen.
+
+    Zuvor hing der Test an einer Sammlung, die es in der laufenden
+    Qdrant-Instanz schlicht nicht gab: ``vector_field`` bekam 404, lieferte
+    ``None`` — und der Test schlug fehl, obwohl der Code in Ordnung war. Ein
+    Test, der von einem von Hand gepflegten Zustand abhaengt, ist rot oder
+    gruen je nach Rechner. Hier wird der Zustand hergestellt, den er braucht.
+    """
+    if not _qdrant_erreichbar():
+        return False
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:6333/collections/test-collection", timeout=4
+        ):
+            return True  # schon da
+    except Exception:
+        pass
+    body = json.dumps(
+        {"vectors": {"test-vector": {"size": 2, "distance": "Cosine"}}}
+    ).encode()
+    req = urllib.request.Request(
+        "http://127.0.0.1:6333/collections/test-collection",
+        data=body, method="PUT", headers={"Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=6)
+        return True
+    except Exception:
+        return False
+
+
 def test_fehlgeschlagener_blick_wird_nicht_gecacht():
     """Nach einem Aussetzer muss der NAECHSTE Aufruf es erneut versuchen."""
     sa = _scope_auto()
@@ -70,8 +103,8 @@ def test_fehlgeschlagener_blick_wird_nicht_gecacht():
 
 def test_erholung_nach_aussetzer():
     """Und die Gegenprobe: ist Qdrant wieder da, muss es wieder funktionieren."""
-    if not _qdrant_erreichbar():
-        pytest.skip("Qdrant nicht erreichbar")
+    if not _stelle_sammlung_sicher():
+        pytest.skip("Qdrant oder die Test-Sammlung nicht verfuegbar")
     sa = _scope_auto()
     sa._LAYOUT_CACHE.clear()
 
@@ -95,8 +128,8 @@ def test_erholung_nach_aussetzer():
 
 def test_erfolgreicher_blick_wird_gecacht():
     """Die Ersparnis muss bleiben: ein erfolgreicher Blick wird gemerkt."""
-    if not _qdrant_erreichbar():
-        pytest.skip("Qdrant nicht erreichbar")
+    if not _stelle_sammlung_sicher():
+        pytest.skip("Qdrant oder die Test-Sammlung nicht verfuegbar")
     sa = _scope_auto()
     sa._LAYOUT_CACHE.clear()
 

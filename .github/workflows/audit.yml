@@ -44,7 +44,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install pytest pytest-asyncio
+          # fastapi/uvicorn: dashboard/server.py ends the process on import without
+          # them, so the dashboard guards would be silently skipped instead of protecting.
+          pip install pytest pytest-asyncio fastapi uvicorn
 
       - name: Collection-Name Check
         run: |

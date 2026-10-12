@@ -108,13 +108,17 @@ async function loadStatus() {
 
   const healthDot = document.getElementById('health-indicator');
   const healthText = document.getElementById('health-text');
-  if (status.qdrant_healthy) {
-    healthDot.className = 'health-dot health-ok';
-    healthText.textContent = 'Healthy';
-  } else {
-    healthDot.className = 'health-dot health-error';
-    healthText.textContent = 'Qdrant Offline';
-  }
+  // Zwei verschiedene Fehler, zwei verschiedene Namen. Vorher hiess beides
+  // "Qdrant Offline" — auch dann, wenn nur die Sammlung fehlte und Qdrant lief.
+  const storeStates = {
+    ok: ['health-dot health-ok', 'Healthy'],
+    collection_missing: ['health-dot health-error', 'Collection missing'],
+    qdrant_unreachable: ['health-dot health-error', 'Qdrant Offline'],
+  };
+  const state = storeStates[status.store_state]
+    || (status.qdrant_healthy ? storeStates.ok : ['health-dot health-error', 'Store not ready']);
+  healthDot.className = state[0];
+  healthText.textContent = state[1];
 }
 
 // ── Fuel-Toggle: KI-Sortierung an/aus ──
