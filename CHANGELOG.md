@@ -1,3 +1,17 @@
+- **The plugin no longer puts its private venv on the host's `sys.path` at all.** The
+  catalog review of the admission request was right: prepending the venv made every
+  shared library (`httpx`, `pydantic`, `openai`) resolve to the plugin's copy for the
+  whole host process, and two plugins doing that would break each other. Appending
+  alone is not the fix either — `sys.modules` is process-global, so whatever is
+  imported first stays for the rest of the process, and `site.addsitedir` would
+  execute the venv's `.pth` files inside the host. The private venv is now only the
+  runtime of the local embedding service; the plugin asks it for vectors
+  (`POST /embed`, loopback) and never imports an embedding stack into the host. If the
+  service is unavailable the plugin still loads and every read answer says so
+  (`⚠ local embedder unavailable: <reason>; fix: <command>`) instead of returning an
+  empty list. Five guards pin it (`plugins/memory/nexus/test_embed_service_guards.py`),
+  all of them red before the fix.
+
 ## [0.22.24] — 2026-10-12
 
 ### Fixed — the dashboard told the truth about the store: full counts, a real search, honest names
