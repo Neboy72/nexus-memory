@@ -59,6 +59,18 @@ time — the display was not.
   `Qwen3-0.6B` would read as the chat model, not the embedding one. The tile never wraps any more —
   `fitOneLine()` shrinks the font (19px → 12px at a 1160px window) until the name fits, and refits
   on resize.
+- **The Fuel card named an AI that some users cannot reach.** `/api/status` read
+  `NEXUS_CONSOLIDATION_MODEL` with a hard-coded default and derived a "provider" from the mere
+  presence of `:cloud` in that string — it never asked the chain. A user without local Ollama and
+  without any API key therefore saw *"GLM-5.3-Flash · ollama-cloud"* with the toggle ON, while the
+  real chain logged `fuel: all stations closed — daemon sleeps until next tick` and sorted nothing.
+  The card now asks the chain itself: `open_station` (probed; only Ollama is verifiable),
+  `next_station`, `model`, `provider`, `verified`, and all `stations` with
+  `offen` / `bereit` / `zu`. With nothing available the model name is **empty** and the card says
+  "keine Station — Erinnerungen bleiben unsortiert" instead of naming a model nobody can reach; a
+  bare key is shown as *"Schlüssel vorhanden, ungeprüft"*, never as a fact. The probe runs in a
+  thread (`asyncio.to_thread`) — an HTTP call in the event loop took the whole surface down on
+  12.10. Five guards pin it (`tests/test_fuel_status_honesty.py`), all of them red before the fix.
 
 **Wachen:** seven new guards across four files. Each is red without its fix (verified by
 reinstalling the previous file and re-running) — the search route, the fail-loud error, the

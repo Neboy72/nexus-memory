@@ -402,6 +402,127 @@ def _store_state(collection_ok: bool, qdrant_reachable: bool) -> str:
     return "collection_missing" if qdrant_reachable else "qdrant_unreachable"
 
 
+def _fuel_status(ollama_base: str | None = None, probe=None) -> dict:
+    """Welche KI-Station wuerde die Kette JETZT nehmen — und ist sie geprueft?
+
+    Der Defekt vom 12.10.2026: die Kachel las nur ``NEXUS_CONSOLIDATION_MODEL``
+    mit fest eingebautem Standard und leitete den Anbieter daraus ab, ob
+    ":cloud" im Namen steht. Ein User ohne lokales Ollama und ohne Schluessel
+    sah so "glm-5.3-flash:cloud" bei "ollama-cloud" mit Schalter AN — ein Name,
+    den er nie erreichen konnte. Hier wird darum die ECHTE Kette gefragt und nur
+    eine tatsaechlich erreichbare Station heisst "offen" (dieselbe Fehlerfamilie
+    wie die Embedding-Kachel: ein Name, der nicht die Wahrheit ist).
+
+    ``probe``: optionales ``callable(name) -> bool``, ersetzt die echte
+    Ollama-Probe (Tests). Ohne Angabe: HTTP GET ``{ollama_base}/api/tags``,
+    Timeout 2 s.
+
+    BLOCKIEREND (HTTP-Probe, Import, Ketten-Bau) — Aufrufer MUESSEN das ueber
+    ``asyncio.to_thread`` erledigen; im Event-Loop legt genau das die ganze
+    Oberflaeche lahm (Ausfall vom 12.10.).
+    """
+    base = ollama_base or os.environ.get("NEXUS_OLLAMA_BASE", "http://127.0.0.1:11434")
+
+    out = {
+        "enabled": True,
+        "open_station": None,   # erste GEPRUEFT offene Station
+        "next_station": None,   # was die Kette jetzt nehmen wuerde
+        "model": "",
+        "provider": "",
+        "verified": False,
+        "stations": [],
+        "budget_usd": _env_float("NEXUS_FUEL_BUDGET_USD", "5.00"),
+        "spent_usd": 0.0,
+    }
+    try:
+        spend_file = os.path.expanduser("~/.nexus-memory/fuel_spend.json")
+        if os.path.exists(spend_file):
+            with open(spend_file) as f:
+                spend = json.load(f)
+            month_key = time.strftime("%Y-%m")
+            out["spent_usd"] = round(float(spend.get(month_key, spend.get("total", 0)) or 0), 4)
+    except Exception as e:
+        _logger.debug("_fuel_status: fuel spend read failed: %s", e)
+
+    # Import erst hier, nicht zur Modul-Zeit: kein Nebeneffekt beim Server-Start.
+    try:
+        from nexus_memory.fuel_chain import build_chain, _paid_enabled  # single source of truth
+    except Exception as e:
+        # Fremde Umgebung ohne das Paket: lieber ehrlich "keine Station" als ein
+        # geratener Modellname. Ein stiller Fehlschlag, der in eine Falschaussage
+        # kippt, ist der schlechteste Ausgang.
+        _logger.warning("_fuel_status: nexus_memory nicht verfuegbar: %s", e)
+        return out
+
+    try:
+        out["enabled"] = _paid_enabled()
+    except Exception:
+        pass  # Schalter unbekannt -> wie bisher Default AN
+
+    # EIN Standard fuer den Modellnamen: er lebt in der Engine
+    # (consolidation.OLLAMA_MODEL). Keine zweite Kopie des Strings hier.
+    try:
+        from nexus_memory.consolidation import OLLAMA_MODEL
+        model = os.environ.get("NEXUS_CONSOLIDATION_MODEL") or OLLAMA_MODEL
+    except Exception:
+        model = os.environ.get("NEXUS_CONSOLIDATION_MODEL", "")
+
+    if probe is None:
+        def probe(_name: str) -> bool:
+            """Echte Ollama-Probe — blockiert bis 2 s, nur ueber to_thread rufen."""
+            try:
+                with urllib.request.urlopen(base + "/api/tags", timeout=2):
+                    return True
+            except Exception:
+                return False
+
+    try:
+        chain = build_chain(base, model)
+    except Exception as e:
+        _logger.warning("_fuel_status: build_chain fehlgeschlagen: %s", e)
+        return out
+
+    stations = []
+    for st in chain:
+        # Nur Ollama ist pruefbar (HTTP). Schluessel-Stationen sind erst beim
+        # echten Aufruf verifiziert — bis dahin "bereit", niemals "offen".
+        # "kein_schluessel" kann aus build_chain nicht entstehen: Stationen ohne
+        # Schluessel baut sie gar nicht erst ein.
+        if st.name == "ollama":
+            try:
+                offen = bool(probe(st.name))
+            except Exception as e:
+                _logger.debug("_fuel_status: probe(%s) failed: %s", st.name, e)
+                offen = False
+            state = "offen" if offen else "zu"
+        elif st.paid:
+            state = "bereit"
+        else:
+            state = "zu"
+        stations.append({
+            "name": st.name,
+            "model": st.model,
+            "paid": bool(st.paid),
+            "state": state,
+        })
+    out["stations"] = stations
+
+    for entry in stations:
+        if out["open_station"] is None and entry["state"] == "offen":
+            out["open_station"] = entry["name"]
+        if out["next_station"] is None and entry["state"] in ("offen", "bereit"):
+            out["next_station"] = entry["name"]
+    if out["next_station"] is not None:
+        nxt = next(e for e in stations if e["name"] == out["next_station"])
+        out["model"] = nxt["model"]
+        out["provider"] = nxt["name"]
+    # "verified" heisst: der angezeigte Name ist geprueft erreichbar, nicht nur
+    # erwartet. Nur dann darf die Kachel ihn wie eine Tatsache nennen.
+    out["verified"] = (out["next_station"] is not None
+                       and out["next_station"] == out["open_station"])
+    return out
+
+
 @app.get("/api/status")
 async def get_system_status():
     """Get overall system status: health, version, stats."""
@@ -446,27 +567,10 @@ async def get_system_status():
         version = "unknown"
 
     # Fuel-Status: welche KI-Station nutzt der Konsolidierungs-Daemon, wie viel verbraucht?
-    try:
-        from nexus_memory.fuel_chain import _paid_enabled  # single source of truth
-        fuel_enabled = _paid_enabled()
-    except Exception:
-        fuel_enabled = True
-    fuel = {
-        "enabled": fuel_enabled,   # Default AN — User-Toggle via POST /api/fuel/paid
-        "model": os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud"),
-        "provider": "ollama-cloud" if ":cloud" in os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud") else "ollama-local",
-        "budget_usd": _env_float("NEXUS_FUEL_BUDGET_USD", "5.00"),
-        "spent_usd": 0.0,
-    }
-    try:
-        spend_file = os.path.expanduser("~/.nexus-memory/fuel_spend.json")
-        if os.path.exists(spend_file):
-            with open(spend_file) as f:
-                spend = json.load(f)
-            month_key = time.strftime("%Y-%m")
-            fuel["spent_usd"] = round(float(spend.get(month_key, spend.get("total", 0)) or 0), 4)
-    except Exception as e:
-        _logger.debug("get_system_status: fuel spend read failed: %s", e)
+    # Die Kette selbst befragen (kein fest eingebauter Name mehr) und das IMMER
+    # im Thread: die Ollama-Probe ist HTTP und wuerde im Event-Loop JEDEN
+    # anderen Endpunkt blockieren (Ausfall vom 12.10.).
+    fuel = await asyncio.to_thread(_fuel_status)
 
     # Echter Modellname statt nur Provider-Label — Regel: volle Transparenz.
     # NIE auf dem Event-Loop bauen: ein sentence-transformers-Init dauert Minuten
