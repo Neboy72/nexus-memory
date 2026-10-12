@@ -535,6 +535,21 @@ def _estimate_cost(model: str, prompt: str, out: str,
     return (in_tok * prices["in"] + out_tok * prices["out"]) / 1_000_000
 
 
+def _ollama_reachable(ollama_base: str, timeout: float = 5) -> bool:
+    """Cheap HTTP pre-check against ``{ollama_base}/api/tags``.
+
+    Fuel time and the status call ask the SAME question ("is local Ollama
+    there?"), so they share one probe instead of drifting apart. Only the
+    patience differs: the daemon can wait, the surface must answer fast.
+    """
+    try:
+        req = urllib.request.Request(ollama_base + "/api/tags")
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 def build_chain(ollama_base: str, ollama_model: str,
                 ollama_generate: Optional[Callable[[str], str]] = None) -> List[Station]:
     """Build the station list in cheapness order. Injected ollama_generate keeps
@@ -546,12 +561,7 @@ def build_chain(ollama_base: str, ollama_model: str,
     def _probe() -> bool:
         if injected:
             return True  # injected generate = trusted open station (test/embed mode)
-        try:
-            req = urllib.request.Request(ollama_base + "/api/tags")
-            with urllib.request.urlopen(req, timeout=5):
-                return True
-        except Exception:
-            return False
+        return _ollama_reachable(ollama_base)
     stations.append(Station(
         "ollama", _probe,
         ollama_generate or (lambda p: _default_ollama_generate(ollama_base, ollama_model, p)),
@@ -766,6 +776,110 @@ def get_fuel(ollama_base: str, ollama_model: str,
             continue
     log.warning("fuel: all stations closed — daemon sleeps until next tick")
     return None
+
+
+def station_status(ollama_base: Optional[str] = None,
+                   probe: Optional[Callable[[str], bool]] = None) -> Dict[str, Any]:
+    """Which station the chain would take RIGHT NOW — and is that name verified?
+
+    The doors of this chain were never explained anywhere, and the surface that
+    showed them could not be trusted: the dashboard's fuel tile answered from a
+    hard-coded default model plus a guess at the provider, so a user with
+    neither Ollama nor a key saw a model he could never reach (defect of
+    12.10.2026, same family as the embedding tile: a name that is not the
+    truth). The truth about the chain belongs in the chain — this is the ONE
+    source the surface reads, so the setup/status path never rebuilds the
+    chain from its own guess.
+
+    Stations are listed in the order the chain tries them (cheapness order,
+    see build_chain): local Ollama first, then the explicit
+    ``NEXUS_FUEL_BASE``+``NEXUS_FUEL_KEY`` station, then the keyed stations
+    OpenRouter / OpenAI / Nous. Only Ollama is checkable up front; a key
+    station is verified at call time, so it is at most "ready", never "open".
+
+    ``probe``: optional ``callable(name) -> bool`` replacing the real Ollama
+    probe (tests). Without it, ``{ollama_base}/api/tags`` is touched, timeout
+    2 s.
+
+    BLOCKING (HTTP probe, chain build) — callers MUST run this through
+    ``asyncio.to_thread``; doing it inside the event loop stalls every endpoint
+    (outage of 12.10.). Never raises: a broken chain reports the honest zero
+    case (no station, empty model name) rather than a guessed name.
+    """
+    out: Dict[str, Any] = {
+        "enabled": True,          # user switch (_paid_enabled()); paid = opt-IN
+        "open_station": None,     # first station PROVEN open (only Ollama is)
+        "next_station": None,     # what the chain would take here and now
+        "model": "",              # "" when no station is there -> no name at all
+        "provider": "",
+        "verified": False,
+        "stations": [],
+    }
+    try:
+        out["enabled"] = _paid_enabled()
+    except Exception:
+        pass  # switch unreadable -> keep the default ON (as before)
+
+    base = ollama_base or os.environ.get("NEXUS_OLLAMA_BASE", "http://127.0.0.1:11434")
+
+    # ONE standard for the model name: it lives in the engine (consolidation.
+    # OLLAMA_MODEL). No second copy of that string here or in the surface.
+    try:
+        from nexus_memory.consolidation import OLLAMA_MODEL
+        model = os.environ.get("NEXUS_CONSOLIDATION_MODEL") or OLLAMA_MODEL
+    except Exception:
+        model = os.environ.get("NEXUS_CONSOLIDATION_MODEL", "")
+
+    if probe is None:
+        def probe(_name: str) -> bool:
+            """Real Ollama probe — blocks up to 2 s, so only via to_thread."""
+            return _ollama_reachable(base, timeout=2)
+
+    try:
+        chain = build_chain(base, model)
+    except Exception as exc:
+        log.warning("fuel: station_status could not build the chain: %s", exc)
+        return out
+
+    stations: List[Dict[str, Any]] = []
+    for station in chain:
+        # Only Ollama is checkable (HTTP). Key stations are verified on the
+        # real call — until then "bereit", never "offen". "kein_schluessel"
+        # cannot arise from build_chain: a station without a key is not built
+        # in the first place (the key IS the door handle).
+        if station.name == "ollama":
+            try:
+                offen = bool(probe(station.name))
+            except Exception as exc:
+                log.debug("fuel: station_status probe(%s) failed: %s", station.name, exc)
+                offen = False
+            state = "offen" if offen else "zu"
+        elif station.paid:
+            state = "bereit"
+        else:
+            state = "zu"
+        stations.append({
+            "name": station.name,
+            "model": station.model,
+            "paid": bool(station.paid),
+            "state": state,
+        })
+    out["stations"] = stations
+
+    for entry in stations:
+        if out["open_station"] is None and entry["state"] == "offen":
+            out["open_station"] = entry["name"]
+        if out["next_station"] is None and entry["state"] in ("offen", "bereit"):
+            out["next_station"] = entry["name"]
+    if out["next_station"] is not None:
+        nxt = next(e for e in stations if e["name"] == out["next_station"])
+        out["model"] = nxt["model"]
+        out["provider"] = nxt["name"]
+    # "verified" means the displayed name is PROVEN reachable, not merely
+    # expected. Only then may the surface state it as a fact.
+    out["verified"] = (out["next_station"] is not None
+                       and out["next_station"] == out["open_station"])
+    return out
 
 # Paid stations are opt-IN: nothing is written to the user's home at import
 # time (see _ensure_toggle_default_on, now a deliberate no-op).

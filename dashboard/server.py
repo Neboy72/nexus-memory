@@ -405,24 +405,19 @@ def _store_state(collection_ok: bool, qdrant_reachable: bool) -> str:
 def _fuel_status(ollama_base: str | None = None, probe=None) -> dict:
     """Welche KI-Station wuerde die Kette JETZT nehmen — und ist sie geprueft?
 
-    Der Defekt vom 12.10.2026: die Kachel las nur ``NEXUS_CONSOLIDATION_MODEL``
-    mit fest eingebautem Standard und leitete den Anbieter daraus ab, ob
-    ":cloud" im Namen steht. Ein User ohne lokales Ollama und ohne Schluessel
-    sah so "glm-5.3-flash:cloud" bei "ollama-cloud" mit Schalter AN — ein Name,
-    den er nie erreichen konnte. Hier wird darum die ECHTE Kette gefragt und nur
-    eine tatsaechlich erreichbare Station heisst "offen" (dieselbe Fehlerfamilie
-    wie die Embedding-Kachel: ein Name, der nicht die Wahrheit ist).
+    Duenner Wrapper: die Wahrheit ueber die Kette lebt in der Engine
+    (``fuel_chain.station_status``). Diese Oberflaeche baut sie NICHT nach —
+    genau daraus entstand der Defekt vom 12.10.2026, als die Kachel den
+    Anbieter aus einem ":cloud" im Modellnamen riet. Signatur und Rueckgabe
+    bleiben unveraendert (die Wachen in tests/ haengen daran); zusaetzlich
+    traegt die Antwort die Budget-Zeile der Kachel.
 
-    ``probe``: optionales ``callable(name) -> bool``, ersetzt die echte
-    Ollama-Probe (Tests). Ohne Angabe: HTTP GET ``{ollama_base}/api/tags``,
-    Timeout 2 s.
+    ``probe``: optionales ``callable(name) -> bool``, wird durchgereicht.
 
-    BLOCKIEREND (HTTP-Probe, Import, Ketten-Bau) — Aufrufer MUESSEN das ueber
+    BLOCKIEREND (HTTP-Probe, Ketten-Bau) — Aufrufer MUESSEN das ueber
     ``asyncio.to_thread`` erledigen; im Event-Loop legt genau das die ganze
     Oberflaeche lahm (Ausfall vom 12.10.).
     """
-    base = ollama_base or os.environ.get("NEXUS_OLLAMA_BASE", "http://127.0.0.1:11434")
-
     out = {
         "enabled": True,
         "open_station": None,   # erste GEPRUEFT offene Station
@@ -434,19 +429,23 @@ def _fuel_status(ollama_base: str | None = None, probe=None) -> dict:
         "budget_usd": _env_float("NEXUS_FUEL_BUDGET_USD", "5.00"),
         "spent_usd": 0.0,
     }
+    # Verbrauch aus der Engine, NICHT aus einer eigenen Datei-Lesung. Die Engine
+    # schreibt ihr Konto als {"year_month": ..., "spent_usd": ...} unter
+    # NEXUS_FUEL_STATE (Standard ~/.nexus-memory/fuel_spend.json). Diese Stelle
+    # suchte frueher einen Schluessel "2026-10" bzw. "total", fand deshalb NIE
+    # etwas und stand dauerhaft auf $0.00 — auch wenn Geld verbraucht war. Eine
+    # zweite Lesung ist eine zweite Wahrheit; hier gilt nur die der Engine.
     try:
-        spend_file = os.path.expanduser("~/.nexus-memory/fuel_spend.json")
-        if os.path.exists(spend_file):
-            with open(spend_file) as f:
-                spend = json.load(f)
-            month_key = time.strftime("%Y-%m")
-            out["spent_usd"] = round(float(spend.get(month_key, spend.get("total", 0)) or 0), 4)
+        from nexus_memory.fuel_chain import fuel_exhausted_info
+        info = fuel_exhausted_info()
+        out["budget_usd"] = info.get("budget_usd", out["budget_usd"])
+        out["spent_usd"] = info.get("spent_usd", 0.0)
     except Exception as e:
-        _logger.debug("_fuel_status: fuel spend read failed: %s", e)
+        _logger.debug("_fuel_status: fuel budget state unreadable: %s", e)
 
     # Import erst hier, nicht zur Modul-Zeit: kein Nebeneffekt beim Server-Start.
     try:
-        from nexus_memory.fuel_chain import build_chain, _paid_enabled  # single source of truth
+        from nexus_memory.fuel_chain import station_status  # single source of truth
     except Exception as e:
         # Fremde Umgebung ohne das Paket: lieber ehrlich "keine Station" als ein
         # geratener Modellname. Ein stiller Fehlschlag, der in eine Falschaussage
@@ -455,71 +454,11 @@ def _fuel_status(ollama_base: str | None = None, probe=None) -> dict:
         return out
 
     try:
-        out["enabled"] = _paid_enabled()
-    except Exception:
-        pass  # Schalter unbekannt -> wie bisher Default AN
-
-    # EIN Standard fuer den Modellnamen: er lebt in der Engine
-    # (consolidation.OLLAMA_MODEL). Keine zweite Kopie des Strings hier.
-    try:
-        from nexus_memory.consolidation import OLLAMA_MODEL
-        model = os.environ.get("NEXUS_CONSOLIDATION_MODEL") or OLLAMA_MODEL
-    except Exception:
-        model = os.environ.get("NEXUS_CONSOLIDATION_MODEL", "")
-
-    if probe is None:
-        def probe(_name: str) -> bool:
-            """Echte Ollama-Probe — blockiert bis 2 s, nur ueber to_thread rufen."""
-            try:
-                with urllib.request.urlopen(base + "/api/tags", timeout=2):
-                    return True
-            except Exception:
-                return False
-
-    try:
-        chain = build_chain(base, model)
+        out.update(station_status(ollama_base=ollama_base, probe=probe))
     except Exception as e:
-        _logger.warning("_fuel_status: build_chain fehlgeschlagen: %s", e)
-        return out
-
-    stations = []
-    for st in chain:
-        # Nur Ollama ist pruefbar (HTTP). Schluessel-Stationen sind erst beim
-        # echten Aufruf verifiziert — bis dahin "bereit", niemals "offen".
-        # "kein_schluessel" kann aus build_chain nicht entstehen: Stationen ohne
-        # Schluessel baut sie gar nicht erst ein.
-        if st.name == "ollama":
-            try:
-                offen = bool(probe(st.name))
-            except Exception as e:
-                _logger.debug("_fuel_status: probe(%s) failed: %s", st.name, e)
-                offen = False
-            state = "offen" if offen else "zu"
-        elif st.paid:
-            state = "bereit"
-        else:
-            state = "zu"
-        stations.append({
-            "name": st.name,
-            "model": st.model,
-            "paid": bool(st.paid),
-            "state": state,
-        })
-    out["stations"] = stations
-
-    for entry in stations:
-        if out["open_station"] is None and entry["state"] == "offen":
-            out["open_station"] = entry["name"]
-        if out["next_station"] is None and entry["state"] in ("offen", "bereit"):
-            out["next_station"] = entry["name"]
-    if out["next_station"] is not None:
-        nxt = next(e for e in stations if e["name"] == out["next_station"])
-        out["model"] = nxt["model"]
-        out["provider"] = nxt["name"]
-    # "verified" heisst: der angezeigte Name ist geprueft erreichbar, nicht nur
-    # erwartet. Nur dann darf die Kachel ihn wie eine Tatsache nennen.
-    out["verified"] = (out["next_station"] is not None
-                       and out["next_station"] == out["open_station"])
+        # Die Engine haelt sich selbst fail-safe; hier bleibt nur die letzte
+        # Reissleine, damit die Kachel nie einen geratenen Namen zeigt.
+        _logger.warning("_fuel_status: station_status fehlgeschlagen: %s", e)
     return out
 
 

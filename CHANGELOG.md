@@ -71,6 +71,20 @@ time — the display was not.
   bare key is shown as *"Schlüssel vorhanden, ungeprüft"*, never as a fact. The probe runs in a
   thread (`asyncio.to_thread`) — an HTTP call in the event loop took the whole surface down on
   12.10. Five guards pin it (`tests/test_fuel_status_honesty.py`), all of them red before the fix.
+- **The doors of the sorting chain were explained nowhere, and the cost line never showed a
+  real amount.** `NEXUS_FUEL_BASE` / `NEXUS_FUEL_KEY` / `NEXUS_FUEL_MODEL` lived only in
+  `fuel_chain.py` and in tests: a user without local Ollama and without an
+  OpenRouter/OpenAI/Nous key had no way to learn what would make sorting work. The README now
+  names all five doors in the order the chain tries them, and the setup wizard closes with the
+  same honest line. The status itself moved into the engine (`fuel_chain.station_status()`), so
+  the surface and the setup read one truth instead of rebuilding the chain; the Ollama probe is
+  shared by fuel time and the status call. Separately, the tile read
+  `~/.nexus-memory/fuel_spend.json` looking for a key `"YYYY-MM"` or `"total"` while the engine
+  writes `{"year_month": …, "spent_usd": …}` under `NEXUS_FUEL_STATE` — the spend therefore sat
+  on `$0.00` forever, real spending included. It now comes from the engine's own
+  `fuel_exhausted_info()`. Guards: `tests/test_fuel_station_status.py` and
+  `tests/test_fuel_spend_display.py` (station order, an **empty** key opening nothing, a ledger
+  in the engine's format reaching the tile), both red before their fix.
 
 **Wachen:** seven new guards across four files. Each is red without its fix (verified by
 reinstalling the previous file and re-running) — the search route, the fail-loud error, the
