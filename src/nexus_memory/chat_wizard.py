@@ -406,9 +406,43 @@ def get_status() -> dict:
         "trust_level": config.get("trust_level", "not set"),
         "qdrant_running": qdrant_running,
         "api_keys_detected": api_keys,
+        "fuel": _fuel_line(),
         "config_path": str(_get_config_path()),
         "env_path": str(_get_env_path()),
     }
+
+
+def _fuel_line() -> str:
+    """Eine ehrliche Zeile zum Abschluss der Einrichtung: welche Tuer der
+    Sortierung offen ist — oder dass keine offen ist.
+
+    Die Tueren der Fuel-Kette (lokales Ollama, NEXUS_FUEL_BASE/KEY,
+    OPENROUTER_API_KEY, OPENAI_API_KEY, NOUS_API_KEY) waren bisher nirgends
+    erklaert; wer keine davon hat, erfuhr gar nichts. Hier steht darum genau
+    der Befund der Engine (fuel_chain.station_status) — nichts geraten, nichts
+    beschoenigt: ein Schluessel ist eine Erwartung, erst die geprueffte Station
+    ist eine Gewissheit. Ohne Engine bleibt die Zeile leer; eine leere Zeile
+    behauptet nichts, eine erfundene schon.
+    """
+    try:
+        try:
+            from nexus_memory.fuel_chain import station_status
+        except ImportError:  # standalone script execution: package not importable
+            from fuel_chain import station_status  # type: ignore[no-redef]
+    except Exception as exc:
+        log.warning("chat_wizard: fuel_chain nicht verfuegbar: %s", exc)
+        return ""
+    try:
+        st = station_status()
+    except Exception as exc:
+        log.warning("chat_wizard: station_status fehlgeschlagen: %s", exc)
+        return ""
+    if st.get("next_station"):
+        wie = "geprueft" if st.get("verified") else "Schluessel vorhanden, ungeprueft"
+        return (f"Sortierung: Station {st['provider']} ({wie}), "
+                f"Modell {st['model']}.")
+    return ("keine Station — Erinnerungen bleiben unsortiert; trage "
+            "NEXUS_FUEL_BASE/KEY ein, um zu sortieren.")
 
 
 def get_qdrant_filter_for_trust_level(level_id: str) -> dict:

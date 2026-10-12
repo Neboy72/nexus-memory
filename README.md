@@ -224,7 +224,15 @@ or `public` is a deliberate step in the dashboard — and it applies immediately
 
 **Knowledge graph 🔗** — Entities and 11 typed relations live alongside the vectors (`category="entity"`), so the agent can ask "what connects to X?" instead of only "what is similar" — and auto-recall fetches 1-hop neighbours of the top hits, tagged `[graph:<relation>]`, all three plugins, access-level filtered, capped at 5. Relations between facts are discovered automatically (no manual edges), with hub scores, isolation scores and knowledge gaps on top.
 
-**Consolidation 🧬** — A background daemon (part of the server, no cron) distills raw conversation dumps into atomic, self-contained facts with resolved pronouns and anchored dates, and resolves contradictions at write time (supersede, never delete). It hitchhikes on your existing LLM config: cheapest open station first (local Ollama if present, then OpenRouter, then any OpenAI-compatible key), sleeps and retries when all are closed, and a monthly budget cap (`NEXUS_FUEL_BUDGET_USD`, default $5) protects paid stations. Consolidated facts inherit the source memory's `access_level`; guardrail-override audit entries are never consolidated.
+**Consolidation 🧬** — A background daemon (part of the server, no cron) distills raw conversation dumps into atomic, self-contained facts with resolved pronouns and anchored dates, and resolves contradictions at write time (supersede, never delete). It hitchhikes on your existing LLM config: it knocks on these doors in this order and takes the first one that opens —
+
+1. local Ollama — free, model from `NEXUS_CONSOLIDATION_MODEL`
+2. your own endpoint — `NEXUS_FUEL_BASE` + `NEXUS_FUEL_KEY` (model via `NEXUS_FUEL_MODEL`, default `gpt-5.6-luna`)
+3. `OPENROUTER_API_KEY` (model via `NEXUS_FUEL_MODEL_OPENROUTER`)
+4. `OPENAI_API_KEY` (model via `NEXUS_FUEL_MODEL_OPENAI`)
+5. `NOUS_API_KEY` (model via `NEXUS_FUEL_MODEL_NOUS`)
+
+Only local Ollama is probed up front; a keyed door stays "ready" until the call actually succeeds (a key is an expectation, not a certainty). With no door open the daemon sleeps and knocks again on the next tick — memories stay unsorted, and the dashboard now says exactly that instead of naming a model you cannot reach. The monthly cap `NEXUS_FUEL_BUDGET_USD` (default $5) covers the paid doors only; local Ollama is free and never counted. There is deliberately no "just use my main chat model" shortcut: sorting would then eat the paid quota your real conversations need. Consolidated facts inherit the source memory's `access_level`; guardrail-override audit entries are never consolidated.
 
 **Fact lifecycle 🧬** — Append-only state machine: `pending → canonical | deprecated | rolled_back`. Every revision carries `fact_id`, `version_id`, `content_hash`, `supersedes` and a mandatory `decision_event` — no silent overwrites, no zombie facts. `create_pending()` / `promote()` / `deprecate()` / `rollback()` drive it; a reranked update no longer stays findable by its refuted wording.
 
