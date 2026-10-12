@@ -17,8 +17,17 @@ from collections import OrderedDict
 #
 # Foreign-user protection (2026-10-04): the host interpreter belongs to HERMES,
 # not to us — under a pipx/system install it is managed externally and
-# write-protected. Nexus therefore puts its OWN venv (<data-dir>/plugin-venv) on
-# the search path, and no repair command ever points at sys.executable.
+# write-protected. No repair command ever points at sys.executable.
+#
+# Catalog rule 135493 (2026-10-12): the plugin must NOT put its private venv on
+# the host's sys.path at all. Prepending the venv made every
+# shared library (httpx, pydantic, openai) resolve to the plugin's copy for the
+# WHOLE host process; and even appending only moves the collision around, since
+# `sys.modules` is process-global (what the plugin imports first, the host gets
+# for the rest of the process). The private venv is now ONLY the runtime of the
+# local embedding service — the plugin asks that service for vectors (POST
+# /embed) instead of importing an embedding stack into the host. See
+# `_embed_via_service` / `embedder_status` below.
 _QDRANT_IMPORT_ERROR: str = ""
 QdrantClient: Any = None
 qmodels: Any = None
@@ -71,60 +80,13 @@ def _plugin_venv_site_packages(venv: Path) -> "Optional[Path]":
     return None
 
 
-def _ensure_plugin_venv_on_path() -> None:
-    """Put the plugin's OWN venv on sys.path — early, and for EVERY dependency.
-
-    Finding 2026-10-11 (the four-day bug). Two separate faults made the
-    agent's own memory unreachable while everything *looked* healthy:
-
-    1. The venv was attached inside the qdrant repair branch only. On a host
-       that HAS qdrant_client but NOT sentence-transformers — Hermes' own
-       plugin environment — that branch never ran at all.
-
-    2. ``sys.path.append`` puts the directory on the search path but does NOT
-       process the venv's ``.pth`` files, so the editable-installed
-       ``nexus_memory`` package itself stayed invisible
-       ("No module named 'nexus_memory'"). ``site.addsitedir`` handles both.
-
-    Ordering: a dependency the package manager installed still wins — but ONLY
-    when the host can serve this path at all. If it cannot (no
-    sentence-transformers), taking the venv as a *mixture* is worse than taking
-    it whole: sentence-transformers would come from the venv while its siblings
-    still came from the host, and a sibling that is *present but incompatible*
-    is the worst case of all. Here the host carried huggingface_hub 1.24.0 —
-    importable, but too old for sentence-transformers 6.1.0
-    ("cannot import name 'ResolvedRevision'"). The provider then fell
-    fail-closed, every recall returned an empty list, and an empty list is
-    indistinguishable from an empty memory. So: no local backend in the host →
-    the venv goes FIRST, as one consistent set.
-
-    Fail-open: a broken venv must not kill the module import.
-    """
-    try:
-        site_pkgs = _plugin_venv_site_packages(_plugin_venv_dir())
-        if site_pkgs is None:
-            return
-        target = str(site_pkgs)
-        if target in sys.path:
-            return
-        try:
-            import importlib.util as _ilu
-            host_can_embed = _ilu.find_spec("sentence_transformers") is not None
-        except Exception:
-            host_can_embed = False
-        if host_can_embed:
-            try:
-                import site as _site
-                _site.addsitedir(target)
-            except Exception:
-                sys.path.append(target)
-            return
-        sys.path.insert(0, target)
-    except Exception:
-        pass
-
-
-_ensure_plugin_venv_on_path()
+# The former `_ensure_plugin_venv_on_path()` lived here. It attached the
+# plugin's private venv to the host `sys.path` — appended when the host could
+# embed, PREPENDED when it could not — so the plugin could import
+# sentence-transformers itself. Catalog rule 135493 retires that entire path:
+# no `sys.path` operation for embedding, ever. The venv is only the service's
+# runtime now (see the service helpers below); the qdrant repair path may still
+# APPEND it (never prepend) in `_try_import_qdrant`.
 
 
 def _try_import_qdrant() -> bool:
@@ -172,6 +134,248 @@ def _try_import_qdrant() -> bool:
 
 
 _try_import_qdrant()
+
+
+# ── Embedding via the local Nexus service (catalog rule 135493) ──────────────
+# The plugin no longer imports an embedding stack into the host. It asks the
+# local service (POST /embed on loopback) for vectors; that service runs the
+# engine with the private venv's interpreter, so the private venv stays a
+# process runtime and never appears on any sys.path. Fixed interface (sec. 8):
+#   base  : NEXUS_EMBED_SERVICE_URL, else http://127.0.0.1:<NEXUS_SERVE_PORT>
+#   reply : {"embedding": [float...], "model": "<str>", "dim": <int>}
+_EMBED_SERVICE_TIMEOUT_SEC = 15.0
+
+# The one-line note every read answer must start with when the embedder is
+# down — one shape for the model, the user and the log.
+_EMBEDDER_NOTE_PREFIX = "⚠ local embedder unavailable"
+
+
+def _serve_port() -> int:
+    """HTTP port of the local service: NEXUS_SERVE_PORT, else the engine default."""
+    default = 9122
+    try:
+        from nexus_memory.serve_daemon import DEFAULT_SERVE_PORT as _engine_default
+        default = int(_engine_default)
+    except Exception:
+        pass
+    raw = os.environ.get("NEXUS_SERVE_PORT", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return default
+
+
+def _embed_service_base() -> str:
+    """Base URL of the embedding service — explicit override wins."""
+    url = os.environ.get("NEXUS_EMBED_SERVICE_URL", "").strip()
+    if url:
+        return url.rstrip("/")
+    return f"http://127.0.0.1:{_serve_port()}"
+
+
+def _embed_service_healthz(timeout: float = 2.0) -> bool:
+    """Cheap GET /healthz — True when the service answers with 2xx."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            _embed_service_base() + "/healthz",
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= int(getattr(resp, "status", 0)) < 300
+    except Exception:
+        return False
+
+
+def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, Any]]":
+    """POST /embed. Returns ``{"embedding","model","dim"}`` or None (never raises).
+
+    ``is_query`` picks the query/document side of an asymmetric model, exactly
+    as the engine does internally.
+    """
+    import urllib.request
+    url = _embed_service_base() + "/embed"
+    try:
+        body = json.dumps({"text": text, "is_query": bool(is_query)}).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=_EMBED_SERVICE_TIMEOUT_SEC) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+        vector = payload.get("embedding")
+        if not isinstance(vector, list) or not vector:
+            return None
+        return {
+            "embedding": vector,
+            "model": str(payload.get("model", "")),
+            "dim": int(payload.get("dim") or len(vector)),
+        }
+    except Exception:
+        return None
+
+
+def _plugin_venv_python() -> Path:
+    """Interpreter of the private venv — the SERVICE's runtime, not the host's."""
+    venv = _plugin_venv_dir()
+    return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
+
+
+def _embed_service_command() -> List[str]:
+    """Argument list that starts the local service — naming an entry point that EXISTS.
+
+    Fix 2026-10-12 (found while verifying, not reported by the build): the first
+    version named ``-m nexus_memory.serve``. There is no such module in the tree
+    — the CLI is ``nexus_memory.mcp_server:cli`` (pyproject: ``nexus-memory``)
+    with the ``serve`` subcommand. A copy-pasteable hint that fails is worse than
+    no hint, and the start attempt would have died silently the same way.
+
+    Console script of the private venv first (the same entry point
+    ``scripts/install_serve.sh`` installs), then the module form — that module
+    carries ``if __name__ == "__main__": cli()``. Never ``sys.executable``: the
+    private venv is the service's runtime, the host's interpreter is not ours.
+    """
+    venv = _plugin_venv_dir()
+    script = venv / ("Scripts/nexus-memory.exe" if os.name == "nt" else "bin/nexus-memory")
+    if script.exists():
+        return [str(script), "serve"]
+    return [str(_plugin_venv_python()), "-m", "nexus_memory.mcp_server", "serve"]
+
+
+def _embedder_repair_command() -> str:
+    """Copy-pasteable start command for the service (never sys.executable).
+
+    The private venv is ONLY the service runtime — the command therefore names
+    the venv's own entry point, never the host interpreter and never a pip
+    install into the host environment.
+    """
+    import shlex
+    return " ".join(shlex.quote(part) for part in _embed_service_command())
+
+
+def _ensure_embed_service() -> bool:
+    """True when /healthz answers; else try to start the daemon, best effort.
+
+    Section 8 guard: the private venv is the service's runtime, started via the
+    engine's own ``nexus_memory.serve_daemon`` (stdlib-only import). The venv
+    never appears on a sys.path. Fail-open: any problem returns False.
+    """
+    if _embed_service_healthz():
+        return True
+    py = _plugin_venv_python()
+    if not py.exists():
+        return False  # nothing to start with — report, do not guess
+    try:
+        import subprocess
+        subprocess.Popen(
+            _embed_service_command(),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+    except Exception:
+        return False
+    for _ in range(10):
+        time.sleep(0.5)
+        if _embed_service_healthz():
+            return True
+    return False
+
+
+def embedder_status() -> Dict[str, Any]:
+    """State of the local embedder service — fixed keys, NEVER raises.
+
+    ``{"status": "ok"|"unavailable", "source": "service"|"none",
+       "detail": "<reason>", "repair": "<command>", "endpoint": "<url>"}``
+
+    Probe-only: it reports the service's state and starts nothing. The start
+    attempt (sec. 8) lives in the embedding-readiness path ``_Embedder`` →
+    ``_ensure_embed_service``, so a status/prompt build can never spawn a daemon
+    as a side effect.
+    """
+    endpoint = ""
+    repair = ""
+    try:
+        endpoint = _embed_service_base()
+        repair = _embedder_repair_command()
+        ok = _embed_service_healthz()
+        if ok:
+            return {
+                "status": "ok",
+                "source": "service",
+                "detail": f"local embedder service answers on {endpoint}",
+                "repair": repair,
+                "endpoint": endpoint,
+            }
+        return {
+            "status": "unavailable",
+            "source": "none",
+            "detail": (
+                f"no local embedder service answered /healthz on {endpoint} "
+                f"(and it could not be started with {_plugin_venv_python()})"
+            ),
+            "repair": repair,
+            "endpoint": endpoint,
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "source": "none",
+            "detail": f"embedder status could not be determined: {type(exc).__name__}: {exc}",
+            "repair": repair,
+            "endpoint": endpoint,
+        }
+
+
+def _embedder_unavailable_note() -> str:
+    """The exact one-line note, or "" when the embedder is ok.
+
+    Shape (sec. 8): ``⚠ local embedder unavailable: <detail>; fix: <repair>``
+    """
+    try:
+        st = embedder_status()
+    except Exception:
+        return f"{_EMBEDDER_NOTE_PREFIX}: status unavailable; fix: {_embedder_repair_command()}"
+    if st.get("status") == "ok":
+        return ""
+    return f"{_EMBEDDER_NOTE_PREFIX}: {st.get('detail', '')}; fix: {st.get('repair', '')}"
+
+
+# One log line per session, never per query (sec. 8, "kein Log-Spam").
+_embedder_noted_sessions: "OrderedDict[str, bool]" = OrderedDict()
+_EMBEDDER_NOTE_SESSION_CAP = 64
+
+
+def _note_embedder_unavailable_once(session_id: str = "") -> None:
+    """Log the embedder note once per session id (bounded, fail-open)."""
+    try:
+        sid = str(session_id or "")
+        if sid in _embedder_noted_sessions:
+            return
+        _embedder_noted_sessions[sid] = True
+        while len(_embedder_noted_sessions) > _EMBEDDER_NOTE_SESSION_CAP:
+            _embedder_noted_sessions.pop(next(iter(_embedder_noted_sessions)))
+        note = _embedder_unavailable_note()
+        if note:
+            logger.error("%s", note)
+    except Exception:
+        pass
+
+
+def _discover_vector_name(client: Any, collection: str) -> "Optional[str]":
+    """The collection's single named vector, or None (legacy/unnamed/missing).
+
+    Read-only: on the service path the ENGINE owns collection creation, so the
+    plugin adopts whatever named vector already exists instead of binding a
+    fingerprint of its own. Fail-soft to None.
+    """
+    try:
+        info = client.get_collection(collection)
+        params = getattr(getattr(info, "config", None), "params", None)
+        vectors = getattr(params, "vectors", None)
+        if isinstance(vectors, dict) and len(vectors) == 1:
+            return next(iter(vectors))
+    except Exception:
+        return None
+    return None
+
 
 # Regel B: collection binding helpers. Imported only when qdrant_client is
 # available so a missing dependency does not kill module import.
@@ -327,29 +531,63 @@ _MIN_KEEP_LEN = 2  # rewritten/empty below this falls back to the original query
 
 
 class _Embedder:
-    """Auto-detect embedding provider — reuses the shared EmbeddingProvider.
+    """Embed via the host's own provider when it can, else via the local service.
 
-    Local-first: ``sentence-transformers`` (Hugging Face) is the ONE automatic
-    path (it ships with the package). Ollama is used only when it is chosen
-    explicitly (``NEXUS_EMBEDDING_PROVIDER=ollama``), never as an automatic
-    fallback. A cloud provider (Voyage 1024d / OpenAI 1536d / Google 768d /
-    Jina 1024d) is used only when it is explicitly preferred —
-    ``NEXUS_EMBEDDING_PROVIDER`` or ``embedding_provider`` in the Nexus config —
-    and its API key is present. A key that merely sits in the environment does
-    NOT select a provider on its own. Same logic as the MCP server so both
-    paths produce compatible vectors for the same collection.
+    Local-first (unchanged): when the host can serve an embedding provider the
+    plugin uses it directly, exactly as before. When it CANNOT — or when
+    ``NEXUS_EMBED_SERVICE_URL`` names a service explicitly — the plugin does
+    NOT reach for its private venv and does NOT touch ``sys.path``: it asks the
+    local embedding service (``POST /embed``) for the vector. The private venv
+    is only that service's runtime.
     """
     def __init__(self) -> None:
         self._impl: Any = None
-        try:
-            from nexus_memory.embeddings import EmbeddingProvider
-            self._impl = EmbeddingProvider()
-            logger.info("Nexus plugin embedder: %s (%dd)", self._impl.model_name, self._impl.dim)
-        except Exception as exc:
-            raise RuntimeError(f"Could not init embedding provider: {exc}")
+        # Service fallback state.
+        self._service_ok: bool = False
+        self._service_model: str = ""
+        self._service_dim: int = 0
+        self._local_error: str = ""
+        explicit_service = bool(os.environ.get("NEXUS_EMBED_SERVICE_URL", "").strip())
+        if not explicit_service:
+            try:
+                from nexus_memory.embeddings import EmbeddingProvider
+                self._impl = EmbeddingProvider()
+                logger.info("Nexus plugin embedder: %s (%dd)",
+                            self._impl.model_name, self._impl.dim)
+                return
+            except Exception as exc:
+                # The host cannot serve the embedding package (the four-day
+                # case: huggingface_hub present but too old). Do NOT put the
+                # plugin venv on sys.path — ask the service instead.
+                self._local_error = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "Nexus plugin: host embedding provider unavailable (%s) — "
+                    "using the local embedder service", exc)
+        self._service_ok = _ensure_embed_service()
+        if not self._service_ok:
+            # Load, but never fail silently: every read answer and the status
+            # will carry the note (sec. 8).
+            logger.error("Nexus plugin: %s", _embedder_unavailable_note()
+                         or "local embedder unavailable")
 
     def embed(self, text: str, is_query: bool = True) -> List[float]:
         import asyncio
+
+        if self._impl is None:
+            # Service path: the vector comes from the local service, never from
+            # an import in this (host) process.
+            resp = _embed_via_service(text, is_query)
+            if resp is None:
+                st = embedder_status()
+                self._service_ok = st.get("status") == "ok"
+                raise RuntimeError(
+                    f"{_EMBEDDER_NOTE_PREFIX}: {st.get('detail', '')}; "
+                    f"fix: {st.get('repair', '')}"
+                )
+            self._service_ok = True
+            self._service_model = resp["model"]
+            self._service_dim = resp["dim"]
+            return resp["embedding"]
 
         # ``asyncio.run`` owns the loop lifecycle (creation, pending-task
         # cleanup, close) — but it REFUSES to run when a loop is already
@@ -385,7 +623,25 @@ class _Embedder:
             ).result()
 
     @property
-    def dim(self) -> int: return self._impl.dim
+    def dim(self) -> int:
+        if self._impl is not None:
+            return self._impl.dim
+        return self._service_dim or 384  # service dim once known, else engine default
+
+    @property
+    def model_name(self) -> str:
+        if self._impl is not None:
+            return self._impl.model_name
+        return self._service_model or "local-service"
+
+    @property
+    def uses_service(self) -> bool:
+        """True when vectors come from the local service, not a host import."""
+        return self._impl is None
+
+    @property
+    def available(self) -> bool:
+        return self._impl is not None or self._service_ok
 
 
 def _is_trivial_query(text: Optional[str]) -> bool:
@@ -474,6 +730,29 @@ class NexusMemoryProvider:
         # probe implementation, sharing its TTL cache.
         return _health_probe()[0]
 
+    def _embedder_available(self) -> bool:
+        """True when THIS provider can produce a vector.
+
+        Either the host serves an embedding provider (``_impl`` set) or the
+        local service answered when the embedder was built. When neither holds,
+        read answers must say so loudly instead of looking empty.
+        """
+        emb = getattr(self, "_embedder", None)
+        if emb is None:
+            return False
+        if isinstance(emb, _Embedder):
+            return emb._impl is not None or emb._service_ok
+        # A foreign/test-double embedder: assume usable. Only our own _Embedder
+        # knows about the service fallback; a double that exposes `embed()`
+        # (SimpleNamespace, MagicMock, …) is treated as a working host provider.
+        return True
+
+    def _embedder_note(self) -> str:
+        """The one-line note a read answer must start with, or "" when ok."""
+        if self._embedder_available():
+            return ""
+        return _embedder_unavailable_note()
+
     def unavailable_reason(self) -> str:
         """Precise English explanation of why the provider is unusable ("" if usable).
 
@@ -484,7 +763,10 @@ class NexusMemoryProvider:
         try:
             ok, cause = _health_probe()
             if ok:
-                return ""
+                # Qdrant is fine — but the local embedder may still be down, and
+                # then reads cannot produce a vector. Report the same note the
+                # read answers carry (sec. 8, "Status/Health meldet dasselbe").
+                return self._embedder_note()
             return (
                 f"Nexus Memory provider is unavailable: {_mask_paths(cause)}. "
                 f"Interpreter: {_mask_paths(sys.executable)}. "
@@ -519,18 +801,25 @@ class NexusMemoryProvider:
                 os.environ["VOYAGE_API_KEY"] = _vkey
             self._qdrant = QdrantClient(host=_HOST, port=_PORT)
             self._embedder = _Embedder()
-            legacy_cfg = self._read_legacy_collections()
-            if CollectionBinding is None:
-                raise RuntimeError(_QDRANT_IMPORT_ERROR or "CollectionBinding unavailable")
-            binding = CollectionBinding(
-                self._qdrant, self._collection, self._embedder._impl,
-                config_legacy_collections=legacy_cfg,
-            )
-            binding.ensure()
-            # Regel B may auto-switch the provider — adopt it, or the plugin
-            # keeps embedding with the old model under the new vector name.
-            self._embedder._impl = binding.provider
-            self.vector_name = binding.vector_name()
+            if self._embedder._impl is not None:
+                # Host can embed: keep the unchanged Regel-B binding path.
+                legacy_cfg = self._read_legacy_collections()
+                if CollectionBinding is None:
+                    raise RuntimeError(_QDRANT_IMPORT_ERROR or "CollectionBinding unavailable")
+                binding = CollectionBinding(
+                    self._qdrant, self._collection, self._embedder._impl,
+                    config_legacy_collections=legacy_cfg,
+                )
+                binding.ensure()
+                # Regel B may auto-switch the provider — adopt it, or the plugin
+                # keeps embedding with the old model under the new vector name.
+                self._embedder._impl = binding.provider
+                self.vector_name = binding.vector_name()
+            else:
+                # Service path: no local provider to bind a fingerprint with,
+                # and the ENGINE owns collection creation. Adopt the collection's
+                # existing named vector, read-only (never create one from here).
+                self.vector_name = _discover_vector_name(self._qdrant, self._collection)
             self._write_stop.clear()
             self._write_thread = threading.Thread(target=self._write_loop, name="nexus-writer", daemon=True)
             self._write_thread.start()
@@ -1178,6 +1467,16 @@ class NexusMemoryProvider:
         (e.g. _do_prefetch, direct calls) means no guard.
         """
         if not self._embedder or not self._qdrant: return
+        if not self._embedder_available():
+            # A prefetch must never publish an empty block when the embedder is
+            # down — that reads as "no memories". Publish the visible note.
+            note = self._embedder_note() or _embedder_unavailable_note()
+            if note:
+                with self._prefetch_lock:
+                    if gate is None or gate is self._prefetch_gate:
+                        self._prefetch_result = note
+                _note_embedder_unavailable_once(getattr(self, "_session_id", ""))
+            return
         try:
             query = self._rewrite_if_enabled(query)
             vector = self._embed_cached(query)
@@ -1425,6 +1724,18 @@ class NexusMemoryProvider:
             raise RuntimeError(
                 "Provider not initialized" + (f" — {reason}" if reason else "")
             )
+        if not self._embedder_available():
+            # The embedder is down: a read must NEVER come back as an empty
+            # list, because an empty list is indistinguishable from an empty
+            # memory. Lead with the visible note instead (sec. 8).
+            note = self._embedder_note() or _embedder_unavailable_note()
+            _note_embedder_unavailable_once(getattr(self, "_session_id", ""))
+            return [{
+                "id": "", "text": note, "score": 0.0,
+                "source": "embedder-unavailable", "source_url": "",
+                "access_level": "private", "category": "system",
+                "confidence": None, "created_at": "",
+            }]
         try: self._bump_agent_stats(read=True)
         except Exception: pass
         # H209: single (correct) annotation — the appended values are tuples
