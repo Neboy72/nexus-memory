@@ -86,25 +86,34 @@ async function loadStatus() {
   const fuelEl = document.getElementById('stat-fuel');
   if (fuelEl && status.fuel) {
     const f = status.fuel;
-    const shortModel = f.model.replace(':cloud', '').replace('glm-5.3-flash', 'GLM-5.3-Flash').replace('bge-m3', 'BGE-M3').replace('qwen3-embedding', 'Qwen3-Embedding');
     // Zeile 1: Modellname (wächst — Auto-Fit per Länge), Zeile 2: Kosten (kurz, stabil)
     const nameEl = document.getElementById('stat-fuel-model');
     const costEl = document.getElementById('stat-fuel-cost');
     if (nameEl && costEl) {
-      nameEl.textContent = f.enabled ? shortModel : 'OFF';
+      // Die Kachel darf nur nennen, was wirklich offen ist: ohne Station KEINEN
+      // Modellnamen (vorher stand hier "glm-5.3-flash:cloud" auch dann, wenn der
+      // User weder Ollama noch einen Schlüssel hatte — ein Name, der nicht stimmt).
+      if (!f.enabled) {
+        nameEl.textContent = 'OFF';
+        fuelEl.title = 'Memory AI sorting is off — memories stay unsorted.';
+      } else if (!f.provider) {
+        nameEl.textContent = 'keine Station';
+        fuelEl.title = 'Keine Station offen — Erinnerungen bleiben unsortiert.';
+      } else {
+        nameEl.textContent = prettyFuelModel(f.model);
+        // "geprüft" nur, wenn der Name wirklich erreichbar ist; ein blosser
+        // Schlüssel ist eine Erwartung, keine Gewissheit.
+        const wie = f.verified ? 'geprüft' : 'Schlüssel vorhanden, ungeprüft';
+        fuelEl.title = `Station: ${f.provider} (${wie}) · Modell: ${f.model}`;
+      }
       costEl.textContent = f.enabled ? `$${f.spent_usd.toFixed(2)} / $${f.budget_usd.toFixed(2)}` : '—';
       const toggleEl = document.getElementById('fuel-toggle');
       if (toggleEl) {
         toggleEl.checked = f.enabled;
         toggleEl.disabled = false;
       }
-      let size = 20;
-      if (shortModel.length > 14) size = 16;
-      if (shortModel.length > 20) size = 13;
-      nameEl.style.fontSize = size + 'px';
-      fuelEl.title = f.enabled
-        ? `Nexus uses your existing AI to summarize & sort old memories. Provider: ${f.provider}. Hard monthly cap protects you.`
-        : 'Memory AI sorting is off — memories stay unsorted.';
+      // Einzeilig halten: statt Umbruch wird die Schrift kleiner (fitOneLine).
+      fitOneLine(nameEl, 20, 11);
     }
   }
 
@@ -399,6 +408,19 @@ function prettyEmbedName(raw) {
     : w.charAt(0).toUpperCase() + w.slice(1)).join('-');
 }
 
+// Fuel-Modellname lesbar machen. ":cloud" ist ein Transport-Suffix, kein Teil
+// des Modellnamens (es stand vorher im Namen und taeuschte einen Anbieter vor,
+// den es nicht gab). Unbekannte Namen bleiben unveraendert — lieber roh als
+// geraten.
+function prettyFuelModel(raw) {
+  return String(raw == null ? '' : raw).trim()
+    .replace(':cloud', '')
+    .replace('glm-5.3-flash', 'GLM-5.3-Flash')
+    .replace('gpt-5.6-luna', 'GPT-5.6-Luna')
+    .replace('bge-m3', 'BGE-M3')
+    .replace('qwen3-embedding', 'Qwen3-Embedding');
+}
+
 // Einzeilig halten: der Name darf nie umbrechen (sonst steht ein einzelnes "b"
 // in Zeile 2). Statt Umbruch wird die Schrift kleiner, bis der Text passt.
 function fitOneLine(el, maxPx = 19, minPx = 11) {
@@ -436,4 +458,7 @@ setInterval(() => { loadStatus(); loadAgents(); }, 30000);
 // Breitere/schmalere Kachel (Fenster, Tablet, Handy): Namen neu einpassen.
 window.addEventListener('resize', () => {
   fitOneLine(document.getElementById('stat-provider'));
+  // Auch der Fuel-Name muss nach einem Resize wieder einzeilig werden —
+  // sonst bricht genau bei schmalem Fenster ein Zeichen in Zeile 2 um.
+  fitOneLine(document.getElementById('stat-fuel-model'), 20, 11);
 });
