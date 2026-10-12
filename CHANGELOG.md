@@ -49,6 +49,16 @@ time — the display was not.
   category now has its own colour, the fallback is a distinct bright tone, and the legend is
   **built from the store** — it shows each category with its real count, so it cannot drift
   from the data again.
+- **The embedding card named the model twice and wrapped mid-word.** The value comes from the
+  collection's vector fingerprint (`qwen_qwen3-embedding-0_6b` = provider + organisation + model),
+  and the prettifier dropped the word "embedding" *together with the hyphen next to it*, so the
+  string collapsed to `Qwen_qwen30_6b`: "Qwen" twice, an unreadable number, and — because the
+  column is narrower than the text and `overflow-wrap: anywhere` permits it — the last letter on a
+  second line. The organisation prefix is now removed **only** when the model name repeats it
+  (`qwen` + `qwen3-…` → `Qwen3-Embedding-0.6B`), and "Embedding" stays in the name: the short form
+  `Qwen3-0.6B` would read as the chat model, not the embedding one. The tile never wraps any more —
+  `fitOneLine()` shrinks the font (19px → 12px at a 1160px window) until the name fits, and refits
+  on resize.
 
 **Wachen:** seven new guards across four files. Each is red without its fix (verified by
 reinstalling the previous file and re-running) — the search route, the fail-loud error, the

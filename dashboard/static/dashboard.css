@@ -107,6 +107,9 @@ header {
   transition: all 0.25s ease;
   position: relative;
   overflow: hidden;
+  /* Ohne das sprengt ein langer Name (white-space: nowrap) seine Spalte und
+     zieht die ganze Leiste breit — 1fr-Spuren haben min-content als Minimum. */
+  min-width: 0;
 }
 
 .stat-card::before {
@@ -145,7 +148,11 @@ header {
   font-size: 19px;
   font-weight: 600;
   line-height: 1.25;
-  overflow-wrap: anywhere;
+  /* Nie umbrechen: ein einzelnes "b" in Zeile 2 ist unlesbar. Stattdessen
+     verkleinert fitOneLine() in dashboard.js die Schrift, bis es passt. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stat-value--multi {

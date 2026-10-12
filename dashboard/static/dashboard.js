@@ -73,12 +73,14 @@ async function loadStatus() {
 
   document.getElementById('version').textContent = `v${status.version}`;
   document.getElementById('stat-memories').textContent = status.points_count?.toLocaleString() || '0';
-  const ep = (status.embedding_provider || 'unknown');
-  // Das Label der Kachel lautet schon "Embedding Provider", deshalb faellt das
-  // Wort im Wert weg; die Modellgroesse bleibt ("qwen3-embedding:0.6b" -> "Qwen3:0.6b").
-  const epShort = ep.replace(/-?\s*embedding\s*-?/gi, '').replace(/^[-:\s]+/, '');
-  const epPretty = epShort.split('-').map(w => /^(bge|llm|api)$/i.test(w) ? w.toUpperCase() : (w.charAt(0).toUpperCase() + w.slice(1))).join('-');
-  document.getElementById('stat-provider').textContent = epPretty;
+  // Der Wert ist der ECHTE Vektorraum der Sammlung ("qwen_qwen3-embedding-0_6b").
+  // Die API liefert ihn roh; lesbar gemacht wird nur die Anzeige.
+  const providerEl = document.getElementById('stat-provider');
+  if (providerEl) {
+    providerEl.textContent = prettyEmbedName(status.embedding_provider);
+    providerEl.title = status.embedding_provider || 'unknown';
+    fitOneLine(providerEl);
+  }
 
   // Fuel-Zeile: eine Zeile, alles Wichtige drin (Modell · verbraucht von Cap)
   const fuelEl = document.getElementById('stat-fuel');
@@ -374,6 +376,41 @@ async function refreshAll() {
 
 // ── Utils ────────────────────────────────────────────────────
 
+// Ein Vektorraum heisst "<provider>__<organisation>_<modell>__<dims>", z.B.
+// "sentence-transformers__qwen_qwen3-embedding-0_6b__1024". Der Modell-Teil
+// wiederholt die Organisation ("qwen" + "qwen3-...") und traegt die Groesse mit
+// Unterstrichen. Anzeige: "Qwen3-Embedding-0.6B". Das Wort "Embedding" bleibt
+// stehen — ohne es laese man den Chat-Modellnamen Qwen3-0.6B.
+function prettyEmbedName(raw) {
+  let s = String(raw == null ? '' : raw).trim();
+  if (!s || s.toLowerCase() === 'unknown') return 'unknown';
+  // Groesse lesbar: "…-embedding-0_6b" bzw. "…embedding_0_6b" -> "-0.6B"
+  s = s.replace(/[_-](\d+)[_-](\d+)([bm])\b/gi, '-$1.$2$3');
+  s = s.replace(/(\d)\.(\d+)([bm])\b/gi, (m, major, minor, unit) => `${major}.${minor}${unit.toUpperCase()}`);
+  // Organisations-Praefix nur weg, wenn der Modellname ihn selbst wiederholt
+  // ("qwen" + "qwen3-..." -> "qwen3-..."). Sonst stuende "Qwen" zweimal drin.
+  const parts = s.split('_');
+  if (parts.length > 1 && parts[1].toLowerCase().startsWith(parts[0].toLowerCase())) {
+    s = parts.slice(1).join('_');
+  }
+  // Wortweise gross: "qwen3-embedding-0.6B" -> "Qwen3-Embedding-0.6B"
+  return s.split('-').map(w => /^(bge|llm|api)$/i.test(w)
+    ? w.toUpperCase()
+    : w.charAt(0).toUpperCase() + w.slice(1)).join('-');
+}
+
+// Einzeilig halten: der Name darf nie umbrechen (sonst steht ein einzelnes "b"
+// in Zeile 2). Statt Umbruch wird die Schrift kleiner, bis der Text passt.
+function fitOneLine(el, maxPx = 19, minPx = 11) {
+  if (!el) return;
+  let size = maxPx;
+  el.style.fontSize = size + 'px';
+  while (size > minPx && el.scrollWidth > el.clientWidth) {
+    size -= 1;
+    el.style.fontSize = size + 'px';
+  }
+}
+
 function timeAgo(isoStr) {
   const date = new Date(isoStr);
   const diff = Date.now() - date.getTime();
@@ -395,3 +432,8 @@ async function init() {
 init();
 // Auto-refresh every 30s
 setInterval(() => { loadStatus(); loadAgents(); }, 30000);
+
+// Breitere/schmalere Kachel (Fenster, Tablet, Handy): Namen neu einpassen.
+window.addEventListener('resize', () => {
+  fitOneLine(document.getElementById('stat-provider'));
+});
