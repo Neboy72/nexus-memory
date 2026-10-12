@@ -324,7 +324,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function showDetail(d) {
     const driftIcons = { fresh: '🟢', drifting: '🟡', drifted: '🔴' };
-    const color = NEXUS_CATEGORY_COLORS[d.category] || '#888';
+    const color = NEXUS_CATEGORY_COLORS[d.category] || NEXUS_CATEGORY_FALLBACK_COLOR;
 
     const created = d.created_at ? new Date(d.created_at).toLocaleDateString('en-US', {
       year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'

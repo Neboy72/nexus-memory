@@ -1,3 +1,61 @@
+## [0.22.24] — 2026-10-12
+
+### Fixed — the dashboard told the truth about the store: full counts, a real search, honest names
+
+Seven defects in `dashboard/`, all of the same family: **a window was presented as the whole
+store, and a wrong part was named for the fault.** The memory itself was healthy the whole
+time — the display was not.
+
+- **The graph showed two colours because it read one page.** `/api/memories` scrolled
+  `min(limit * 2, 5000)` points when no filter was set and then trimmed to `limit`. With ~75 %
+  `fact` in a store of 38.6k, that window held 468 facts, 20 rules, 1 belief — and **zero
+  sessions**. The graph page builds its nodes from exactly this endpoint, so it looked as if
+  the store contained nothing but facts and rules. It now reads the full collection through
+  `_scroll_all_memories` (~0.7 s) and takes a **cross-section**: round-robin over the
+  categories, so a small one stays visible next to the mass of facts. `category_counts` is
+  derived **before** the trim, so the legend no longer mirrors the slice (it reported 20 where
+  the store holds 28,931).
+- **`/api/graph` had the same defect** — it scrolled `{"limit": 500}` with no pagination and
+  read the raw `payload["category"]` instead of `_extract_memory_fields()`, so two views of the
+  same store disagreed. Counts now come from the full collection, the node budget is spread
+  over the categories (`per_cat = max(1, BUDGET // len(groups))`), and the category is derived
+  the same way everywhere.
+- **The search route did not exist.** `webui-js/api.js` has always called
+  `/api/memories/search?q=…`; the server never had that route, so the search box could not
+  return anything. It exists now and embeds through the running service (`POST /embed`) rather
+  than building its own model — the service already holds the same provider and vector space.
+  A missing embedding is reported as an error, never as "nothing found".
+- **"Qdrant Offline" was shown for a missing collection.** `dashboard.js` printed that text
+  whenever `qdrant_healthy` was false, and `qdrant_healthy` was set from the *collection*
+  probe. That is how a stale collection name looked like a dead database. `/api/status` now
+  separates the two faults (`store_state`: `ok` / `collection_missing` / `qdrant_unreachable`)
+  and names the one that actually applies.
+- **The embedding card named a provider that was not in use.** Both `/api/status` and
+  `/api/health` read the config file and then any present cloud key — they never looked at
+  `NEXUS_EMBEDDING_PROVIDER`, which is the engine's first source of truth. A leftover key
+  therefore won: the card said `voyage` while the local model did the work. One helper
+  (`_detect_embed_provider()`) now follows the engine's own order, and the model name comes
+  from the collection's vector fingerprint, so it names what is really in there.
+- **A model init inside the event loop could silence the whole dashboard.** `/api/status`
+  built `EmbeddingProvider()` synchronously to read its name. On a 16 GB Mac with the memory
+  service already holding the embedding model, that init ran out of memory — and blocked
+  **every** endpoint, not just that one (all requests timed out, `/api/health` included).
+  That call is gone: the name is read without building anything. A failing model must never
+  take the interface down with it.
+- **Nine categories were painted in the temp colour.** The palette knew six categories; the
+  rest fell back to `#6b7280` — byte for byte the temp colour. In the graph that meant 227 of
+  500 nodes looked like "Temp" while the store holds exactly **one** temp entry, and the
+  legend (hardcoded in `graph.html`) asserted the same wrong thing about 6,024 entries. Every
+  category now has its own colour, the fallback is a distinct bright tone, and the legend is
+  **built from the store** — it shows each category with its real count, so it cannot drift
+  from the data again.
+
+**Wachen:** seven new guards across four files. Each is red without its fix (verified by
+reinstalling the previous file and re-running) — the search route, the fail-loud error, the
+two fault names, the provider precedence, the full-scroll requirement, the cross-section
+itself, and the colour coverage. Built in `~/nexus-memory-build`, taken into the main tree
+only after the proof.
+
 ## [0.22.23] — 2026-10-11
 
 ### Fixed — the plugin reaches its own venv for every dependency again

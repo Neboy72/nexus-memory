@@ -71,6 +71,9 @@ except ImportError:
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
+
+# Node budget for the graph view — spread over categories, not a raw first page.
+GRAPH_NODE_BUDGET = 500
 DASHBOARD_DIR = Path(__file__).parent
 
 app = FastAPI(title="Nexus Memory Dashboard", version="0.5.0")
@@ -197,6 +200,60 @@ def _env_float(name: str, default: str) -> float:
         return float(default)
 
 
+SEARCH_RESULT_LIMIT = 50
+
+
+@app.get("/api/memories/search")
+async def search_memories(q: str = "", limit: int = 5):
+    """Vector search over the live collection.
+
+    The web UI has always called this path, but the route never existed — the
+    search box therefore could not return anything. The embedding is taken from
+    the running service (POST /embed): it already holds the same provider and
+    vector space, and building a second model inside this process is what
+    blocked the whole UI on 12.10.
+    """
+    query = (q or "").strip()
+    if not query:
+        return {"query": "", "count": 0, "memories": []}
+    try:
+        limit = max(1, min(int(limit or 5), SEARCH_RESULT_LIMIT))
+    except (TypeError, ValueError):
+        limit = 5
+
+    try:
+        vec = await asyncio.to_thread(_service_embed, query)
+    except Exception as e:
+        # Fail loud: an empty result must never look like "nothing found".
+        _logger.warning("Suche: Dienst lieferte kein Embedding: %s", e)
+        return {"query": query, "count": 0, "memories": [], "error": f"embedding unavailable: {e}"}
+
+    name = _named_vector()
+    body = {"vector": {"name": name, "vector": vec}, "limit": limit, "with_payload": True} \
+        if name else {"vector": vec, "limit": limit, "with_payload": True}
+    try:
+        resp = await _qdrant_request_async(f"/collections/{COLLECTION}/points/search", body)
+    except Exception as e:
+        _logger.warning("Suche: Qdrant-Abfrage fehlgeschlagen: %s", e)
+        return {"query": query, "count": 0, "memories": [], "error": str(e)}
+
+    memories = []
+    for hit in resp.get("result", []) or []:
+        fields = _extract_memory_fields(hit.get("payload", {}))
+        memories.append({
+            "id": str(hit.get("id", "")),
+            "text": fields.get("text", ""),
+            "title": fields.get("title", ""),
+            "category": fields.get("category"),
+            "access_level": fields.get("access_level"),
+            "confidence": fields.get("confidence", 0.7),
+            "source": fields.get("source"),
+            "created_at": fields.get("created_at"),
+            "score": hit.get("score"),
+        })
+    return {"query": query, "count": len(memories), "memories": memories}
+
+
 @app.get("/api/memories/{memory_id}/why")
 async def inspector_why(memory_id: str):
     """Full metadata: WHY this memory exists and how it behaves."""
@@ -276,44 +333,108 @@ async def inspector_restore(memory_id: str):
     return {"status": "ok", "id": memory_id, "lifecycle_status": "canonical"}
 
 
+
+# ── Embedding: EINE Quelle der Wahrheit ──────────────────────────────────────
+# Der Dienst haelt den echten Provider und den passenden Vektorraum. Das
+# Dashboard baut KEIN eigenes Modell mehr: ein sentence-transformers-Init im
+# Event-Loop hat am 12.10. jeden Endpunkt blockiert (16-GB-Mac, Speicher voll).
+SERVICE_URL = os.getenv("NEXUS_SERVE_URL", "http://127.0.0.1:9122")
+
+
+def _detect_embed_provider() -> str:
+    """Which embedding provider is actually in force.
+
+    Same order as the engine itself (nexus_memory.embeddings): the environment
+    variable wins, then the config file, then a present cloud key. The card used
+    to read the config file and the keys only — it never looked at
+    NEXUS_EMBEDDING_PROVIDER, so it named a provider that was not in use.
+    """
+    provider = os.environ.get("NEXUS_EMBEDDING_PROVIDER", "").strip().lower()
+    if provider:
+        return provider
+    try:
+        import yaml
+        config_path = os.path.expanduser("~/.hermes/config.yaml")
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            provider = (cfg.get("nexus-memory", {}).get("embed_provider") or "").strip().lower()
+            if provider:
+                return provider
+    except Exception as e:
+        _logger.debug("provider detect: config read failed: %s", e)
+    for p, key in (("voyage", "VOYAGE_API_KEY"), ("openai", "OPENAI_API_KEY"),
+                   ("google", "GOOGLE_API_KEY"), ("jina", "JINA_API_KEY")):
+        if os.getenv(key):
+            return p
+    return "unknown"
+
+
+def _named_vector() -> str:
+    """Name of the vector space the collection actually holds ("" if anonymous)."""
+    try:
+        resp = _qdrant_request(f"/collections/{COLLECTION}")
+        vectors = (resp.get("result", {}).get("config", {}).get("params", {}).get("vectors", {}) or {})
+        if isinstance(vectors, dict) and vectors and "size" not in vectors:
+            return next(iter(vectors))
+    except Exception as e:
+        _logger.debug("named vector lookup failed: %s", e)
+    return ""
+
+
+def _service_embed(text: str) -> list:
+    """Ask the running service for the vector (it holds the right provider)."""
+    body = json.dumps({"text": text}).encode("utf-8")
+    req = urllib.request.Request(f"{SERVICE_URL}/embed", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    vec = payload.get("embedding")
+    if not isinstance(vec, list) or not vec:
+        raise ValueError("service returned no embedding")
+    return vec
+
+
+def _store_state(collection_ok: bool, qdrant_reachable: bool) -> str:
+    """A missing collection is NOT a dead Qdrant — the card called both that."""
+    if collection_ok:
+        return "ok"
+    return "collection_missing" if qdrant_reachable else "qdrant_unreachable"
+
+
 @app.get("/api/status")
 async def get_system_status():
     """Get overall system status: health, version, stats."""
-    # Qdrant health
-    qdrant_healthy = False
+    # Qdrant health — zwei verschiedene Fehler, zwei verschiedene Namen.
+    # Eine fehlende Sammlung ist kein totes Qdrant; vorher hiess beides gleich.
+    collection_ok = False
+    qdrant_reachable = False
     points_count = 0
     try:
         resp = await _qdrant_request_async(f"/collections/{COLLECTION}")
         result = resp.get("result", {})
         # Qdrant returns "status" field (e.g. "green") not "collection_name"
-        qdrant_healthy = result.get("status") in ("green", "yellow", "red") or "points_count" in result
+        collection_ok = result.get("status") in ("green", "yellow", "red") or "points_count" in result
+        qdrant_reachable = True
         points_count = result.get("points_count", 0)
     except Exception as e:
-        # qdrant_healthy stays False (fail-closed) — log the reason for diagnosis.
-        _logger.debug("get_system_status: qdrant probe failed: %s", e)
+        # Fail-closed, aber LAUT: eine unbekannte Sammlung antwortet 404 und
+        # wurde vorher stillschweigend als "Qdrant Offline" angezeigt.
+        qdrant_reachable = not any(m in str(e) for m in ("doesn't exist", "Not found", "404"))
+        _logger.warning("get_system_status: Sammlung %s nicht lesbar: %s", COLLECTION, e)
 
-    # Config - detect embedding provider from config or env
-    embed_provider = "unknown"
+    qdrant_healthy = collection_ok
+    store_state = _store_state(collection_ok, qdrant_reachable)
+
+    # Embedding provider — EINE Quelle der Wahrheit, in der Reihenfolge der Engine
     config_path = os.path.expanduser("~/.hermes/config.yaml")
-    try:
-        import yaml
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                cfg = yaml.safe_load(f) or {}
-            embed_provider = cfg.get("nexus-memory", {}).get("embed_provider", "unknown")
-        if embed_provider == "unknown":
-            for p, key in [("voyage", "VOYAGE_API_KEY"), ("openai", "OPENAI_API_KEY"), ("google", "GOOGLE_API_KEY"), ("jina", "JINA_API_KEY")]:
-                if os.getenv(key):
-                    embed_provider = p
-                    break
-            else:
-                try:
-                    await asyncio.to_thread(_probe_ollama, 2)
-                    embed_provider = "ollama"
-                except Exception as e:
-                    _logger.debug("get_system_status: ollama probe failed: %s", e)
-    except Exception as e:
-        _logger.debug("get_system_status: config read failed: %s", e)
+    embed_provider = _detect_embed_provider()
+    if embed_provider == "unknown":
+        try:
+            await asyncio.to_thread(_probe_ollama, 2)
+            embed_provider = "ollama"
+        except Exception as e:
+            _logger.debug("get_system_status: ollama probe failed: %s", e)
 
     # Version — aus dem INSTALLIERTEN nexus_memory-Paket (importlib.metadata),
     # NICHT aus dem Legacy-Repo-Root-Paket `nexus` (dessen __init__ ist veraltet
@@ -347,17 +468,19 @@ async def get_system_status():
     except Exception as e:
         _logger.debug("get_system_status: fuel spend read failed: %s", e)
 
-    # Echter Modellname (z.B. "voyage-4", "qwen3-embedding") statt nur Provider-Label — Regel: volle Transparenz
+    # Echter Modellname statt nur Provider-Label — Regel: volle Transparenz.
+    # NIE auf dem Event-Loop bauen: ein sentence-transformers-Init dauert Minuten
+    # und blockiert dann JEDEN anderen Endpunkt (genau der Ausfall vom 12.10.).
+    # Der Fingerprint der Sammlung nennt das Modell, das wirklich drinliegt.
     embed_model = embed_provider
-    try:
-        from nexus_memory.embeddings import EmbeddingProvider
-        embed_model = EmbeddingProvider().name or embed_provider
-    except Exception as e:
-        _logger.debug("get_system_status: embedding model lookup failed: %s", e)
+    named = _named_vector()
+    if named and "__" in named:
+        embed_model = named.split("__")[1]
 
     return {
         "version": version,
         "qdrant_healthy": qdrant_healthy,
+        "store_state": store_state,
         "points_count": points_count,
         "embedding_provider": embed_model,  # echtes Modell, nicht nur Provider-Label
         "config_path": config_path,
@@ -519,9 +642,12 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
     MATCHING points — otherwise rare access levels (e.g. trusted: 202 of
     21.8k) come back nearly empty and the graph looks broken.
     """
-    has_filter = any(v not in ("all", "") for v in (category, access_level, drift, source))
-    scan_cap = 50_000 if has_filter else min(limit * 2, 5000)
-    all_points = await asyncio.to_thread(_scroll_all_memories, scan_cap)
+    # IMMER die volle Sammlung lesen. Ohne Filter wurde vorher nur die erste
+    # Seite gelesen — ein beliebiger Ausschnitt, kein Querschnitt: bei ~75 %
+    # Fakten enthaelt er praktisch nur Fakten, und die Graph-Seite zeigte dann
+    # nur zwei Farben. Die volle Sammlung kostet ~0,6 s (gemessen) und macht
+    # Auswahl, Zaehlung UND Filter ehrlich.
+    all_points = await asyncio.to_thread(_scroll_all_memories, 500_000)
 
     memories = []
 
@@ -554,13 +680,34 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
         }
         memories.append(mem)
 
-    # H189: trim to the requested limit FIRST. Edges and category_counts are
-    # then derived from the trimmed set — otherwise D3 gets dangling edges to
-    # memories that were cut off and counts that don't match `memories`.
-    if len(memories) > limit:
-        memories = memories[:limit]
+    # ECHTE Verteilung, bevor ausgewaehlt wird: die Legende darf nicht die
+    # gekuerzte Auswahl widerspiegeln, sonst stuenden dort 33 statt 28.931.
+    by_cat_full: dict = {}
+    for mem in memories:
+        by_cat_full.setdefault(mem["category"], []).append(mem)
+    category_counts = {cat: len(mems) for cat, mems in by_cat_full.items()}
 
-    # Group the (trimmed) memories for edge + count building.
+    # H189: trim to the requested limit. Aber als QUERSCHNITT: Round-Robin
+    # ueber die Kategorien, damit eine kleine Kategorie nicht von der
+    # Faktenmasse verdraengt wird.
+    if len(memories) > limit:
+        ordered = sorted(by_cat_full.items(), key=lambda kv: -len(kv[1]))
+        picked: list = []
+        idx = 0
+        while len(picked) < limit:
+            moved = False
+            for _, group in ordered:
+                if idx < len(group):
+                    picked.append(group[idx])
+                    moved = True
+                    if len(picked) >= limit:
+                        break
+            if not moved:
+                break
+            idx += 1
+        memories = picked
+
+    # Group the (trimmed) memories for edge building.
     by_cat: dict = {}
     by_source: dict = {}
     for mem in memories:
@@ -583,8 +730,6 @@ async def get_memories(category: str = "all", access_level: str = "all", drift: 
                     if pair not in seen_pairs:
                         edges.append({"source": m1["id"], "target": m2["id"]})
                         seen_pairs.add(pair)
-
-    category_counts = {cat: len(mems) for cat, mems in by_cat.items()}
 
     return {"memories": memories, "edges": edges, "category_counts": category_counts}
 
@@ -687,32 +832,34 @@ async def get_full_stats():
 
 @app.get("/api/graph")
 async def get_graph_data():
-    """Get memory graph data (categories as nodes, shared attributes as edges)."""
-    resp = await _qdrant_request_async(
-        f"/collections/{COLLECTION}/points/scroll",
-        {"limit": 500, "with_payload": True, "with_vector": False}
-    )
-    
-    points = resp.get("result", {}).get("points", [])
-    
-    # Build nodes from memories
-    nodes = []
-    categories = {}
-    for p in points[:500]:  # Cap at 500 for performance
-        payload = p.get("payload", {})
-        cat = payload.get("category", "unknown")
-        text = (payload.get("text") or payload.get("content", ""))[:100]
-        level = payload.get("access_level", "none")
-        
-        nodes.append({
+    """Get memory graph data (categories as nodes, shared attributes as edges).
+
+    The category counts come from the FULL collection. A single first-page
+    scroll is an arbitrary window and not a sample: with roughly three quarters
+    of the store being facts, the rare categories (session, belief, preference)
+    never appear inside it, so the graph looked as if the store held nothing but
+    facts. The counts are complete now, and the node budget is spread over the
+    categories so a small one stays visible next to the mass of facts.
+    """
+    all_points = await asyncio.to_thread(_scroll_all_memories, 500_000)
+
+    by_cat: dict[str, list] = {}
+    for p in all_points:
+        fields = _extract_memory_fields(p.get("payload", {}))
+        cat = fields.get("category") or "uncategorized"
+        text = (fields.get("text") or "")[:100]
+        by_cat.setdefault(cat, []).append({
             "id": p.get("id", ""),
             "label": text[:50],
             "category": cat,
-            "access_level": level,
+            "access_level": fields.get("access_level", "none"),
             "full_text": text,
         })
-        
-        categories[cat] = categories.get(cat, 0) + 1
+
+    categories = {cat: len(items) for cat, items in by_cat.items()}
+
+    per_cat = max(1, GRAPH_NODE_BUDGET // max(1, len(by_cat)))
+    nodes = [node for items in by_cat.values() for node in items[:per_cat]]
     
     # Build category nodes
     cat_nodes = [
@@ -764,30 +911,14 @@ async def health_check():
     except Exception as e:
         checks["collection"] = {"status": "error", "detail": str(e)}
     
-    # Embedding provider - detect from config or env
-    embed_provider = "unknown"
-    try:
-        import yaml
-        config_path = os.path.expanduser("~/.hermes/config.yaml")
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                cfg = yaml.safe_load(f) or {}
-            embed_provider = cfg.get("nexus-memory", {}).get("embed_provider", "unknown")
-        if embed_provider == "unknown":
-            # Check env vars
-            for p, key in [("voyage", "VOYAGE_API_KEY"), ("openai", "OPENAI_API_KEY"), ("google", "GOOGLE_API_KEY"), ("jina", "JINA_API_KEY")]:
-                if os.getenv(key):
-                    embed_provider = p
-                    break
-            else:
-                # Check for ollama
-                try:
-                    await asyncio.to_thread(_probe_ollama, 2)
-                    embed_provider = "ollama"
-                except Exception as e:
-                    _logger.debug("health: ollama probe failed: %s", e)
-    except Exception as e:
-        _logger.debug("health: config read failed: %s", e)
+    # Embedding provider - EINE Quelle der Wahrheit (siehe _detect_embed_provider)
+    embed_provider = _detect_embed_provider()
+    if embed_provider == "unknown":
+        try:
+            await asyncio.to_thread(_probe_ollama, 2)
+            embed_provider = "ollama"
+        except Exception as e:
+            _logger.debug("health: ollama probe failed: %s", e)
     checks["embedding"] = {
         "status": "ok" if embed_provider != "unknown" else "warning",
         "provider": embed_provider,
