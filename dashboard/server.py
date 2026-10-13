@@ -340,6 +340,12 @@ async def inspector_restore(memory_id: str):
 # Event-Loop hat am 12.10. jeden Endpunkt blockiert (16-GB-Mac, Speicher voll).
 SERVICE_URL = os.getenv("NEXUS_SERVE_URL", "http://127.0.0.1:9122")
 
+# Seit 13.10.2026 verlangt der Dienst den Schluessel je Installation auf /embed.
+# Der Name kommt aus dem Paket, damit Server und Dashboard nicht auseinanderlaufen.
+from nexus_memory.service_auth import AUTH_HEADER as SERVICE_AUTH_HEADER
+from nexus_memory.service_auth import load_service_key as load_service_key_for_service
+
+
 
 def _detect_embed_provider() -> str:
     """Which embedding provider is actually in force.
@@ -385,8 +391,12 @@ def _named_vector() -> str:
 def _service_embed(text: str) -> list:
     """Ask the running service for the vector (it holds the right provider)."""
     body = json.dumps({"text": text}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    key = load_service_key_for_service()
+    if key:
+        headers[SERVICE_AUTH_HEADER] = key
     req = urllib.request.Request(f"{SERVICE_URL}/embed", data=body,
-                                 headers={"Content-Type": "application/json"})
+                                 headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     vec = payload.get("embedding")
