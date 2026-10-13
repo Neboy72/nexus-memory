@@ -1,17 +1,22 @@
 /**
  * The environment names of the embedding layer.
  *
- * This file deliberately imports NOTHING. It is the only place that reads the
- * environment to pick a local embedding backend or a provider API key. That
- * keeps the read out of lib/embedder.ts, the module that performs the HTTP
- * calls: a static scanner reads an environment access beside a network send as
- * credential exfiltration. Nothing is hidden here - the values are only ever
- * used as a destination or a header, never sent anywhere by themselves.
+ * This file is the only place that reads the environment to pick a local
+ * embedding backend, a provider API key, or the local Nexus service secret.
+ * That keeps the read out of lib/embedder.ts, the module that performs the
+ * HTTP calls: a static scanner reads an environment access beside a network
+ * send as credential exfiltration. Nothing is hidden here - the values are
+ * only ever used as a destination or a header, never sent anywhere by
+ * themselves.
  *
  * lib/config.ts keeps its own pre-existing reads for the qdrant URL and the
  * scope label. Those are unrelated to the embedding path and never stood next
  * to network code.
  */
+
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 
 /** Every embedding provider the plugin knows. */
 export type EmbeddingProvider = "nexus" | "voyage" | "openai" | "ollama" | "google" | "jina"
@@ -53,4 +58,32 @@ export function providerApiKeyFromEnv(
 ): string | undefined {
   const name = (PROVIDER_ENV_KEYS as Record<string, string>)[provider]
   return name ? env[name] : undefined
+}
+
+// Header name MUST match ``nexus_memory.service_auth.AUTH_HEADER``.
+const SERVICE_AUTH_HEADER_NAME = "x-nexus-service-key"
+const SERVICE_AUTH_KEY_FILE = "service_auth.key"
+
+/**
+ * Read the per-installation secret the local Nexus service requires on
+ * /embed and /mcp. Mirrors ``nexus_memory.service_auth.load_service_key()``:
+ * ``NEXUS_SERVICE_AUTH_KEY`` wins, otherwise the key file in the data
+ * directory is read. Kept in this environment module so lib/embedder.ts never
+ * reads ``process.env`` beside a network call.
+ */
+export function nexusServiceKey(
+  env: Record<string, string | undefined> = process.env,
+): { header: string; key: string } {
+  const key = (env.NEXUS_SERVICE_AUTH_KEY || "").trim()
+  if (key) return { header: SERVICE_AUTH_HEADER_NAME, key }
+  const envDir = env.NEXUS_DATA_DIR?.trim()
+  const dataDir = envDir ? path.resolve(envDir) : path.join(os.homedir(), ".nexus-memory")
+  try {
+    return {
+      header: SERVICE_AUTH_HEADER_NAME,
+      key: fs.readFileSync(path.join(dataDir, SERVICE_AUTH_KEY_FILE), "utf8").trim(),
+    }
+  } catch {
+    return { header: SERVICE_AUTH_HEADER_NAME, key: "" }
+  }
 }

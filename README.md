@@ -46,10 +46,14 @@ Nexus Memory offers three integration paths: **Native Plugin** (automatic memory
 
 ```bash
 nexus-memory serve                      # Streamable HTTP on 127.0.0.1:9122
-curl http://127.0.0.1:9122/healthz      # → {"status":"ok","qdrant":true,...}
+curl http://127.0.0.1:9122/healthz      # → {"status":"ok","qdrant":true}
 ```
 
 - **Additive, not a replacement**: stdio and both native plugins work exactly as before.
+- **Survives its host**: the service binds `127.0.0.1:9122` and keeps running after the agent/editor that started it exits. It only stops when you stop it explicitly (or the machine reboots); a normal plugin/editor shutdown does **not** terminate the shared service.
+- **Per-installation authentication**: `/embed` and `/mcp` require a per-installation secret. The first start creates `<data-dir>/service_auth.key` with mode `0600`; every caller must send it in the `x-nexus-service-key` header. `/healthz` stays intentionally open so host probes can check liveness without the secret.
+- **Loopback-only rebinding guard**: `/embed` and `/mcp` both validate the `Host`/`Origin` headers and reject anything that is not `127.0.0.1:*` or `localhost:*`. The per-installation key is still required on both routes.
+- **No self-update inside the running service**: the daemon has no built-in update tool. Updates are installed from the outside (package manager, wizard, or the explicit update script).
 - **Installed as an OS service** (`scripts/install_serve.sh`): launchd / systemd user unit / Windows scheduled task, idempotent, and re-asserted on every update (fail-open — a failed install never breaks stdio or the plugins).
 - **Self-healing**: with `RunAtLoad` + `KeepAlive` it survives reboots and crashes.
 - **Consolidation leader election**: when several instances run (daemon + agent), an advisory `flock` elects one leader — the consolidation daemon runs once, followers take over on failover.
@@ -105,6 +109,10 @@ nexus-memory                           # or: nexus-memory serve (daemon), nexus-
 ### 🛠️ Embedding Provider (default: local, no key, no extra software)
 
 **The default is local — and it works on a machine with nothing installed.** Nexus embeds locally through **HuggingFace**: `sentence-transformers` ships as a normal dependency and downloads `Qwen/Qwen3-Embedding-0.6B` (~1.2 GB, cached after the first use) — 1024d, multilingual. Nothing leaves your machine, no account, no API key. **Ollama is not required.**
+
+The local service on `127.0.0.1:9122` uses a per-installation secret (`x-nexus-service-key`) to protect `/embed` and `/mcp`. The secret is stored as `<data-dir>/service_auth.key` with mode `0600`; `/healthz` is the only open endpoint. Both `/embed` and `/mcp` also enforce the same `Host`/`Origin` allow-list (`127.0.0.1:*`, `localhost:*`).
+
+> **What this protection does not cover:** the model assumes the machine's own user account is trustworthy. Anything running as the same user, any program with write access to `<data-dir>` (other plugins, backup tools, sync services such as Dropbox/iCloud), or any process that can read `service_auth.key` can impersonate a caller. Keep the data directory restricted and treat backups of it as sensitive.
 
 - **Ollama is not part of the automatic path.** It is extra software that not every machine has, so the automatic path never depends on it. If you run Ollama and want to use it, choose it explicitly: `NEXUS_EMBEDDING_PROVIDER=ollama` (then `ollama pull qwen3-embedding:0.6b`).
 - **A cloud provider** (Voyage, OpenAI, Google, Jina) is only used when you name it explicitly — `NEXUS_EMBEDDING_PROVIDER=<name>` plus its key. A key alone is not enough, and there is no silent cloud fallback.
@@ -172,7 +180,7 @@ Every MCP-compatible agent uses the same stdio config — only the file differs:
 | `update` ✏️ | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `subscribe` / `unsubscribe` / `list_subscriptions` 🔔 | Manage webhooks for memory events | see below |
 | `health` ❤️ | Server status, embedding, update availability | none |
-| `check_update` / `do_update` 🔄 | Check for a newer version / backup + pull + install + restart | `confirm` (req, must be `true`) |
+| `check_update` / `do_update` 🔄 | CLI only — the *running* service deliberately does not register them (a self-updating daemon that outlives its host is a security risk). Update from a shell instead. | `confirm` (req, must be `true`) |
 | `backup` / `restore` 💾 | Export all memories to JSON / restore from a backup | `backup_path`, `reembed` (optional) |
 | `guardrail_check` 🛡️ | Check whether an action is safe before running it | `command` (req), `tool_name`, `tool_input` |
 | `guardrail_override` 🔓 | Record an override with audit trail | `command` (req), `reasoning` (req, min 10 chars), `matched_rules`, `agent_id` |
@@ -240,7 +248,7 @@ Only local Ollama is probed up front; a keyed door stays "ready" until the call 
 
 **SICA self-improvement 🔄** — Automatic memory hygiene: detects stale temp memories (> 7 days), low-confidence entries (< 0.5) and contradiction groups, deletes what is disposable, and turns the rest into suggestions — duplicate entities become merge reviews (oldest wins, nothing auto-deleted), contradictions become one deterministic insight each. Harness-independent: any plugin can call `run_sica()`. Skill export turns clustered canonical facts into a ready `SKILL.md`.
 
-**Operations 💾** — Automatic backup every 6 hours (payload + vectors, last 7 kept), a safety backup before every update, update notifications in chat, and a self-report layer that notices a broken agent (missing dependency, silence from a plugin that used to call back) and shouts through a webhook or a macOS notification instead of failing quietly. `health` and `GET /healthz` surface the same status.
+**Operations 💾** — Automatic backup every 6 hours (payload + vectors, last 7 kept), a safety backup before every update, opt-in update notifications in chat (`NEXUS_UPDATE_CHECK=1` — the service itself no longer polls or updates itself), and a self-report layer that notices a broken agent (missing dependency, silence from a plugin that used to call back) and shouts through a webhook or a macOS notification instead of failing quietly. `health` reports the full status; the open `GET /healthz` deliberately answers only liveness (`status`, `qdrant`) so an unauthenticated caller learns nothing beyond "it is up".
 
 **Token & cost hygiene ⚡** — Repeated queries are served from an embedding cache (L0), prefetch has an env-tunable token budget, and cost-aware routing sends premium categories to high-quality providers and ephemeral ones to local embeddings when both are configured.
 

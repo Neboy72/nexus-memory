@@ -1,5 +1,6 @@
 import { log } from "../logger.ts"
 
+import { nexusServiceKey } from "./embedding-env.ts"
 import type { EmbeddingProvider } from "./embedding-env.ts"
 
 /** Default models and dimensions per provider. */
@@ -210,9 +211,16 @@ export class Embedder {
     const base = this.baseUrl ?? "http://127.0.0.1:9122"
     log.debugRequest("embed.nexus", { textLen: text.length, baseUrl: base })
 
+    const auth = nexusServiceKey()
+    if (!auth.key) {
+      log.warn("no service auth key available for %s/embed (set NEXUS_SERVICE_AUTH_KEY or ensure <data-dir>/service_auth.key is readable)", base)
+    }
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (auth.key) headers[auth.header] = auth.key
+
     const resp = await fetchWithTimeout(`${base}/embed`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ text, is_query: true }),
     })
 

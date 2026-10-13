@@ -13,7 +13,20 @@ import inspect
 import json
 import sys
 
+import pytest
+
 import nexus_memory.mcp_server as mcp
+
+
+@pytest.fixture(autouse=True)
+def _service_key(monkeypatch):
+    """Every test in this module calls an authenticated endpoint."""
+    monkeypatch.setenv("NEXUS_SERVICE_AUTH_KEY", "test-service-key")
+
+
+def _auth_headers():
+    from nexus_memory import service_auth
+    return {service_auth.AUTH_HEADER: "test-service-key"}
 
 
 def _client():
@@ -55,8 +68,6 @@ class TestHealthz:
         body = r.json()
         assert body["status"] == "ok"
         assert body["qdrant"] is True
-        assert isinstance(body["version"], str) and body["version"]
-        assert isinstance(body["uptime_s"], (int, float)) and body["uptime_s"] >= 0
 
     def test_degraded_when_qdrant_down(self, monkeypatch):
         monkeypatch.setattr(mcp, "_qdrant_reachable", lambda *a, **k: False)
@@ -68,12 +79,13 @@ class TestHealthz:
         assert body["status"] == "degraded"
         assert body["qdrant"] is False
 
-    def test_reports_configured_version(self, monkeypatch):
+    def test_healthz_is_minimal(self, monkeypatch):
+        """Punkt 5: /healthz exposes only the liveness facts the host needs."""
         monkeypatch.setattr(mcp, "_qdrant_reachable", lambda *a, **k: True)
         with _client() as client:
             body = client.get("/healthz").json()
 
-        assert body["version"] == mcp.nexus_version
+        assert set(body) == {"status", "qdrant"}
 
 
 # ===========================================================================
@@ -97,6 +109,7 @@ class TestMcpOverHttp:
                     },
                 },
                 headers={
+                    ** _auth_headers(),
                     "Accept": "application/json, text/event-stream",
                     "Content-Type": "application/json",
                 },
@@ -128,10 +141,10 @@ class TestMcpOverHttp:
                         "clientInfo": {"name": "pytest", "version": "1.0"},
                     },
                 },
-                headers={"Accept": "application/json, text/event-stream"},
+                headers={**_auth_headers(), "Accept": "application/json, text/event-stream"},
             )
             session_id = init.headers.get("mcp-session-id")
-            headers = {"Accept": "application/json, text/event-stream"}
+            headers = {**_auth_headers(), "Accept": "application/json, text/event-stream"}
             if session_id:
                 headers["mcp-session-id"] = session_id
             r = client.post(

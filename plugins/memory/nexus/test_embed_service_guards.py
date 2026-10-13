@@ -120,6 +120,7 @@ def test_old_host_is_loud_not_empty(data_dir, monkeypatch):
 class _FakeEmbedService(BaseHTTPRequestHandler):
     vector = [0.5, 0.25, 0.125, 0.0625]
     model = "fake-service-model"
+    expected_key = "plugin-test-key"
 
     def log_message(self, *a):  # silence the test output
         pass
@@ -140,6 +141,16 @@ class _FakeEmbedService(BaseHTTPRequestHandler):
         if self.path != "/embed":
             self.send_response(404)
             self.end_headers()
+            return
+        # The service requires the per-installation secret on /embed.
+        provided = self.headers.get("x-nexus-service-key", "")
+        if provided != self.expected_key:
+            body = json.dumps({"error": "unauthorized"}).encode()
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         length = int(self.headers.get("Content-Length", 0))
         payload = json.loads(self.rfile.read(length) or b"{}")
@@ -171,6 +182,7 @@ def fake_service():
 def test_vector_comes_from_an_answering_service(data_dir, monkeypatch, fake_service):
     """Mit laufendem /embed kommt der Vektor vom Dienst — nicht aus dem Wirt."""
     monkeypatch.setenv("NEXUS_EMBED_SERVICE_URL", fake_service)
+    monkeypatch.setenv("NEXUS_SERVICE_AUTH_KEY", _FakeEmbedService.expected_key)
     plugin = _load_plugin("nexus_plugin_service_ok")
 
     # Prove the vector is NOT from a host-side import.
@@ -186,6 +198,30 @@ def test_vector_comes_from_an_answering_service(data_dir, monkeypatch, fake_serv
     assert embedder.model_name == _FakeEmbedService.model
     assert "sentence_transformers" not in sys.modules, (
         "the vector came from the host, not the service")
+
+
+# ── 3b: _embed_via_service schickt den Kopfzeilenwert (und fehlt er, None) ─
+
+def test_embed_via_service_sends_auth_header(data_dir, monkeypatch, fake_service):
+    """Mit gueltigem x-nexus-service-key kommt der Vektor vom Dienst."""
+    monkeypatch.setenv("NEXUS_EMBED_SERVICE_URL", fake_service)
+    monkeypatch.setenv("NEXUS_SERVICE_AUTH_KEY", _FakeEmbedService.expected_key)
+    plugin = _load_plugin("nexus_plugin_service_key_ok")
+
+    resp = plugin._embed_via_service("auth test")
+    assert resp is not None
+    assert resp["embedding"] == list(_FakeEmbedService.vector)
+    assert resp["model"] == _FakeEmbedService.model
+
+
+def test_embed_via_service_returns_none_without_key(data_dir, monkeypatch, fake_service):
+    """Fehlt der Schluessel, bricht _embed_via_service laut ab (None, nicht 401)."""
+    monkeypatch.setenv("NEXUS_EMBED_SERVICE_URL", fake_service)
+    monkeypatch.delenv("NEXUS_SERVICE_AUTH_KEY", raising=False)
+    plugin = _load_plugin("nexus_plugin_service_key_missing")
+
+    resp = plugin._embed_via_service("no key")
+    assert resp is None
 
 
 # ── 4: Dienst fehlt — Status sagt es, Reparaturbefehl, keine leere Liste ────
@@ -220,7 +256,38 @@ def test_missing_service_reports_status_and_repair(data_dir, monkeypatch):
     assert out[0]["text"].startswith("⚠ local embedder unavailable:")
 
 
-# ── 5: der Reparaturbefehl zeigt auf einen Einstieg, den es WIRKLICH gibt ───
+# ── 5: normaler shutdown beendet den gemeinsamen Dienst NICHT ────────────────
+
+class _FakePopen:
+    """Popen stand-in that records whether it was terminated."""
+    def __init__(self):
+        self.terminated = False
+        self._pid = 12345
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def test_shutdown_does_not_terminate_embed_service(data_dir, monkeypatch):
+    """Punkt 1: shutdown() darf den lokalen Dienst nicht beenden."""
+    monkeypatch.setenv("NEXUS_EMBED_SERVICE_URL", _DEAD_URL)
+    plugin = _load_plugin("nexus_plugin_shutdown_keeps_service")
+
+    provider = plugin.NexusMemoryProvider()
+    fake_proc = _FakePopen()
+    provider._embedder = plugin._Embedder()
+    provider._embedder._service_process = fake_proc
+
+    provider.shutdown()
+
+    assert fake_proc.terminated is False, (
+        "shutdown() must not terminate the shared embedder service")
+
+
+# ── 6: der Reparaturbefehl zeigt auf einen Einstieg, den es WIRKLICH gibt ───
 
 def test_repair_command_names_a_real_entry_point(data_dir, monkeypatch):
     """Fund 12.10.2026 beim Nachpruefen (nicht vom Bau gemeldet): der Befehl
