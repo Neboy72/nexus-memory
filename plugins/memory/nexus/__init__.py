@@ -5,7 +5,7 @@ and embedding logic as the MCP server so all agents share the same memory.
 """
 
 from __future__ import annotations
-import json, logging, math, os, re, sys, threading, time, uuid
+import json, logging, math, os, re, subprocess, sys, threading, time, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from collections import OrderedDict
@@ -40,20 +40,73 @@ qmodels: Any = None
 _UPDATE_CHECK_ENABLED = os.environ.get("NEXUS_UPDATE_CHECK", "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _plugin_venv_dir() -> Path:
-    """Path to the plugin's OWN venv — deliberately not the host interpreter.
+# Header name MUST match ``nexus_memory.service_auth.AUTH_HEADER``.
+# Kept as a literal here so the plugin does not import nexus_memory.
+_SERVICE_AUTH_HEADER = "x-nexus-service-key"
+_SERVICE_AUTH_KEY_FILE = "service_auth.key"
 
-    Same data-dir rule as ``_selfcheck_path()``, so the plugin and the daemon
-    never read and write in different directories. Fail-open: a broken
-    ``NEXUS_DATA_DIR`` value must not kill the module import.
+
+def _plugin_data_dir() -> Path:
+    """Same rule as ``_selfcheck_path()`` and the daemon's ``data_dir()``.
+
+    ``$NEXUS_DATA_DIR`` when set, else ``~/.nexus-memory``. Fail-open: a
+    malformed value falls back to the default instead of killing import.
     """
     try:
         env_dir = os.environ.get("NEXUS_DATA_DIR", "").strip()
-        base = (Path(os.path.expanduser(env_dir)) if env_dir
-                else Path(os.path.expanduser("~/.nexus-memory")))
-        return base / "plugin-venv"
+        if env_dir:
+            return Path(os.path.expanduser(env_dir))
+    except Exception:
+        pass
+    return Path(os.path.expanduser("~/.nexus-memory"))
+
+
+def _service_auth_key() -> str:
+    """Read the per-installation key the service demands on /embed and /mcp.
+
+    Mirrors ``nexus_memory.service_auth.load_service_key()`` without importing
+    ``nexus_memory`` (catalog rule 135493). The environment variable wins for
+    test/operator overrides; otherwise the key file in the data directory is
+    read. Missing/unreadable key -> empty string; callers must fail loudly.
+    """
+    env = os.environ.get("NEXUS_SERVICE_AUTH_KEY", "").strip()
+    if env:
+        return env
+    path = _plugin_data_dir() / _SERVICE_AUTH_KEY_FILE
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except Exception as exc:
+        logger.warning("service-auth: cannot read %s: %s", path, exc)
+        return ""
+
+
+def _plugin_venv_dir() -> Path:
+    """Path to the plugin's OWN venv — deliberately not the host interpreter.
+
+    Same data-dir rule as ``_selfcheck_path()`` and ``_plugin_data_dir()``, so
+    the plugin and the daemon never read and write in different directories.
+    Fail-open: a broken ``NEXUS_DATA_DIR`` value must not kill the module import.
+    """
+    try:
+        return _plugin_data_dir() / "plugin-venv"
     except Exception:
         return Path(os.path.expanduser("~/.nexus-memory")) / "plugin-venv"
+
+
+def _selfcheck_path() -> Path:
+    """Location of the watchdog-consumed self-check file (patchable in tests).
+
+    One file PER AGENT (``agent-selfcheck-<agent-id>.json``): several agents
+    share the data dir, and a single shared file would let one healthy agent
+    overwrite another agent's broken report.
+
+    The directory is ``$NEXUS_DATA_DIR`` when set, else ``~/.nexus-memory`` —
+    the SAME rule as ``_plugin_data_dir()`` so the plugin and the daemon
+    never write/read in different places (a mismatch made the watchdog report
+    "ok" forever).
+    """
+    agent_id = _sanitize_agent_id(os.environ.get("NEXUS_AGENT_ID") or "hermes")
+    return _plugin_data_dir() / f"agent-selfcheck-{agent_id}.json"
 
 
 def _plugin_venv_site_packages(venv: Path) -> "Optional[Path]":
@@ -196,10 +249,21 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
     """
     import urllib.request
     url = _embed_service_base() + "/embed"
+    key = _service_auth_key()
+    if not key:
+        # Missing key is a configuration problem, not "the service is gone".
+        # Fail soft (None) but loud so the status note points at the real cause.
+        logger.warning(
+            "service-auth: no key available for %s/embed "
+            "(set NEXUS_SERVICE_AUTH_KEY or ensure %s/%s is readable)",
+            _embed_service_base(), _plugin_data_dir(), _SERVICE_AUTH_KEY_FILE)
+        return None
     try:
         body = json.dumps({"text": text, "is_query": bool(is_query)}).encode("utf-8")
         req = urllib.request.Request(
-            url, data=body, headers={"Content-Type": "application/json"})
+            url, data=body,
+            headers={"Content-Type": "application/json",
+                     _SERVICE_AUTH_HEADER: key})
         with urllib.request.urlopen(req, timeout=_EMBED_SERVICE_TIMEOUT_SEC) as resp:
             payload = json.loads(resp.read().decode("utf-8", "replace"))
         vector = payload.get("embedding")
@@ -252,31 +316,92 @@ def _embedder_repair_command() -> str:
     return " ".join(shlex.quote(part) for part in _embed_service_command())
 
 
-def _ensure_embed_service() -> bool:
+def _provider_key_env_var(provider: str) -> "Optional[str]":
+    """Environment variable name that carries the API key for *provider*.
+
+    The engine's provider list is fixed (see README and
+    ``nexus_memory.embeddings.CLOUD_PROVIDER_IDS``): voyage, openai, google,
+    jina.  Local providers (auto, huggingface, ollama) need no cloud key.
+    Unknown provider ids are treated like local ones — no key is forwarded,
+    which is safe because the engine will fail loudly if it cannot satisfy the
+    request.
+    """
+    return {
+        "voyage": "VOYAGE_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "google": "GOOGLE_API_KEY",
+        "jina": "JINA_API_KEY",
+    }.get(provider)
+
+
+def _ensure_embed_service() -> "Tuple[bool, Optional[Any]]":
     """True when /healthz answers; else try to start the daemon, best effort.
 
     Section 8 guard: the private venv is the service's runtime, started via the
     engine's own ``nexus_memory.serve_daemon`` (stdlib-only import). The venv
-    never appears on a sys.path. Fail-open: any problem returns False.
+    never appears on a sys.path. Fail-open: any problem returns ``(False, None)``.
+
+    Returns ``(healthy, process)``. ``process`` is the ``Popen`` handle ONLY
+    when this call started the daemon; it is ``None`` when the service was
+    already running. The caller keeps the handle for diagnostics/status but
+    must NOT terminate the shared service on shutdown.
     """
     if _embed_service_healthz():
-        return True
+        return True, None
     py = _plugin_venv_python()
     if not py.exists():
-        return False  # nothing to start with — report, do not guess
+        return False, None  # nothing to start with — report, do not guess
+
+    # Minimal, explicit environment: do not inherit every provider key from the
+    # host shell. Pass only PATH, HOME, NEXUS_* settings, and the ONE cloud key
+    # that matches NEXUS_EMBEDDING_PROVIDER. The service itself decides which
+    # provider to use from NEXUS_EMBEDDING_PROVIDER and the key it sees.
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+    }
+    for k, v in os.environ.items():
+        if k.startswith("NEXUS_"):
+            env[k] = v
+    provider = os.environ.get("NEXUS_EMBEDDING_PROVIDER", "").strip().lower()
+    key_var = _provider_key_env_var(provider)
+    if key_var is not None:
+        key_value = os.environ.get(key_var)
+        if key_value is not None:
+            env[key_var] = key_value
+
+    process = None
     try:
-        import subprocess
-        subprocess.Popen(
+        process = subprocess.Popen(
             _embed_service_command(),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True)
+            start_new_session=True, env=env)
     except Exception:
-        return False
+        return False, process
     for _ in range(10):
         time.sleep(0.5)
         if _embed_service_healthz():
-            return True
-    return False
+            return True, process
+    return False, process
+
+
+def _stop_embed_service(process: "Any") -> None:
+    """Explicit, user-initiated stop of a service process this plugin started.
+
+    Normal provider shutdown must NOT call this: the service is shared and
+    outlives its host.  Only an operator command or a deliberate user action
+    should terminate it.  Sends SIGTERM and waits briefly to avoid zombies.
+    """
+    if process is None:
+        return
+    try:
+        process.terminate()
+    except Exception:
+        pass
+    try:
+        process.wait(timeout=5.0)
+    except Exception:
+        pass
 
 
 def embedder_status() -> Dict[str, Any]:
@@ -546,6 +671,7 @@ class _Embedder:
         self._service_ok: bool = False
         self._service_model: str = ""
         self._service_dim: int = 0
+        self._service_process: "Optional[subprocess.Popen]" = None
         self._local_error: str = ""
         explicit_service = bool(os.environ.get("NEXUS_EMBED_SERVICE_URL", "").strip())
         if not explicit_service:
@@ -563,7 +689,7 @@ class _Embedder:
                 logger.warning(
                     "Nexus plugin: host embedding provider unavailable (%s) — "
                     "using the local embedder service", exc)
-        self._service_ok = _ensure_embed_service()
+        self._service_ok, self._service_process = _ensure_embed_service()
         if not self._service_ok:
             # Load, but never fail silently: every read answer and the status
             # will carry the note (sec. 8).
@@ -1075,6 +1201,13 @@ class NexusMemoryProvider:
             except Exception: pass
             self._rewrite_exec = None
         if self._qdrant: self._qdrant.close(); self._qdrant = None
+        # The local embedder service is SHARED across agents and survives its
+        # host by design.  We deliberately do NOT terminate the process we may
+        # have started: another consumer may have attached while we were
+        # running, and killing the service under them would break them silently.
+        # The Popen handle stays attached to the embedder for diagnostics; an
+        # explicit stop path exists in ``_stop_embed_service()`` but is only for
+        # user-initiated shutdowns, never for normal provider shutdown.
         logger.info("NexusMemoryProvider shut down")
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -2567,24 +2700,6 @@ def _sanitize_agent_id(raw: str) -> str:
     """Filesystem-safe agent id — a raw id with a path separator would escape the data dir."""
     safe = re.sub(r"[^A-Za-z0-9._-]", "-", (raw or "").strip())
     return safe.strip("-") or "unknown"
-
-
-def _selfcheck_path() -> Path:
-    """Location of the watchdog-consumed self-check file (patchable in tests).
-
-    One file PER AGENT (``agent-selfcheck-<agent-id>.json``): several agents
-    share the data dir, and a single shared file would let one healthy agent
-    overwrite another agent's broken report.
-
-    The directory is ``$NEXUS_DATA_DIR`` when set, else ``~/.nexus-memory`` —
-    the SAME rule as ``self_report.data_dir()`` so the plugin and the daemon
-    never write/read in different places (a mismatch made the watchdog report
-    "ok" forever).
-    """
-    agent_id = _sanitize_agent_id(os.environ.get("NEXUS_AGENT_ID") or "hermes")
-    env_dir = os.environ.get("NEXUS_DATA_DIR", "").strip()
-    base = Path(os.path.expanduser(env_dir)) if env_dir else Path(os.path.expanduser("~/.nexus-memory"))
-    return base / f"agent-selfcheck-{agent_id}.json"
 
 
 def write_agent_selfcheck(ok: bool, reason: str, fix: str) -> None:

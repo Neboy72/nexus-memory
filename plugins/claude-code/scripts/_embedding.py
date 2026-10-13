@@ -24,8 +24,32 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 DEFAULT_SERVE_URL = "http://127.0.0.1:9122"
+
+# Header name MUST match ``nexus_memory.service_auth.AUTH_HEADER``.
+# The scripts run under the system python3 and must not import nexus_memory.
+_SERVICE_AUTH_HEADER = "x-nexus-service-key"
+_SERVICE_AUTH_KEY_FILE = "service_auth.key"
+
+
+def _service_auth_key() -> str:
+    """Read the per-installation key required by the local Nexus service.
+
+    Mirrors ``nexus_memory.service_auth.load_service_key()``: the environment
+    variable ``NEXUS_SERVICE_AUTH_KEY`` wins, otherwise the key file in the
+    data directory is read. Missing/unreadable key -> empty string.
+    """
+    env = os.environ.get("NEXUS_SERVICE_AUTH_KEY", "").strip()
+    if env:
+        return env
+    env_dir = os.environ.get("NEXUS_DATA_DIR", "").strip()
+    data_dir = Path(os.path.expanduser(env_dir)) if env_dir else Path.home() / ".nexus-memory"
+    try:
+        return (data_dir / _SERVICE_AUTH_KEY_FILE).read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
 
 # Providers that mean "ask the local Nexus service". "auto" is the default the
 # hooks carry when the user configured nothing.
@@ -54,11 +78,15 @@ def embed_via_serve(text: str, is_query: bool = True) -> "list | None":
     the engine does internally.
     """
     url = f"{serve_url()}/embed"
+    headers = {"Content-Type": "application/json"}
+    key = _service_auth_key()
+    if key:
+        headers[_SERVICE_AUTH_HEADER] = key
     try:
         req = urllib.request.Request(
             url,
             data=json.dumps({"text": text, "is_query": is_query}).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             payload = json.loads(resp.read())

@@ -29,6 +29,7 @@ import os
 import re
 import socket
 import stat as stat_module
+import hmac
 import sys
 import threading
 import time
@@ -719,7 +720,9 @@ class MemoryStore:
         self._backup_nudged: bool = False
         self._last_backup_path: str = ""
         self._last_backup_time: float = 0
-        self._check_for_updates_async()
+        # Update checks are intentionally not started by the service.
+        # The check_update / do_update tools were removed from the running
+        # service; a human can still invoke _check_for_updates_async() via CLI.
         self._start_auto_backup()
         # 2026-08-31: in-process health audit (harness-independent, read-only)
         self._health_auditor = None
@@ -2269,29 +2272,6 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="check_update",
-            description="Check if a newer version is available on GitHub.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-        types.Tool(
-            name="do_update",
-            description="Update Nexus Memory to the latest version. Pulls from GitHub and reinstalls.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "confirm": {
-                        "type": "boolean",
-                        "description": "Must be true to actually run the update. Safety guard.",
-                        "default": False,
-                    },
-                },
-                "required": ["confirm"],
-            },
-        ),
-        types.Tool(
             name="subscribe",
             description=(
                 "Register a webhook URL to receive HTTP POST notifications when "
@@ -2970,26 +2950,6 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 text=json.dumps({"status": "error", "error": str(e)}),
             )]
 
-    elif name == "do_update":
-        confirm = arguments.get("confirm", False)
-        result = await _do_update(confirm=confirm)
-        response = [types.TextContent(
-            type="text",
-            text=json.dumps(result, indent=2),
-        )]
-        # Self-restart: Nach erfolgreichem Update Server beenden.
-        if result.get("restarting"):
-            sys.stdout.flush()
-            asyncio.get_running_loop().call_later(1, lambda: os._exit(0))
-        return response
-
-    elif name == "check_update":
-        result = await _check_for_update()
-        return [types.TextContent(
-            type="text",
-            text=json.dumps(result, indent=2),
-        )]
-
     elif name == "subscribe":
         try:
             event_type = arguments["event_type"]
@@ -3401,17 +3361,120 @@ def build_serve_app():
     ASGI client instead of binding a real port.
     """
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
     from mcp.server.streamable_http_manager import (
         StreamableHTTPASGIApp,
         StreamableHTTPSessionManager,
+        TransportSecuritySettings,
     )
+    from nexus_memory import service_auth
 
-    manager = StreamableHTTPSessionManager(app=server)
+    # Per-installation service key: generated once and required by both the
+    # /embed endpoint and the /mcp Streamable-HTTP mount.  /healthz stays
+    # intentionally unauthenticated so the host's probe can check liveness
+    # without knowing the secret.
+    service_key = service_auth.ensure_service_key()
+
+    manager = StreamableHTTPSessionManager(
+        app=server,
+        security_settings=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["127.0.0.1:*", "localhost:*"],
+            allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
+        ),
+    )
     # The manager itself is not callable; StreamableHTTPASGIApp is the ASGI
     # adapter that forwards to manager.asgi_app.
     mcp_asgi = StreamableHTTPASGIApp(manager)
+
+    class ServiceKeyMiddleware:
+        """ASGI middleware: DNS-rebinding + service-key guard for /embed and /mcp."""
+
+        def __init__(self, app, service_key: str, header: str,
+                     allowed_hosts: list[str], allowed_origins: list[str]):
+            self.app = app
+            # Compare raw bytes: decoding the header as UTF-8 would raise on
+            # invalid byte sequences and turn a 401 into a 500.
+            self.service_key = service_key.encode("utf-8")
+            self.header = header.lower().encode("ascii")
+            self.allowed_hosts = allowed_hosts
+            self.allowed_origins = allowed_origins
+
+        def _host_allowed(self, host: bytes) -> bool:
+            if not host:
+                return False
+            # ASGI headers are bytes; tolerate any byte sequence safely.
+            host_s = host.decode("utf-8", "replace").lower()
+            for allowed in self.allowed_hosts:
+                if allowed.endswith(":*"):
+                    if host_s.startswith(allowed[:-2] + ":"):
+                        return True
+                elif host_s == allowed:
+                    return True
+            return False
+
+        def _origin_allowed(self, origin: bytes) -> bool:
+            # Same-origin requests may omit Origin entirely.
+            if not origin:
+                return True
+            origin_s = origin.decode("utf-8", "replace").lower()
+            for allowed in self.allowed_origins:
+                if allowed.endswith(":*"):
+                    if origin_s.startswith(allowed[:-2] + ":"):
+                        return True
+                elif origin_s == allowed:
+                    return True
+            return False
+
+        async def __call__(self, scope, receive, send):
+            if scope.get("type") != "http":
+                await self.app(scope, receive, send)
+                return
+            method = scope.get("method", "")
+            path = scope.get("path", "")
+            # GET /healthz is deliberately exempt (host probe, no secret).
+            if method == "GET" and path == "/healthz":
+                await self.app(scope, receive, send)
+                return
+            headers = dict(scope.get("headers", []))
+            # DNS-rebinding protection: same host/origin allow-list the MCP
+            # session manager uses for /mcp, now applied to /embed as well.
+            if not self._host_allowed(headers.get(b"host", b"")):
+                body = json.dumps({"error": "invalid host"}).encode("utf-8")
+                await send({
+                    "type": "http.response.start",
+                    "status": 421,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({"type": "http.response.body", "body": body})
+                return
+            if not self._origin_allowed(headers.get(b"origin", b"")):
+                body = json.dumps({"error": "invalid origin"}).encode("utf-8")
+                await send({
+                    "type": "http.response.start",
+                    "status": 403,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({"type": "http.response.body", "body": body})
+                return
+            provided = headers.get(self.header, b"")
+            # Stay on bytes: hmac.compare_digest works on bytes and never
+            # raises on non-UTF-8 or non-ASCII header values.
+            if not provided or not hmac.compare_digest(provided, self.service_key):
+                body = json.dumps({"error": "unauthorized"}).encode("utf-8")
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": body,
+                })
+                return
+            await self.app(scope, receive, send)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -3425,20 +3488,12 @@ def build_serve_app():
     # 1 s pro Probe, genau wenn Qdrant down ist (worst case: /mcp-Lauf).
     def healthz(request):
         reachable = _qdrant_reachable()
-        started = _serve_started_at if _serve_started_at is not None else time.monotonic()
-        # Cheap self-report verdict: file reads + registry parse only. A failure
-        # here must never degrade /healthz, so it reports "unknown".
-        try:
-            from nexus_memory.self_report import evaluate as _evaluate_self_report
-            self_report = _evaluate_self_report().get("status") or "unknown"
-        except Exception:
-            self_report = "unknown"
+        # /healthz is intentionally minimal: host probes only need HTTP 200.
+        # Operational details belong to the dedicated `health` tool or the
+        # dashboard, not to an unauthenticated liveness endpoint.
         return JSONResponse({
             "status": "ok" if reachable else "degraded",
             "qdrant": reachable,
-            "version": nexus_version,
-            "uptime_s": round(time.monotonic() - started, 3),
-            "self_report": self_report,
         })
 
     async def embed(request):
@@ -3504,6 +3559,15 @@ def build_serve_app():
             Mount("/", app=mcp_asgi),
         ],
         lifespan=lifespan,
+        middleware=[
+            Middleware(
+                ServiceKeyMiddleware,
+                service_key=service_key,
+                header=service_auth.AUTH_HEADER,
+                allowed_hosts=["127.0.0.1:*", "localhost:*"],
+                allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
+            ),
+        ],
     )
 
 

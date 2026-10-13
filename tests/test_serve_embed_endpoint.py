@@ -43,6 +43,17 @@ class _FakeStore:
         self._embedder = embedder
 
 
+@pytest.fixture(autouse=True)
+def _service_key(monkeypatch):
+    """Every test in this module calls an authenticated endpoint."""
+    monkeypatch.setenv("NEXUS_SERVICE_AUTH_KEY", "test-service-key")
+
+
+def _auth_headers():
+    from nexus_memory import service_auth
+    return {service_auth.AUTH_HEADER: "test-service-key"}
+
+
 def _client(monkeypatch, embedder):
     """A TestClient with get_store() replaced — no Qdrant, no model load."""
     from starlette.testclient import TestClient
@@ -51,12 +62,13 @@ def _client(monkeypatch, embedder):
     monkeypatch.setattr(mcp, "get_store", lambda: _FakeStore(embedder))
     # No context manager: the MCP session manager is not needed for /embed and
     # starting it would only couple this test to the MCP transport.
-    return TestClient(mcp.build_serve_app()), embedder
+    # base_url forces the Host header onto the loopback allow-list.
+    return TestClient(mcp.build_serve_app(), base_url="http://127.0.0.1:9122"), embedder
 
 
 def test_returns_vector_model_and_dimension(monkeypatch):
     client, embedder = _client(monkeypatch, _FakeEmbedder(dim=6))
-    r = client.post("/embed", json={"text": "remember this"})
+    r = client.post("/embed", json={"text": "remember this"}, headers=_auth_headers())
     assert r.status_code == 200
     body = r.json()
     assert len(body["embedding"]) == 6
@@ -68,7 +80,8 @@ def test_returns_vector_model_and_dimension(monkeypatch):
 
 def test_document_side_is_forwarded(monkeypatch):
     client, embedder = _client(monkeypatch, _FakeEmbedder())
-    r = client.post("/embed", json={"text": "a stored fact", "is_query": False})
+    r = client.post("/embed", json={"text": "a stored fact", "is_query": False},
+                     headers=_auth_headers())
     assert r.status_code == 200
     assert embedder.calls == [("a stored fact", False)]
 
@@ -82,7 +95,7 @@ def test_document_side_is_forwarded(monkeypatch):
 ])
 def test_rejects_requests_without_usable_text(monkeypatch, payload):
     client, embedder = _client(monkeypatch, _FakeEmbedder())
-    r = client.post("/embed", json=payload)
+    r = client.post("/embed", json=payload, headers=_auth_headers())
     assert r.status_code == 400
     assert "text" in r.json()["error"]
     assert embedder.calls == [], "a rejected request must never reach the model"
@@ -90,7 +103,7 @@ def test_rejects_requests_without_usable_text(monkeypatch, payload):
 
 def test_rejects_non_json_body(monkeypatch):
     client, _ = _client(monkeypatch, _FakeEmbedder())
-    r = client.post("/embed", content=b"not json at all")
+    r = client.post("/embed", content=b"not json at all", headers=_auth_headers())
     assert r.status_code == 400
 
 
@@ -98,7 +111,8 @@ def test_oversized_text_is_rejected_before_the_model(monkeypatch):
     import nexus_memory.mcp_server as mcp
 
     client, embedder = _client(monkeypatch, _FakeEmbedder())
-    r = client.post("/embed", json={"text": "x" * (mcp.MAX_EMBED_CHARS + 1)})
+    r = client.post("/embed", json={"text": "x" * (mcp.MAX_EMBED_CHARS + 1)},
+                     headers=_auth_headers())
     assert r.status_code == 413
     assert str(mcp.MAX_EMBED_CHARS) in r.json()["error"]
     assert embedder.calls == [], "the bound must hold before the model runs"
@@ -108,13 +122,14 @@ def test_text_at_the_bound_is_accepted(monkeypatch):
     import nexus_memory.mcp_server as mcp
 
     client, _ = _client(monkeypatch, _FakeEmbedder())
-    r = client.post("/embed", json={"text": "x" * mcp.MAX_EMBED_CHARS})
+    r = client.post("/embed", json={"text": "x" * mcp.MAX_EMBED_CHARS},
+                     headers=_auth_headers())
     assert r.status_code == 200
 
 
 def test_no_provider_is_a_loud_503_with_a_hint(monkeypatch):
     client, _ = _client(monkeypatch, _FakeEmbedder(available=False))
-    r = client.post("/embed", json={"text": "hello"})
+    r = client.post("/embed", json={"text": "hello"}, headers=_auth_headers())
     assert r.status_code == 503
     assert "embedding provider" in r.json()["error"]
     assert "hint" in r.json()
@@ -128,13 +143,14 @@ def test_store_failure_is_a_503_not_a_crash(monkeypatch):
         raise RuntimeError("qdrant is gone")
 
     monkeypatch.setattr(mcp, "get_store", _boom)
-    r = TestClient(mcp.build_serve_app()).post("/embed", json={"text": "hello"})
+    r = TestClient(mcp.build_serve_app(), base_url="http://127.0.0.1:9122").post(
+        "/embed", json={"text": "hello"}, headers=_auth_headers())
     assert r.status_code == 503
 
 
 def test_embedding_failure_is_reported_not_swallowed(monkeypatch):
     client, _ = _client(monkeypatch, _FakeEmbedder(fail=True))
-    r = client.post("/embed", json={"text": "hello"})
+    r = client.post("/embed", json={"text": "hello"}, headers=_auth_headers())
     assert r.status_code == 500
     assert "RuntimeError" in r.json()["error"], (
         "the failure class must surface — a silent empty vector is the defect "
@@ -148,3 +164,16 @@ def test_route_is_registered_in_the_served_app(monkeypatch):
     paths = [getattr(r, "path", "") for r in mcp.build_serve_app().routes]
     assert "/embed" in paths, "the plugins depend on this route existing"
     assert "/healthz" in paths
+
+
+def test_invalid_utf8_service_key_header_is_401(monkeypatch):
+    """Punkt 2: a header with invalid UTF-8 must be rejected as 401, never 500."""
+    from nexus_memory import service_auth
+    client, embedder = _client(monkeypatch, _FakeEmbedder())
+    r = client.post(
+        "/embed",
+        json={"text": "hello"},
+        headers={service_auth.AUTH_HEADER: b"\xff\xfe"},
+    )
+    assert r.status_code == 401
+    assert embedder.calls == [], "a rejected request must never reach the model"
