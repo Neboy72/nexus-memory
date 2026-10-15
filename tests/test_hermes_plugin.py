@@ -59,6 +59,20 @@ def provider():
     return NexusMemoryProvider()
 
 
+@pytest.fixture(autouse=True)
+def _host_embedder_opted_in(monkeypatch):
+    """Diese Datei prueft den Plugin-Kern mit einem Wirt, der SELBST einbettet.
+
+    Seit 15.10.2026 laedt der Wirt auf Apple Silicon kein Modell mehr: dort
+    waehlt die Bibliothek "mps", und PyTorch-MPS riss den ganzen Prozess mit
+    (neun harte Abbrueche in fuenf Tagen). Der Wirt wird hier deshalb
+    ausdruecklich erlaubt — so prueft dieselbe Datei auf jeder Maschine
+    denselben Kern. Die Plattform-Regel selbst deckt
+    ``test_embed_host_never_loads_model.py`` ab.
+    """
+    monkeypatch.setenv("NEXUS_EMBED_IN_HOST", "1")
+
+
 @pytest.fixture
 def tmp_hermes_home():
     """Temp hermes_home with a THROWAWAY collection name.

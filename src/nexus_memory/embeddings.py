@@ -470,8 +470,26 @@ class EmbeddingProvider:
         last_error: Exception | None = None
         for model_name in (wanted,):
             try:
-                self._model = SentenceTransformer(model_name)
+                # Gerät festnageln: die Bibliothek wählt auf Apple Silicon von
+                # selbst "mps", und PyTorch-MPS bricht bei zwei gleichzeitigen
+                # Einbettungen im selben Prozess den GANZEN Prozess ab
+                # (Metal-Assertion `_status < MTLCommandBufferStatusCommitted`).
+                # Gemessen am 15.10.2026 im Gateway-Log: neun harte Abbrüche in
+                # fünf Tagen (11.-15.10.), jedes Mal mitten in der
+                # Gedächtnisarbeit des Agenten. CPU ist langsamer, kann den
+                # Wirt aber nicht mitreißen.
+                # NEXUS_HF_DEVICE bleibt der ausdrückliche Hebel (z. B. cuda).
+                _uname = getattr(os, "uname", lambda: None)()
+                _apple_silicon = bool(
+                    _uname
+                    and getattr(_uname, "sysname", "") == "Darwin"
+                    and getattr(_uname, "machine", "") == "arm64"
+                )
+                _env_device = (os.environ.get("NEXUS_HF_DEVICE") or "").strip()
+                _device = _env_device or ("cpu" if _apple_silicon else None)
+                self._model = SentenceTransformer(model_name, device=_device)
                 probe = self._model.encode("nexus dimension probe")
+                logger.info("Embedding device: %s", _device or "library default")
                 self._name = model_name
                 self._dim = int(len(probe))
                 self._backend = "sentence-transformers"
