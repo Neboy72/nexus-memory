@@ -1,3 +1,5 @@
+## [0.22.25] — 2026-10-15
+
 - **The local HuggingFace model no longer runs on Apple's GPU — and the host stops loading one
   at all there.** On Apple Silicon `sentence-transformers` resolves to `mps` by itself, and
   PyTorch's MPS backend aborts the WHOLE process when two encodes overlap
