@@ -70,8 +70,12 @@ def _fake_st_module(dim: int):
     mod = types.ModuleType("sentence_transformers")
 
     class SentenceTransformer:
-        def __init__(self, name):
+        # Echte Signatur spiegeln: der Produktivcode reicht `device=` durch
+        # (Apple Silicon -> cpu). Ein Rumpf-Double laesst die lokale Route
+        # still auf "none" fallen (Audit 15.10.2026).
+        def __init__(self, name, device=None, **kwargs):
             self.name = name
+            self.device = device
 
         def encode(self, text):
             return [0.0] * dim

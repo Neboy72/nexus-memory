@@ -556,8 +556,12 @@ class _FakeSentenceTransformer:
     (Qwen3-Embedding, see ``nexus_memory.embeddings.LOCAL_HF_DEFAULT``).
     """
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, device=None, **kwargs):
+        # `device=` muss ankommen: der Produktivcode pinnt das Geraet
+        # (Apple Silicon -> cpu). Ein Double mit festem Rumpf-Argument laesst
+        # die lokale Route still auf "none" fallen, siehe Audit 15.10.2026.
         self.model_name = model_name
+        self.device = device
 
     def encode(self, text: str):
         return [0.0] * 1024
@@ -656,8 +660,11 @@ class TestEmbeddingProviderDetection:
         monkeypatch.setattr("nexus_memory.embeddings.VOYAGE_API_KEY", "vo-test-1234567890")
 
         class _LocalStub:
-            def __init__(self, model_name):
+            def __init__(self, model_name, device=None, **kwargs):
+                # Siehe _FakeSentenceTransformer: `device=` muss ankommen,
+                # sonst faellt die lokale Route still auf "none".
                 self.model_name = model_name
+                self.device = device
 
             def encode(self, _text):
                 return [0.0] * 1024
