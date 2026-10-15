@@ -3,8 +3,11 @@ name: nexus-memory
 description: >
   Persistent memory for Claude Code backed by Qdrant. Auto-Recall injects
   relevant memories before each prompt. Auto-Capture stores facts after each
-  turn, automatically. Storage is a local Qdrant instance; embeddings default
-  to a fully local Ollama model, so nothing leaves your machine out of the box.
+  turn, automatically. Storage is a local Qdrant instance; embeddings run fully
+  local by default through the local Nexus service (sentence-transformers with
+  Qwen/Qwen3-Embedding-0.6B, 1024d), so nothing leaves your machine out of the
+  box. A cloud embedder runs only when NEXUS_EMBEDDING_PROVIDER names it
+  together with its key.
   The same Qdrant collection can be shared with Hermes and OpenClaw. Read the
   "What gets stored" section before installing. Configure via NEXUS_*
   environment variables. Use when the user asks to "remember", "recall",
