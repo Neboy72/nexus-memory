@@ -1,3 +1,20 @@
+- **The local HuggingFace model no longer runs on Apple's GPU — and the host stops loading one
+  at all there.** On Apple Silicon `sentence-transformers` resolves to `mps` by itself, and
+  PyTorch's MPS backend aborts the WHOLE process when two encodes overlap
+  (`failed assertion _status < MTLCommandBufferStatusCommitted` / `A command encoder is already
+  encoding to this command buffer`). Measured in the live gateway log, read on 2026-10-15: **nine hard
+  process deaths in five days** (11.10.–15.10.) — eight of them `Fatal Python error: Aborted`, one
+  a `Segmentation fault` — and every one of them on or directly behind a `Batches: 0%` line, in
+  threads that were
+  embedding the agent's own memory. The first in-process embedding run in that log is
+  **10.10. 17:17:48** (`Loading weights`) with **17:17:55** for the first `Batches:` line — and
+  nothing of that kind appears anywhere earlier in the file (its first dated line is 16.08.2026).
+  The engine now pins the model to the CPU on Apple Silicon (`NEXUS_HF_DEVICE` overrides it;
+  elsewhere the library keeps its own choice), and the Hermes plugin no longer builds one there by
+  itself — the vector comes from the local service, `NEXUS_EMBED_IN_HOST=1` is the explicit
+  opt-in. Both guards are red without the fix — two failing tests in
+  `tests/test_hf_device_pinned.py`, one in
+  `plugins/memory/nexus/test_embed_host_never_loads_model.py`.
 - **The plugin no longer puts its private venv on the host's `sys.path` at all.** The
   catalog review of the admission request was right: prepending the venv made every
   shared library (`httpx`, `pydantic`, `openai`) resolve to the plugin's copy for the
