@@ -655,6 +655,22 @@ _PLUGIN_REWRITE_LOCK = threading.Lock()
 _MIN_KEEP_LEN = 2  # rewritten/empty below this falls back to the original query
 
 
+def _apple_silicon() -> bool:
+    """True auf Apple Silicon.
+
+    Dort waehlt sentence-transformers von selbst "mps", und PyTorch-MPS bricht
+    bei zwei gleichzeitigen Einbettungen im selben Prozess den GANZEN Prozess ab
+    (Metal-Assertion; gemessen 15.10.2026: neun harte Abbrueche in fuenf Tagen).
+    Auf allen anderen Plattformen gibt es kein MPS — dort bleibt alles wie zuvor.
+    """
+    uname = getattr(os, "uname", lambda: None)()
+    return bool(
+        uname
+        and getattr(uname, "sysname", "") == "Darwin"
+        and getattr(uname, "machine", "") == "arm64"
+    )
+
+
 class _Embedder:
     """Embed via the host's own provider when it can, else via the local service.
 
@@ -674,7 +690,21 @@ class _Embedder:
         self._service_process: "Optional[subprocess.Popen]" = None
         self._local_error: str = ""
         explicit_service = bool(os.environ.get("NEXUS_EMBED_SERVICE_URL", "").strip())
-        if not explicit_service:
+        # Der Wirt laedt nicht mehr von selbst ein Modell (gemessen 15.10.2026 im
+        # Gateway-Log): auf Apple Silicon
+        # loest sentence-transformers von selbst auf "mps" auf, und PyTorch-MPS
+        # bricht bei zwei gleichzeitigen Einbettungen im selben Prozess den GANZEN
+        # Prozess ab (Metal-Assertion). Neun harte Abbrueche in fuenf Tagen
+        # (11.-15.10.), jedes Mal mitten in der Gedaechtnisarbeit des Agenten.
+        # Genau EIN Prozess bettet
+        # ein: der Dienst (POST /embed). NEXUS_EMBED_IN_HOST=1 bleibt der
+        # ausdrueckliche Hebel fuer einen Wirt, der wirklich eine eigene Kopie will.
+        _in_host = (os.environ.get("NEXUS_EMBED_IN_HOST") or "").strip().lower() in (
+            "1", "true", "yes", "on")
+        # Auf Apple Silicon nicht mehr: dort waehlt die Bibliothek "mps", und
+        # PyTorch-MPS bricht bei zwei gleichzeitigen Einbettungen den WIRT ab.
+        # Ueberall sonst bleibt der Wirt wie bisher der naheliegende Weg.
+        if not explicit_service and (_in_host or not _apple_silicon()):
             try:
                 from nexus_memory.embeddings import EmbeddingProvider
                 self._impl = EmbeddingProvider()
@@ -687,7 +717,7 @@ class _Embedder:
                 # plugin venv on sys.path — ask the service instead.
                 self._local_error = f"{type(exc).__name__}: {exc}"
                 logger.warning(
-                    "Nexus plugin: host embedding provider unavailable (%s) — "
+                    "Nexus plugin: in-host embedding provider unavailable (%s) — "
                     "using the local embedder service", exc)
         self._service_ok, self._service_process = _ensure_embed_service()
         if not self._service_ok:
