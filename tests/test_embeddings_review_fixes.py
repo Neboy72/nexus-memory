@@ -118,8 +118,14 @@ def _fake_local_hf(monkeypatch, dim: int = 1024) -> None:
     """Install a fake SentenceTransformer so the local route needs no download."""
 
     class _FakeModel:
-        def __init__(self, name):  # noqa: D107
+        # Faithful to the real signature: `device=` und weitere Kwargs des
+        # Produktivcodes muessen hier ankommen. Ein Double, das nur `name`
+        # annimmt, laesst `_try_sentence_transformers` mit TypeError in den
+        # Fallback laufen und die lokale Route still auf "none" fallen —
+        # genau das hat am 15.10.2026 den Audit-Lauf auf rot gesetzt.
+        def __init__(self, name, device=None, **kwargs):  # noqa: D107
             self.name = name
+            self.device = device
 
         def encode(self, _text):  # noqa: D102
             return [0.0] * dim

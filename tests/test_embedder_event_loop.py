@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import os
 import pathlib
 import sys
 
@@ -22,13 +23,34 @@ PLUGIN = WURZEL / "plugins" / "memory" / "nexus" / "__init__.py"
 
 @pytest.fixture(scope="module")
 def embedder():
+    """Der Wirt bettet hier SELBST ein — das ist der Kern, den die Datei prueft.
+
+    Seit 15.10.2026 laedt der Wirtsprozess auf Apple Silicon kein
+    Einbettungsmodell mehr: dort waehlt sentence-transformers von selbst "mps",
+    und PyTorch-MPS riss bei zwei gleichzeitigen Einbettungen den GANZEN Prozess
+    mit (neun harte Abbrueche in fuenf Tagen, gemessen im Gateway-Log). Auf
+    Apple Silicon kommt der Vektor deshalb vom lokalen Dienst — im Test laeuft
+    keiner, und die Datei stand dort ohne dieses Flag auf rot, obwohl der
+    Loop-Fehler, um den es geht, im Wirtspfad sitzt. Der Wirt wird hier also
+    ausdruecklich erlaubt (``NEXUS_EMBED_IN_HOST=1``), damit dieselbe Datei auf
+    jeder Maschine denselben Kern prueft. Die Plattform-Regel selbst deckt
+    ``plugins/memory/nexus/test_embed_host_never_loads_model.py`` ab.
+    """
     if not PLUGIN.exists():
         pytest.skip("Nexus-Plugin nicht vorhanden")
-    spec = importlib.util.spec_from_file_location("_nexus_plugin_under_test", PLUGIN)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod._Embedder()
+    vorher = os.environ.get("NEXUS_EMBED_IN_HOST")
+    os.environ["NEXUS_EMBED_IN_HOST"] = "1"
+    try:
+        spec = importlib.util.spec_from_file_location("_nexus_plugin_under_test", PLUGIN)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        yield mod._Embedder()
+    finally:
+        if vorher is None:
+            os.environ.pop("NEXUS_EMBED_IN_HOST", None)
+        else:
+            os.environ["NEXUS_EMBED_IN_HOST"] = vorher
 
 
 def test_embed_ohne_laufenden_loop(embedder):
