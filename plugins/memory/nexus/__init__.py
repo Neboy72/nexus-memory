@@ -1435,6 +1435,20 @@ class NexusMemoryProvider:
             return {"public", "trusted", "private"}
         return {"public"}
 
+    def _agent_level(self) -> str:
+        """The highest level this agent may see, as a ``GraphTraversal`` level.
+
+        Derived from ``_visible_levels()`` — no second source of truth. An
+        empty set (unknown agent context) yields a value ``GraphTraversal``
+        treats as unknown, so the call sees nothing (fail-closed) instead of
+        guessing a level.
+        """
+        visible = self._visible_levels()
+        for level in ("private", "trusted", "public"):
+            if level in visible:
+                return level
+        return "unknown"
+
     def _graph_boost(self, top_points: list, max_boost: int = 3,
                      out_pids: Optional[set] = None, max_depth: int = 2) -> List[str]:
         """Fetch graph neighbors for the top vector search results.
@@ -1455,7 +1469,7 @@ class NexusMemoryProvider:
         try:
             from nexus.graph.traversal import GraphTraversal
             sg = self._get_skill_graph()
-            gt = GraphTraversal(sg)
+            gt = GraphTraversal(sg, access_level=self._agent_level())
             seen_ids: set = set()
             budget_boost = 6  # hard cap: depth>1 adds fan-out, keep prefetch budget sane
             for p in top_points[:max_boost]:
@@ -2177,7 +2191,7 @@ class NexusMemoryProvider:
             )
             try:
                 sg.initialize()
-                gt = GraphTraversal(sg)
+                gt = GraphTraversal(sg, access_level=self._agent_level())
                 results = gt.traverse(fact_id, max_depth=max_depth, relation=relation, target_type=target_type)
             finally:
                 # Release the store (and its Qdrant client) even when the
@@ -2202,7 +2216,7 @@ class NexusMemoryProvider:
             )
             try:
                 sg.initialize()
-                gt = GraphTraversal(sg)
+                gt = GraphTraversal(sg, access_level=self._agent_level())
                 results = gt.find_entities(entity_type=entity_type, limit=limit)
             finally:
                 try: sg.store.close()
@@ -2224,7 +2238,7 @@ class NexusMemoryProvider:
             )
             try:
                 sg.initialize()
-                gt = GraphTraversal(sg)
+                gt = GraphTraversal(sg, access_level=self._agent_level())
                 result = gt.get_subgraph(fact_id, max_depth=max_depth)
             finally:
                 try: sg.store.close()
@@ -2246,7 +2260,7 @@ class NexusMemoryProvider:
             )
             try:
                 sg.initialize()
-                gt = GraphTraversal(sg)
+                gt = GraphTraversal(sg, access_level=self._agent_level())
                 results = gt.get_related(fact_id, relation=relation)
             finally:
                 try: sg.store.close()
