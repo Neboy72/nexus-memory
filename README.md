@@ -307,6 +307,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.26** | 2026-10-24 | The knowledge graph honours `access_level` end to end — and stops answering "nothing there" when the truth is "you may not look" or "I could not look" |
 | **v0.22.25** | 2026-10-15 | The local embedding model no longer runs on Apple's GPU: pinned to the CPU on Apple Silicon, and the Hermes plugin loads no model in the host process — the vector comes from the local service |
 | **v0.22.24** | 2026-10-12 | The dashboard stops presenting a window as the whole store — full counts in graph and legend, a working search route, and the two faults "collection missing" and "Qdrant down" finally named separately |
 | **v0.22.23** | 2026-10-11 | The plugin reaches its own venv for every dependency again — a host with a partial environment no longer loses the agent's memory silently |
@@ -435,4 +436,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.25 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.26 · One memory for all your agents</sub>
