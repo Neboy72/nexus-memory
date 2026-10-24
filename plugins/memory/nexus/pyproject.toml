@@ -10,7 +10,7 @@
 # an index would install a stranger's code. The dependency resolves through
 # `[tool.uv.sources]` to our own repository at a pinned commit instead.
 name = "hermes-nexus-provider"
-version = "0.22.30"
+version = "0.22.31"
 description = "Hermes MemoryProvider runtime for Nexus Memory."
 requires-python = ">=3.11"
 
@@ -38,4 +38,4 @@ package = false
 # another review. The sha cannot move. `tests/test_pin_chain_is_closed.py`
 # proves both places name it and that the commit the catalog pins changes no
 # engine file over it.
-nexus-memory = { git = "https://github.com/Neboy72/nexus-memory.git", rev = "f02e67c7320848360b521abdb68c80282b630420" }
+nexus-memory = { git = "https://github.com/Neboy72/nexus-memory.git", rev = "0b6102ab8785b8b6cb349be215801448d3866317" }
