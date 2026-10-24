@@ -22,7 +22,9 @@ Was diese Datei bewacht, in der Reihenfolge, in der es kaputtgeht:
    Sie sind zweimal auseinandergelaufen.
 2. Diese Revision ist ein VOLLER Commit-Hash (40 Hexzeichen), kein Tag-Name.
 3. Der Hash existiert (lokal; und ist von einem entfernten Ref erreichbar, sobald
-   das Repository einen kennt).
+   das Repository einen kennt). Solange der Pin in der noch unveroeffentlichten
+   Kette von HEAD liegt, ist Erreichbarkeit nachweislich unmoeglich — dafuer gilt
+   genau eine Ausnahme, ein sichtbarer SKIP mit Grund (siehe Test 3).
 4. **Ketten-Beweis:** `git diff <pin> HEAD -- src nexus pyproject.toml` ist LEER.
    Das ist der Satz des Reviewers in Pruefform: B aendert nur die Revisionsstellen
    und die Versionsnummern, nicht die Engine. Beim Pruefen ist HEAD der Pin-Commit
@@ -144,9 +146,41 @@ def test_engine_ref_exists_as_a_commit() -> None:
     )
 
 
+def remote_refs_containing(rev: str) -> list[str]:
+    """Every remote-tracking ref whose history contains `rev`."""
+    probe = subprocess.run(
+        ["git", "for-each-ref", "--contains", rev, "--format=%(refname)", "refs/remotes"],
+        cwd=REPO, capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.fail(f"git for-each-ref --contains {rev} failed: {probe.stderr.strip()[:300]}")
+    return [ref for ref in probe.stdout.splitlines() if ref.strip()]
+
+
 def test_engine_ref_is_reachable_from_a_remote_ref() -> None:
-    """The pin must survive outside this checkout — otherwise a fresh clone fails."""
+    """The pin must survive outside this checkout — otherwise a fresh clone fails.
+
+    Genau eine Ausnahme, eng gefasst: ein Pin, der gerade erst entstanden ist, steht
+    auf keinem entfernten Ref — ein Push kann nicht enthalten, was er noch nicht
+    geschickt hat. Der SKIP ist nur erlaubt, solange der Pin in der noch
+    unveroeffentlichten Kette von HEAD liegt (HEAD selbst oder ein Vorfahr davon) und
+    KEIN entferntes Ref ihn enthaelt: wer HEAD pusht, veroeffentlicht den Pin mit, und
+    der CI-Lauf auf dem veroeffentlichten Commit prueft die Erreichbarkeit erneut.
+    Ein Pin, den kein entferntes Ref enthaelt und der KEIN Vorfahr von HEAD ist, ist
+    eine Waise (umgeschriebene, verlorene oder erfundene Historie) und bleibt rot.
+    """
     rev = pinned_ref()
+    if not remote_refs_containing(rev):
+        unpublished = subprocess.run(["git", "merge-base", "--is-ancestor", rev, "HEAD"],
+                                      cwd=REPO, capture_output=True, text=True)
+        if unpublished.returncode != 0:
+            pytest.fail(
+                f"the pinned revision {rev!r} is contained in no remote ref and is not an "
+                "ancestor of HEAD: it is an orphan, so nobody else can install it."
+            )
+        pytest.skip(
+            f"pin commit {rev[:12]} is part of the unpublished history at HEAD and not yet "
+            "on any remote ref — reachability is checked by CI after publication"
+        )
     remote_ref = None
     for candidate in ("origin/main", "origin/HEAD", "origin/master"):
         probe = subprocess.run(["git", "rev-parse", "--verify", "--quiet", candidate],
