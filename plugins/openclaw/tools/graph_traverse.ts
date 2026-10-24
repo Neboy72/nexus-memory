@@ -12,7 +12,7 @@ import { visibleAccessLevels } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { clampInt } from "../lib/num.ts"
 import { isActiveEdge, normalizeEdge } from "../lib/edge.ts"
-import { bfsEdges } from "../lib/bfs.ts"
+import { bfsEdges, loadPointStrict } from "../lib/bfs.ts"
 import { log } from "../logger.ts"
 
 // H123: hard bounds for the graph tools, mirrored by their Typebox schemas.
@@ -138,7 +138,10 @@ export function registerGraphTraverseTool(
 
         try {
           const isVisible = visibilityGate(cfg)
-          const point = await qdrantClient.scrollPoint(factId)
+          // 24.10.2026: strict lookup — "not found" may only mean Qdrant
+          // confirmed the point is absent (404); a failed request throws into
+          // the catch below instead of masquerading as a missing fact.
+          const point = await loadPointStrict(qdrantClient, factId)
           // A start point outside the agent's access level must be
           // indistinguishable from an absent one — the message names no reason
           // and no existence, or the ID itself becomes a probe.
@@ -234,6 +237,20 @@ export function registerFindEntitiesTool(
         // H123: bound the paginated scroll fan-out (per page).
         const limit = clampInt(params.limit, ENTITIES_LIMIT_DEFAULT, 1, ENTITIES_LIMIT_MAX)
 
+        // 24.10.2026 audit fix: the visibility gate below filters AFTER the
+        // scroll, so `limit` was spent on points the agent may not see — a
+        // `public` agent got a silently short (or empty) list although enough
+        // visible entities existed. The level filter goes into Qdrant, so
+        // `limit` counts visible entities only.
+        const levels = visibleAccessLevels(cfg.accessLevel)
+        // W31-16: an unknown agent level sees nothing — and must not fall
+        // through to an unfiltered scroll (that returned the whole set).
+        if (levels.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No entities found." }],
+          }
+        }
+
         try {
           const filter: Record<string, unknown> = {
             must: [{ key: "category", match: { value: "entity" } }],
@@ -244,6 +261,15 @@ export function registerFindEntitiesTool(
               match: { value: entityType },
             })
           }
+          // Fail-closed like the gate in visibilityGate(): a point without
+          // `access_level` matches no `any` clause and is dropped by Qdrant —
+          // the same rule as `?? "private"`.
+          if (!levels.includes("private")) {
+            ;(filter.must as Array<Record<string, unknown>>).push({
+              key: "access_level",
+              match: { any: levels },
+            })
+          }
 
           // W31-18(b): `limit` is the PER-PAGE scroll limit; scrollFiltered
           // walks up to 5 pages, so without a total cap this returned up to
@@ -251,7 +277,8 @@ export function registerFindEntitiesTool(
           const points = await qdrantClient.scrollFiltered(filter, limit, limit)
           // 24.10.2026 audit: the entity list used to ignore access_level —
           // a `public` agent saw every `private` entity. Filter BEFORE mapping,
-          // so no field of a hidden point can leak into the result.
+          // so no field of a hidden point can leak into the result. Kept as the
+          // SECOND defence behind the Qdrant filter above.
           const isVisible = visibilityGate(cfg)
           const visiblePoints = points.filter((pt) => isVisible(pt.payload))
           const entities = visiblePoints.map((pt) => {
@@ -411,7 +438,9 @@ export function registerGetRelatedTool(
 
         try {
           const isVisible = visibilityGate(cfg)
-          const point = await qdrantClient.scrollPoint(factId)
+          // Strict like graph_traverse: a failed lookup must not read as an
+          // absent fact (see loadPointStrict in lib/bfs.ts).
+          const point = await loadPointStrict(qdrantClient, factId)
           // Same answer for "absent" and "outside your level" — see
           // graph_traverse above.
           if (!point || !isVisible(point.payload)) {
@@ -421,13 +450,15 @@ export function registerGetRelatedTool(
           }
 
           // Edges name their neighbour by ID only, so each one must be loaded
-          // to judge its access_level. A neighbour that cannot be loaded counts
-          // as invisible (fail-closed). The cache keeps one fetch per ID.
+          // to judge its access_level. A neighbour that is genuinely absent
+          // (404) counts as invisible (fail-closed); a lookup that FAILS
+          // throws into the catch below, so an outage is reported instead of
+          // silently shortening the list. The cache keeps one fetch per ID.
           const neighbourVisible = new Map<string, boolean>()
           const isNeighbourVisible = async (id: string): Promise<boolean> => {
             const cached = neighbourVisible.get(id)
             if (cached !== undefined) return cached
-            const neighbour = await qdrantClient.scrollPoint(id)
+            const neighbour = await loadPointStrict(qdrantClient, id)
             const visible = neighbour ? isVisible(neighbour.payload) : false
             neighbourVisible.set(id, visible)
             return visible
