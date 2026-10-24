@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import time
 import re
 import sys
@@ -55,8 +56,11 @@ from nexus_memory.agent_detect import (
     detect_all_agents,
     cleanup_removed_agents,
 )
+from nexus_memory.reranker import load_rerank_config
 
 _logger = logging.getLogger(__name__)
+
+HERMES_CONFIG_PATH = Path.home() / ".hermes" / "config.yaml"
 
 try:
     from fastapi import Depends, FastAPI, HTTPException, Request
@@ -566,6 +570,143 @@ async def api_fuel_paid(request: FuelPaidRequest):
         return JSONResponse({"ok": True, "enabled": enabled, "message": msg})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+# ── Recall ordering toggle (nexus-memory.rerank) ────────────────────────────
+# Wirkt sofort: die Konfiguration wird pro Aufruf frisch gelesen.
+
+
+_RERANK_LINE_RE = re.compile(r"^(?P<indent>[ \t]+)rerank[ \t]*:")
+
+
+def _load_rerank_state() -> dict:
+    """Rerank settings as the dashboard shows them.
+
+    One source only: ``load_rerank_config`` already resolves the LLM endpoint,
+    so the route and the engine cannot disagree about the five fields.
+    """
+    cfg = load_rerank_config(str(HERMES_CONFIG_PATH))
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "reranker": str(cfg.get("reranker", "llm")),
+        "pool": int(cfg.get("pool_k", 20)),
+        "llm_model": str(cfg.get("llm_model") or "unknown"),
+        "llm_configured": bool(cfg.get("llm_configured", False)),
+    }
+
+
+def _write_rerank_flag(enabled: bool) -> None:
+    """Set only ``nexus-memory.rerank`` in the Hermes config, atomically.
+
+    Line-precise on purpose: the file carries comments and an ordering that a
+    full YAML round-trip would drop (ruamel is not a dependency). The edited
+    text is re-parsed and compared against the expected document before it
+    replaces the original, so a mis-edit fails closed instead of rewriting the
+    user's config.
+    """
+    import yaml
+
+    original_text = HERMES_CONFIG_PATH.read_text(encoding="utf-8")
+    original = yaml.safe_load(original_text) or {}
+    if not isinstance(original, dict):
+        raise ValueError("config is not a mapping")
+    old_block = original.get("nexus-memory")
+    if old_block is not None and not isinstance(old_block, dict):
+        raise ValueError("'nexus-memory' is not a mapping")
+
+    value = "true" if enabled else "false"
+    lines = original_text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += "\n"
+
+    start = next(
+        (i for i, line in enumerate(lines) if re.match(r"nexus-memory\s*:", line)),
+        None,
+    )
+    if start is None:
+        lines.append(f"nexus-memory:\n  rerank: {value}\n")
+    else:
+        # Block ends at the next line that starts a top-level key.
+        end = next(
+            (
+                i
+                for i in range(start + 1, len(lines))
+                if lines[i].strip() and not lines[i][:1].isspace()
+            ),
+            len(lines),
+        )
+        target = next(
+            (i for i in range(start + 1, end) if _RERANK_LINE_RE.match(lines[i])),
+            None,
+        )
+        if target is None:
+            indent = next(
+                (
+                    m.group(1)
+                    for i in range(start + 1, end)
+                    if (m := re.match(r"^([ \t]+)\S", lines[i]))
+                ),
+                "  ",
+            )
+            lines.insert(start + 1, f"{indent}rerank: {value}\n")
+        else:
+            indent = _RERANK_LINE_RE.match(lines[target]).group("indent")
+            lines[target] = f"{indent}rerank: {value}\n"
+
+    new_text = "".join(lines)
+    expected = dict(original)
+    expected["nexus-memory"] = {**(old_block or {}), "rerank": enabled}
+    if yaml.safe_load(new_text) != expected:
+        raise ValueError("rerank edit did not round-trip; config left untouched")
+
+    tmp_path = HERMES_CONFIG_PATH.with_suffix(
+        HERMES_CONFIG_PATH.suffix + f".tmp-{os.getpid()}"
+    )
+    tmp_path.write_text(new_text, encoding="utf-8")
+    os.replace(tmp_path, HERMES_CONFIG_PATH)
+
+
+@app.get("/api/settings/rerank")
+async def api_get_settings_rerank():
+    """Return the current recall-rerank configuration."""
+    return _load_rerank_state()
+
+
+@app.post("/api/settings/rerank", dependencies=[Depends(verify_local_mutation)])
+async def api_set_settings_rerank(request: Request):
+    """Toggle only ``nexus-memory.rerank`` in ``~/.hermes/config.yaml``.
+
+    Validation first (a 400 leaves the file untouched), then a timestamped
+    backup, then an atomic single-line write that keeps every other key and
+    all comments.
+    """
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict) or "enabled" not in payload:
+            raise ValueError("body must be an object with 'enabled'")
+        enabled = payload["enabled"]
+        if not isinstance(enabled, bool):
+            raise ValueError("'enabled' must be a boolean")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid input: {exc}")
+
+    if not HERMES_CONFIG_PATH.exists():
+        raise HTTPException(status_code=500, detail="Hermes config not found")
+
+    backup = HERMES_CONFIG_PATH.with_suffix(
+        HERMES_CONFIG_PATH.suffix + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
+    try:
+        shutil.copy2(HERMES_CONFIG_PATH, backup)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"backup failed: {exc}")
+
+    try:
+        _write_rerank_flag(enabled)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"write failed: {exc}")
+
+    return _load_rerank_state()
 
 
 @app.get("/api/agents")

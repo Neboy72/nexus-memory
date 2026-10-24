@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#050810">
 <title>Nexus Memory Dashboard</title>
-<link rel="stylesheet" href="/static/dashboard.css?v=20261012a">
+<link rel="stylesheet" href="/static/dashboard.css?v=20261024a">
 <link rel="icon" type="image/png" href="/assets/brand/nexus-icon.png">
 </head>
 <body>
@@ -57,6 +57,19 @@
         </label>
       </div>
     </div>
+    <div class="stat-card stat-card--recall" id="recall-card">
+      <div class="stat-value stat-value--name stat-recall-value">
+        <span class="stat-recall-model" id="stat-recall-model">-</span>
+      </div>
+      <div class="stat-label stat-label--row">
+        <span>Recall ordering</span>
+        <label class="fuel-toggle" title="ON: results are re-ranked by your own model per search. OFF: keep the original vector order.">
+          <input type="checkbox" id="recall-toggle">
+          <span class="fuel-toggle-slider"></span>
+        </label>
+      </div>
+      <div class="stat-recall-hint" id="stat-recall-hint">Loading…</div>
+    </div>
   </div>
 
   <!-- Main Content: Agents full width, 2-Spalten -->
@@ -105,6 +118,6 @@
 </div>
 
 <script src="/static/webui-js/inspector.js?v=20260907"></script>
-<script src="/static/dashboard.js?v=20261012a"></script>
+<script src="/static/dashboard.js?v=20261024a"></script>
 </body>
 </html>
