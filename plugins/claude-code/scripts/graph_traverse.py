@@ -24,6 +24,10 @@ import sys
 # third-party modules (import hijack).
 sys.path.append(os.path.expanduser("~/nexus-memory"))
 
+# This script's own directory, also appended: `python3 script.py` puts it at
+# sys.path[0] anyway, but an import by path (tests, `python3 -c`) does not.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 QDRANT_URL = os.environ.get("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus")
 
@@ -66,6 +70,26 @@ MAX_DEPTH_LIMIT = 10
 LIMIT_MAX = 1000
 
 
+def _agent_level() -> str:
+    """Trust level of the calling agent, fail-closed to ``"public"``.
+
+    Same source as the other hooks: ``~/.nexus-memory/agents.json`` via
+    ``NEXUS_AGENT_ID`` (scope_auto.resolve_trust_level). Graph queries are a
+    read path like recall, so they must obey the same gate. Anything that
+    goes wrong here — scope_auto missing, registry unreadable, unknown
+    agent — resolves to ``"public"``, the level that only sees public facts.
+    """
+    try:
+        import scope_auto
+        return scope_auto.resolve_trust_level()
+    except Exception as exc:
+        print(
+            f"[nexus graph] trust level unresolved ({exc}) — fail-closed to 'public'",
+            file=sys.stderr,
+        )
+        return "public"
+
+
 def _emit_error(message: str) -> None:
     """Print the single error schema to stdout (pinned stdout contract, H1).
 
@@ -83,7 +107,7 @@ def traverse(fact_id: str, max_depth: int = 3, relation: str = "", target_type: 
     sg = SkillGraph(qdrant_url=QDRANT_URL, collection=COLLECTION)
     try:
         sg.initialize()
-        gt = GraphTraversal(sg)
+        gt = GraphTraversal(sg, access_level=_agent_level())
         results = gt.traverse(
             fact_id,
             max_depth=max_depth,
@@ -103,7 +127,7 @@ def find_entities(entity_type: str = "", limit: int = 50) -> dict:
     sg = SkillGraph(qdrant_url=QDRANT_URL, collection=COLLECTION)
     try:
         sg.initialize()
-        gt = GraphTraversal(sg)
+        gt = GraphTraversal(sg, access_level=_agent_level())
         results = gt.find_entities(
             entity_type=entity_type or None,
             limit=limit,
@@ -121,7 +145,7 @@ def get_subgraph(fact_id: str, max_depth: int = 2) -> dict:
     sg = SkillGraph(qdrant_url=QDRANT_URL, collection=COLLECTION)
     try:
         sg.initialize()
-        gt = GraphTraversal(sg)
+        gt = GraphTraversal(sg, access_level=_agent_level())
         result = gt.get_subgraph(fact_id, max_depth=max_depth)
         return result
     finally:
@@ -136,7 +160,7 @@ def get_related(fact_id: str, relation: str = "") -> dict:
     sg = SkillGraph(qdrant_url=QDRANT_URL, collection=COLLECTION)
     try:
         sg.initialize()
-        gt = GraphTraversal(sg)
+        gt = GraphTraversal(sg, access_level=_agent_level())
         results = gt.get_related(fact_id, relation=relation or None)
         return {"results": results}
     finally:
