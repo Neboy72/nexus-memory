@@ -1942,17 +1942,23 @@ class NexusMemoryProvider:
                 reranker=cfg.get("reranker", "cross-encoder"),
                 pool_k=int(cfg.get("pool_k", DEFAULT_POOL_K)),
             )
-        # v0.15 Memory Dynamics: effective_score = base x reinforcement x decay.
-        # APPLIED AS A TIE-BREAKER (review fix): the cross-encoder reranker
-        # above supplies the semantic relevance order — we must NOT re-sort that
-        # by vector score (it breaks the rerank integration test).
-        # Instead: only for (near-)equal rerank positions does the dynamics
-        # score (use_count/salience) decide the order. Stateless, fail-open.
+        # v0.15 Memory Dynamics: applied ONLY when the active reranker is NOT
+        # the LLM reranker. Measurement on 2026-10-24 showed that
+        # _apply_dynamics_tiebreak after the LLM reranker reordered results
+        # within 0.02 vector-score windows by usage frequency, which destroyed
+        # the order chosen by the model and cost up to 2 of 20 hits. For
+        # cross-encoder the reranker supplies a semantic relevance order and
+        # dynamics remains a useful tie-breaker.
         try:
             from nexus_memory.memory_dynamics import effective_score as _eff
         except ImportError:
             _eff = None
-        if _eff is not None and pts:
+        try:
+            from nexus_memory.reranker import _resolve_reranker
+            active_reranker = _resolve_reranker((cfg.get("reranker") or ""))
+        except Exception:
+            active_reranker = "cross-encoder"  # fail-open: keep old behavior
+        if _eff is not None and pts and active_reranker != "llm":
             pts = self._apply_dynamics_tiebreak(pts, _eff)
 
         results: List[Dict[str, Any]] = []
