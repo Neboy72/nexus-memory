@@ -57,8 +57,7 @@ class TestLoadRerankConfig:
 
         cfg = load_rerank_config(str(tmp_path / "missing.yaml"))
         assert cfg["enabled"] is False
-        # zero-Voyage policy: default is the local cross-encoder.
-        assert cfg["reranker"] == "cross-encoder"
+        assert cfg["reranker"] == "llm"
         assert cfg["pool_k"] == 20
 
     def test_reads_config_block(self, tmp_path):
@@ -72,7 +71,7 @@ class TestLoadRerankConfig:
                 {
                     "nexus-memory": {
                         "rerank": True,
-                        "reranker": "cross-encoder",
+                        "reranker": "llm",
                         "rerank_pool": 12,
 
                     }
@@ -81,7 +80,7 @@ class TestLoadRerankConfig:
         )
         cfg = load_rerank_config(str(cfg_file))
         assert cfg["enabled"] is True
-        assert cfg["reranker"] == "cross-encoder"
+        assert cfg["reranker"] == "llm"
         assert cfg["pool_k"] == 12
 
     def test_env_overrides_config(self, tmp_path, monkeypatch):
@@ -230,14 +229,91 @@ class TestRecallRerankIntegration:
             prov._recall("q2", limit=1)
         assert loader.call_count == 1  # cached after first call
 
+    def test_dynamics_skipped_for_llm_reranker(self, monkeypatch):
+        """Bei reranker='llm' bleibt die vom Modell gelieferte Reihenfolge erhalten."""
+        import nexus_memory.reranker as rr
+
+        def fake_llm_rerank(query, results, top_k=5):
+            # Put index 0 first, then the rest in original order.
+            by_idx = {r["_idx"]: r for r in results}
+            chosen = [0] + [r["_idx"] for r in results if r["_idx"] != 0]
+            return [by_idx[i] for i in chosen[:top_k]]
+
+        monkeypatch.setattr(rr, "_rerank_llm", fake_llm_rerank)
+
+        def fake_eff(base_score, payload):
+            # Higher use_count -> higher effective score; would reorder if dynamics ran.
+            return base_score + (payload.get("use_count", 0) * 0.1)
+
+        monkeypatch.setattr("nexus_memory.memory_dynamics.effective_score", fake_eff)
+
+        prov, client = self._provider(
+            {"enabled": True, "reranker": "llm", "pool_k": 5}
+        )
+
+        pts = [
+            _pt("p0", "zero", 0.91),
+            _pt("p1", "one", 0.91),
+            _pt("p2", "two", 0.91),
+            _pt("p3", "three", 0.91),
+            _pt("p4", "four", 0.91),
+        ]
+        for p in pts:
+            p.payload["use_count"] = int(p.id[1:]) * 10  # p4 highest, p0 lowest
+
+        client.query_points.side_effect = (
+            lambda collection_name, query, limit: SimpleNamespace(points=pts)
+        )
+
+        out = prov._recall("q", limit=5)
+        # LLM reranker put p0 first; dynamics must NOT override it.
+        assert [r["id"] for r in out] == ["p0", "p1", "p2", "p3", "p4"]
+
+    def test_dynamics_applies_for_cross_encoder(self, monkeypatch):
+        """Bei reranker='cross-encoder' greift die Dynamik-Umsortierung weiterhin."""
+        import nexus_memory.reranker as rr
+
+        def fake_local(query, results):
+            return results  # identity reranker, keeps vector order
+
+        monkeypatch.setattr(rr, "_rerank_local", fake_local)
+
+        def fake_eff(base_score, payload):
+            return base_score + (payload.get("use_count", 0) * 0.1)
+
+        monkeypatch.setattr("nexus_memory.memory_dynamics.effective_score", fake_eff)
+
+        prov, client = self._provider(
+            {"enabled": True, "reranker": "cross-encoder", "pool_k": 5}
+        )
+
+        pts = [
+            _pt("p0", "zero", 0.91),
+            _pt("p1", "one", 0.91),
+            _pt("p2", "two", 0.91),
+            _pt("p3", "three", 0.91),
+            _pt("p4", "four", 0.91),
+        ]
+        for p in pts:
+            p.payload["use_count"] = int(p.id[1:]) * 10  # p4 highest
+
+        client.query_points.side_effect = (
+            lambda collection_name, query, limit: SimpleNamespace(points=pts)
+        )
+
+        out = prov._recall("q", limit=5)
+        # All scores equal, so dynamics should reorder by effective_score descending.
+        assert [r["id"] for r in out] == ["p4", "p3", "p2", "p1", "p0"]
+
 class TestAutoMode:
     """User-adaptive behavior: same code, different hardware/keys per user."""
 
-    def test_auto_resolves_to_local(self, monkeypatch):
+    def test_auto_resolves_to_llm(self, monkeypatch):
         import nexus_memory.reranker as rr
 
-        assert rr._resolve_reranker("auto", None) == "cross-encoder"
-        assert rr._resolve_reranker("auto", "") == "cross-encoder"
+        assert rr._resolve_reranker("auto", None) == "llm"
+        assert rr._resolve_reranker("auto", "") == "llm"
+        assert rr._resolve_reranker("") == "llm"
 
     def test_explicit_choice_beats_auto(self):
         from nexus_memory.reranker import _resolve_reranker
@@ -245,7 +321,7 @@ class TestAutoMode:
         assert _resolve_reranker("cross-encoder", "has-key") == "cross-encoder"
 
 
-    def test_load_config_default_is_cross_encoder(self, tmp_path, monkeypatch):
+    def test_load_config_default_is_llm(self, tmp_path, monkeypatch):
         import yaml
 
         from nexus_memory.reranker import load_rerank_config
@@ -253,4 +329,4 @@ class TestAutoMode:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(yaml.safe_dump({"nexus-memory": {"rerank": True}}))
         cfg = load_rerank_config(str(cfg_file))
-        assert cfg["reranker"] == "cross-encoder"
+        assert cfg["reranker"] == "llm"
