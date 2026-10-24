@@ -33,9 +33,9 @@ package = false
 # at our own repository at the reviewed commit so the engine arrives with the
 # plugin; a bare index lookup would fetch the unrelated PyPI project.
 # The revision is the FULL 40-character sha of that commit, not the tag
-# `v0.22.23` that points at it: a tag can be moved, and a moved tag would
+# `v0.22.26` that points at it: a tag can be moved, and a moved tag would
 # silently change the engine for every new install and every repair run without
 # another review. The sha cannot move. `tests/test_pin_chain_is_closed.py`
 # proves both places name it and that the commit the catalog pins changes no
 # engine file over it.
-nexus-memory = { git = "https://github.com/Neboy72/nexus-memory.git", rev = "e47be349ee31ac53aa9e7c0ee74297c8a7f4f931" }
+nexus-memory = { git = "https://github.com/Neboy72/nexus-memory.git", rev = "a7d72e6594757c1fd688acbf5818ff2dc482540f" }
