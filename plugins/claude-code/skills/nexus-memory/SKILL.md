@@ -47,11 +47,11 @@ something just said.
 **2. Where the text goes depends on your embedding provider - and the
 default is local.** Out of the box the plugin embeds through the local
 Nexus service (`nexus-memory serve`), which runs the engine with its local
-HuggingFace model: nothing has to be installed and memory text does not
-leave your machine. Only if you deliberately name a cloud provider
-(Voyage, OpenAI, Google, Jina) is the text of your memories sent to that
-provider's API. If you switch providers later, re-embed, because vectors
-from different models are not comparable.
+HuggingFace model, so memory text does not leave your machine. The service
+must be set up once (see "Embeddings"). Only if you deliberately name a
+cloud provider (OpenAI, Google, Jina) is the text of your memories sent to
+that provider's API. If you switch providers later, re-embed, because
+vectors from different models are not comparable.
 
 **3. A shared collection is readable across agents.** If Claude Code,
 Hermes Agent and OpenClaw point at the same Qdrant collection (the common
@@ -78,26 +78,33 @@ Environment variables (set in `.env` or shell):
 |----------|---------|-------------|
 | `NEXUS_QDRANT_URL` | `http://localhost:6333` | Qdrant server URL |
 | `NEXUS_COLLECTION` | `nexus` | Qdrant collection name |
-| `NEXUS_EMBEDDING_PROVIDER` | `auto` | `auto` (local Nexus service, default), `ollama` (local), or a cloud provider (`voyage`, `openai`, `google`, `jina`) |
-| `NEXUS_EMBEDDING_MODEL` | `voyage-4` | Model used when the provider is `voyage` |
-| `VOYAGE_API_KEY` | - | Required only if you choose the Voyage provider |
+| `NEXUS_EMBEDDING_PROVIDER` | `auto` | `auto` (local Nexus service, default), `ollama` (local), or a cloud provider (`openai`, `google`, `jina`) |
 | `NEXUS_OLLAMA_EMBED_MODEL` | `qwen3-embedding:0.6b` | Model used when the provider is `ollama` |
 | `NEXUS_MAX_RECALL` | `5` | Max memories to inject per prompt |
 
 ## Embeddings
 
-The plugin defaults to the **local Nexus service** - no API key, no account,
-nothing leaving your machine, and nothing to install:
+The plugin defaults to the **local Nexus service**: no API key, no account,
+and nothing leaving your machine. It is not "nothing to install" - the
+service is a small Python package that has to be installed and started once.
+The free local alternative that needs no Nexus service is Ollama.
 
 | Provider | Where | Setup | Default model |
 |----------|-------|-------|---------------|
-| *(default)* `auto` | **Local** - the service embeds with the engine's model | run `nexus-memory serve` (the installer registers it as a service) | local HuggingFace, e.g. `Qwen/Qwen3-Embedding-0.6B` (1024d) |
+| *(default)* `auto` | **Local** - the service embeds with the engine's model | `pip install nexus-memory`, then run `nexus-memory serve` (the installer registers it as a service) | local HuggingFace, e.g. `Qwen/Qwen3-Embedding-0.6B` (1024d) |
 | `ollama` | **Local** (needs Ollama running) | `NEXUS_EMBEDDING_PROVIDER=ollama` + `ollama pull qwen3-embedding:0.6b` | `qwen3-embedding:0.6b` (1024d) |
-| `voyage` | Cloud (text is sent to Voyage) | set `NEXUS_EMBEDDING_PROVIDER=voyage` and `VOYAGE_API_KEY` | `voyage-4` |
+| `openai` | Cloud (text is sent to OpenAI) | set `NEXUS_EMBEDDING_PROVIDER=openai` and `OPENAI_API_KEY` | `text-embedding-3-small` (1536d) |
+| `google` | Cloud (text is sent to Google) | set `NEXUS_EMBEDDING_PROVIDER=google` and `GOOGLE_API_KEY` | `text-embedding-004` (768d) |
+| `jina` | Cloud (text is sent to Jina) | set `NEXUS_EMBEDDING_PROVIDER=jina` and `JINA_API_KEY` | `jina-embeddings-v3` (1024d) |
 
-**Setup (once):** run the service - the wizard/installer already registers it:
+**Without one of these sources there is neither recall nor capture.** The
+hooks say so on stderr and skip their work.
+
+**Setup (once):** install the service and start it - the wizard/installer
+already registers it:
 
 ```bash
+pip install nexus-memory
 nexus-memory serve        # http://127.0.0.1:9122, installed as a user service
 ```
 
