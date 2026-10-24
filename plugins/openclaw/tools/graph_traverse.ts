@@ -8,6 +8,7 @@
 import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
+import { visibleAccessLevels } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { clampInt } from "../lib/num.ts"
 import { isActiveEdge, normalizeEdge } from "../lib/edge.ts"
@@ -46,6 +47,24 @@ const KG_RELATIONS: readonly string[] = [
 ]
 
 /**
+ * Visibility gate shared by the four graph tools (24.10.2026 ClawHub audit).
+ *
+ * The tools used to emit every point they touched — entity lists, edge
+ * targets, traversal steps — without checking `access_level`, so a `public`
+ * agent could read `private` entities and, worse, reach nodes hidden behind
+ * a private one. Every emitted or traversed point now runs through this gate;
+ * an invisible point is treated exactly like an absent one.
+ *
+ * Fail-closed: a payload without `access_level` counts as `private` — the
+ * same convention as `mapHit()` in lib/qdrant-client.ts (`?? "private"`).
+ * An unknown agent level yields no visible levels at all (W31-16).
+ */
+function visibilityGate(cfg: NexusConfig): (payload?: Record<string, unknown>) => boolean {
+  const levels = visibleAccessLevels(cfg.accessLevel)
+  return (payload) => levels.includes(String(payload?.access_level ?? "private"))
+}
+
+/**
  * Validate one INCOMING edge (a `findIncomingEdges` result) before it enters
  * the public `{ fact_id, relation, edge_id }` contract.
  *
@@ -75,7 +94,7 @@ function validateIncomingEdge(
 export function registerGraphTraverseTool(
   api: OpenClawPluginApi,
   qdrantClient: QdrantClient,
-  _cfg: NexusConfig,
+  cfg: NexusConfig,
   toolName = "nexus_graph_traverse",
 ): void {
   api.registerTool(
@@ -118,17 +137,24 @@ export function registerGraphTraverseTool(
         const targetType = params.target_type || undefined
 
         try {
+          const isVisible = visibilityGate(cfg)
           const point = await qdrantClient.scrollPoint(factId)
-          if (!point) {
+          // A start point outside the agent's access level must be
+          // indistinguishable from an absent one — the message names no reason
+          // and no existence, or the ID itself becomes a probe.
+          if (!point || !isVisible(point.payload)) {
             return {
               content: [{ type: "text" as const, text: `Fact ${factId} not found` }],
             }
           }
 
           // BFS traversal over edges in Qdrant payloads (shared lib/bfs.ts).
+          // The gate rides along so neighbours (and everything behind them)
+          // are filtered during the walk, not after it.
           const { steps: results } = await bfsEdges(qdrantClient, factId, maxDepth, {
             relation,
             targetType,
+            isVisible,
           })
 
           if (results.length === 0) {
@@ -174,7 +200,7 @@ export function registerGraphTraverseTool(
 export function registerFindEntitiesTool(
   api: OpenClawPluginApi,
   qdrantClient: QdrantClient,
-  _cfg: NexusConfig,
+  cfg: NexusConfig,
   toolName = "nexus_find_entities",
 ): void {
   api.registerTool(
@@ -223,7 +249,12 @@ export function registerFindEntitiesTool(
           // walks up to 5 pages, so without a total cap this returned up to
           // limit*5 entities. Pass `limit` as the total cap as well.
           const points = await qdrantClient.scrollFiltered(filter, limit, limit)
-          const entities = points.map((pt) => {
+          // 24.10.2026 audit: the entity list used to ignore access_level —
+          // a `public` agent saw every `private` entity. Filter BEFORE mapping,
+          // so no field of a hidden point can leak into the result.
+          const isVisible = visibilityGate(cfg)
+          const visiblePoints = points.filter((pt) => isVisible(pt.payload))
+          const entities = visiblePoints.map((pt) => {
             const payload = (pt.payload ?? {}) as Record<string, unknown>
             return {
               id: pt.id,
@@ -307,8 +338,12 @@ export function registerGetSubgraphTool(
 
         try {
           // Shared BFS (lib/bfs.ts), subgraph mode: collect nodes + edges.
+          // The visibility gate drops hidden nodes (and every edge that would
+          // point at one); an invisible start yields the same "No subgraph
+          // found" answer as an absent one.
           const { nodes, edges } = await bfsEdges(qdrantClient, factId, maxDepth, {
             collectEdges: true,
+            isVisible: visibilityGate(cfg),
           })
 
           if (nodes.length <= 1) {
@@ -350,7 +385,7 @@ export function registerGetSubgraphTool(
 export function registerGetRelatedTool(
   api: OpenClawPluginApi,
   qdrantClient: QdrantClient,
-  _cfg: NexusConfig,
+  cfg: NexusConfig,
   toolName = "nexus_get_related",
 ): void {
   api.registerTool(
@@ -375,11 +410,27 @@ export function registerGetRelatedTool(
         const relation = params.relation || undefined
 
         try {
+          const isVisible = visibilityGate(cfg)
           const point = await qdrantClient.scrollPoint(factId)
-          if (!point) {
+          // Same answer for "absent" and "outside your level" — see
+          // graph_traverse above.
+          if (!point || !isVisible(point.payload)) {
             return {
               content: [{ type: "text" as const, text: `Fact ${factId} not found` }],
             }
+          }
+
+          // Edges name their neighbour by ID only, so each one must be loaded
+          // to judge its access_level. A neighbour that cannot be loaded counts
+          // as invisible (fail-closed). The cache keeps one fetch per ID.
+          const neighbourVisible = new Map<string, boolean>()
+          const isNeighbourVisible = async (id: string): Promise<boolean> => {
+            const cached = neighbourVisible.get(id)
+            if (cached !== undefined) return cached
+            const neighbour = await qdrantClient.scrollPoint(id)
+            const visible = neighbour ? isVisible(neighbour.payload) : false
+            neighbourVisible.set(id, visible)
+            return visible
           }
 
           const edges = (point.payload?.edges ?? []) as Array<Record<string, unknown>>
@@ -397,6 +448,9 @@ export function registerGetRelatedTool(
               continue
             }
             if (relation && normalized.relation !== relation) continue
+            // A hidden neighbour is left out silently — no gap marker, no
+            // count, no hint that an edge exists.
+            if (!(await isNeighbourVisible(normalized.targetId))) continue
 
             results.push({
               fact_id: normalized.targetId,
@@ -418,6 +472,9 @@ export function registerGetRelatedTool(
               continue
             }
             if (relation && normalized.relation !== relation) continue
+            // findIncomingEdges walks every entity point's edges and returns
+            // the source IDs only — the source's access_level is decided here.
+            if (!(await isNeighbourVisible(normalized.fact_id))) continue
             results.push({
               fact_id: normalized.fact_id,
               relation: normalized.relation,

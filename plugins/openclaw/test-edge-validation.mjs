@@ -104,7 +104,11 @@ function registerToolFor(fn, client) {
   let tool
   let registered = 0
   const api = { registerTool: (tt) => { tool = tt; registered++ } }
-  fn(api, client, {})
+  // 24.10.2026: die Graph-Tools prüfen seit dem Audit-Fix access_level und
+  // antworten bei unbekanntem Agent-Level fail-closed (nichts sichtbar).
+  // Dieser Test prüft die Edge-Validierung, nicht die Sichtbarkeit — er gibt
+  // dem Werkzeug deshalb den Config-Default "private" (sieht alle Stufen).
+  fn(api, client, { accessLevel: "private" })
   if (registered === 0 || !tool) {
     throw new Error(`Registrierung fehlgeschlagen: registerTool wurde ${registered}× gerufen (Export umbenannt? Signatur geändert?)`)
   }
@@ -165,6 +169,12 @@ await t("get_related: Contract {fact_id, relation, edge_id, direction}, malforme
           ],
         },
       },
+      // 24.10.2026: get_related lädt jeden Nachbarn, um seinen access_level zu
+      // prüfen. Ein nicht ladbarer Nachbar gilt fail-closed als unsichtbar —
+      // die Ziele (und die eingehende Quelle) müssen daher im Stub existieren.
+      a: { id: "a", payload: { access_level: "public", edges: [] } },
+      b: { id: "b", payload: { access_level: "public", edges: [] } },
+      "src-1": { id: "src-1", payload: { access_level: "public", edges: [] } },
     },
     [{ source_id: "src-1", relation: "owns", edge_id: "e3" }],
   )

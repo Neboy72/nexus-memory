@@ -12,6 +12,10 @@
  * same edge-emission rule (traverse skips an already-visited target, subgraph
  * still records the edge). H123 depth clamping stays in the tools — maxDepth
  * arrives here already bounded and is defensively re-bounded (W40-4).
+ *
+ * `isVisible` (24.10.2026 audit fix) is the one addition: the graph tools pass
+ * the agent's access-level gate in, and an invisible point is treated as
+ * absent everywhere — never emitted, never traversed through.
  */
 
 import type { QdrantClient } from "./qdrant-client.ts"
@@ -41,6 +45,14 @@ export interface BfsOptions {
   targetType?: string
   /** true → collect nodes+edges (subgraph); false → collect steps (traverse). */
   collectEdges?: boolean
+  /**
+   * Visibility gate for every point the walk touches (24.10.2026 audit fix).
+   * A point that fails it is treated exactly like an absent point: it is not
+   * emitted, not enqueued and — crucially — not traversed *through*, so its
+   * own edges can never surface a node behind it. The graph tools pass
+   * `access_level` in here; a missing level counts as `private` (fail-closed).
+   */
+  isVisible?: (payload?: Record<string, unknown>) => boolean
 }
 
 export interface BfsResult {
@@ -55,7 +67,7 @@ export async function bfsEdges(
   maxDepth: number,
   opts: BfsOptions = {},
 ): Promise<BfsResult> {
-  const { relation, targetType, collectEdges = false } = opts
+  const { relation, targetType, collectEdges = false, isVisible } = opts
 
   // W40-4: maxDepth arrives here already clamped (H123), but it is a shared
   // entry point parameter — a non-finite value made `depth >= maxDepth` always
@@ -86,13 +98,22 @@ export async function bfsEdges(
     return pointCache.get(id) ?? null
   }
 
+  // The visibility gate wraps the cached load (not the cache itself), so a
+  // point is fetched once and judged on every use.
+  const loadVisiblePoint = async (id: string) => {
+    const pt = await loadPoint(id)
+    if (!pt) return null
+    if (isVisible && !isVisible(pt.payload)) return null
+    return pt
+  }
+
   // W40-4: head index instead of queue.shift() — shift() re-indexes the whole
   // frontier (O(n)) and made the BFS quadratic on large graphs.
   for (let head = 0; head < queue.length; head++) {
     const { id, depth, path } = queue[head]
     if (depth >= depthLimit) continue
 
-    const pt = await loadPoint(id)
+    const pt = await loadVisiblePoint(id)
     if (!pt) continue
 
     // W40-4: `edges` is untyped JSON from arbitrary writers — a non-iterable
@@ -116,17 +137,16 @@ export async function bfsEdges(
 
       const source = path.length > 0 ? path[path.length - 1] : factId
 
-      // Filter by target_type BEFORE the visited/enqueue decision. A
-      // non-matching node must neither be enqueued (its descendants would
-      // leak into the result) nor recorded as an edge endpoint that was never
-      // added to `nodes`/`nodeSet` — both broke the subgraph invariant. Doing
-      // this first also makes the revisited branch below consistent for free:
-      // only targets that already passed the filter are ever marked visited.
-      if (targetType) {
-        const targetPoint = await loadPoint(targetId)
-        const entityType = targetPoint?.payload?.entity_type
-        if (entityType !== targetType) continue
-      }
+      // Load the target BEFORE the visited/enqueue decision, so both the
+      // visibility gate (isVisible) and the target_type filter see it first.
+      // An invisible target must neither be enqueued (its own edges would leak
+      // descendants into the result) nor recorded as a node or an edge
+      // endpoint that was never added to `nodes` — both broke the subgraph
+      // invariant. The load is cached (pointCache), so the later dequeue of
+      // this target reuses it instead of issuing a second request.
+      const targetPoint = await loadVisiblePoint(targetId)
+      if (!targetPoint) continue
+      if (targetType && targetPoint.payload?.entity_type !== targetType) continue
 
       if (visited.has(targetId)) {
         // traverse: a revisited target yields nothing. subgraph: still record
