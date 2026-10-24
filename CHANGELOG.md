@@ -1,3 +1,30 @@
+## [0.22.28] — 2026-10-24
+
+### Changed — the reranker is the model the agent already runs
+
+Recall was not the bottleneck, ordering was. With 20 questions about facts the corpus holds, the
+provider's own recall path put the answer inside the top five 14 times with the cross-encoder it
+used before — the correct entry was usually in the candidate pool, below position five.
+
+- `reranker.llm` is a third option and the new default; `"auto"` and an empty value resolve to it,
+  an explicit `"cross-encoder"` stays available. One chat-completion call per deliberate search
+  over the provider's rerank pool (`nexus-memory.rerank_pool`, 40 in this install) with 300
+  characters per candidate.
+- `reasoning_effort: "low"` is mandatory: without that brake the model spends the whole output
+  budget on thinking and returns empty text with `finish_reason=length`.
+- One repeat request on an empty or unusable answer; after that the reranker returns nothing and
+  the caller keeps the original order, with a single warning per process.
+- Credentials come from `NEXUS_RERANK_LLM_API_KEY`/`_BASE_URL`/`_MODEL`, otherwise from the
+  Hermes credential pool entry `ollama-cloud`.
+- The memory-dynamics tie-break in the Hermes provider now runs only when the active reranker is
+  not the LLM one: it reorders within 0.02 vector-score windows by usage frequency and destroyed
+  the order the model had chosen.
+
+Measured through the provider's own recall path with the same 20 questions, the same collection,
+the query rewrite switched off and the same candidate pool: 14/20 with the previous default,
+**17/20 with this change**. In one of those 20 searches the reranker gave up after the repeat
+request and the original order came back; that run is counted as it ran.
+
 ## [0.22.27] — 2026-10-24
 
 ### Removed — the Voyage provider is gone, not just unused
