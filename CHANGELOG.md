@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.22.27] — 2026-10-24
 
 ### Removed — the Voyage provider is gone, not just unused
 
