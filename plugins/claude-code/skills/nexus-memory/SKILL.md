@@ -82,6 +82,24 @@ Environment variables (set in `.env` or shell):
 | `NEXUS_OLLAMA_EMBED_MODEL` | `qwen3-embedding:0.6b` | Model used when the provider is `ollama` |
 | `NEXUS_MAX_RECALL` | `5` | Max memories to inject per prompt |
 
+## Access levels
+
+Every memory carries an `access_level` - `public` < `trusted` < `private`.
+The hooks read the agent's level from `~/.nexus-memory/agents.json`
+(`resolve_trust_level()` in `scripts/scope_auto.py`) and hand it to the
+engine, which applies one rule everywhere it reads:
+
+- an agent at level N sees memories at level 0..N;
+- a point with **no** `access_level` counts as `private` (fail-closed);
+- a hidden point is neither returned **nor traversed through** - in the graph
+  a hidden bridge hides everything behind it, and asking for a hidden fact by
+  ID answers exactly like asking for one that does not exist;
+- no readable registry, an unknown agent id, or an invalid level means
+  `public`.
+
+Enforced in search, delete (by ID and by query) and the graph tools
+(`traverse`, `find_entities`, `get_related`, `get_subgraph`).
+
 ## Embeddings
 
 The plugin defaults to the **local Nexus service**: no API key, no account,
@@ -91,7 +109,7 @@ The free local alternative that needs no Nexus service is Ollama.
 
 | Provider | Where | Setup | Default model |
 |----------|-------|-------|---------------|
-| *(default)* `auto` | **Local** - the service embeds with the engine's model | `pip install nexus-memory`, then run `nexus-memory serve` (the installer registers it as a service) | local HuggingFace, e.g. `Qwen/Qwen3-Embedding-0.6B` (1024d) |
+| *(default)* `auto` | **Local** - the service embeds with the engine's model | install from the repository (see the setup block below), then run `nexus-memory serve` (the installer registers it as a service) | local HuggingFace, e.g. `Qwen/Qwen3-Embedding-0.6B` (1024d) |
 | `ollama` | **Local** (needs Ollama running) | `NEXUS_EMBEDDING_PROVIDER=ollama` + `ollama pull qwen3-embedding:0.6b` | `qwen3-embedding:0.6b` (1024d) |
 | `openai` | Cloud (text is sent to OpenAI) | set `NEXUS_EMBEDDING_PROVIDER=openai` and `OPENAI_API_KEY` | `text-embedding-3-small` (1536d) |
 | `google` | Cloud (text is sent to Google) | set `NEXUS_EMBEDDING_PROVIDER=google` and `GOOGLE_API_KEY` | `text-embedding-004` (768d) |
@@ -104,7 +122,10 @@ hooks say so on stderr and skip their work.
 already registers it:
 
 ```bash
-pip install nexus-memory
+# Do NOT `pip install nexus-memory`: the PyPI package of that name is a
+# different project ("renamed to smriti-memcore"). Install from the repository.
+git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
+pip install -e ~/nexus-memory
 nexus-memory serve        # http://127.0.0.1:9122, installed as a user service
 ```
 
