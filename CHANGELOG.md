@@ -1,3 +1,19 @@
+## [0.22.31] — 2026-10-25
+
+### Changed — lock refreshed for five packages, test runner on pytest 9
+
+Seven open advisories sat on five packages in the lockfile; all seven are addressed here:
+
+- `certifi` 2026.7.22 → 2026.10.23 (bundles CAs with a compromised intermediate, critical) — 1 advisory.
+- `filelock` 4.0.3 → 4.2.4 (read/write lock handling) — 3 advisories, one high and two low.
+- `setuptools` 84.0.0 → 84.2.1 (path escape while reading metadata) — 1 advisory, low.
+- `opentelemetry-api` 1.45.0 → 1.45.1 (`tracestate` parsing) — 1 advisory, medium.
+- `pytest`: the bound was `>=8,<9`, but the advisory ("pytest has vulnerable tmpdir handling") is
+  fixed only from 9.0.3. The bound is now `pytest>=9.0.3,<10.0.0` and the lock resolves 9.1.1 —
+  1 advisory, medium. The full suite runs green on it: 2440 passed, 3 skipped, 0 failed.
+
+The dependency refresh itself changes no runtime behaviour; the daemon fix from 0.22.30 is unchanged.
+
 ## [0.22.30] — 2026-10-24
 
 ### Fixed — the maintenance daemons stay quiet on a fresh installation

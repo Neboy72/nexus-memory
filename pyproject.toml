@@ -1,6 +1,6 @@
 [project]
 name = "nexus-memory"
-version = "0.22.30"
+version = "0.22.31"
 description = "Universal Memory Layer for AI Agents — MCP-powered, self-hosted, secure."
 authors = [{ name = "Nebo" }]
 readme = "README.md"
@@ -21,7 +21,7 @@ dependencies = [
 openai = ["openai>=1.0.0,<3.0.0"]
 google = ["google-generativeai>=0.7.0,<1.0.0"]
 all = ["openai>=1.0.0,<3.0.0", "google-generativeai>=0.7.0,<1.0.0", "fastapi>=0.100.0,<1.0.0", "uvicorn>=0.20.0,<1.0.0"]
-test = ["pytest>=8.0.0,<9.0.0", "pytest-asyncio>=0.23.0,<2.0.0"]
+test = ["pytest>=9.0.3,<10.0.0", "pytest-asyncio>=0.23.0,<2.0.0"]
 
 [project.scripts]
 nexus-memory = "nexus_memory.mcp_server:cli"
