@@ -2460,6 +2460,12 @@ async def handle_list_tools() -> list[types.Tool]:
                         "description": "Only return targets with this entity_type (e.g. 'device', 'service')",
                         "default": "",
                     },
+                    "access_level": {
+                        "type": "string",
+                        "enum": ALL_ACCESS_LEVELS,
+                        "description": "Caller's visibility tier: only facts at this level or below are returned (public < trusted < private)",
+                        "default": ACCESS_PRIVATE,
+                    },
                 },
                 "required": ["fact_id"],
             },
@@ -2486,6 +2492,12 @@ async def handle_list_tools() -> list[types.Tool]:
                         "minimum": 1,
                         "maximum": 200,
                     },
+                    "access_level": {
+                        "type": "string",
+                        "enum": ALL_ACCESS_LEVELS,
+                        "description": "Caller's visibility tier: only entities at this level or below are returned (public < trusted < private)",
+                        "default": ACCESS_PRIVATE,
+                    },
                 },
             },
         ),
@@ -2510,6 +2522,12 @@ async def handle_list_tools() -> list[types.Tool]:
                         "minimum": 1,
                         "maximum": 5,
                     },
+                    "access_level": {
+                        "type": "string",
+                        "enum": ALL_ACCESS_LEVELS,
+                        "description": "Caller's visibility tier: only nodes at this level or below are included (public < trusted < private)",
+                        "default": ACCESS_PRIVATE,
+                    },
                 },
                 "required": ["fact_id"],
             },
@@ -2532,6 +2550,12 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Only return edges with this relation (e.g. 'manages')",
                         "default": "",
+                    },
+                    "access_level": {
+                        "type": "string",
+                        "enum": ALL_ACCESS_LEVELS,
+                        "description": "Caller's visibility tier: only neighbours at this level or below are returned (public < trusted < private)",
+                        "default": ACCESS_PRIVATE,
                     },
                 },
                 "required": ["fact_id"],
@@ -3162,6 +3186,23 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
     elif name == "graph_traverse":
         try:
+            # The graph is a second way into the collection: without the
+            # caller's level a traversal would answer as "public" and hide
+            # nearly everything (most legacy points carry no access_level, so
+            # they count as private). Fail CLOSED on an unknown value instead
+            # of silently returning an empty result.
+            access_level = arguments.get("access_level", ACCESS_PRIVATE)
+            if not _is_valid_access_level(access_level):
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": (
+                            f"Invalid access_level: {access_level!r}. "
+                            f"Allowed: {ALL_ACCESS_LEVELS}"
+                        ),
+                    }),
+                )]
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
             sg = SkillGraph(
@@ -3170,7 +3211,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 binding=getattr(store, "_binding", None),
             )
             sg.initialize()
-            gt = GraphTraversal(sg)
+            gt = GraphTraversal(sg, access_level=access_level)
             results = gt.traverse(
                 arguments["fact_id"],
                 max_depth=arguments.get("max_depth", 3),
@@ -3184,6 +3225,20 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
     elif name == "find_entities":
         try:
+            # See graph_traverse: an unknown level must be an error, never an
+            # empty (and therefore misleading) entity list.
+            access_level = arguments.get("access_level", ACCESS_PRIVATE)
+            if not _is_valid_access_level(access_level):
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": (
+                            f"Invalid access_level: {access_level!r}. "
+                            f"Allowed: {ALL_ACCESS_LEVELS}"
+                        ),
+                    }),
+                )]
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
             sg = SkillGraph(
@@ -3192,7 +3247,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 binding=getattr(store, "_binding", None),
             )
             sg.initialize()
-            gt = GraphTraversal(sg)
+            gt = GraphTraversal(sg, access_level=access_level)
             results = gt.find_entities(
                 entity_type=arguments.get("entity_type") or None,
                 limit=arguments.get("limit", 50),
@@ -3204,6 +3259,19 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
     elif name == "get_subgraph":
         try:
+            # See graph_traverse: fail CLOSED on an unknown level.
+            access_level = arguments.get("access_level", ACCESS_PRIVATE)
+            if not _is_valid_access_level(access_level):
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": (
+                            f"Invalid access_level: {access_level!r}. "
+                            f"Allowed: {ALL_ACCESS_LEVELS}"
+                        ),
+                    }),
+                )]
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
             sg = SkillGraph(
@@ -3212,7 +3280,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 binding=getattr(store, "_binding", None),
             )
             sg.initialize()
-            gt = GraphTraversal(sg)
+            gt = GraphTraversal(sg, access_level=access_level)
             result = gt.get_subgraph(
                 arguments["fact_id"],
                 max_depth=arguments.get("max_depth", 2),
@@ -3224,6 +3292,19 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
     elif name == "get_related":
         try:
+            # See graph_traverse: fail CLOSED on an unknown level.
+            access_level = arguments.get("access_level", ACCESS_PRIVATE)
+            if not _is_valid_access_level(access_level):
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": (
+                            f"Invalid access_level: {access_level!r}. "
+                            f"Allowed: {ALL_ACCESS_LEVELS}"
+                        ),
+                    }),
+                )]
             from nexus.graph.graph import SkillGraph
             from nexus.graph.traversal import GraphTraversal
             sg = SkillGraph(
@@ -3232,7 +3313,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 binding=getattr(store, "_binding", None),
             )
             sg.initialize()
-            gt = GraphTraversal(sg)
+            gt = GraphTraversal(sg, access_level=access_level)
             results = gt.get_related(
                 arguments["fact_id"],
                 relation=arguments.get("relation") or None,

@@ -32,13 +32,17 @@ class TestKGRelations:
 
 
 class TestGraphTraversal:
-    """Tests for GraphTraversal (mocked SkillGraph)."""
+    """Tests for GraphTraversal (mocked SkillGraph).
+
+    The mocked neighbours carry no ``access_level``; such a point counts as
+    ``private``, so these mechanics tests traverse explicitly as ``private``.
+    """
 
     def test_traverse_empty_graph(self):
         """traverse() on non-existent node returns []."""
         mock_graph = MagicMock()
         mock_graph.has_node.return_value = False
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         result = gt.traverse("nonexistent")
         assert result == []
 
@@ -47,7 +51,7 @@ class TestGraphTraversal:
         mock_graph = MagicMock()
         mock_graph.has_node.return_value = True
         mock_graph.neighbors.return_value = []
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         result = gt.traverse("lonely-node")
         assert result == []
 
@@ -58,7 +62,7 @@ class TestGraphTraversal:
         mock_graph.neighbors.return_value = [
             {"fact_id": "neighbor-1", "relation": "manages", "edge_id": "e1"},
         ]
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         result = gt.traverse("start", max_depth=1)
         assert len(result) == 1
         assert result[0]["fact_id"] == "neighbor-1"
@@ -77,7 +81,7 @@ class TestGraphTraversal:
             [{"fact_id": "end", "relation": "connected_to", "edge_id": "e2"}],
             [],  # end node has no more neighbors
         ]
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         result = gt.traverse("start", max_depth=2)
         assert len(result) >= 1
         # Should find "mid" at depth 1
@@ -94,7 +98,7 @@ class TestGraphTraversal:
             [{"fact_id": "A", "relation": "manages", "edge_id": "e1"}],
             [{"fact_id": "start", "relation": "manages", "edge_id": "e2"}],
         ]
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         result = gt.traverse("start", max_depth=5)
         # Should not include "start" again
         fact_ids = [r["fact_id"] for r in result]
@@ -106,7 +110,7 @@ class TestGraphTraversal:
         mock_graph = MagicMock()
         mock_graph.has_node.return_value = True
         mock_graph.neighbors.return_value = []
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         gt.traverse("start", relation="manages")
         mock_graph.neighbors.assert_called_with("start", relation="manages")
 
@@ -116,7 +120,7 @@ class TestGraphTraversal:
         mock_graph.neighbors.return_value = [
             {"fact_id": "n1", "relation": "manages", "edge_id": "e1"},
         ]
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         result = gt.get_related("start")
         assert len(result) == 1
         assert result[0]["fact_id"] == "n1"
@@ -125,7 +129,7 @@ class TestGraphTraversal:
         """get_subgraph on non-existent node returns empty."""
         mock_graph = MagicMock()
         mock_graph.has_node.return_value = False
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         result = gt.get_subgraph("nonexistent")
         assert result == {"nodes": [], "edges": []}
 
@@ -136,7 +140,7 @@ class TestGraphTraversal:
         mock_graph.neighbors.return_value = [
             {"fact_id": "n1", "relation": "manages", "edge_id": "e1"},
         ]
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         result = gt.get_subgraph("start", max_depth=1)
         assert len(result["nodes"]) >= 1
         assert "start" in [n["id"] for n in result["nodes"]]
@@ -146,7 +150,7 @@ class TestGraphTraversal:
         mock_graph = MagicMock()
         mock_graph.stats.return_value = {"nodes": 10, "edges": 5}
         mock_graph.list_edges.return_value = []
-        gt = GraphTraversal(mock_graph)
+        gt = GraphTraversal(mock_graph, access_level="private")
         stats = gt.stats()
         assert "kg_edges" in stats
         assert "total_relations" in stats
