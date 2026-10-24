@@ -82,17 +82,27 @@ cp -r ~/nexus-memory/plugins/openclaw ~/.openclaw/plugins/nexus-memory
    | **Jina** | `JINA_API_KEY` | `jina-embeddings-v3` | 1024 |
 
    ```bash
-   export OPENAI_API_KEY="sk-your-key-here"
+   export OPENAI_API_KEY="<dein-schluessel>"
    ```
 
    **c. The local Nexus service** — only if you run Nexus Memory yourself:
 
    ```bash
-   pip install nexus-memory && nexus-memory serve   # http://127.0.0.1:9122
+   # Install from the repository — NOT from PyPI (see note below).
+   git clone https://github.com/Neboy72/nexus-memory.git ~/nexus-memory
+   pip install -e ~/nexus-memory
+   nexus-memory serve   # http://127.0.0.1:9122
    ```
 
+   > **The PyPI package named `nexus-memory` is not this project.** PyPI serves
+   > version 1.0.2 with the note "DEPRECATED: renamed to smriti-memcore", so
+   > `pip install nexus-memory` installs someone else's package. Install from
+   > the repository (clone above, or
+   > `pip install "git+https://github.com/Neboy72/nexus-memory.git"` if your pip
+   > may install from Git).
+
    This is our in-house setup, not the default for a ClawHub install: the
-   package does not ship that service. Point the plugin elsewhere with
+   plugin does not ship that service. Point the plugin elsewhere with
    `embedding.baseUrl`; the service picks its own embedding backend through the
    engine's `NEXUS_EMBEDDING_PROVIDER`.
 
@@ -223,6 +233,18 @@ Nexus Memory supports three access levels with hierarchical filtering:
 - **`private`** — agent sees all memories (`public` + `trusted` + `private`)
 
 This lets you run multiple agents with different trust levels against the same Qdrant collection.
+
+The level is enforced everywhere the plugin reads: semantic search, delete
+(by ID and by query) **and the graph tools** (`nexus_find_entities`,
+`nexus_graph_traverse`, `nexus_get_subgraph`, `nexus_get_related`). In the
+graph, a memory outside the agent's level is not just hidden itself — its
+neighbours are hidden too, and a traversal does not pass *through* it. Asking
+for a hidden fact by ID answers exactly like asking for one that does not
+exist.
+
+A stored point without an `access_level` counts as `private` (fail-closed), so
+legacy or foreign writers can never accidentally publish data. Auto-Capture
+writes every new memory at the configured `accessLevel` (default `private`).
 
 ## How it works
 
