@@ -1,6 +1,6 @@
 {
   "name": "@neboy72/nexus-memory",
-  "version": "1.21.13",
+  "version": "1.21.14",
   "type": "module",
   "description": "OpenClaw Nexus Memory plugin \u2014 Auto-Recall + Auto-Capture over Qdrant + ingestion-time consolidation",
   "license": "MIT",
@@ -19,13 +19,12 @@
     "dist"
   ],
   "scripts": {
-    "build": "esbuild index.ts --bundle --format=esm --platform=node --target=es2022 --external:openclaw --external:openclaw/* --external:@sinclair/typebox --outfile=dist/index.js",
+    "build": "esbuild index.ts --bundle --format=esm --platform=node --target=es2022 --external:openclaw --external:openclaw/* --outfile=dist/index.js",
     "check-types": "tsc --noEmit",
     "prepack": "npm run check-types && npm run build"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.7 <2027.0.0",
-    "@sinclair/typebox": "^0.34.0"
+    "openclaw": ">=2026.5.7 <2027.0.0"
   },
   "openclaw": {
     "extensions": [
