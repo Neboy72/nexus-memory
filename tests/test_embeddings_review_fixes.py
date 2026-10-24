@@ -137,9 +137,9 @@ def _fake_local_hf(monkeypatch, dim: int = 1024) -> None:
 
 def _no_cloud_keys(monkeypatch) -> None:
     """Remove every cloud key from the environment and the module constants."""
-    for var in ("VOYAGE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "JINA_API_KEY"):
+    for var in ("OPENAI_API_KEY", "GOOGLE_API_KEY", "JINA_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    for const in ("VOYAGE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
+    for const in ("OPENAI_API_KEY", "GOOGLE_API_KEY"):
         if hasattr(embeddings_module, const):
             monkeypatch.setattr(embeddings_module, const, "")
 
@@ -237,7 +237,7 @@ class TestFailClosedExplicitProvider:
     ):
         """Explicit local provider down + cloud keys present → error."""
         monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "ollama")
-        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "vo-valid")
+        
         monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "sk-valid")
         _block_ollama(monkeypatch)
 
@@ -258,26 +258,26 @@ class TestFailClosedExplicitProvider:
         self, isolated_env, monkeypatch
     ):
         """A failed explicit cloud provider also raises instead of switching."""
-        monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
-        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "")  # unusable
-        monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "sk-valid")
+        monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "openai")
+        monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "")  # unusable
+        monkeypatch.setattr(embeddings_module, "GOOGLE_API_KEY", "AIza-valid")
         _block_ollama(monkeypatch)
 
         with pytest.raises(RuntimeError):
-            EmbeddingProvider(preferred="voyage")
+            EmbeddingProvider(preferred="openai")
 
     def test_successful_explicit_provider_still_works(
         self, isolated_env, monkeypatch
     ):
-        """The happy path is untouched: explicit voyage + working client."""
-        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "vo-valid")
-        fake_voyage = MagicMock(name="voyageai")
-        fake_voyage.Client = MagicMock(return_value=MagicMock())
-        monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
+        """The happy path is untouched: explicit openai + working client."""
+        monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "sk-valid")
+        fake_openai = MagicMock(name="openai")
+        fake_openai.OpenAI = MagicMock(return_value=MagicMock())
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
 
-        ep = EmbeddingProvider(preferred="voyage")
+        ep = EmbeddingProvider(preferred="openai")
 
-        assert ep.name == "voyage-4"
+        assert ep.name == "text-embedding-3-small"
         assert ep.available is True
 
 
@@ -292,10 +292,10 @@ class TestAutoStaysLocal:
     ):
         """'auto' must NOT send a user to the cloud (Regel A.3)."""
         monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
-        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "vo-valid")
-        fake_voyage = MagicMock(name="voyageai")
-        fake_voyage.Client = MagicMock(return_value=MagicMock())
-        monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
+        monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "sk-valid")
+        fake_openai = MagicMock(name="openai")
+        fake_openai.OpenAI = MagicMock(return_value=MagicMock())
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
         _block_ollama(monkeypatch)
         _fake_local_hf(monkeypatch)
 
@@ -304,7 +304,7 @@ class TestAutoStaysLocal:
         assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
         assert ep.dim == 1024
         assert ep.provider_type == "local"
-        fake_voyage.Client.assert_not_called()
+        fake_openai.OpenAI.assert_not_called()
 
     def test_auto_with_cloud_key_and_local_down_never_reaches_cloud(
         self, isolated_env, monkeypatch
@@ -315,17 +315,17 @@ class TestAutoStaysLocal:
         finding the public scanner reported twice.
         """
         monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
-        monkeypatch.setenv("VOYAGE_API_KEY", "vo-test-1234567890")
-        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "vo-test-1234567890")
-        fake_voyage = MagicMock(name="voyageai")
-        fake_voyage.Client = MagicMock(return_value=MagicMock())
-        monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-1234567890")
+        monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "sk-test-1234567890")
+        fake_openai = MagicMock(name="openai")
+        fake_openai.OpenAI = MagicMock(return_value=MagicMock())
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
         _block_ollama(monkeypatch)
         _block_local_hf(monkeypatch)
 
         ep = EmbeddingProvider(preferred="auto")
 
-        fake_voyage.Client.assert_not_called()
+        fake_openai.OpenAI.assert_not_called()
         assert ep.provider_type == "none", (
             "with no local backend and no explicit cloud opt-in the provider "
             f"must stay unset, not fall into the cloud (got {ep.provider_type})"
@@ -334,10 +334,10 @@ class TestAutoStaysLocal:
     def test_auto_uses_local_hf_when_ollama_is_down(self, isolated_env, monkeypatch):
         """auto prefers the local HF default and never touches the cloud."""
         monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "auto")
-        monkeypatch.setattr(embeddings_module, "VOYAGE_API_KEY", "vo-valid")
-        fake_voyage = MagicMock(name="voyageai")
-        fake_voyage.Client = MagicMock(return_value=MagicMock())
-        monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
+        monkeypatch.setattr(embeddings_module, "OPENAI_API_KEY", "sk-valid")
+        fake_openai = MagicMock(name="openai")
+        fake_openai.OpenAI = MagicMock(return_value=MagicMock())
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
         _block_ollama(monkeypatch)
         _fake_local_hf(monkeypatch, dim=1024)
 
@@ -345,7 +345,7 @@ class TestAutoStaysLocal:
 
         assert ep.backend == "sentence-transformers"
         assert ep.provider_type == "local"
-        fake_voyage.Client.assert_not_called()
+        fake_openai.OpenAI.assert_not_called()
 
 
 # ===========================================================================

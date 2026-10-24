@@ -19,7 +19,7 @@ import os from "node:os"
 import path from "node:path"
 
 /** Every embedding provider the plugin knows. */
-export type EmbeddingProvider = "nexus" | "voyage" | "openai" | "ollama" | "google" | "jina"
+export type EmbeddingProvider = "nexus" | "openai" | "ollama" | "google" | "jina"
 
 /** The two local providers this choice can return. */
 export type LocalEmbeddingProvider = "ollama" | "nexus"
@@ -30,7 +30,6 @@ const LOCAL_ENDPOINT_VARS = ["OLLAMA_HOST", "OLLAMA_BASE_URL"] as const
 /** Env var names per provider API key ("" = the provider needs none). */
 export const PROVIDER_ENV_KEYS: Record<EmbeddingProvider, string> = {
   nexus: "",
-  voyage: "VOYAGE_API_KEY",
   openai: "OPENAI_API_KEY",
   ollama: "",
   google: "GOOGLE_API_KEY",

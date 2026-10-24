@@ -28,7 +28,7 @@ startet beim Einschalten von selbst und lebt, auch wenn gerade kein Bot wach ist
   MCP-Server. Ihr Kernwert Auto-Injection hängt an Qdrant, nicht am Server.
 - Der MCP-Server (`nexus-memory`, 15 Werkzeuge) ist der stdio-Weg für Claude Code, Cursor
   und jeden MCP-Client.
-- Qdrant läuft als Docker-Container. Embeddings: Voyage-4 (Fuel über Keys in .env).
+- Qdrant läuft als Docker-Container. Embeddings: lokales HuggingFace-Modell (Qwen3-Embedding) oder explizit benannter Cloud-Provider (Keys in .env).
 
 ### Baustein A: `nexus serve` (HTTP-Dienst)
 

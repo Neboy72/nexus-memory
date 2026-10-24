@@ -118,8 +118,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--collection", help="collection to inspect")
-    ap.add_argument("--backend", help="embedding backend that BUILT it (voyage, ollama, ...)")
-    ap.add_argument("--model", help="model that BUILT it (e.g. voyage-4, qwen3-embedding:0.6b)")
+    ap.add_argument("--backend", help="embedding backend that BUILT it (openai, ollama, ...)")
+    ap.add_argument("--model", help="model that BUILT it (e.g. text-embedding-3-small, qwen3-embedding:0.6b)")
     ap.add_argument("--dim", type=int, help="vector size (read from the collection if omitted)")
     args = ap.parse_args()
 
@@ -156,7 +156,7 @@ def main() -> int:
     if not backend or not model:
         print("\nBackend/Modell unbekannt. Bitte angeben, WER die Sammlung GEBAUT hat "
               "(nicht wer sie jetzt nutzen soll):\n"
-              "  python3 scripts/detect-legacy-collection.py --backend voyage --model voyage-4")
+              "  python3 scripts/detect-legacy-collection.py --backend openai --model text-embedding-3-small")
         return 1
 
     fp = fingerprint(backend, model, args.dim or dim)

@@ -74,7 +74,7 @@ class TestApiKeyValidation:
         assert _ok(ess.validate_api_key("K", "a" * 512))
 
     def test_accepts_realistic_provider_keys(self):
-        for key in ("sk-proj-AbC123_-xyz", "vo-abc123", "AIzaSyD-123"):
+        for key in ("sk-proj-AbC123_-xyz", "sk-abc123", "AIzaSyD-123"):
             assert _ok(ess.validate_api_key("K", key)), key
 
     def test_serialize_escapes_quotes_and_backslash(self):
@@ -136,7 +136,7 @@ class TestApiKeyValidation:
 class TestPermissionsChatWizard:
     def test_new_dir_and_file_get_restrictive_modes(self, tmp_env):
         d, env = tmp_env
-        ess.write_env_key(env, "VOYAGE_API_KEY", "vo-abc123")
+        ess.write_env_key(env, "OPENAI_API_KEY", "sk-abc123")
         assert _mode(env) == 0o600
         assert _mode(d) == 0o700
 
@@ -191,7 +191,7 @@ class TestPermissionsChatWizard:
 class TestPermissionsInteractiveWizard:
     def test_wizard_env_helper_writes_0600(self, tmp_env):
         _, env = tmp_env
-        ess.write_env_key(env, "VOYAGE_API_KEY", "vo-abc123")
+        ess.write_env_key(env, "OPENAI_API_KEY", "sk-abc123")
         assert _mode(env) == 0o600
 
     def test_wizard_rewrites_keep_0600(self, tmp_env):

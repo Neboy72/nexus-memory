@@ -38,7 +38,7 @@ let qdrantUp = false
 const originalFetch = globalThis.fetch
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : String(url)
-  if (u.includes("voyageai.com")) {
+  if (u.includes("openai.com")) {
     // Nr 379: parseEmbeddingResponse liest resp.text() zuerst — Mock erfuellt Contract
     return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ embedding: new Array(1024).fill(0.1) }] }), json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }) }
   }
@@ -65,7 +65,7 @@ const mockApi = {
     autoRecall: false,
     autoCapture: true,
     accessLevel: "private",
-    embedding: { provider: "voyage", apiKey: "test" },
+    embedding: { provider: "openai", apiKey: "test" },
   },
 }
 // W39/F1+F3: Setup (import + register) läuft im try-Block — der finally-Restore

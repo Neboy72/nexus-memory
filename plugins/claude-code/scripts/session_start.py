@@ -20,8 +20,7 @@ import _embedding  # noqa: E402
 
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
-EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
+EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "auto")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
@@ -140,14 +139,14 @@ def _resolve_trust_level() -> str:
 def get_embedding(text: str) -> Optional[list]:
     """Embed the session query. W32-7: fail-soft.
 
-    A Voyage timeout / non-2xx / malformed body previously escaped as an
+    A cloud-provider timeout / non-2xx / malformed body previously escaped as an
     unhandled exception and crashed the SessionStart hook — search_qdrant is
     fail-soft, the embed call was not. Any transport or shape failure now
     returns None, and the caller treats that exactly like today (no recall).
 
     W40-1: the annotation says so too — the ``return None`` fall-throughs at
     the end are part of the contract, not an oversight. A missing
-    VOYAGE_API_KEY or a mistyped provider disables the hook by design
+    A mistyped provider disables the hook by design
     (documented here rather than failing silently).
 
     NB: this hook uses urllib (not requests), so the caught network errors
@@ -177,41 +176,7 @@ def get_embedding(text: str) -> Optional[list]:
                     return embs[0]
             print("[nexus session-start] ollama embedding response shape unexpected", file=sys.stderr)
             return None
-        if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
-            req_data = json.dumps({
-                "input": [text],
-                "model": EMBEDDING_MODEL,
-                # Voyage is asymmetric: this embeds the session QUERY, so it must
-                # use input_type="query" (H182), not "document".
-                "input_type": "query"
-            }).encode()
-            req = urllib.request.Request(
-                "https://api.voyageai.com/v1/embeddings",
-                data=req_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {VOYAGE_API_KEY}"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
-                # W40-scan (high): the response is untrusted JSON. A top-level
-                # array/string/number or "data": null raises TypeError on the
-                # subscript chain — absent from the tuple below, so the hook
-                # aborted instead of failing soft. Validate the shape instead
-                # of widening the except (KeyError/IndexError/ValueError stay
-                # caught for genuinely malformed bodies).
-                if (
-                    isinstance(data, dict)
-                    and isinstance(data.get("data"), list)
-                    and len(data["data"]) > 0
-                    and isinstance(data["data"][0], dict)
-                ):
-                    emb = data["data"][0].get("embedding")
-                    if isinstance(emb, list) and emb:
-                        return emb
-                print("[nexus session-start] embedding response shape unexpected", file=sys.stderr)
-                return None
+
     except (urllib.error.URLError, OSError, KeyError, IndexError, ValueError) as exc:
         print(f"[nexus session-start] embedding failed: {exc}", file=sys.stderr)
         return None

@@ -87,12 +87,11 @@ def isolated_env(monkeypatch):
     to avoid leaking the developer's real credentials into the assertion path.
 
     Note: ``mcp_server.py`` reads the env vars *at import time* (it binds
-    ``VOYAGE_API_KEY = os.environ.get(...)`` as a module-level constant).
+    ``OPENAI_API_KEY = os.environ.get(...)`` as a module-level constant).
     We therefore also patch the module-level constants directly so the
     tests stay hermetic even if a key is set in the developer's shell.
     """
     for var in (
-        "VOYAGE_API_KEY",
         "OPENAI_API_KEY",
         "GOOGLE_API_KEY",
         "JINA_API_KEY",
@@ -103,10 +102,8 @@ def isolated_env(monkeypatch):
         # fail the "no provider configured" assertions below. The default
         # path is what these tests exercise, so pin it to unset.
         "NEXUS_EMBEDDING_PROVIDER",
-        # Fail-closed tests need the fallback opt-in gone, or _try_voyage
-        # (which reads VOYAGE_API_KEY live from the environment) re-succeeds
-        # on hosts where ~/.hermes/.env exports it and the fallback flag
-        # lets _detect() silently continue into auto-detection.
+        # Fail-closed tests need the fallback opt-in gone; an exported cloud key
+        # must not silently re-enable a removed provider or auto-detection.
         "NEXUS_ALLOWED_CLOUD_FALLBACK",
     ):
         monkeypatch.delenv(var, raising=False)
@@ -132,15 +129,12 @@ def isolated_env(monkeypatch):
     # Clear the module-level constants that the MCP server captured at
     # import time. Tests that *want* to exercise a particular provider
     # can override these afterwards.
-    monkeypatch.setattr("nexus_memory.mcp_server.VOYAGE_API_KEY", "")
     monkeypatch.setattr("nexus_memory.mcp_server.OPENAI_API_KEY", "")
     monkeypatch.setattr("nexus_memory.mcp_server.GOOGLE_API_KEY", "")
 
-    # Also clear the constants in embeddings.py — it has its own
-    # import-time bindings that EmbeddingProvider._detect() reads
-    # directly (line 148: `if not VOYAGE_API_KEY`). Without this,
-    # the developer's real ~/.hermes/.env leaks into test assertions.
-    monkeypatch.setattr("nexus_memory.embeddings.VOYAGE_API_KEY", "")
+    # Also clear the cloud constants in embeddings.py — it has its own
+    # import-time bindings that EmbeddingProvider._detect() reads.
+    # Without this, the developer's real ~/.hermes/.env leaks into test assertions.
     monkeypatch.setattr("nexus_memory.embeddings.OPENAI_API_KEY", "")
     monkeypatch.setattr("nexus_memory.embeddings.GOOGLE_API_KEY", "")
     return monkeypatch
@@ -193,7 +187,7 @@ def make_fake_point(point_id: str, payload: dict, score: float = 0.9) -> _FakePo
 #
 # A subset of the suite requires a REAL, live environment:
 #   * a Qdrant server listening on localhost:6333 (integration tests)
-#   * a VOYAGE_API_KEY (the production 1024-dim embedder)
+#   * an OPENAI_API_KEY (a cloud embedder, only when explicitly named)
 #   * the openclaw plugin's built dist/ bundle
 #
 # On machines that lack these (GitHub runners, fresh containers) those tests
@@ -226,9 +220,9 @@ _requires_qdrant = pytest.mark.skipif(
     reason="requires a live Qdrant on localhost:6333 (CI/fresh containers have none)",
 )
 
-_requires_voyage = pytest.mark.skipif(
-    not os.environ.get("VOYAGE_API_KEY"),
-    reason="requires VOYAGE_API_KEY for the production 1024-dim embedder "
+_requires_openai = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="requires OPENAI_API_KEY for a cloud embedder test "
            "(intentionally absent on CI/fresh containers)",
 )
 

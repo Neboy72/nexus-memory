@@ -8,7 +8,6 @@ const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: 
   // The local Nexus service embeds with the engine's own model (local
   // HuggingFace by default), so this plugin needs nothing installed.
   nexus: { model: "nexus-engine", dimensions: 1024, baseUrl: "http://127.0.0.1:9122" },
-  voyage: { model: "voyage-4", dimensions: 1024 },
   openai: { model: "text-embedding-3-small", dimensions: 1536 },
   ollama: { model: "qwen3-embedding:0.6b", dimensions: 1024, baseUrl: "http://localhost:11434" },
   google: { model: "text-embedding-004", dimensions: 768 },
@@ -109,7 +108,7 @@ async function parseEmbeddingResponse(
 }
 
 /**
- * Embedding provider — thin HTTP client for Voyage/OpenAI/Ollama/Google/Jina.
+ * Embedding provider — thin HTTP client for OpenAI/Ollama/Google/Jina.
  *
  * No SDK dependencies, just fetch(). Returns a vector (number[]).
  */
@@ -187,8 +186,6 @@ export class Embedder {
     switch (this.provider) {
       case "nexus":
         return this.embedNexus(text)
-      case "voyage":
-        return this.embedVoyage(text)
       case "openai":
         return this.embedOpenAI(text)
       case "ollama":
@@ -231,30 +228,6 @@ export class Embedder {
     const vector = this.validateVector(data.embedding, "Nexus")
 
     log.debugResponse("embed.nexus", { dims: vector.length, model: data.model })
-    return vector
-  }
-
-  private async embedVoyage(text: string): Promise<number[]> {
-    log.debugRequest("embed.voyage", { model: this.model, textLen: text.length })
-
-    const resp = await fetchWithTimeout("https://api.voyageai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        input: [text],
-        model: this.model,
-      }),
-    })
-
-    const data = await parseEmbeddingResponse(resp, "Voyage") as {
-      data?: Array<{ embedding?: number[] }>
-    }
-    const vector = this.validateVector(data.data?.[0]?.embedding, "Voyage")
-
-    log.debugResponse("embed.voyage", { dims: vector.length })
     return vector
   }
 

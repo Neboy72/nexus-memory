@@ -23,43 +23,16 @@ if getattr(r, '_bm25', None) is None:
 else:
     print(f"✅ Loaded {len(getattr(r, '_ids', None) or [])} points from cache")
 
-# Get Voyage embedding for vector search
-vec = None
-voyage_key = None
+# Use sentence-transformers for a local vector search example.
 try:
-    with open(os.path.expanduser('~/.hermes/config.yaml')) as f:
-        for line in f:
-            if 'voyage_api_key:' in line:
-                voyage_key = line.split(':', 1)[1].strip().strip("'\"")
-                break
-except (OSError, UnicodeDecodeError) as e:
-    # Narrowed from a bare except: a typo or permission problem must not
-    # silently degrade the run to BM25-only without a hint.
-    print(f"⚠️ config read failed ({e}) — continuing without vector search")
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    vec = model.encode(query).tolist()
+except Exception as exc:
+    print("Local embedding unavailable:", exc)
+    vec = None
 
-if voyage_key:
-    import requests
-    print("🧠 Embedding...", end=' ', flush=True)
-    try:
-        resp = requests.post(
-            'https://api.voyageai.com/v1/embeddings',
-            headers={'Authorization': f'Bearer {voyage_key}'},
-            json={'input': query, 'model': 'voyage-4'},
-            timeout=15
-        )
-        if 200 <= resp.status_code < 300:
-            vec = resp.json()['data'][0]['embedding']
-            print("1024d")
-        else:
-            print(f"API {resp.status_code}")
-    except Exception as e:
-        print(f"fail: {e}")
-
-# Hybrid search with reranker
-if vec:
-    results = r.search_hybrid(query, query_vector=vec, top_k=5, rerank=True, voyage_api_key=voyage_key)
-else:
-    results = r.search_bm25(query, top_k=5)
+results = r.search_hybrid(query, query_vector=vec, top_k=5, rerank=True)
 
 if not results:
     print("\nNo results found.")

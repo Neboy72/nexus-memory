@@ -947,7 +947,7 @@ def nexus_search_hybrid(
 
     Supports all 3 embedding backends (auto-detected from config or overridden):
 
-    - ``"voyage"`` (cloud) — uses VOYAGE_API_KEY, best quality
+    - ``"openai"`` / ``"google"`` / ``"jina"`` (cloud) — requires matching API key
     - ``"sentence-transformers"`` (local) — ``all-MiniLM-L6-v2``, 384d, free
     - ``"ollama"`` (local) — ``nomic-embed-text``, needs Ollama running
 
@@ -965,7 +965,7 @@ def nexus_search_hybrid(
 
         results = nexus_search_hybrid(
             "send-gate encoding fix",
-            embed_provider="voyage",
+            embed_provider="openai",
             top_k=5,
         )
         for r in results:
@@ -1017,48 +1017,13 @@ def _embed_query(query: str, provider: str) -> list[float] | None:
     """
     provider = provider.strip().lower()
 
-    if provider == "voyage":
-        return _embed_voyage(query)
-    elif provider == "sentence-transformers":
+    if provider == "sentence-transformers":
         return _embed_sentence_transformers(query)
     elif provider == "ollama":
         return _embed_ollama(query)
     return None
 
 
-def _embed_voyage(query: str) -> list[float] | None:
-    """Embed via Voyage AI API."""
-    import os, requests
-
-    api_key = os.environ.get("VOYAGE_API_KEY")
-    if not api_key:
-        # Try .env
-        env_path = os.path.expanduser("~/.hermes/.env")
-        if os.path.exists(env_path):
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("VOYAGE_API_KEY="):
-                        api_key = line.split("=", 1)[1].strip().strip("\"'")
-                        break
-    if not api_key:
-        return None
-
-    try:
-        r = requests.post(
-            "https://api.voyageai.com/v1/embeddings",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={"input": [query], "model": "voyage-4"},
-            timeout=10,
-        )
-        data = r.json()
-        return data["data"][0]["embedding"]
-    except Exception as e:
-        _logger.debug("voyage embedding failed: %s", e)
-        return None
 
 
 # H177: lazy module-level singleton — loading the model on EVERY call was the

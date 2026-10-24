@@ -141,9 +141,9 @@ echo "Least-privilege defaults are used below (prompt injection and conversation
 echo "access disabled, accessLevel \"private\"). Raise them only for an isolated/"
 echo "trusted backend."
 echo ""
-echo "NOTE: embedding config below is a Voyage EXAMPLE - adjust provider/"
+echo "NOTE: embedding config below is an OpenAI EXAMPLE - adjust provider/"
 echo "model/apiKey if you use OpenAI/Google/Jina/Ollama (see prerequisites)."
-echo "OpenClaw interpolates \${VOYAGE_API_KEY} from the process env."
+echo "OpenClaw interpolates cloud API keys from the process env."
 echo ""
 echo '{'
 echo '  "plugins": {'
@@ -161,9 +161,9 @@ echo '        "config": {'
 echo '          "qdrantUrl": "http://localhost:6333",'
 echo '          "collection": "nexus",'
 echo '          "embedding": {'
-echo '            "provider": "voyage",'
-echo '            "model": "voyage-4",'
-echo '            "apiKey": "${VOYAGE_API_KEY}"'
+echo '            "provider": "openai",'
+echo '            "model": "text-embedding-3-small",'
+echo '            "apiKey": "${OPENAI_API_KEY}"'
 echo '          },'
 echo '          "autoRecall": true,'
 echo '          "autoCapture": true,'
@@ -183,7 +183,7 @@ echo "1. Qdrant running at http://localhost:6333"
 echo "   Quick start: docker run -p 6333:6333 qdrant/qdrant"
 echo ""
 echo "2. Embedding provider — set one of:"
-echo "   export VOYAGE_API_KEY=\"vo-...\"     (voyage-4, 1024d)"
+echo "   export OPENAI_API_KEY=\"sk-...\"     (text-embedding-3-small, 1536d)"
 echo "   export OPENAI_API_KEY=\"sk-...\"     (text-embedding-3-small, 1536d)"
 echo "   export GOOGLE_API_KEY=\"AIza...\"    (text-embedding-004, 768d)"
 echo "   export JINA_API_KEY=\"jina_...\"     (jina-embeddings-v3, 1024d)"

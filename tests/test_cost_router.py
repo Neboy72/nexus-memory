@@ -41,8 +41,8 @@ class TestTierDefinitions:
     def test_procedure_is_standard(self):
         assert CATEGORY_TIERS["procedure"] == TIER_STANDARD
 
-    def test_voyage_is_premium(self):
-        assert PROVIDER_TIERS["voyage"] == TIER_PREMIUM
+    def test_openai_is_premium(self):
+        assert PROVIDER_TIERS["openai"] == TIER_PREMIUM
 
     def test_ollama_is_economy(self):
         assert PROVIDER_TIERS["ollama"] == TIER_ECONOMY
@@ -55,7 +55,7 @@ class TestTierDefinitions:
         assert PROVIDER_COSTS["sentence-transformers"] == 0.0
 
     def test_cloud_providers_have_nonzero_cost(self):
-        assert PROVIDER_COSTS["voyage"] > 0
+        assert PROVIDER_COSTS["openai"] > 0
         assert PROVIDER_COSTS["openai"] > 0
 
 
@@ -89,14 +89,14 @@ class TestCostAwareRouterEnabled:
     def test_routing_enabled_with_two_providers(self):
         router = CostAwareRouter()
         router._available_providers = {
-            "voyage": TIER_PREMIUM,
+            "openai": TIER_PREMIUM,
             "ollama": TIER_ECONOMY,
         }
         router._routing_enabled = True
 
-        # Fact → premium tier → voyage
+        # Fact → premium tier → openai
         provider = router.get_provider_for_category("fact")
-        assert provider == "voyage"
+        assert provider == "openai"
 
         # Temp → economy tier → ollama
         provider = router.get_provider_for_category("temp")
@@ -105,7 +105,7 @@ class TestCostAwareRouterEnabled:
     def test_routing_falls_up_when_no_economy_provider(self):
         router = CostAwareRouter()
         router._available_providers = {
-            "voyage": TIER_PREMIUM,
+            "openai": TIER_PREMIUM,
             "google": TIER_STANDARD,
         }
         router._routing_enabled = True
@@ -116,17 +116,17 @@ class TestCostAwareRouterEnabled:
 
     def test_routing_falls_up_to_premium(self):
         router = CostAwareRouter()
-        router._available_providers = {"voyage": TIER_PREMIUM}
+        router._available_providers = {"openai": TIER_PREMIUM}
         router._routing_enabled = True
 
         # Temp → economy, no economy or standard → fall up to premium
         provider = router.get_provider_for_category("temp")
-        assert provider == "voyage"
+        assert provider == "openai"
 
     def test_routing_standard_uses_standard_tier(self):
         router = CostAwareRouter()
         router._available_providers = {
-            "voyage": TIER_PREMIUM,
+            "openai": TIER_PREMIUM,
             "google": TIER_STANDARD,
             "ollama": TIER_ECONOMY,
         }
@@ -139,7 +139,7 @@ class TestCostAwareRouterEnabled:
     def test_routing_unknown_category_defaults_to_standard(self):
         router = CostAwareRouter()
         router._available_providers = {
-            "voyage": TIER_PREMIUM,
+            "openai": TIER_PREMIUM,
             "google": TIER_STANDARD,
         }
         router._routing_enabled = True
@@ -151,7 +151,7 @@ class TestCostAwareRouterEnabled:
     def test_routing_decisions_tracked(self):
         router = CostAwareRouter()
         router._available_providers = {
-            "voyage": TIER_PREMIUM,
+            "openai": TIER_PREMIUM,
             "ollama": TIER_ECONOMY,
         }
         router._routing_enabled = True
@@ -161,7 +161,7 @@ class TestCostAwareRouterEnabled:
         router.get_provider_for_category("fact")
         router.get_provider_for_category("temp")
 
-        assert router._routing_decisions.get("voyage") == 2
+        assert router._routing_decisions.get("openai") == 2
         assert router._routing_decisions.get("ollama") == 1
 
 
@@ -171,7 +171,7 @@ class TestShouldUseCloud:
     def test_economy_with_local_available(self):
         router = CostAwareRouter()
         router._available_providers = {
-            "voyage": TIER_PREMIUM,
+            "openai": TIER_PREMIUM,
             "ollama": TIER_ECONOMY,
         }
         router._routing_enabled = True
@@ -181,7 +181,7 @@ class TestShouldUseCloud:
 
     def test_economy_without_local(self):
         router = CostAwareRouter()
-        router._available_providers = {"voyage": TIER_PREMIUM}
+        router._available_providers = {"openai": TIER_PREMIUM}
         router._routing_enabled = True
 
         # Session → economy, but no local → must use cloud
@@ -190,7 +190,7 @@ class TestShouldUseCloud:
     def test_premium_always_cloud(self):
         router = CostAwareRouter()
         router._available_providers = {
-            "voyage": TIER_PREMIUM,
+            "openai": TIER_PREMIUM,
             "ollama": TIER_ECONOMY,
         }
         router._routing_enabled = True
@@ -211,7 +211,7 @@ class TestEstimateCost:
 
     def test_cloud_provider_nonzero_cost(self):
         router = CostAwareRouter()
-        router._available_providers = {"voyage": TIER_PREMIUM}
+        router._available_providers = {"openai": TIER_PREMIUM}
         router._routing_enabled = True
 
         cost = router.estimate_cost("some text", "fact")
@@ -226,7 +226,7 @@ class TestEstimateCost:
 
     def test_longer_text_costs_more(self):
         router = CostAwareRouter()
-        router._available_providers = {"voyage": TIER_PREMIUM}
+        router._available_providers = {"openai": TIER_PREMIUM}
         router._routing_enabled = True
 
         short_cost = router.estimate_cost("short", "fact")
@@ -239,7 +239,7 @@ class TestStatsAndExplain:
 
     def test_stats_structure(self):
         router = CostAwareRouter()
-        router._available_providers = {"voyage": TIER_PREMIUM, "ollama": TIER_ECONOMY}
+        router._available_providers = {"openai": TIER_PREMIUM, "ollama": TIER_ECONOMY}
         router._routing_enabled = True
 
         stats = router.stats()
@@ -258,14 +258,14 @@ class TestStatsAndExplain:
 
     def test_explain_returns_string(self):
         router = CostAwareRouter()
-        router._available_providers = {"voyage": TIER_PREMIUM, "ollama": TIER_ECONOMY}
+        router._available_providers = {"openai": TIER_PREMIUM, "ollama": TIER_ECONOMY}
         router._routing_enabled = True
 
         explanation = router.explain("fact")
         assert isinstance(explanation, str)
         assert "fact" in explanation
         assert "premium" in explanation
-        assert "voyage" in explanation
+        assert "openai" in explanation
 
     def test_explain_disabled_routing(self):
         router = CostAwareRouter()

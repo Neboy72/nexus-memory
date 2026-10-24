@@ -2,7 +2,7 @@
 
 Recall queries repeat heavily in practice (bursts in the same chat,
 prefetch + recall on the same turn, repeated session starts). The cache
-removes the ~256 ms Voyage roundtrip for repeated queries - a pure L0
+removes the cloud roundtrip for repeated queries - a pure L0
 win: same vectors, zero API cost, no behavior change.
 """
 

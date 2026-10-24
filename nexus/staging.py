@@ -36,11 +36,11 @@ _logger = logging.getLogger(__name__)
 # The staging module lives in the ``nexus/`` core package while the full
 # ``EmbeddingProvider`` is in ``src/nexus_memory/embeddings.py``.  To avoid a
 # cross-package import we implement a minimal embedding function here that
-# mirrors the same provider priority: Voyage → sentence-transformers → Ollama.
+# mirrors the same provider priority: sentence-transformers → Ollama → cloud (when named explicitly).
 
 _EMBED_DIM_CACHE: Optional[int] = None
 _EMBED_PROVIDER: Optional[str] = None
-_VOYAGE_CLIENT: Any = None
+_CLOUD_CLIENT: Any = None
 _ST_MODEL: Any = None
 _OLLAMA_MODEL: Optional[str] = None
 
@@ -51,12 +51,12 @@ def _detect_vector_size() -> int:
     Respects user's preferred provider (same logic as EmbeddingProvider):
       1. NEXUS_EMBEDDING_PROVIDER env var
       2. ~/.nexus-memory/config.json or $HERMES_HOME/nexus/config.json
-      3. Auto-detect: Voyage → OpenAI → Google → Jina → Ollama → sentence-transformers
+      3. Auto-detect: local (sentence-transformers / Ollama) only; cloud providers must be named explicitly.
 
-    Defaults to 1024 (Voyage) when no provider is available, matching the
+    Defaults to 1024 when no provider is available, matching the
     main ``nexus`` collection dimension.
     """
-    global _EMBED_DIM_CACHE, _EMBED_PROVIDER, _VOYAGE_CLIENT, _ST_MODEL
+    global _EMBED_DIM_CACHE, _EMBED_PROVIDER, _CLOUD_CLIENT, _ST_MODEL
 
     if _EMBED_DIM_CACHE is not None:
         return _EMBED_DIM_CACHE
@@ -66,7 +66,6 @@ def _detect_vector_size() -> int:
 
     # Provider dimension map
     PROVIDER_DIMS = {
-        "voyage": 1024,
         "openai": 1536,
         "google": 768,
         "jina": 1024,
@@ -100,18 +99,18 @@ def _detect_vector_size() -> int:
             return _EMBED_DIM_CACHE
 
     # Auto-detect fallback (same priority as EmbeddingProvider)
-    for provider in ["voyage", "openai", "google", "jina", "ollama", "sentence-transformers"]:
+    for provider in ["openai", "google", "jina", "ollama", "sentence-transformers"]:
         if _try_init_provider(provider):
             _EMBED_DIM_CACHE = _dim_for(provider)
             _logger.info("Staging embeddings: %s (%dd) [auto-detected]", provider, _EMBED_DIM_CACHE)
             return _EMBED_DIM_CACHE
 
-    # No provider found — default to 1024 (Voyage) to match main collection
+    # No provider found — default to 1024 to match main collection
     _EMBED_PROVIDER = "none"
     _EMBED_DIM_CACHE = 1024
     _logger.warning(
         "No embedding provider detected for staging — using 1024d zero vectors. "
-        "Set VOYAGE_API_KEY or install sentence-transformers for real embeddings."
+        "Install sentence-transformers or start Ollama for real embeddings."
     )
     return _EMBED_DIM_CACHE
 
@@ -144,25 +143,14 @@ def _read_preferred_provider() -> str:
 
 def _try_init_provider(provider: str) -> bool:
     """Try to initialize a specific embedding provider. Returns True on success."""
-    global _EMBED_PROVIDER, _VOYAGE_CLIENT, _ST_MODEL, _OLLAMA_MODEL
+    global _EMBED_PROVIDER, _CLOUD_CLIENT, _ST_MODEL, _OLLAMA_MODEL
 
-    if provider == "voyage":
-        voyage_key = os.environ.get("VOYAGE_API_KEY", "")
-        if voyage_key and (voyage_key.startswith("vo-") or voyage_key.startswith("pa-")):
-            try:
-                import voyageai
-                _VOYAGE_CLIENT = voyageai.Client(api_key=voyage_key)
-                _EMBED_PROVIDER = "voyage"
-                return True
-            except Exception:
-                pass
-
-    elif provider == "openai":
+    if provider == "openai":
         openai_key = os.environ.get("OPENAI_API_KEY", "")
         if openai_key and openai_key.startswith("sk-"):
             try:
                 from openai import OpenAI
-                _VOYAGE_CLIENT = OpenAI(api_key=openai_key)
+                _CLOUD_CLIENT = OpenAI(api_key=openai_key)
                 _EMBED_PROVIDER = "openai"
                 return True
             except Exception:
@@ -174,7 +162,7 @@ def _try_init_provider(provider: str) -> bool:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=google_key)
-                _VOYAGE_CLIENT = genai
+                _CLOUD_CLIENT = genai
                 _EMBED_PROVIDER = "google"
                 return True
             except Exception:
@@ -255,14 +243,11 @@ def _embed_content(text: str) -> list[float]:
         return [0.0] * dim
 
     try:
-        if _EMBED_PROVIDER == "voyage":
-            result = _VOYAGE_CLIENT.embed([text], model="voyage-4")
-            return result.embeddings[0]
-        elif _EMBED_PROVIDER == "openai":
-            result = _VOYAGE_CLIENT.embeddings.create(model="text-embedding-3-small", input=[text])
+        if _EMBED_PROVIDER == "openai":
+            result = _CLOUD_CLIENT.embeddings.create(model="text-embedding-3-small", input=[text])
             return result.data[0].embedding
         elif _EMBED_PROVIDER == "google":
-            result = _VOYAGE_CLIENT.embed_content(model="text-embedding-004", content=text)
+            result = _CLOUD_CLIENT.embed_content(model="text-embedding-004", content=text)
             return result["embedding"]
         elif _EMBED_PROVIDER == "jina":
             jina_key = os.environ.get("JINA_API_KEY", "")
@@ -358,9 +343,8 @@ def ensure_collections(
     and promote() via ``_auto_ensure_collections()``.
 
     When ``vector_size`` is None (default), auto-detects from the
-    available embedding provider (1024 for Voyage, 1536 for OpenAI,
-    768 for Google/Ollama, 384 for sentence-transformers).  Defaults
-    to 1024 (Voyage) when no provider is detected.
+    available embedding provider (1536 for OpenAI, 768 for Google/Ollama,
+    384 for sentence-transformers).  Defaults to 1024 when no provider is detected.
     """
     if vector_size is None:
         vector_size = _detect_vector_size()

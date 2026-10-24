@@ -44,8 +44,7 @@ except Exception as _scope_import_exc:  # pragma: no cover - defensive
         file=sys.stderr,
     )
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "auto")
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
-EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
+EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 
 
 def _central_env() -> dict:
@@ -209,7 +208,7 @@ def get_embedding(text: str, input_type: str = "query") -> list:
     missing ``data[0].embedding``) degrades to ``None`` — the hook then skips
     recall instead of aborting. Mirrors auto_capture.get_embedding's contract.
 
-    W32-8: Voyage embeddings are asymmetric. Memories are STORED with
+    W32-8: Asymmetric cloud embeddings (e.g. OpenAI/Jina) differ for query/document. Memories are STORED with
     input_type="document" (auto_capture, mcp_server), so embedding the recall
     query as a document too degrades every score. The default here is
     therefore "query"; auto_capture keeps "document" for the write path.
@@ -220,24 +219,7 @@ def get_embedding(text: str, input_type: str = "query") -> list:
         # vector space across every agent in the house.
         return _embedding.embed_via_serve(text, is_query=(input_type == "query"))
     try:
-        if EMBEDDING_PROVIDER == "voyage" and VOYAGE_API_KEY:
-            req_data = json.dumps({
-                "input": [text],
-                "model": EMBEDDING_MODEL,
-                "input_type": input_type
-            }).encode()
-            req = urllib.request.Request(
-                "https://api.voyageai.com/v1/embeddings",
-                data=req_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {VOYAGE_API_KEY}"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
-                return data["data"][0]["embedding"]
-        elif EMBEDDING_PROVIDER == "ollama":
+        if EMBEDDING_PROVIDER == "ollama":
             # W33-10: same endpoint/field mismatch auto_capture fixed in
             # W32-9. The legacy /api/embeddings endpoint reads "prompt" and
             # returns a single "embedding"; the current /api/embed reads

@@ -830,8 +830,7 @@ class HybridRetriever:
         top_k: int = 10,
         graph_boost: bool = False,
         rerank: bool = False,
-        reranker: str = "voyage",
-        voyage_api_key: str | None = None,
+        reranker: str = "cross-encoder",
         stepback_query: str | None = None,
         stepback_weight: float = 0.9,
         graph_expand: bool = False,
@@ -845,8 +844,7 @@ class HybridRetriever:
             top_k: Number of results to return.
             graph_boost: If True, boost results by graph connectivity (SkillGraph).
             rerank: If True, enable cross-encoder reranking.
-            reranker: Which reranker to use — "voyage" (default, API) or "cross-encoder" (local).
-            voyage_api_key: Required if reranker="voyage".
+            reranker: Which reranker to use — "cross-encoder" (default, local) or "off" (no rerank).
             stepback_query: Optional broader query for step-back retrieval.
             stepback_weight: Score multiplier for step-back results (default 0.9).
             graph_expand: If True, expand results with graph neighbors from
@@ -881,8 +879,7 @@ class HybridRetriever:
         if rerank and fused:
             if reranker == "cross-encoder":
                 fused = self._rerank_cross_encoder(fused, query, top_k)
-            elif reranker == "voyage" and voyage_api_key:
-                fused = self._rerank_voyage(fused, query, voyage_api_key)
+
 
         # Step-Back: secondary search with broader query → fuse
         if stepback_query and fused:
@@ -897,8 +894,7 @@ class HybridRetriever:
             if rerank and sb_fused:
                 if reranker == "cross-encoder":
                     sb_fused = self._rerank_cross_encoder(sb_fused, stepback_query, top_k)
-                elif reranker == "voyage" and voyage_api_key:
-                    sb_fused = self._rerank_voyage(sb_fused, stepback_query, voyage_api_key)
+
 
             # Fusion: primary keeps score, stepback gets weighted
             seen_ids = {r.get("id", "") for r in fused}
@@ -923,36 +919,6 @@ class HybridRetriever:
 
         return fused[:top_k]
 
-    def _rerank_voyage(self, results: list[dict], query: str, voyage_api_key: str) -> list[dict]:
-        """Re-rank results via Voyage Rerank API (cross-encoder)."""
-        if not HAS_REQUESTS:
-            return results
-
-        docs = [r.get('text', '')[:1000] for r in results]
-        try:
-            resp = requests.post(
-                'https://api.voyageai.com/v1/rerank',
-                headers={'Authorization': f'Bearer {voyage_api_key}'},
-                json={'query': query, 'documents': docs, 'model': 'rerank-2', 'top_k': len(docs)},
-                timeout=15
-            )
-            if not is_success(resp.status_code):
-                return results
-            ranking = resp.json().get('data', [])
-            reranked = []
-            for item in sorted(ranking, key=lambda x: x.get('relevance_score', 0), reverse=True):
-                idx = item.get('index', 0)
-                if idx < len(results):
-                    r = dict(results[idx])
-                    r['rerank_score'] = item.get('relevance_score', 0.0)
-                    methods = list(r.get('methods', []))
-                    if 'rerank' not in methods:
-                        methods.append('rerank')
-                    r['methods'] = methods
-                    reranked.append(r)
-            return reranked if reranked else results
-        except Exception:
-            return results
 
     def _rerank_cross_encoder(self, results: list[dict], query: str, top_k: int) -> list[dict]:
         """Re-rank results via local Cross-Encoder model (sentence-transformers).

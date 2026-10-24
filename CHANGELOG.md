@@ -1,3 +1,31 @@
+## [Unreleased]
+
+### Removed — the Voyage provider is gone, not just unused
+
+The zero-Voyage policy of 2026-10-17 was decided but never enforced in the code: `voyage`
+stayed a selectable provider (embeddings, reranker, cost routing, wizard, both agent plugins,
+installer examples) and the lockfile still resolved `voyageai`. Anything that merely checked
+for a `VOYAGE_API_KEY` could therefore still pick Voyage.
+
+- **Embeddings.** `VOYAGE_API_KEY`, the `_try_voyage` path, the Voyage dispatch in `embed()`
+  and the `detect_available()` entry are gone; the optional dependency `voyageai` (extra
+  `voyage`) is no longer declared.
+- **Reranker.** The Voyage Rerank endpoint is removed. The default is the local
+  cross-encoder; `"auto"` maps to it, and an explicit `"voyage"` is rejected by name instead
+  of silently falling back.
+- **Cost router / wizards.** `voyage` is out of the tier table, the provider priority and the
+  `vo-`/`pa-` key detection, so the router can no longer bill or prefer a provider that does
+  not exist.
+- **Plugins.** The Claude Code hooks and the OpenClaw plugin no longer know the provider (and
+  no longer default their model name to `voyage-4`); the OpenClaw installer examples point at
+  a provider that is actually supported.
+- **Lockfile.** `uv lock` drops `voyageai` and the packages only it pulled in, and repairs two
+  versions the file had pinned outside the declared ranges (`openai` 3.x, `pytest` 9.x).
+
+Tests that only covered Voyage-specific branches were removed with it; tests that guard
+general behaviour (provider selection, fail-closed explicit choice, auto stays local) remain
+and now assert that the rejected provider fails loudly.
+
 ## [0.22.26] — 2026-10-24
 
 ### Fixed — the knowledge graph no longer answers "nothing there" when the truth is "you may not look" or "I could not look"

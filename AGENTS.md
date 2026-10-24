@@ -111,7 +111,7 @@ This script:
 1. Detects your OpenClaw installation
 2. Adds the plugin to `plugins.load.paths` in `~/.openclaw/openclaw.json`
 3. Sets `plugins.slots.memory = "nexus-memory"`
-4. Sets up your embedding provider. The default is **local through HuggingFace** (`sentence-transformers`, model `Qwen/Qwen3-Embedding-0.6B`, 1024d, multilingual) — no key, no extra software and no Ollama. Ollama is used only when you choose it explicitly, and a cloud provider (Voyage > OpenAI > Google > Jina) only when you name one and its key is set.
+4. Sets up your embedding provider. The default is **local through HuggingFace** (`sentence-transformers`, model `Qwen/Qwen3-Embedding-0.6B`, 1024d, multilingual) — no key, no extra software and no Ollama. Ollama is used only when you choose it explicitly, and a cloud provider (OpenAI > Google > Jina) only when you name one and its key is set.
 5. Restarts OpenClaw gateway
 
 Want to choose the provider yourself? The interactive picker knows every option and what is already installed on your machine:
@@ -222,7 +222,7 @@ returns `{"embedding": [...], "model": ..., "dim": 1024}`. That is how the two
 plugins that talk to Qdrant directly (Claude Code, OpenClaw) embed: they use the
 engine's provider — local HuggingFace by default — instead of keeping their own
 provider list, so a machine with nothing installed still gets memory. Their own
-default is `NEXUS_EMBEDDING_PROVIDER=auto`; naming a provider (`ollama`, `voyage`,
+default is `NEXUS_EMBEDDING_PROVIDER=auto`; naming a provider (`ollama`,
 `openai`, `google`, `jina`) still works, it is just never automatic.
 
 ```bash
@@ -270,7 +270,7 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
   |----------|------|-----------|------------|
   | **HuggingFace** 🏠 *(default)* | Local | 1024d | `sentence-transformers` ships with the package and downloads `Qwen/Qwen3-Embedding-0.6B` (~1.2 GB) on first use — no key, no extra software |
   | **Ollama** 🦙 | Local | 1024d | Only on explicit choice: `NEXUS_EMBEDDING_PROVIDER=ollama` + `ollama pull qwen3-embedding:0.6b` — never picked automatically |
-  | **Voyage** ☁️ | Cloud | 1024d | `VOYAGE_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=voyage`) |
+  
   | **OpenAI** ☁️ | Cloud | 1536d | `OPENAI_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=openai`) |
   | **Google/Vertex AI** 💚 | Cloud | 768d | `GOOGLE_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=google`) |
   | **Jina** 💜 | Cloud | 1024d | `JINA_API_KEY` (+ `NEXUS_EMBEDDING_PROVIDER=jina`) |
@@ -298,7 +298,7 @@ Set your preferred embedding provider's API key. Pick **one** of these options �
 // Hermes / Claude Code / Standard MCP — mcpServers.<name>.env
 {
   "env": {
-    "VOYAGE_API_KEY": "vo-your-key-here"
+
     // or: "OPENAI_API_KEY": "sk-...",
     // or: "GOOGLE_API_KEY": "AIza..."
   }
@@ -307,7 +307,7 @@ Set your preferred embedding provider's API key. Pick **one** of these options �
 
 **Option B — `.env` file (auto-loaded from repo root or $NEXUS_ENV_FILE):**
 ```bash
-echo 'VOYAGE_API_KEY="vo-your-key-here"' >> ~/nexus-memory/.env
+
 ```
 
 > 💡 **No API key?** Nothing to do — the default embedder is local and ships with the package. If you run Ollama and want that instead, select it explicitly with `NEXUS_EMBEDDING_PROVIDER=ollama`.
@@ -473,7 +473,7 @@ result = run_sica(auto_patch=True)
 | `SICA_STALE_TEMP_DAYS` | 7 | Days before temp memories are considered stale (legacy; feeds SICA_RETENTION_TEMP as fallback) |
 | `SICA_RETENTION_TEMP` / `SICA_RETENTION_SESSION` / `SICA_RETENTION_<CATEGORY>` | 1 / 7 / — | Per-category retention in days (roadmap 2.2). Categories without a policy keep memories forever |
 | `SICA_DEFAULT_RETENTION_DAYS` | — | Fallback retention for categories without explicit policy |
-| `NEXUS_RERANK` / `NEXUS_RERANKER` / `NEXUS_RERANK_POOL` | off / auto / 20 | Cross-encoder reranking (roadmap 1.2): auto = Voyage when key present, free local cross-encoder otherwise |
+| `NEXUS_RERANK` / `NEXUS_RERANKER` / `NEXUS_RERANK_POOL` | off / auto / 20 | Cross-encoder reranking (roadmap 1.2): auto maps to free local cross-encoder (Voyage removed) |
 | `NEXUS_PREFETCH_CHARS` | 2400 | Character budget for auto-injected memory context (roadmap 3.1b). Raised from 1200 on 2026-08-30: at 14k+ stored memories the old limit surfaced only 2-3 hits. See "Tuning the prefetch budget" in the README before changing it |
 | `NEXUS_AUTO_ENRICH` | 1 | Auto entity enrichment on nexus_remember (0 = off) |
 | `SICA_RETENTION_*` etc. also accept `SICA_STALE_TEMP_DAYS` | — | Legacy single-category knob still works |
@@ -605,8 +605,8 @@ always know whether a memory's evidence is still alive.
 ```python
 # Best practice: include source_url + confidence on every remember()
 await mcp_nexus_remember(
-    text="Voyage-3-large produces 1024-dim embeddings",
-    source_url="https://docs.voyageai.com/docs/embeddings",
+
+
     confidence=0.95,
     source="documentation",
     category="fact",
@@ -662,7 +662,7 @@ MCP Client ← stdio → nexus-memory (MCP Server)
                            │
               ┌────────────┼────────────┐
               │            │            │
-           Voyage       OpenAI      Google
+           OpenAI       Google      Jina
            (1024d)      (1536d)     (768d)
               │            │            │
             Jina        Ollama     sentence-
@@ -675,7 +675,7 @@ MCP Client ← stdio → nexus-memory (MCP Server)
 > default model is `Qwen/Qwen3-Embedding-0.6B` (1024d, fetched on first use).
 > **Ollama is not part of the automatic path**: it is extra software that not
 > every machine has, so `auto` never depends on it — choosing it is explicit
-> (`NEXUS_EMBEDDING_PROVIDER=ollama`). Cloud providers (Voyage → OpenAI → Google →
+> (`NEXUS_EMBEDDING_PROVIDER=ollama`). Cloud providers (OpenAI → Google →
 > Jina) are **never** picked in `auto` mode — they require an explicit choice
 > (`NEXUS_EMBEDDING_PROVIDER` or a configured preference).
 

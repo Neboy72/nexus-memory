@@ -2,7 +2,7 @@
 
 Long-term memory for [OpenClaw](https://openclaw.ai), powered by [Qdrant](https://qdrant.tech). Automatically recalls relevant context before every AI turn and captures conversations after each turn — all through Qdrant's vector search, with no Python dependency.
 
-> **Thin TypeScript plugin** that talks to Qdrant REST API directly. Embeddings via Voyage, OpenAI, Ollama, Google, or Jina — all over HTTP.
+> **Thin TypeScript plugin** that talks to Qdrant REST API directly. Embeddings via OpenAI, Ollama, Google, or Jina — all over HTTP.
 
 ## Install
 
@@ -131,9 +131,9 @@ Add to `~/.openclaw/openclaw.json`:
           "qdrantUrl": "http://localhost:6333",
           "collection": "nexus",
           "embedding": {
-            "provider": "voyage",
-            "model": "voyage-4",
-            "apiKey": "${VOYAGE_API_KEY}"
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "apiKey": "${OPENAI_API_KEY}"
           },
           "autoRecall": true,
           "autoCapture": true,
@@ -156,7 +156,7 @@ Add to `~/.openclaw/openclaw.json`:
 |-----|------|---------|-------------|
 | `qdrantUrl` | `string` | `http://localhost:6333` | Qdrant REST API endpoint |
 | `collection` | `string` | `nexus` | Qdrant collection name |
-| `embedding.provider` | `string` | auto-detected | `voyage`, `openai`, `ollama`, `google`, or `jina` |
+| `embedding.provider` | `string` | auto-detected | `openai`, `ollama`, `google`, or `jina` |
 | `embedding.model` | `string` | provider default | Embedding model name |
 | `embedding.apiKey` | `string` | env var | API key (supports `${ENV_VAR}` interpolation) |
 | `embedding.baseUrl` | `string` | provider default | Base URL (mainly for Ollama) |
@@ -310,7 +310,7 @@ plugins/openclaw/
 │   └── openclaw.d.ts      # OpenClaw SDK type declarations
 ├── lib/
 │   ├── config.ts          # Config parser + schema
-│   ├── embedder.ts        # Embedding provider (Voyage/OpenAI/Ollama/Google/Jina)
+│   ├── embedder.ts        # Embedding provider (OpenAI/Ollama/Google/Jina)
 │   └── qdrant-client.ts   # Qdrant REST API client
 ├── hooks/
 │   ├── trigger.ts         # isInteractiveTrigger helper
