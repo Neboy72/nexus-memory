@@ -149,6 +149,98 @@ def _env_int(name: str, default: int, minimum: int | None = None) -> int:
 MAX_RESULTS = _env_int("NEXUS_MAX_RECALL", 5, minimum=1)
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
+# Access counting for the shared agent registry. This hook reads Qdrant
+# DIRECTLY (only the embedding comes from the local service), so without this
+# the dashboard never sees Claude Code's recalls. Same file and shape as  # guard-ok: Plugin-Name, kein Modellname
+# ``nexus_memory.agent_detect.record_agent_access``: id, timestamps,
+# reads/writes. Telemetry only — a broken registry never skips a recall, and
+# the warning is printed once per process.
+AGENT_ID = (os.getenv("NEXUS_AGENT_ID") or "").strip() or "claude-code"
+_ACCESS_COUNTED = False
+_ACCESS_WARNED = False
+
+
+def _record_access(read: bool = False, write: bool = False) -> None:
+    """Count one direct memory access in the shared agents registry.
+
+    This hook runs under the system python3 and must not import
+    ``nexus_memory``, so the registry is updated here with the same layout
+    the core writes: read under the shared lock file, modify, atomic replace.
+    A self-test (``NEXUS_AGENT_SELFTEST``) is not an agent and counts nothing.
+    """
+    global _ACCESS_COUNTED, _ACCESS_WARNED
+    if _ACCESS_COUNTED or not (read or write):
+        return
+    if os.getenv("NEXUS_AGENT_SELFTEST", "").strip().lower() in ("1", "true"):
+        return
+    try:
+        import socket
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # Same advisory lock file the core uses, so Python writers serialize.
+        lock_file = None
+        try:
+            import fcntl
+
+            lock_file = open(str(AGENTS_FILE) + ".lock", "a+")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except ImportError:  # Windows: no fcntl; atomic replace still applies
+            pass
+        try:
+            registry = (
+                json.loads(AGENTS_FILE.read_text()) if AGENTS_FILE.exists()
+                else {"agents": []}
+            )
+            if not isinstance(registry, dict):
+                raise ValueError("agents registry must be a JSON object")
+            agents = registry.setdefault("agents", [])
+            if not isinstance(agents, list):
+                raise ValueError("agents registry must hold an agents list")
+            entry = next(
+                (a for a in agents if isinstance(a, dict) and a.get("id") == AGENT_ID),
+                None,
+            )
+            if entry is None:
+                entry = {
+                    "id": AGENT_ID,
+                    "name": AGENT_ID,
+                    "icon": "\U0001F50C",
+                    "trust_level": "public",
+                    "install_type": "unknown",
+                    "config_dir": None,
+                    "connected_at": now,
+                    "last_seen": now,
+                    "reads": 0,
+                    "writes": 0,
+                    "host_type": "local",
+                    "host_label": (socket.gethostname().split(".")[0]
+                                   or "this machine"),
+                }
+                agents.append(entry)
+            entry["last_seen"] = now
+            if read:
+                entry["reads"] = entry.get("reads", 0) + 1
+            if write:
+                entry["writes"] = entry.get("writes", 0) + 1
+            tmp = AGENTS_FILE.with_name(f"{AGENTS_FILE.name}.tmp-{os.getpid()}")
+            tmp.write_text(json.dumps(registry, indent=2) + "\n")
+            os.replace(tmp, AGENTS_FILE)
+            _ACCESS_COUNTED = True
+        finally:
+            if lock_file is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                lock_file.close()
+    except Exception as exc:
+        if not _ACCESS_WARNED:
+            _ACCESS_WARNED = True
+            print(
+                f"[nexus auto_recall] agent access not counted ({exc}) — "
+                "recall continues",
+                file=sys.stderr,
+            )
+
 def _resolve_trust_level() -> str:
     """Gatekeeper: resolve this agent's trust level from agents.json.
 
@@ -279,6 +371,8 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
             results = data.get("result", [])
     except Exception:
         return []
+    # Reached the database directly: this read is one access for this agent.
+    _record_access(read=True)
 
     # Client-side filter: only return memories the agent is allowed to see
     # Scope gating (project/agent areas): skip memories scoped to a different
