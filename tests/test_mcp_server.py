@@ -181,7 +181,7 @@ class TestMemoryStoreRemember:
 
     async def test_remember_stores_payload_with_category(self, store, mock_qdrant_client):
         result = await store.remember(
-            text="Voyage-3-large produces 1024-dim embeddings",
+            text="OpenAI text-embedding-3-small produces 1536-dim embeddings",
             category="fact",
         )
         assert result["status"] == "ok"
@@ -192,7 +192,7 @@ class TestMemoryStoreRemember:
         assert len(points) == 1
         payload = points[0].payload
         assert payload["category"] == "fact"
-        assert payload["content"] == "Voyage-3-large produces 1024-dim embeddings"
+        assert payload["content"] == "OpenAI text-embedding-3-small produces 1536-dim embeddings"
         # Provenance is a non-empty dict (default confidence 0.7).
         assert payload["provenance"]["confidence"] == 0.7
 
@@ -643,21 +643,21 @@ class TestEmbeddingProviderDetection:
             import requests as _r
             monkeypatch.setattr(_r, "get", _explode)
 
-    def test_voyage_key_with_correct_prefix_stays_local_by_default(self, isolated_env, monkeypatch):
+    def test_cloud_key_alone_stays_local_by_default(self, isolated_env, monkeypatch):
         """A valid cloud key alone must NOT route a user to the cloud.
 
         Local-first is the developer default (2026-10-07): without an
-        explicit provider choice, a Voyage key sitting in the environment no
+        explicit provider choice, an OpenAI key sitting in the environment no
         longer decides anything. The key only takes effect once the user (or
         their agent) chooses it deliberately.
         """
-        fake_voyage = MagicMock()
-        fake_voyage.Client = MagicMock(return_value=MagicMock(name="voyage-client"))
-        monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
+        fake_openai = MagicMock()
+        fake_openai.OpenAI = MagicMock(return_value=MagicMock(name="openai-client"))
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
 
-        monkeypatch.setenv("VOYAGE_API_KEY", "vo-test-1234567890")
-        monkeypatch.setattr(mcp, "VOYAGE_API_KEY", "vo-test-1234567890")
-        monkeypatch.setattr("nexus_memory.embeddings.VOYAGE_API_KEY", "vo-test-1234567890")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-1234567890")
+        monkeypatch.setattr(mcp, "OPENAI_API_KEY", "sk-test-1234567890")
+        monkeypatch.setattr("nexus_memory.embeddings.OPENAI_API_KEY", "sk-test-1234567890")
 
         class _LocalStub:
             def __init__(self, model_name, device=None, **kwargs):
@@ -678,20 +678,20 @@ class TestEmbeddingProviderDetection:
         ep = mcp.EmbeddingProvider()
         assert ep.name == "Qwen/Qwen3-Embedding-0.6B"
         assert ep.provider_type == "local"
-        fake_voyage.Client.assert_not_called()
+        fake_openai.OpenAI.assert_not_called()
 
-    def test_voyage_key_with_wrong_prefix_does_not_pick_voyage(
+    def test_bad_openai_key_does_not_pick_openai(
         self, isolated_env, monkeypatch
     ):
-        # Wrong prefix → server should skip voyage and fall through to
+        # Bad prefix → server should skip openai and fall through to
         # sentence-transformers.
-        monkeypatch.setenv("VOYAGE_API_KEY", "not-a-voyage-key")
-        monkeypatch.setattr(mcp, "VOYAGE_API_KEY", "not-a-voyage-key")
+        monkeypatch.setenv("OPENAI_API_KEY", "not-an-openai-key")
+        monkeypatch.setattr(mcp, "OPENAI_API_KEY", "not-an-openai-key")
         _install_fake_sentence_transformers(monkeypatch)
 
         ep = mcp.EmbeddingProvider()
-        assert ep.name != "voyage-3-large", (
-            "Bad-prefix VOYAGE_API_KEY must not be accepted as a voyage key"
+        assert ep.name != "text-embedding-3-small", (
+            "Bad-prefix OPENAI_API_KEY must not be accepted as an openai key"
         )
 
 

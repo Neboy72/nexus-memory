@@ -36,7 +36,7 @@ def _patch_probe(monkeypatch, dim=1024):
 
 
 def _clear_env(monkeypatch):
-    for var in ("VOYAGE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
+    for var in ("OPENAI_API_KEY", "GOOGLE_API_KEY",
                 "JINA_API_KEY", "NEXUS_EMBEDDING_PROVIDER"):
         monkeypatch.delenv(var, raising=False)
     # neutralize config-based preference

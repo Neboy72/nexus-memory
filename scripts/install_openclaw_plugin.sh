@@ -82,12 +82,7 @@ mkdir -p "${OPENCLAW_STATE_DIR}"
 # --- Auto-detect embedding provider ---
 
 detect_embedding() {
-    if [ -n "${VOYAGE_API_KEY:-}" ]; then
-        EMBEDDING_PROVIDER="voyage"
-        EMBEDDING_MODEL="voyage-4"
-        EMBEDDING_APIKEY='${VOYAGE_API_KEY}'
-        echo -e "${GREEN}✓${NC} Embedding: Voyage (voyage-4, 1024d)"
-    elif [ -n "${OPENAI_API_KEY:-}" ]; then
+    if [ -n "${OPENAI_API_KEY:-}" ]; then
         EMBEDDING_PROVIDER="openai"
         EMBEDDING_MODEL="text-embedding-3-small"
         EMBEDDING_APIKEY='${OPENAI_API_KEY}'
@@ -133,7 +128,7 @@ detect_embedding() {
         echo "    1. curl -fsSL https://ollama.com/install.sh | sh     # or: brew install ollama"
         echo "    2. ollama pull qwen3-embedding:0.6b                 # 639 MB, 1024d, multilingual"
         echo "    3. re-run this script"
-        echo "  Prefer a cloud provider instead? Set VOYAGE_API_KEY, OPENAI_API_KEY,"
+        echo "  Prefer a cloud provider instead? Set OPENAI_API_KEY,"
         echo "  GOOGLE_API_KEY or JINA_API_KEY and re-run this script."
         echo "  Want to choose interactively?  python3 -m nexus_memory.wizard"
     fi
@@ -269,7 +264,7 @@ else:
     print("  ⚠ No embedding provider configured yet — the plugin will use its local default")
     print("    (Ollama, qwen3-embedding:0.6b). Finish it with:")
     print("      ollama pull qwen3-embedding:0.6b   # 639 MB, 1024d, multilingual")
-    print("    Prefer a cloud provider? Set VOYAGE_API_KEY / OPENAI_API_KEY /")
+    print("    Prefer a cloud provider? Set OPENAI_API_KEY /")
     print("    GOOGLE_API_KEY / JINA_API_KEY and re-run this script.")
     print("    Choose interactively: python3 -m nexus_memory.wizard")
 

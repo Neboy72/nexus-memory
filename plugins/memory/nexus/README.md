@@ -22,7 +22,7 @@ Query rewriting and paid stations are off, and Qdrant plus all state
 stay local under `~/.nexus-memory`.
 
 Cloud embedding is **opt-in and needs two things**: an explicit choice —
-`NEXUS_EMBEDDING_PROVIDER=voyage|openai|google|jina` or `embedding_provider` in
+`NEXUS_EMBEDDING_PROVIDER=openai|google|jina` or `embedding_provider` in
 the Nexus config — **and** the matching API key in the environment. A key that
 is merely present (for example `OPENAI_API_KEY`, which many setups carry for
 other tools) does **not** select a cloud provider on its own, and turn text is
@@ -34,7 +34,7 @@ Read the table below before opting in — it lists what each setting enables.
 
 | Setting | What leaves the machine | Destination |
 |---|---|---|
-| `NEXUS_EMBEDDING_PROVIDER=voyage` **and** `VOYAGE_API_KEY` | Turn text (user + assistant), for embedding | Voyage AI (`api.voyageai.com`) |
+| `NEXUS_EMBEDDING_PROVIDER=openai` **and** `OPENAI_API_KEY` | Turn text (user + assistant), for embedding | OpenAI (`api.openai.com`) |
 | `NEXUS_EMBEDDING_PROVIDER=openai` **and** `OPENAI_API_KEY` | Turn text, for embedding | OpenAI (`api.openai.com`) |
 | `NEXUS_EMBEDDING_PROVIDER=google` **and** `GOOGLE_API_KEY` | Turn text, for embedding | Google (`generativelanguage.googleapis.com`) |
 | `NEXUS_EMBEDDING_PROVIDER=jina` **and** `JINA_API_KEY` | Turn text, for embedding | Jina (`api.jina.ai`) |
@@ -46,7 +46,7 @@ Embedding is **auto-detected, and the automatic path is local**: HuggingFace via
 `sentence-transformers` (ships with the package, model `Qwen/Qwen3-Embedding-0.6B`,
 1024d) — no key and no extra software, and no Ollama needed. Ollama is used only
 when it is chosen explicitly (`NEXUS_EMBEDDING_PROVIDER=ollama`); its model
-remains `qwen3-embedding` (1024d). Cloud providers (Voyage → OpenAI → Google →
+remains `qwen3-embedding` (1024d). Cloud providers (OpenAI → Google →
 Jina) are **never** picked automatically — they need `NEXUS_EMBEDDING_PROVIDER`
 plus the matching key.
 
@@ -89,7 +89,7 @@ configuration.
 | Field | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `qdrant_url` | Qdrant server URL | No | `http://localhost:6333` |
-| `voyage_api_key` | Voyage AI API key — opt-in cloud embedding. Supply it through the environment (`VOYAGE_API_KEY`); the plugin reads it from there and it is not copied into the plugin config | No | — |
+
 | `collection_name` | Qdrant collection name | No | `nexus` |
 
 ## Shared Store

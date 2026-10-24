@@ -10,7 +10,7 @@
 ## Reporting a Vulnerability
 
 Nexus Memory runs entirely on your local machine. No data leaves your system
-unless you configure a cloud embedding provider (Voyage, OpenAI, Google, Jina).
+unless you configure a cloud embedding provider (OpenAI, Google, Jina).
 
 **If you discover a security issue:**
 

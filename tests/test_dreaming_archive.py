@@ -30,7 +30,7 @@ class FakeStore:
         if not self._named:
             return [0.1]
         names = ["ollama__qwen3-embedding_0_6b__1024",
-                 "voyage__voyage-4__1024"][:self._vector_count]
+                 "openai__text-embedding-3-small__1536"][:self._vector_count]
         return {n: [0.1] for n in names}
 
     def search(self, collection_name, query_vector, limit, query_filter):

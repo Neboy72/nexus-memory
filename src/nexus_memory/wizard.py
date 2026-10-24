@@ -36,17 +36,6 @@ WHITE_BOLD = "\033[1;37m"
 # ── Provider definitions ───────────────────────────────────────────────
 PROVIDERS = [
     {
-        "id": "voyage",
-        "name": "Voyage AI",
-        "dims": 1024,
-        "quality": "excellent",
-        "type": "cloud",
-        "key_url": "https://dash.voyageai.com/api-keys",
-        "key_env": "VOYAGE_API_KEY",
-        "icon": "☁️",
-        "pip_package": "voyageai",
-    },
-    {
         "id": "openai",
         "name": "OpenAI",
         "dims": 1536,
@@ -260,7 +249,6 @@ def _check_pip_package(package: str) -> bool:
         return True
     # Map pip package name to import name
     import_map = {
-        "voyageai": "voyageai",
         "openai": "openai",
         "google-generativeai": "google.generativeai",
         "sentence-transformers": "sentence_transformers",
@@ -284,12 +272,7 @@ def _scan_providers() -> list[ProviderStatus]:
     for p in PROVIDERS:
         ps = ProviderStatus(provider=p)
 
-        if p["id"] == "voyage":
-            key = os.environ.get("VOYAGE_API_KEY", "")
-            ps.key_detected = bool(key and (key.startswith("vo-") or key.startswith("pa-")))
-            ps.available = ps.key_detected and _check_pip_package("voyageai")
-
-        elif p["id"] == "openai":
+        if p["id"] == "openai":
             key = os.environ.get("OPENAI_API_KEY", "")
             ps.key_detected = bool(key and key.startswith("sk-"))
             ps.available = ps.key_detected and _check_pip_package("openai")
@@ -798,7 +781,7 @@ def _run_wizard() -> None:
 
     # 5. Provider-specific setup
     api_key = None
-    if provider_id in ("voyage", "openai", "google", "jina"):
+    if provider_id in ("openai", "google", "jina"):
         api_key = _setup_cloud_provider(selected)
         if api_key is None:
             _print(f"  {YELLOW}⚠ No API key provided. The provider will use auto-detect at runtime.{RESET}")

@@ -86,9 +86,9 @@ class TestWizardRecommendsLocalWhenNothingIsInstalled:
         """Cloud-first is fine once the user actually configured one."""
         from nexus_memory.wizard import _find_recommended
 
-        statuses = self._statuses(available_ids={"voyage", "ollama"})
+        statuses = self._statuses(available_ids={"openai", "ollama"})
         idx = _find_recommended(statuses)
-        assert statuses[idx].provider["id"] == "voyage", (
+        assert statuses[idx].provider["id"] == "openai", (
             "a user who already set a cloud key should still be offered it"
         )
 

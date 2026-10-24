@@ -2,7 +2,7 @@
 
 R-EMBED-DEFAULT. This regressed twice, in two directions:
 
-1. The plugins once shipped a **cloud-first** default (Voyage) in all three
+1. The plugins once shipped a **cloud-first** default (Voyage, now removed) in all three
    native integrations, so a user with no cloud key got no memory at all —
    while the docs claimed the setup was "private" and "self-hosted".
 2. They then defaulted to a local **Ollama**, which is still extra software that
@@ -28,7 +28,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_SCRIPTS = REPO_ROOT / "plugins" / "claude-code" / "scripts"
 OPENCLAW_LIB = REPO_ROOT / "plugins" / "openclaw" / "lib"
-CLOUD_PROVIDERS = ("voyage", "openai", "google", "jina")
+CLOUD_PROVIDERS = ("openai", "google", "jina")
 
 
 def _read(path: Path) -> str:

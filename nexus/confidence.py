@@ -46,13 +46,6 @@ try:
 except ImportError:
     pass
 
-HAS_VOYAGE = False
-try:
-    import voyageai
-    HAS_VOYAGE = True
-except ImportError:
-    pass
-
 HAS_SKLEARN = False
 try:
     from sklearn.metrics.pairwise import cosine_similarity
@@ -126,17 +119,6 @@ def _cosine_sim(a: list[float], b: list[float]) -> float:
 # every call — one per query batch and one per chunk batch on a per-request
 # path, i.e. SentenceTransformer reloaded its weights each time.
 _ST_MODEL_CACHE: dict[str, object] = {}
-_VOYAGE_CLIENT: object | None = None
-
-
-def _get_voyage_client():
-    """Cache the voyageai client for the process."""
-    global _VOYAGE_CLIENT
-    if _VOYAGE_CLIENT is None:
-        _VOYAGE_CLIENT = voyageai.Client()
-    return _VOYAGE_CLIENT
-
-
 def _get_st_model():
     """Cache the sentence-transformers model for the process."""
     model = _ST_MODEL_CACHE.get("model")
@@ -149,34 +131,20 @@ def _get_st_model():
 
 def _embed(
     texts: list[str],
-    provider: str = "voyage",
+    provider: str = "sentence-transformers",
     input_type: str = "document",
 ) -> Optional[list[list[float]]]:
-    """Embed a list of texts via Voyage, sentence-transformers, or Ollama.
+    """Embed a list of texts via sentence-transformers or Ollama.
 
     Args:
         texts: List of texts to embed.
-        provider: "voyage" (512d), "sentence-transformers" (384d) or "ollama" (768d).
-        input_type: Voyage's asymmetric embedding type — ``"query"`` for a
-            search query, ``"document"`` (default) for corpus/chunk texts.
-            Ignored by the non-Voyage providers.
+        provider: "sentence-transformers" (384d) or "ollama" (768d).
+        input_type: Kept for API compatibility; ignored by current providers.
 
     Returns:
         List of embedding vectors or None on error.
     """
-    if provider == "voyage":
-        if not HAS_VOYAGE:
-            _logger.warning("voyageai not installed")
-            return None
-        try:
-            client = _get_voyage_client()
-            result = client.embed(texts, model="voyage-3-lite", input_type=input_type)
-            return result.embeddings
-        except Exception as e:
-            _logger.warning("Voyage embedding failed: %s", e)
-            return None
-
-    elif provider == "sentence-transformers":
+    if provider == "sentence-transformers":
         try:
             model = _get_st_model()
             return model.encode(texts).tolist()
@@ -293,7 +261,7 @@ class GroundingScorer:
 
     def __init__(
         self,
-        embed_provider: str = "voyage",
+        embed_provider: str = "sentence-transformers",
         qdrant_host: str = "localhost",
         qdrant_port: int = 6333,
         collection: Optional[str] = None,
@@ -329,8 +297,7 @@ class GroundingScorer:
         """
         report = GroundingReport(query=query, answer=answer)
 
-        # Step 1: Embed query — Voyage is asymmetric: a search query must use
-        # input_type="query" (chunks below stay "document"). (H182)
+        # Step 1: Embed query.
         q_emb = _embed([query], provider=self.embed_provider, input_type="query")
         if q_emb is None:
             report.error = "Embedding failed"
@@ -476,7 +443,7 @@ class GroundingScorer:
     # Technical named entities for the factual signal
     _TECH_ENTITIES = {
         # Produkte & Frameworks
-        "nexus", "qdrant", "voyage", "ollama", "bm25", "gpt", "claude",
+        "nexus", "qdrant", "ollama", "bm25", "gpt", "claude",
         "gemini", "rag", "hermes", "openclaw", "whisper", "yt-dlp", "twikit",
         "github", "discord", "telegram", "docker", "python",
         # Konzepte
@@ -499,7 +466,7 @@ class GroundingScorer:
 
         Extracts technical named entities from the answer and checks
         whether they appear in the chunk texts. Recognizes terms like
-        Voyage, Qdrant, BM25, GPT, RAG — not just simple words.
+        Qdrant, BM25, GPT, RAG — not just simple words.
 
         Low value = answer uses technical terms not present in any
         chunk source text.

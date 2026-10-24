@@ -25,8 +25,7 @@ import _embedding  # noqa: E402
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
-EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "voyage-4")
+EMBEDDING_MODEL = os.getenv("NEXUS_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 EMBEDDING_PROVIDER = os.getenv("NEXUS_EMBEDDING_PROVIDER", "auto")
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
@@ -181,31 +180,7 @@ def get_embedding(text: str) -> list:
         # Automatic path: the local Nexus service embeds the document side.
         return _embedding.embed_via_serve(text, is_query=False)
     try:
-        if EMBEDDING_PROVIDER == "voyage":
-            if not VOYAGE_API_KEY:
-                print(
-                    "[nexus auto-capture] NEXUS_EMBEDDING_PROVIDER=voyage but "
-                    "VOYAGE_API_KEY is unset — memory not stored",
-                    file=sys.stderr,
-                )
-                return None
-            req_data = json.dumps({
-                "input": [text],
-                "model": EMBEDDING_MODEL,
-                "input_type": "document"
-            }).encode()
-            req = urllib.request.Request(
-                "https://api.voyageai.com/v1/embeddings",
-                data=req_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {VOYAGE_API_KEY}"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
-                return data["data"][0]["embedding"]
-        elif EMBEDDING_PROVIDER == "ollama":
+        if EMBEDDING_PROVIDER == "ollama":
             # W32-9: endpoint ↔ field mismatch. The legacy /api/embeddings
             # endpoint reads the text from "prompt" and returns a single
             # "embedding"; the current /api/embed reads "input" and returns

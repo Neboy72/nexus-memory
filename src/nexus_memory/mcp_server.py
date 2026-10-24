@@ -8,7 +8,7 @@ Integrates all nexus v2.8.0 features:
 - Guardrails (content length, PII hints)
 - Access Control (public/trusted/private)
 - Qdrant vector storage
-- Embedding: auto-detect (sentence-transformers local → Voyage cloud)
+- Embedding: auto-detect (sentence-transformers local; cloud only when named explicitly)
 """
 
 import asyncio
@@ -91,7 +91,6 @@ for env_path in env_paths:
 QDRANT_HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 COLLECTION_NAME = os.environ.get("NEXUS_COLLECTION", "nexus")
-VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 

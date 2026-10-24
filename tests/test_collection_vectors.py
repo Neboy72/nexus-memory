@@ -755,7 +755,7 @@ class TestFingerprint:
         assert parts[2] == "1024"
 
     def test_expected_examples(self):
-        assert vector_fingerprint("voyage", "voyage-4", 1024) == "voyage__voyage-4__1024"
+        assert vector_fingerprint("openai", "text-embedding-3-small", 1536) == "openai__text-embedding-3-small__1536"
         assert vector_fingerprint("ollama", "qwen3-embedding:0.6b", 1024) == \
             "ollama__qwen3-embedding_0_6b__1024"
 

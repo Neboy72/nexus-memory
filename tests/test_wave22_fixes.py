@@ -196,7 +196,7 @@ class TestNr396VersionParity:
 class TestNr397EnvDocs:
     def test_comment_lists_optional_vars(self):
         src = _read("plugins/memory/nexus/plugin.yaml")
-        assert "VOYAGE_API_KEY" in src
+        assert "OPENAI_API_KEY" in src
         assert "NEXUS_QDRANT_HOST" in src
 
 

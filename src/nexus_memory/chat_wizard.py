@@ -23,8 +23,8 @@ Two modes:
 
 Run standalone:
     python3 chat_wizard.py scan
-    python3 chat_wizard.py apply voyage          # key via VOYAGE_API_KEY or stdin
-    echo "vo-xxx" | python3 chat_wizard.py apply voyage
+    python3 chat_wizard.py apply openai        # key via OPENAI_API_KEY or stdin
+    echo "sk-xxx" | python3 chat_wizard.py apply openai
     python3 chat_wizard.py trust
     python3 chat_wizard.py save_trust trusted
     python3 chat_wizard.py status
@@ -58,7 +58,6 @@ try:
 except ImportError:
     # Fallback if running standalone
     PROVIDERS = [
-        {"id": "voyage", "name": "Voyage AI", "dims": 1024, "quality": "excellent", "type": "cloud", "key_url": "https://dash.voyageai.com/api-keys", "key_env": "VOYAGE_API_KEY", "icon": "☁️", "pip_package": "voyageai"},
         {"id": "openai", "name": "OpenAI", "dims": 1536, "quality": "excellent", "type": "cloud", "key_url": "https://platform.openai.com/api-keys", "key_env": "OPENAI_API_KEY", "icon": "☁️", "pip_package": "openai"},
         {"id": "google", "name": "Google / Vertex AI", "dims": 768, "quality": "good", "type": "cloud", "key_url": "https://aistudio.google.com/apikey", "key_env": "GOOGLE_API_KEY", "icon": "💚", "pip_package": "google-generativeai"},
         {"id": "jina", "name": "Jina", "dims": 1024, "quality": "good", "type": "cloud", "key_url": "https://jina.ai/platform/embeddings", "key_env": "JINA_API_KEY", "icon": "💜", "pip_package": None},
@@ -90,7 +89,7 @@ except ImportError:
         if package is None:
             return True
         import pkgutil
-        import_map = {"voyageai": "voyageai", "openai": "openai", "google-generativeai": "google.generativeai", "sentence-transformers": "sentence_transformers"}
+        import_map = {"openai": "openai", "google-generativeai": "google.generativeai", "sentence-transformers": "sentence_transformers"}
         import_name = import_map.get(package, package.replace("-", "_"))
         try:
             return pkgutil.find_loader(import_name) is not None
@@ -198,12 +197,7 @@ def scan_providers() -> dict:
         ollama_model = ""
         needs_install = False
 
-        if p["id"] == "voyage":
-            key = os.environ.get("VOYAGE_API_KEY", "")
-            key_detected = bool(key and (key.startswith("vo-") or key.startswith("pa-")))
-            available = key_detected and _check_pip_package("voyageai")
-            needs_install = key_detected and not _check_pip_package("voyageai")
-        elif p["id"] == "openai":
+        if p["id"] == "openai":
             key = os.environ.get("OPENAI_API_KEY", "")
             key_detected = bool(key and key.startswith("sk-"))
             available = key_detected and _check_pip_package("openai")
@@ -266,7 +260,7 @@ def scan_providers() -> dict:
         "title": "Nexus Memory Setup - Embedding Provider",
         "providers": results,
         "recommended_index": recommended_idx,
-        "instructions": "Reply with the number of your choice (1-N). If the provider needs an API key, include it: '3 vo-your-key-here'"
+        "instructions": "Reply with the number of your choice (1-N). If the provider needs an API key, include it: '2 sk-your-key-here'"
     }
 
 

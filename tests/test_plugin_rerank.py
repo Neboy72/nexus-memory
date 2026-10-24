@@ -57,8 +57,8 @@ class TestLoadRerankConfig:
 
         cfg = load_rerank_config(str(tmp_path / "missing.yaml"))
         assert cfg["enabled"] is False
-        # "auto" adapts per user: voyage if they have a key, local otherwise.
-        assert cfg["reranker"] == "auto"
+        # zero-Voyage policy: default is the local cross-encoder.
+        assert cfg["reranker"] == "cross-encoder"
         assert cfg["pool_k"] == 20
 
     def test_reads_config_block(self, tmp_path):
@@ -74,7 +74,7 @@ class TestLoadRerankConfig:
                         "rerank": True,
                         "reranker": "cross-encoder",
                         "rerank_pool": 12,
-                        "voyage_api_key": "pv-123",
+
                     }
                 }
             )
@@ -83,7 +83,6 @@ class TestLoadRerankConfig:
         assert cfg["enabled"] is True
         assert cfg["reranker"] == "cross-encoder"
         assert cfg["pool_k"] == 12
-        assert cfg["voyage_api_key"] == "pv-123"
 
     def test_env_overrides_config(self, tmp_path, monkeypatch):
         import yaml
@@ -157,33 +156,17 @@ class TestRerankPoints:
         out = rerank_points("q", pts, reranker="nope")
         assert [p.id for p in out] == [p.id for p in pts]
 
-    def test_voyage_rerank(self, monkeypatch):
+    def test_voyage_reranker_rejected(self):
         import nexus_memory.reranker as rr
 
-        class FakeResp:
-            status_code = 200
-
-            def json(self):
-                return {
-                    "data": [
-                        {"index": 2, "relevance_score": 0.99},
-                        {"index": 0, "relevance_score": 0.10},
-                        {"index": 1, "relevance_score": 0.50},
-                    ]
-                }
-
-        fake_requests = MagicMock()
-        fake_requests.post.return_value = FakeResp()
-        monkeypatch.setattr(rr, "_requests", fake_requests)
-
         pts = _pool()[:3]
-        out = rr.rerank_points("q", pts, reranker="voyage", voyage_api_key="k")
-        assert [p.id for p in out] == ["p3", "p2", "p1"]
+        with pytest.raises(ValueError, match="Voyage reranker has been removed"):
+            rr.rerank_points("q", pts, reranker="voyage")
 
     def test_empty_points_passthrough(self):
         from nexus_memory.reranker import rerank_points
 
-        assert rerank_points("q", [], reranker="voyage") == []
+        assert rerank_points("q", [], reranker="cross-encoder") == []
 
 
 # ---------------------------------------------------------------------------
@@ -250,12 +233,7 @@ class TestRecallRerankIntegration:
 class TestAutoMode:
     """User-adaptive behavior: same code, different hardware/keys per user."""
 
-    def test_auto_with_voyage_key_uses_api(self, monkeypatch):
-        import nexus_memory.reranker as rr
-
-        assert rr._resolve_reranker("auto", "pv-key-123") == "voyage"
-
-    def test_auto_without_key_uses_local(self, monkeypatch):
+    def test_auto_resolves_to_local(self, monkeypatch):
         import nexus_memory.reranker as rr
 
         assert rr._resolve_reranker("auto", None) == "cross-encoder"
@@ -265,10 +243,9 @@ class TestAutoMode:
         from nexus_memory.reranker import _resolve_reranker
 
         assert _resolve_reranker("cross-encoder", "has-key") == "cross-encoder"
-        assert _resolve_reranker("voyage", None) == "voyage"  # fail-open in caller
 
-    def test_load_config_default_is_auto(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+
+    def test_load_config_default_is_cross_encoder(self, tmp_path, monkeypatch):
         import yaml
 
         from nexus_memory.reranker import load_rerank_config
@@ -276,4 +253,4 @@ class TestAutoMode:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(yaml.safe_dump({"nexus-memory": {"rerank": True}}))
         cfg = load_rerank_config(str(cfg_file))
-        assert cfg["reranker"] == "auto"
+        assert cfg["reranker"] == "cross-encoder"

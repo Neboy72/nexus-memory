@@ -4,7 +4,7 @@ Different memory categories have different value. A `temp` note doesn't need
 expensive cloud embeddings, while a durable `fact` warrants the best quality.
 
 Tier mapping:
-  - fact, rule → premium (Voyage 1024d / OpenAI 1536d)
+  - fact, rule → premium (OpenAI 1536d)
   - preference, belief, procedure → standard (Google 768d / Jina 1024d)
   - session, temp → economy (Ollama 768d / sentence-transformers 384d)
 
@@ -13,7 +13,7 @@ If not, route to a provider in the recommended tier (falling back gracefully).
 
 The routing is advisory — if only one provider is available, it's used for
 all categories regardless of tier. Cost-awareness kicks in when MULTIPLE
-providers are available (e.g. Voyage API key + local Ollama).
+providers are available (e.g. OpenAI API key + local Ollama).
 """
 
 from __future__ import annotations
@@ -44,7 +44,6 @@ CATEGORY_TIERS: Dict[str, str] = {
 
 # Provider → tier
 PROVIDER_TIERS: Dict[str, str] = {
-    "voyage": TIER_PREMIUM,
     "openai": TIER_PREMIUM,
     "google": TIER_STANDARD,
     "jina": TIER_STANDARD,
@@ -55,11 +54,10 @@ PROVIDER_TIERS: Dict[str, str] = {
 # Nr 453: deterministic within-tier preference. Without this the "priority
 # order" comment was a lie — the choice followed the dict insertion order of
 # ``_available_providers``. Providers not listed sort last (stable).
-PROVIDER_PRIORITY = ("voyage", "openai", "google", "jina", "ollama")
+PROVIDER_PRIORITY = ("openai", "google", "jina", "ollama")
 
 # Provider → estimated cost per 1M tokens (USD, approximate)
 PROVIDER_COSTS: Dict[str, float] = {
-    "voyage": 0.02,        # voyage-4
     "openai": 0.13,        # text-embedding-3-large
     "google": 0.025,       # text-embedding-004
     "jina": 0.018,         # jina-embeddings-v3
@@ -68,7 +66,7 @@ PROVIDER_COSTS: Dict[str, float] = {
 }
 
 TIER_DESCRIPTIONS: Dict[str, str] = {
-    TIER_PREMIUM: "Premium cloud embeddings (Voyage/OpenAI) — best quality for durable facts and rules",
+    TIER_PREMIUM: "Premium cloud embeddings (OpenAI) — best quality for durable facts and rules",
     TIER_STANDARD: "Standard cloud embeddings (Google/Jina) — balanced quality and cost for preferences and beliefs",
     TIER_ECONOMY: "Local embeddings (Ollama/sentence-transformers) — zero cost for temporary and session memories",
 }
@@ -105,7 +103,7 @@ class CostAwareRouter:
 
         An explicit ``cost_aware_routing`` value in config.json always wins.
         Otherwise cost-aware routing is only enabled when MULTIPLE providers
-        are available (e.g. Voyage API key + local Ollama). With a single
+        are available (e.g. OpenAI API key + local Ollama). With a single
         provider, all categories use that provider.
         """
         self._detect_available_providers()
@@ -133,9 +131,6 @@ class CostAwareRouter:
 
     def _detect_available_providers(self) -> None:
         """Check which embedding providers are available without fully initializing them."""
-        # Voyage
-        if os.environ.get("VOYAGE_API_KEY", "").startswith(("vo-", "pa-")):
-            self._available_providers["voyage"] = TIER_PREMIUM
         # OpenAI
         if os.environ.get("OPENAI_API_KEY", "").startswith("sk-"):
             self._available_providers["openai"] = TIER_PREMIUM
@@ -198,7 +193,7 @@ class CostAwareRouter:
     def get_provider_for_category(self, category: str, record: bool = True) -> Optional[str]:
         """Get the recommended provider name for a memory category.
 
-        Returns the provider name (e.g. "voyage", "ollama") or None if
+        Returns the provider name (e.g. "openai", "ollama") or None if
         only one provider is available (routing disabled — use the configured one).
 
         Args:

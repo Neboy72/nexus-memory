@@ -33,7 +33,7 @@ Copy `.env.example` to `.env` and set:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `QDRANT_URL` | Yes | Qdrant endpoint (default: `http://localhost:6333`) |
-| `VOYAGE_API_KEY` | Yes | Voyage AI API key for embeddings |
+
 | `QDRANT_API_KEY` | No | If your Qdrant instance requires auth |
 
 ## 🧪 Running Tests
@@ -89,7 +89,7 @@ AI Agent (Hermes / Claude / Codex / …)
 │  mcp-nexus    │  ← MCP server exposing memory tools
 │  server.py    │
 ├───────────────┤
-│  embedding.py │  ← Voyage AI / Ollama embeddings
+│  embedding.py │  ← Cloud / Ollama embeddings
 ├───────────────┤
 │  qdrant.py    │  ← Vector storage & search
 └───────────────┘

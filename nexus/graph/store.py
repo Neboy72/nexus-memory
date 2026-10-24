@@ -45,7 +45,7 @@ def _default_vector_size() -> int:
 
     Mirrors ``nexus.staging._detect_vector_size()`` (the canonical-collection
     bootstrap) so an edge collection created here can never disagree with the
-    size used for the real embeddings. Falls back to 1024 (Voyage) when the
+    size used for the real embeddings. Falls back to 1024 when the
     provider cannot be detected, matching ``nexus/events.py``.
     """
     try:

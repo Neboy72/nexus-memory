@@ -144,7 +144,7 @@ def _get_config() -> Dict[str, Any]:
 
 
 def _load_env() -> None:
-    """Load .env file so API keys (VOYAGE_API_KEY etc.) are available."""
+    """Load .env file so API keys (OPENAI_API_KEY etc.) are available."""
     for env_path in [
         os.path.expanduser("~/.hermes/.env"),
         os.path.expanduser("~/.nexus-memory/.env"),
@@ -760,7 +760,7 @@ def _store_sica_session(
         )
 
         # Use provided embedder, or create one. When creating standalone,
-        # load .env first so VOYAGE_API_KEY is available.
+        # load .env first so OPENAI_API_KEY etc. are available.
         _embedder = embedder
         if _embedder is None:
             _load_env()

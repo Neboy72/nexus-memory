@@ -6,14 +6,14 @@ import sys
 import os
 
 # H259: fail fast instead of masking a missing credential. The old
-# ``os.environ.setdefault("VOYAGE_API_KEY", "")`` made the key *exist but empty*,
+# ``os.environ.setdefault("OPENAI_API_KEY", "")`` made the key *exist but empty*,
 # so the server started in a degraded mode and the test could pass on a
 # misconfiguration. An honest legacy test must refuse to run.
-if not os.environ.get("VOYAGE_API_KEY"):
+if not os.environ.get("OPENAI_API_KEY"):
     print(
-        "VOYAGE_API_KEY is not set — refusing to run the MCP test against a "
+        "OPENAI_API_KEY is not set — refusing to run the MCP test against a "
         "degraded server. Export it first:\n"
-        "  export VOYAGE_API_KEY=...",
+        "  export OPENAI_API_KEY=...",
         file=sys.stderr,
     )
     sys.exit(1)

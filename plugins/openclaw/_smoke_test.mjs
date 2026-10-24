@@ -24,7 +24,7 @@ const api = {
   // also annehmen, sonst bricht register() vor den Tool-Registrierungen ab.
   registerMemoryCapability: noop,
 };
-const cfg = { collection: "nexus", embedding: { provider: "voyage", model: "voyage-4" }, accessLevel: "trusted" };
+const cfg = { collection: "nexus", embedding: { provider: "openai", model: "text-embedding-3-small" }, accessLevel: "trusted" };
 
 const entry = plugin.default ?? plugin;
 // W34-4: register(api) reads the config from api.pluginConfig (single-arg

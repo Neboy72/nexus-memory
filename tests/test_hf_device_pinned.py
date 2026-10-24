@@ -51,7 +51,7 @@ def fake_st(monkeypatch):
     module.SentenceTransformer = _FakeST
     monkeypatch.setitem(sys.modules, "sentence_transformers", module)
     # Der Provider darf sich nicht auf die Sammlung/andere Wege verlassen.
-    for name in ("VOYAGE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "JINA_API_KEY"):
+    for name in ("OPENAI_API_KEY", "GOOGLE_API_KEY", "JINA_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("NEXUS_HF_DEVICE", raising=False)
     monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "sentence-transformers")

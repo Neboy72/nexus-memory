@@ -64,7 +64,6 @@ def _selfcheck_path() -> Path:
 def _required_env_var(provider: str) -> str:
     """Return the API-key env var name for a provider, or "" for keyless ones."""
     mapping = {
-        "voyage": "VOYAGE_API_KEY",
         "openai": "OPENAI_API_KEY",
         "google": "GOOGLE_API_KEY",
         "jina": "JINA_API_KEY",

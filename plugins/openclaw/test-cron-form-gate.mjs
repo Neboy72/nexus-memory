@@ -69,7 +69,7 @@ const mockApi = {
     // Bestands-Titel (plus Limits), damit die Blockfälle echte
     // Gate-Entscheidungen prüfen.
     cronFormGate: { enabled: true, titles: GATE_TITLES, maxLines: 6, maxChars: 900 },
-    embedding: { provider: "voyage", apiKey: "test" },
+    embedding: { provider: "openai", apiKey: "test" },
   },
 }
 
@@ -77,7 +77,7 @@ const mockApi = {
 const originalFetch = globalThis.fetch
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : String(url)
-  if (u.includes("voyageai.com")) {
+  if (u.includes("openai.com")) {
     return { ok: true, status: 200, json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }) }
   }
   if (u.includes("localhost:6333")) {

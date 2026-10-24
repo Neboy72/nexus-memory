@@ -72,12 +72,12 @@ def test_provider_switch_drops_stale_model(tmp_path, capsys):
     orig = w._get_config_dir
     w._get_config_dir = lambda: monkey_dir
     try:
-        w._save_config("voyage", "")  # switch to cloud, no local model
+        w._save_config("openai", "")  # switch to cloud, no local model
     finally:
         w._get_config_dir = orig
 
     saved = json.loads(cfg.read_text())
-    assert saved["embedding_provider"] == "voyage"
+    assert saved["embedding_provider"] == "openai"
     assert "embedding_model" not in saved, \
         "stale Ollama model must not survive a provider switch"
     assert saved["trust_level"] == "trusted", "unrelated keys preserved"
@@ -85,7 +85,7 @@ def test_provider_switch_drops_stale_model(tmp_path, capsys):
 
 def test_local_provider_records_model(tmp_path, capsys):
     cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"embedding_provider": "voyage"}))
+    cfg.write_text(json.dumps({"embedding_provider": "openai"}))
 
     import nexus_memory.wizard as w
     orig = w._get_config_dir

@@ -102,7 +102,7 @@ await t("probeEmbeddingAvailability: funktionierender Embedder → ok", async ()
 
 await t("probeEmbeddingAvailability: embed() wirft → ok:false + error", async () => {
   const rt = buildMemoryRuntime(client(), {
-    embed: async () => { throw new Error("voyage 401") },
+    embed: async () => { throw new Error("openai 401") },
   })
   const { manager } = await rt.getMemorySearchManager({ cfg: {}, agentId: "a" })
   const probe = await manager.probeEmbeddingAvailability()
@@ -112,7 +112,7 @@ await t("probeEmbeddingAvailability: embed() wirft → ok:false + error", async 
   // TypeError aus assert.match.
   const errText = typeof probe.error === "string" ? probe.error : JSON.stringify(probe.error)
   assert.ok(errText && errText !== "undefined", `probe.error fehlt bei ok:false: ${JSON.stringify(probe)}`)
-  assert.match(errText, /voyage 401/)
+  assert.match(errText, /openai 401/)
 })
 
 await t("probeVectorAvailability delegiert an den count-Check", async () => {

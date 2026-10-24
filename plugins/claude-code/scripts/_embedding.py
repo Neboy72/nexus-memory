@@ -7,7 +7,7 @@ One rule, so all four hooks cannot drift apart:
   service runs the engine with its **local HuggingFace** model, so this plugin
   works on a machine with nothing installed: no Ollama, no API key, and every
   agent in the house shares one vector space.
-* **explicit** — ``NEXUS_EMBEDDING_PROVIDER=ollama|voyage|openai|google|jina``
+* **explicit** — ``NEXUS_EMBEDDING_PROVIDER=ollama|openai|google|jina``
   keeps working exactly as before, for anyone who wants that.
 
 Why not embed here instead? These hooks are started with ``python3`` by the
@@ -112,7 +112,7 @@ def embed_via_serve(text: str, is_query: bool = True) -> "list | None":
             f"[nexus] no local Nexus service at {serve_url()} ({exc}).\n"
             "        Start it with `nexus-memory serve` (installed as a service by\n"
             "        the wizard), or pick a provider explicitly:\n"
-            "        NEXUS_EMBEDDING_PROVIDER=ollama|voyage|openai|google|jina",
+            "        NEXUS_EMBEDDING_PROVIDER=ollama|openai|google|jina",
             file=sys.stderr,
         )
         return None

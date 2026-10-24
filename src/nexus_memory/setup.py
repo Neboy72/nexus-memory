@@ -24,7 +24,7 @@ Usage:
 
     # JSON mode (for bots)
     python3 -m nexus_memory.setup --json scan_embedding
-    python3 -m nexus_memory.setup --json apply_embedding voyage vo-xxx
+    python3 -m nexus_memory.setup --json apply_embedding openai sk-xxx
     python3 -m nexus_memory.setup --json detect_agents
     python3 -m nexus_memory.setup --json set_trust hermes private
     python3 -m nexus_memory.setup --json install_agent hermes

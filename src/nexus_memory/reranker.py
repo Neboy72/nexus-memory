@@ -1,7 +1,8 @@
 """Reranker for the Nexus Memory Hermes plugin (roadmap 1.2).
 
-Bridges ``nexus.retrieval.HybridRetriever``'s reranking (Voyage Rerank API
-or local CrossEncoder) into the Hermes plugin's ``_recall`` pipeline.
+Bridges ``nexus.retrieval.HybridRetriever``'s reranking (local CrossEncoder only)
+into the Hermes plugin's ``_recall`` pipeline. Voyage Rerank was removed on
+2026-10-17 (zero-Voyage policy); "auto" maps to the local cross-encoder.
 
 The plugin's recall path is: embed query -> Qdrant vector search ->
 graph-boost -> return. This module inserts an optional rerank step between
@@ -23,28 +24,28 @@ logger = logging.getLogger("nexus.hermes_plugin.rerank")
 
 # Defaults (conservative): rerank only the top pool, return at most this many.
 DEFAULT_POOL_K = 20
-DEFAULT_RERANKER = "auto"  # "auto" = voyage if key present, else local cross-encoder
+DEFAULT_RERANKER = "cross-encoder"  # local cross-encoder only (zero-Voyage policy)
 MAX_DOC_CHARS = 1000  # truncation cap for reranker documents
 
 
-def _resolve_reranker(reranker: str, voyage_api_key: Optional[str]) -> str:
-    """Resolve "auto" to a concrete reranker based on what the user HAS.
+def _resolve_reranker(reranker: str, _voyage_api_key: Optional[str] = None) -> str:
+    """Resolve reranker name; "auto" is kept for backwards compatibility.
 
-    User with VOYAGE_API_KEY -> Voyage Rerank (best quality, API-cost).
-    Everyone else -> local CrossEncoder (free, CPU, ~50ms per 50 docs).
-    This is how the same code adapts from user to user without config.
+    Voyage Rerank has been removed, so "auto" always maps to the local
+    cross-encoder. Explicit "voyage" raises ValueError (fail-closed).
     """
-    if reranker != "auto":
+    if reranker == "voyage":
+        raise ValueError('Voyage reranker has been removed; use "cross-encoder" or "off"')
+    if reranker and reranker != "auto":
         return reranker
-    return "voyage" if voyage_api_key else "cross-encoder"
+    return "cross-encoder"
 
 
 def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """Read rerank settings from ``~/.hermes/config.yaml`` (nexus-memory block).
 
     Returns a dict with keys: ``enabled`` (bool), ``reranker`` (str),
-    ``pool_k`` (int), ``voyage_api_key`` (str). All values have safe
-    defaults when the block is missing.
+    ``pool_k`` (int). All values have safe defaults when the block is missing.
 
     Env overrides: ``NEXUS_RERANK=0/1`` and ``NEXUS_RERANKER``.
     """
@@ -52,7 +53,6 @@ def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         "enabled": False,
         "reranker": DEFAULT_RERANKER,
         "pool_k": DEFAULT_POOL_K,
-        "voyage_api_key": os.environ.get("VOYAGE_API_KEY", ""),
     }
     try:
         import os as _os
@@ -69,9 +69,7 @@ def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             cfg["enabled"] = bool(block.get("rerank", False))
             cfg["reranker"] = str(block.get("reranker", DEFAULT_RERANKER))
             cfg["pool_k"] = int(block.get("rerank_pool", DEFAULT_POOL_K))
-            key = block.get("voyage_api_key", "")
-            if key:
-                cfg["voyage_api_key"] = key
+
     except Exception as exc:  # fail-open: defaults stand
         logger.debug("rerank config read skipped: %s", exc)
 
@@ -93,7 +91,7 @@ def rerank_points(
     *,
     reranker: str,
     pool_k: int = DEFAULT_POOL_K,
-    voyage_api_key: Optional[str] = None,
+    _voyage_api_key: Optional[str] = None,
 ) -> List[Any]:
     """Re-rank Qdrant ScoredPoints by true query<->document relevance.
 
@@ -119,11 +117,9 @@ def rerank_points(
     if not results:
         return points
 
-    reranker = _resolve_reranker(reranker, voyage_api_key)
+    reranker = _resolve_reranker(reranker)
     try:
-        if reranker == "voyage" and voyage_api_key:
-            ranked = _rerank_voyage(query, results, voyage_api_key)
-        elif reranker == "cross-encoder":
+        if reranker == "cross-encoder":
             ranked = _rerank_local(query, results)
         else:
             return points
@@ -146,13 +142,6 @@ def rerank_points(
     return ordered
 
 
-# requests is optional at import time (reranker="voyage" only needs it).
-try:
-    import requests as _requests
-except ImportError:
-    _requests = None
-
-
 def _safe_score(v: Any) -> float:
     """Coerce a reranker score to float, defaulting to 0.0 on bad input.
 
@@ -162,57 +151,6 @@ def _safe_score(v: Any) -> float:
     """
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
 
-
-def _rerank_voyage(
-    query: str, results: List[Dict[str, Any]], voyage_api_key: str
-) -> List[Dict[str, Any]]:
-    """Voyage Rerank API (rerank-2). Returns results sorted by relevance."""
-    if _requests is None:
-        raise RuntimeError("requests not installed")
-
-    docs = [r["text"][:MAX_DOC_CHARS] for r in results]
-    resp = _requests.post(
-        "https://api.voyageai.com/v1/rerank",
-        headers={"Authorization": f"Bearer {voyage_api_key}"},
-        json={
-            "query": query,
-            "documents": docs,
-            "model": "rerank-2",
-            "top_k": len(docs),
-        },
-        timeout=15,
-    )
-    if resp.status_code >= 400:
-        logger.warning(
-            "Voyage rerank HTTP %s - falling back to original order",
-            resp.status_code,
-        )
-        raise RuntimeError(f"voyage rerank HTTP {resp.status_code}")
-    ranking = resp.json().get("data", [])
-    if not isinstance(ranking, list):
-        ranking = []
-    # Drop malformed entries before sorting: a missing/non-int index would
-    # default to document 0, and a null/string relevance_score raised
-    # TypeError inside sorted(). Only genuinely indexable entries survive.
-    ranking = [
-        r for r in ranking
-        if isinstance(r, dict)
-        and isinstance(r.get("index"), int)
-        and not isinstance(r.get("index"), bool)
-        and 0 <= r["index"] < len(results)
-    ]
-    ranked: List[Dict[str, Any]] = []
-    seen_idx = set()
-    for item in sorted(
-        ranking, key=lambda x: _safe_score(x.get("relevance_score")), reverse=True
-    ):
-        idx = item["index"]
-        if idx not in seen_idx:
-            seen_idx.add(idx)
-            r = dict(results[idx])
-            r["_rerank_score"] = _safe_score(item.get("relevance_score"))
-            ranked.append(r)
-    return ranked
 
 
 def _rerank_local(

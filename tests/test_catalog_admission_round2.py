@@ -549,8 +549,8 @@ def test_engine_pin_carries_the_reviewed_fixes():
     # and the explicit choice must still work.
     embeddings = at_pin("src/nexus_memory/embeddings.py")
     auto_body = embeddings[embeddings.index("def _detect_auto"):
-                            embeddings.index("def _try_voyage")]
-    for cloud in ("_try_voyage", "_try_openai", "_try_google", "_try_jina"):
+                            embeddings.index("def _try_openai")]
+    for cloud in ("_try_openai", "_try_google", "_try_jina"):
         assert cloud not in auto_body, (
             f"the pinned engine's auto-detection reaches {cloud} — a fresh "
             f"install would leave the machine without an explicit opt-in"
@@ -759,7 +759,7 @@ def test_readme_describes_local_first_embeddings():
     stale_wording = (
         "cloud keys first",
         "cloud-first",
-        "Priority: Voyage",
+        "Priority: local",
         # Catalog review 10.10.2026: the manifest still advertised "Ollama or
         # sentence-transformers" as the local path while the engine has exactly
         # ONE automatic path (HuggingFace). A docstring in the same class sat in

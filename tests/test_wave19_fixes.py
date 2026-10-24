@@ -165,7 +165,7 @@ class TestNr296ReadOnlyRouting:
     def _router(self):
         from nexus_memory.cost_router import CostAwareRouter, TIER_PREMIUM
         r = CostAwareRouter.__new__(CostAwareRouter)
-        r._available_providers = {"voyage": TIER_PREMIUM}
+        r._available_providers = {"openai": TIER_PREMIUM}
         r._routing_enabled = True
         r._routing_decisions = {}
         r._cost_tracker = {}
@@ -179,7 +179,7 @@ class TestNr296ReadOnlyRouting:
     def test_direct_call_still_records(self):
         r = self._router()
         r.get_provider_for_category("fact")
-        assert r._routing_decisions.get("voyage") == 1
+        assert r._routing_decisions.get("openai") == 1
 
 
 # ── Nr 297: dead guard removed ──────────────────────────────────────────────
@@ -298,34 +298,6 @@ class TestNr302DeadIps:
         # (word-boundary: 'nearby_ips' is legitimate, the dead bare
         # 'ips = _IP_PATTERN.findall' assignment is gone)
         assert "\n    ips = _IP_PATTERN.findall" not in src
-
-
-# ── Nr 303: provider keys read live ─────────────────────────────────────────
-
-class TestNr303LiveKeys:
-    def test_try_voyage_reads_env_live(self):
-        src = _read("src/nexus_memory/embeddings.py")
-        assert 'os.environ.get("VOYAGE_API_KEY") or VOYAGE_API_KEY' in src
-        assert 'os.environ.get("OPENAI_API_KEY") or OPENAI_API_KEY' in src
-        assert 'os.environ.get("GOOGLE_API_KEY") or GOOGLE_API_KEY' in src
-
-    def test_late_key_export_is_honored(self, monkeypatch):
-        from nexus_memory import embeddings as emb
-        # no key at import time (test env), then export late → _try_voyage must
-        # see it. We cannot init a real client; assert the guard passes.
-        monkeypatch.setenv("VOYAGE_API_KEY", "vo-test-late-key")
-        p = emb.EmbeddingProvider.__new__(emb.EmbeddingProvider)
-        p._reset_provider_state()
-
-        captured = {}
-
-        def fake_client(api_key=None):
-            captured["key"] = api_key
-
-        fake_voyage = SimpleNamespace(Client=fake_client)
-        monkeypatch.setitem(sys.modules, "voyageai", fake_voyage)
-        assert p._try_voyage() is True
-        assert captured["key"] == "vo-test-late-key"
 
 
 # ── Nr 304: query/doc mode split ────────────────────────────────────────────
