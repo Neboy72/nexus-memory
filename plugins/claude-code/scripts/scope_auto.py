@@ -28,6 +28,40 @@ COLLECTION = "nexus"
 
 _SCOPE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
+ACCESS_LEVELS = ("public", "trusted", "private")
+
+
+def resolve_trust_level(agent_id: str = "") -> str:
+    """Trust level of this agent, read from ``~/.nexus-memory/agents.json``.
+
+    The same registry and the same fail-closed rule as the hooks' own copies
+    (``auto_recall``, ``auto_capture``, ``session_start``): an unknown agent, a
+    missing entry, an unreadable registry or a level outside the hierarchy all
+    resolve to ``"public"`` — the level that may only see public facts. A
+    broken registry must never widen what an agent can read.
+
+    The path is resolved per call (not at import time) so a moved ``$HOME`` or
+    a test redirect is honoured.
+    """
+    agent = agent_id or os.getenv("NEXUS_AGENT_ID", "claude-code")
+    if not agent:
+        return "public"
+    path = os.path.expanduser("~/.nexus-memory/agents.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            registry = json.load(fh)
+        for entry in registry.get("agents", []):
+            if entry.get("id") == agent:
+                trust = entry.get("trust_level", "public")
+                return trust if trust in ACCESS_LEVELS else "public"
+    except Exception as exc:
+        print(
+            f"[nexus scope_auto] trust registry {path!r} unreadable ({exc}) — "
+            "fail-closed to 'public'",
+            file=sys.stderr,
+        )
+    return "public"
+
 
 def _env_float(name: str, default: float) -> float:
     """Read a float env var without crashing at import time (W31-10).
