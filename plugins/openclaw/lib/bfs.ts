@@ -61,6 +61,28 @@ export interface BfsResult {
   edges: BfsEdge[]
 }
 
+/**
+ * Strict single-point lookup shared by every graph read (24.10.2026 audit fix).
+ *
+ * `scrollPoint()` returns null for BOTH "the point does not exist" (404) and
+ * "the request failed" (500/403/network), so a short outage silently read as
+ * "nothing there": get_related answered "No related facts found." while it had
+ * merely failed to look. `scrollPointStrict()` keeps 404 = null and throws on
+ * every other failure — the error reaches the tool's catch and is reported
+ * honestly instead of vanishing.
+ *
+ * A client that predates the strict variant (test stubs) still works through
+ * `scrollPoint`; the real QdrantClient always provides both.
+ */
+export async function loadPointStrict(
+  qdrantClient: QdrantClient,
+  id: string,
+): Promise<{ id: string; payload?: Record<string, unknown> } | null> {
+  const strict = qdrantClient.scrollPointStrict
+  if (typeof strict === "function") return strict.call(qdrantClient, id)
+  return qdrantClient.scrollPoint(id)
+}
+
 export async function bfsEdges(
   qdrantClient: QdrantClient,
   factId: string,
@@ -84,16 +106,19 @@ export async function bfsEdges(
   const nodes: BfsNode[] = collectEdges ? [{ id: factId, depth: 0 }] : []
   const edges: BfsEdge[] = []
 
-  // W40-4: one scrollPoint per node. The target_type check used to fetch a
+  // W40-4: one point lookup per node. The target_type check used to fetch a
   // newly discovered target and the dequeue then fetched the very same point
   // again — two HTTP calls per node plus N+1 latency on a wide fan-out.
+  // 24.10.2026: the lookup is strict — 404 stays "unknown/skip", a failed
+  // request throws out of the walk instead of shortening the result silently.
+  // A throwing lookup stores nothing, so the cache never holds an error.
   const pointCache = new Map<
     string,
-    Awaited<ReturnType<QdrantClient["scrollPoint"]>>
+    Awaited<ReturnType<QdrantClient["scrollPointStrict"]>>
   >()
   const loadPoint = async (id: string) => {
     if (!pointCache.has(id)) {
-      pointCache.set(id, await qdrantClient.scrollPoint(id))
+      pointCache.set(id, await loadPointStrict(qdrantClient, id))
     }
     return pointCache.get(id) ?? null
   }
