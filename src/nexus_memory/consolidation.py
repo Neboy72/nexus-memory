@@ -39,7 +39,6 @@ CONSOLIDATION_START_DELAY_SECONDS = int(os.environ.get("NEXUS_CONSOLIDATION_STAR
 CONSOLIDATION_BATCH = int(os.environ.get("NEXUS_CONSOLIDATION_BATCH", 10))
 CONSOLIDATION_ENABLED = os.environ.get("NEXUS_CONSOLIDATION", "1") == "1"
 OLLAMA_BASE = os.environ.get("NEXUS_OLLAMA_BASE", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("NEXUS_CONSOLIDATION_MODEL", "glm-5.3-flash:cloud")
 _CONFLICT_SIM_THRESHOLD = float(os.environ.get("NEXUS_CONSOLIDATION_SIM", "0.75"))
 # Consolidation resolves RELATIVE time expressions ("yesterday", "next
 # week") against the date the SOURCE SESSION was created — not the date
@@ -167,9 +166,74 @@ Return ONLY one of:
 """
 
 
+# No built-in model name lives in this module. The daemon calls the model the
+# user configured; with nothing configured it stays idle rather than calling a
+# model the user does not have (same failure family as the reranker default,
+# 24.10.2026).
+_NO_MODEL_LOGGED = False
+
+
+def _no_model_configured() -> None:
+    """Warn exactly once per process that no consolidation model is set."""
+    global _NO_MODEL_LOGGED
+    if not _NO_MODEL_LOGGED:
+        log.warning(
+            "consolidation: no model configured (NEXUS_CONSOLIDATION_MODEL, "
+            "nexus-memory.consolidation_model or model.default in "
+            "~/.hermes/config.yaml) - consolidation stays idle")
+        _NO_MODEL_LOGGED = True
+
+
+def resolve_consolidation_model(config_path: Optional[str] = None) -> str:
+    """Model name the consolidation run may call, resolved at CALL time.
+
+    Priority:
+    1. ``NEXUS_CONSOLIDATION_MODEL`` (unchanged).
+    2. ``~/.hermes/config.yaml`` (or *config_path*):
+       ``nexus-memory.consolidation_model``, then ``model.default``.
+
+    Returns "" when nothing is configured — there is deliberately no built-in
+    fallback model. The caller must then skip the run instead of calling a
+    model the user does not have. Never raises: an unreadable or broken config
+    counts as "not configured".
+    """
+    env_model = (os.environ.get("NEXUS_CONSOLIDATION_MODEL") or "").strip()
+    if env_model:
+        return env_model
+
+    path = config_path or os.path.expanduser(
+        os.path.join("~", ".hermes", "config.yaml"))
+    try:
+        import yaml
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
+        if not isinstance(cfg, dict):
+            return ""
+        block = cfg.get("nexus-memory") or {}
+        if isinstance(block, dict):
+            name = block.get("consolidation_model")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        model_cfg = cfg.get("model") or {}
+        if isinstance(model_cfg, dict):
+            name = model_cfg.get("default")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    except Exception as exc:
+        log.debug("consolidation: model config %s unreadable: %s", path, exc)
+    return ""
+
+
 def _ollama_generate(prompt: str, timeout: int = 120) -> str:
-    """POST /api/generate, stream=False. Raises on failure (caller catches)."""
-    body = json.dumps({"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+    """POST /api/generate, stream=False. Raises on failure (caller catches).
+
+    Raises BEFORE any HTTP call when no model is configured: an empty model
+    name must never reach the station."""
+    model = resolve_consolidation_model()
+    if not model:
+        _no_model_configured()
+        raise RuntimeError("no consolidation model configured")
+    body = json.dumps({"model": model, "prompt": prompt, "stream": False,
                        "options": {"temperature": 0.1}}).encode()
     req = urllib.request.Request(OLLAMA_BASE + "/api/generate", data=body,
                                  headers={"Content-Type": "application/json"})
@@ -185,11 +249,20 @@ def get_default_fuel(timeout: Optional[int] = None):
     ``timeout`` bounds the Ollama station per call via functools.partial:
     None = daemon default 120 s (distill batch), interactive paths pass a
     short timeout (query-rewrite: 10 s so a hanging station never blocks a
-    gateway turn)."""
+    gateway turn).
+
+    Returns ``None`` when no model is configured (``resolve_consolidation_model``
+    is empty): no station is built and no model is called."""
     from functools import partial as _partial
     from nexus_memory.fuel_chain import get_fuel
+    model = resolve_consolidation_model()
+    if not model:
+        # Nothing configured -> no model is called at all; the daemon sleeps
+        # this tick and retries after a config change (one warning per process).
+        _no_model_configured()
+        return None
     gen = _ollama_generate if timeout is None else _partial(_ollama_generate, timeout=timeout)
-    return get_fuel(OLLAMA_BASE, OLLAMA_MODEL, gen)
+    return get_fuel(OLLAMA_BASE, model, gen)  # guard-ok: Legacy-Alias, kein Default-Modell
 
 
 def _extract_payload(txt: str) -> str:
@@ -1045,3 +1118,16 @@ def start_daemon(store, collection: str) -> Optional[Consolidator]:
     except Exception as exc:
         log.warning("Consolidation daemon unavailable: %s", exc)
         return None
+
+
+def __getattr__(name: str) -> str:
+    """Legacy alias: ``OLLAMA_MODEL`` resolved at access time.  # guard-ok: Legacy-Alias, kein Default-Modell
+
+    Older callers (benches/litm) imported ``OLLAMA_MODEL`` as a constant. The  # guard-ok: Legacy-Alias, kein Default-Modell
+    name no longer holds a built-in default — it resolves through
+    :func:`resolve_consolidation_model` on every access, so it can never carry
+    a model name the user has not configured ("" when nothing is set).
+    """
+    if name == "OLLAMA_MODEL":  # guard-ok: Legacy-Alias, kein Default-Modell
+        return resolve_consolidation_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

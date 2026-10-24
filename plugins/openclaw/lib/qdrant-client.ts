@@ -1,6 +1,8 @@
 import { log } from "../logger.ts"
 import { fetchWithTimeout } from "./embedder.ts"
-import { statSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 
 export type SearchResult = {
   id: string
@@ -26,6 +28,89 @@ const ACCESS_LEVEL_ORDER: Record<string, number> = {
   public: 0,
   trusted: 1,
   private: 2,
+}
+
+/**
+ * Shared agent registry — the same file the Nexus core's
+ * ``agent_detect.record_agent_access`` writes and the dashboard reads.
+ *
+ * This client speaks to Qdrant DIRECTLY, so neither the Nexus service nor the
+ * MCP server sees its reads/writes; without this counter the dashboard kept
+ * showing a frozen `openclaw` value. Same entry shape as the core: id,
+ * timestamps, reads/writes. Telemetry only — a failure is reported once per
+ * process and never disturbs the memory operation.
+ */
+const AGENTS_REGISTRY = path.join(os.homedir(), ".nexus-memory", "agents.json")
+
+type RegistryEntry = {
+  id?: string
+  last_seen?: string
+  reads?: number
+  writes?: number
+  [key: string]: unknown
+}
+
+let registryWarningShown = false
+
+function registryAgentId(): string {
+  return (process.env.NEXUS_AGENT_ID || "").trim() || "openclaw"
+}
+
+function recordAgentAccess(read: boolean, write: boolean): void {
+  if (!read && !write) return
+  // Self-tests are not agents: a probe must not register or count.
+  const selftest = (process.env.NEXUS_AGENT_SELFTEST || "").trim().toLowerCase()
+  if (selftest === "1" || selftest === "true") return
+  try {
+    const raw: unknown = existsSync(AGENTS_REGISTRY)
+      ? JSON.parse(readFileSync(AGENTS_REGISTRY, "utf8"))
+      : { agents: [] }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      // A corrupt registry is never overwritten — the core fails closed too.
+      throw new Error("agents registry must be a JSON object")
+    }
+    const registry = raw as { agents?: unknown }
+    if (registry.agents === undefined) registry.agents = []
+    if (!Array.isArray(registry.agents)) {
+      throw new Error("agents registry must hold an agents list")
+    }
+    const agents = registry.agents as RegistryEntry[]
+    const id = registryAgentId()
+    // Same ISO form the core writes (``+00:00``, not JS's ``Z``).
+    const now = new Date().toISOString().replace("Z", "+00:00")
+    let entry = agents.find((a) => a?.id === id)
+    if (!entry) {
+      entry = {
+        id,
+        name: id,
+        icon: "🔌",
+        trust_level: "public",
+        install_type: "unknown",
+        config_dir: null,
+        connected_at: now,
+        last_seen: now,
+        reads: 0,
+        writes: 0,
+        host_type: "local",
+        host_label: os.hostname().split(".")[0] || "this machine",
+      }
+      agents.push(entry)
+    }
+    entry.last_seen = now
+    if (read) entry.reads = (typeof entry.reads === "number" ? entry.reads : 0) + 1
+    if (write) entry.writes = (typeof entry.writes === "number" ? entry.writes : 0) + 1
+    mkdirSync(path.dirname(AGENTS_REGISTRY), { recursive: true })
+    const tmp = `${AGENTS_REGISTRY}.tmp-${process.pid}-${Date.now()}`
+    writeFileSync(tmp, JSON.stringify(registry, null, 2) + "\n")
+    renameSync(tmp, AGENTS_REGISTRY)
+  } catch (err) {
+    if (!registryWarningShown) {
+      registryWarningShown = true
+      process.stderr.write(
+        `nexus: agent access not counted (${err instanceof Error ? err.message : String(err)}) — memory access continues\n`,
+      )
+    }
+  }
 }
 
 /**
@@ -524,6 +609,9 @@ export class QdrantClient {
 
     const results: SearchResult[] = (data.result ?? []).map((r) => this.mapHit(r))
 
+    // Direct Qdrant read — count it for this agent (not via the service).
+    recordAgentAccess(true, false)
+
     log.debugResponse("search", { count: results.length })
     return results
   }
@@ -609,6 +697,9 @@ export class QdrantClient {
       const text = await resp.text()
       throw new Error(`Qdrant upsert failed: ${resp.status} ${text}`)
     }
+
+    // Direct Qdrant write — count it for this agent (not via the service).
+    recordAgentAccess(false, true)
 
     log.debugResponse("upsert", { id })
   }

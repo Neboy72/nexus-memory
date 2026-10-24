@@ -77,16 +77,19 @@ async function loadStatus() {
   // Die API liefert ihn roh; lesbar gemacht wird nur die Anzeige.
   const providerEl = document.getElementById('stat-provider');
   if (providerEl) {
-    providerEl.textContent = prettyEmbedName(status.embedding_provider);
-    providerEl.title = status.embedding_provider || 'unknown';
-    fitOneLine(providerEl);
+    const provider = embedDisplayName(status.embedding_provider);
+    providerEl.textContent = provider.shown;
+    // Das Label der Karte nennt das Wort schon. Damit trotzdem nichts verloren
+    // geht, steht der volle Name im Tooltip UND als data-full im Markup.
+    providerEl.title = provider.full;
+    providerEl.dataset.full = provider.full;
   }
 
   // Fuel-Zeile: eine Zeile, alles Wichtige drin (Modell · verbraucht von Cap)
   const fuelEl = document.getElementById('stat-fuel');
   if (fuelEl && status.fuel) {
     const f = status.fuel;
-    // Zeile 1: Modellname (wächst — Auto-Fit per Länge), Zeile 2: Kosten (kurz, stabil)
+    // Zeile 1: Modellname (feste 13px), Zeile 2: Kosten (kurz, stabil)
     const nameEl = document.getElementById('stat-fuel-model');
     const costEl = document.getElementById('stat-fuel-cost');
     if (nameEl && costEl) {
@@ -95,25 +98,36 @@ async function loadStatus() {
       // User weder Ollama noch einen Schlüssel hatte — ein Name, der nicht stimmt).
       if (!f.enabled) {
         nameEl.textContent = 'OFF';
+        nameEl.removeAttribute('title');
+        delete nameEl.dataset.full;
         fuelEl.title = 'Memory AI sorting is off — memories stay unsorted.';
       } else if (!f.provider) {
         nameEl.textContent = 'keine Station';
+        nameEl.removeAttribute('title');
+        delete nameEl.dataset.full;
         fuelEl.title = 'Keine Station offen — Erinnerungen bleiben unsortiert.';
       } else {
-        nameEl.textContent = prettyFuelModel(f.model);
+        // Nur der Modellname; die Kennung hinter dem letzten ":" bleibt im
+        // Tooltip und als data-full erhalten.
+        const model = modelName(f.model);
+        nameEl.textContent = prettyFuelModel(model.shown);
+        nameEl.title = model.full;
+        nameEl.dataset.full = model.full;
         // "geprüft" nur, wenn der Name wirklich erreichbar ist; ein blosser
         // Schlüssel ist eine Erwartung, keine Gewissheit.
         const wie = f.verified ? 'geprüft' : 'Schlüssel vorhanden, ungeprüft';
-        fuelEl.title = `Station: ${f.provider} (${wie}) · Modell: ${f.model}`;
+        fuelEl.title = `Station: ${f.provider} (${wie}) · Modell: ${model.full}`;
       }
       costEl.textContent = f.enabled ? `$${f.spent_usd.toFixed(2)} / $${f.budget_usd.toFixed(2)}` : '—';
+      // Beschreibungszeile unter dem Schalter — Betrag aus derselben Quelle wie
+      // die Kostenanzeige darüber (NEXUS_FUEL_BUDGET_USD), nicht hartkodiert.
+      const hintEl = document.getElementById('stat-fuel-hint');
+      if (hintEl) hintEl.textContent = `Sorts old memories with your own AI — hard $${f.budget_usd.toFixed(2)}/month cap.`;
       const toggleEl = document.getElementById('fuel-toggle');
       if (toggleEl) {
         toggleEl.checked = f.enabled;
         toggleEl.disabled = false;
       }
-      // Einzeilig halten: statt Umbruch wird die Schrift kleiner (fitOneLine).
-      fitOneLine(nameEl, 20, 11);
     }
   }
 
@@ -162,9 +176,13 @@ async function loadRecallOrdering() {
   const card = document.getElementById('recall-card');
   const hint = document.getElementById('stat-recall-hint');
   if (modelEl) {
-    modelEl.textContent = data.llm_model || 'unknown';
-    // Mono data is 11.5-13px (DESIGN.md); fit below the CSS size, never above.
-    fitOneLine(modelEl, 13, 11);
+    // Fixed 13px from CSS (DESIGN.md: mono data 11.5-13px) — never shrunk.
+    // Angezeigt wird nur der Modellname; die Hermes-Kennung bleibt in
+    // title/data-full.
+    const model = modelName(data.llm_model);
+    modelEl.textContent = model.shown;
+    modelEl.title = model.full;
+    modelEl.dataset.full = model.full;
   }
   if (toggle) {
     toggle.checked = data.enabled;
@@ -435,49 +453,70 @@ async function refreshAll() {
 // Ein Vektorraum heisst "<provider>__<organisation>_<modell>__<dims>", z.B.
 // "sentence-transformers__qwen_qwen3-embedding-0_6b__1024". Der Modell-Teil
 // wiederholt die Organisation ("qwen" + "qwen3-...") und traegt die Groesse mit
-// Unterstrichen. Anzeige: "Qwen3-Embedding-0.6B". Das Wort "Embedding" bleibt
-// stehen — ohne es laese man den Chat-Modellnamen Qwen3-0.6B.
+// Unterstrichen. Anzeige: "Name-0.6B" (das Wort "Embedding" entfernt
+// embedDisplayName, das Label der Karte sagt es bereits).
 function prettyEmbedName(raw) {
   let s = String(raw == null ? '' : raw).trim();
   if (!s || s.toLowerCase() === 'unknown') return 'unknown';
-  // Groesse lesbar: "…-embedding-0_6b" bzw. "…embedding_0_6b" -> "-0.6B"
-  s = s.replace(/[_-](\d+)[_-](\d+)([bm])\b/gi, '-$1.$2$3');
-  s = s.replace(/(\d)\.(\d+)([bm])\b/gi, (m, major, minor, unit) => `${major}.${minor}${unit.toUpperCase()}`);
   // Organisations-Praefix nur weg, wenn der Modellname ihn selbst wiederholt
   // ("qwen" + "qwen3-..." -> "qwen3-..."). Sonst stuende "Qwen" zweimal drin.
   const parts = s.split('_');
   if (parts.length > 1 && parts[1].toLowerCase().startsWith(parts[0].toLowerCase())) {
     s = parts.slice(1).join('_');
   }
-  // Wortweise gross: "qwen3-embedding-0.6B" -> "Qwen3-Embedding-0.6B"
-  return s.split('-').map(w => /^(bge|llm|api)$/i.test(w)
+  // Zusammengezogene Groesse: der Vektor-Name verliert Punkt und Bindestrich
+  // ("0.6b" -> "0_6b" -> "0_6b" ohne Trenner: "name30_6b"). Steht vor der "0"
+  // eine Ziffer, ist das die Hauptversion und die "0" der Punkt: -> "name3-0.6b".
+  s = s.replace(/(\d)0[_-](\d+)([bm])$/i, '$1-0.$2$3');
+  // Klassisch getrennte Groesse: "…-embedding-0_6b" bzw. "…embedding_0_6b" -> "-0.6b"
+  s = s.replace(/[_-](\d+)[_-](\d+)([bm])\b/gi, '-$1.$2$3');
+  // Einheit gross: "0.6b" -> "0.6B"
+  s = s.replace(/(\d)\.(\d+)([bm])\b/gi, (m, major, minor, unit) => `${major}.${minor}${unit.toUpperCase()}`);
+  // "bge-…" bleibt klein (so schreibt sich die Modellfamilie), sonst wortweise
+  // gross: "name3-0.6B" -> "Name3-0.6B".
+  const words = s.split('-');
+  if (/^bge$/i.test(words[0])) {
+    return s.toLowerCase().replace(/(\d)\.(\d+)([bm])\b/gi,
+      (m, major, minor, unit) => `${major}.${minor}${unit.toUpperCase()}`);
+  }
+  return words.map(w => /^(llm|api)$/i.test(w)
     ? w.toUpperCase()
     : w.charAt(0).toUpperCase() + w.slice(1)).join('-');
 }
 
-// Fuel-Modellname lesbar machen. ":cloud" ist ein Transport-Suffix, kein Teil
-// des Modellnamens (es stand vorher im Namen und taeuschte einen Anbieter vor,
-// den es nicht gab). Unbekannte Namen bleiben unveraendert — lieber roh als
+// Das Label der Karte sagt bereits "Embedding Provider" — im Wert ist das Wort
+// doppelt und kostet nur Platz. Entfernt wird nur das Wort selbst, nicht die
+// Bedeutung: der volle Name bleibt in title/data-full erhalten.
+function embedDisplayName(raw) {
+  const full = String(raw == null ? '' : raw).trim() || 'unknown';
+  const cleaned = prettyEmbedName(full)
+    .replace(/embeddings?/gi, '')       // das Wort selbst (auch "Embeddings")
+    .replace(/([-_\s])[-_\s]+/g, '$1')  // doppelte Trenner -> einer
+    .replace(/^[-_\s]+|[-_\s]+$/g, ''); // Trenner an den Raendern
+  // War der Wert nur "embedding", ist der Rest leer: lieber roh als leer.
+  return { shown: cleaned || full, full };
+}
+
+// Hermes haengt eine Kennung an den Modellnamen ("provider-model:1017-cloud",  # guard-ok: neutrale Platzhalter, kein echter Modellname
+// "provider-model:cloud"). Fuer die Anzeige zaehlt nur der Modellname; alles ab  # guard-ok: neutrale Platzhalter, kein echter Modellname
+// dem letzten ":" faellt weg und bleibt in title und data-full erhalten. Die
+// Regel gilt fuer jeden Modellnamen, nicht fuer eine bestimmte Endung.
+function modelName(raw) {
+  const full = String(raw == null ? '' : raw).trim() || 'unknown';
+  const cut = full.lastIndexOf(':');
+  const shown = cut > 0 ? full.slice(0, cut).trim() : full;
+  return { shown: shown || full, full };
+}
+
+// Fuel-Modellname lesbar machen. Die Kennung hinter dem ":" hat modelName()
+// bereits entfernt. Unbekannte Namen bleiben unveraendert — lieber roh als
 // geraten.
 function prettyFuelModel(raw) {
   return String(raw == null ? '' : raw).trim()
-    .replace(':cloud', '')
     .replace('glm-5.3-flash', 'GLM-5.3-Flash')
     .replace('gpt-5.6-luna', 'GPT-5.6-Luna')
     .replace('bge-m3', 'BGE-M3')
     .replace('qwen3-embedding', 'Qwen3-Embedding');
-}
-
-// Einzeilig halten: der Name darf nie umbrechen (sonst steht ein einzelnes "b"
-// in Zeile 2). Statt Umbruch wird die Schrift kleiner, bis der Text passt.
-function fitOneLine(el, maxPx = 19, minPx = 11) {
-  if (!el) return;
-  let size = maxPx;
-  el.style.fontSize = size + 'px';
-  while (size > minPx && el.scrollWidth > el.clientWidth) {
-    size -= 1;
-    el.style.fontSize = size + 'px';
-  }
 }
 
 function timeAgo(isoStr) {
@@ -501,12 +540,3 @@ async function init() {
 init();
 // Auto-refresh every 30s
 setInterval(() => { loadStatus(); loadAgents(); loadRecallOrdering(); }, 30000);
-
-// Breitere/schmalere Kachel (Fenster, Tablet, Handy): Namen neu einpassen.
-window.addEventListener('resize', () => {
-  fitOneLine(document.getElementById('stat-provider'));
-  // Auch der Fuel-Name muss nach einem Resize wieder einzeilig werden —
-  // sonst bricht genau bei schmalem Fenster ein Zeichen in Zeile 2 um.
-  fitOneLine(document.getElementById('stat-fuel-model'), 20, 11);
-  fitOneLine(document.getElementById('stat-recall-model'), 13, 11);
-});

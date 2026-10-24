@@ -822,11 +822,13 @@ def station_status(ollama_base: Optional[str] = None,
 
     base = ollama_base or os.environ.get("NEXUS_OLLAMA_BASE", "http://127.0.0.1:11434")
 
-    # ONE standard for the model name: it lives in the engine (consolidation.
-    # OLLAMA_MODEL). No second copy of that string here or in the surface.
+    # ONE standard for the model name: consolidation.resolve_consolidation_model()
+    # is the SAME resolver the daemon uses, so the tile can only show the name
+    # the call would really use — and "" when nothing is configured (no guessed
+    # name, no second copy of a default string here or in the surface).
     try:
-        from nexus_memory.consolidation import OLLAMA_MODEL
-        model = os.environ.get("NEXUS_CONSOLIDATION_MODEL") or OLLAMA_MODEL
+        from nexus_memory.consolidation import resolve_consolidation_model
+        model = resolve_consolidation_model()
     except Exception:
         model = os.environ.get("NEXUS_CONSOLIDATION_MODEL", "")
 

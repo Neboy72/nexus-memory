@@ -28,6 +28,7 @@ Usage:
 
 import fcntl
 import json
+import logging
 import os
 import re
 import shutil
@@ -644,29 +645,122 @@ def _write_registry_unlocked_nofsync(registry: dict) -> None:
             tmp_path.unlink()
 
 
-def update_agent_stats(agent_id: str, read: bool = False, write: bool = False) -> None:
+# Universal access counting (24.10.): every memory read/write is attributed to
+# the caller — whoever it is. The id comes from an explicit argument (a client
+# that knows its own name) or ``NEXUS_AGENT_ID``; when neither exists the call
+# is STILL counted, under this fixed label, instead of being dropped. That way
+# no usage stays invisible in the dashboard just because a client never went
+# through the setup wizard.
+UNIDENTIFIED_AGENT_ID = "unidentified"
+
+# Neutral placeholder for an auto-registered entry — a generic socket icon,
+# not an agent identity (an auto-registered entry has no known identity yet).
+_DEFAULT_AGENT_ICON = "🔌"
+
+# Self-tests are not agents. A watchdog or probe that writes a test memory to
+# prove the pipeline works used to auto-register itself as a dashboard card
+# (`wache-selftest`, install_type UNKNOWN). With ``NEXUS_AGENT_SELFTEST=1``
+# (or "true") this process registers nothing and increments no counter.
+SELFTEST_ENV = "NEXUS_AGENT_SELFTEST"
+
+
+def is_selftest() -> bool:
+    """True when this process is a self-test, not a real agent access."""
+    return os.environ.get(SELFTEST_ENV, "").strip().lower() in ("1", "true")
+
+
+def resolve_agent_id(explicit: Optional[str] = None) -> str:
+    """Return the id an access is attributed to — never empty.
+
+    Order: explicit parameter (the caller states who it is) → the
+    ``NEXUS_AGENT_ID`` environment variable → ``UNIDENTIFIED_AGENT_ID``.
+    Nothing is guessed from hostnames, install paths or which agents happen
+    to be installed on this machine: an id is only ever what the caller or
+    the environment declares.
+    """
+    for candidate in (explicit, os.environ.get("NEXUS_AGENT_ID")):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return UNIDENTIFIED_AGENT_ID
+
+
+def update_agent_stats(agent_id: Optional[str] = None, read: bool = False,
+                       write: bool = False) -> None:
     """Update last_seen, reads, writes for an agent.
+
+    An id that is not in the registry is REGISTERED on first sight instead of
+    being discarded — otherwise every client that never ran the setup wizard
+    (native plugins, hooks, CLI, HTTP, future clients) reported into the void.
+    The auto-created entry uses the id as ``name``, ``trust_level="public"``
+    (the safe default: an unknown caller gains no visibility), ``connected_at``
+    = now, ``install_type="unknown"`` until a detector or the user says
+    otherwise, and the host fields of this machine.
 
     Nr 451: writes via ``_write_registry_unlocked_nofsync`` — atomic replace
     without fsync (the fsync was the per-MCP-call durability cost the fund
     names). Fail-closed semantics are unchanged: a corrupt registry file
-    still raises at the read, immediately, on every call.
+    still raises at the read, immediately, on every call. Callers on a memory
+    path use ``record_agent_access``, which turns that into a debug log.
+
+    A self-test process (``NEXUS_AGENT_SELFTEST``) is not counted at all.
+    The guard sits here as well as in ``record_agent_access`` because the
+    Hermes plugin counts through this function directly.
     """
+    if is_selftest():
+        return
+    agent_id = resolve_agent_id(agent_id)
+    now = _now_iso()
     with _registry_lock():
         registry = _load_registry_unlocked()
-        for a in registry.get("agents", []):
+        agents = registry.setdefault("agents", [])
+        for a in agents:
             if a.get("id") == agent_id:
-                a["last_seen"] = _now_iso()
+                a["last_seen"] = now
                 if read:
                     a["reads"] = a.get("reads", 0) + 1
                 if write:
                     a["writes"] = a.get("writes", 0) + 1
                 _write_registry_unlocked_nofsync(registry)
                 return
-        # Unknown agent id: nothing to update, don't rewrite the file.
+        # First contact: register the caller, then count this access.
+        agent = {
+            "id": agent_id,
+            "name": agent_id,
+            "icon": _DEFAULT_AGENT_ICON,
+            "trust_level": "public",
+            "install_type": "unknown",
+            "config_dir": None,
+            "connected_at": now,
+            "last_seen": now,
+            "reads": 1 if read else 0,
+            "writes": 1 if write else 0,
+        }
+        annotate_host(agent, host_type="local")
+        agents.append(agent)
+        _write_registry_unlocked_nofsync(registry)
 
 
-def update_agent_seen(agent_id: str) -> None:
+def record_agent_access(agent_id: Optional[str] = None, read: bool = False,
+                        write: bool = False) -> None:
+    """Count one memory access — this is the fail-open counting entry point.
+
+    Every memory path (core store, plugins, CLI, HTTP, future clients) calls
+    this. Counting is telemetry: it must never break a memory operation, so
+    every error (corrupt registry, read-only home, locked path) is swallowed
+    and logged at DEBUG level only.
+    """
+    if not (read or write):
+        return
+    # Self-tests are not agents: a probe must not appear in the dashboard.
+    if is_selftest():
+        return
+    try:
+        update_agent_stats(agent_id, read=read, write=write)
+    except Exception as exc:
+        logging.debug("Agent access count skipped: %s", exc)
+
+
+def update_agent_seen(agent_id: Optional[str] = None) -> None:
     """Update last_seen timestamp for an agent (backward compat)."""
     update_agent_stats(agent_id)
 

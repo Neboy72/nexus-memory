@@ -685,6 +685,27 @@ def _valid_at(payload: dict, as_of: datetime) -> bool:
 
 # ── Storage ─────────────────────────────────────────────────────────
 
+def _count_memory_access(read: bool = False, write: bool = False) -> None:
+    """Count one memory access for the agents registry (fail-open).
+
+    This is the ONE place the registry counters are fed from the core: every
+    read/write that goes through ``MemoryStore`` is counted here, regardless
+    of which client (MCP, HTTP/serve, CLI, plugin, future clients) performed
+    it. Counting at the protocol edges instead misses any client that does
+    not pass through that edge.
+
+    The agent id is resolved by ``agent_detect`` (explicit → NEXUS_AGENT_ID →
+    "unidentified"). Telemetry must never break a memory operation, so every
+    error is swallowed and logged at DEBUG level only.
+    """
+    try:
+        from nexus_memory.agent_detect import record_agent_access
+
+        record_agent_access(read=read, write=write)
+    except Exception as exc:
+        logging.debug("Agent access count skipped: %s", exc)
+
+
 class MemoryStore:
 
     # Regel B: named vector of the bound collection, set in __init__ once the
@@ -1019,6 +1040,10 @@ class MemoryStore:
         explicit recall() is NEVER scope-filtered. Empty/invalid values fall back to
         'default' (behaves exactly like pre-scope memories).
         """
+        # Universal access counting: one write per remember() — every client
+        # path lands here (fail-open, see _count_memory_access).
+        _count_memory_access(write=True)
+
         # Validate category against MemoryCategory
         valid_categories = [c.value for c in MemoryCategory]
         if category not in valid_categories:
@@ -1314,6 +1339,10 @@ class MemoryStore:
         or None=∞) > as_of. The valid_until TTL is also compared against the
         cutoff instead of 'now'.
         """
+        # Universal access counting: one read per recall() — every client path
+        # lands here (fail-open, see _count_memory_access).
+        _count_memory_access(read=True)
+
         # Parse as_of once (aware UTC). Unparseable → treated as None
         # (default behavior) so a bad client value can never crash recall.
         as_of_dt = _parse_iso(as_of)
@@ -1739,6 +1768,8 @@ class MemoryStore:
         return results
 
     async def forget(self, memory_id: str) -> bool:
+        # Universal access counting: a deletion is a write access.
+        _count_memory_access(write=True)
         result = self.client.delete(
             collection_name=COLLECTION_NAME,
             points_selector=qmodels.PointIdsList(points=[memory_id]),
@@ -2598,23 +2629,19 @@ async def handle_list_tools() -> list[types.Tool]:
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     store = get_store()
 
-    # Registry stats (dashboard last_seen/reads/writes): remember/update = write,
-    # recall = read. Fire-and-forget — registry stats must never break a
-    # memory operation. Requires NEXUS_AGENT_ID env; without it we skip
-    # rather than misattribute activity to the wrong agent.
-    if not getattr(handle_call_tool, "_skip_stats", False):
-        agent_id = os.environ.get("NEXUS_AGENT_ID", "").strip()
-        if agent_id:
-            try:
-                from nexus_memory.agent_detect import update_agent_stats
+    # Registry stats (dashboard last_seen/reads/writes). remember / recall /
+    # forget are counted CENTRALLY inside MemoryStore, so counting them here
+    # as well would double every access. `update` is the one write this
+    # handler performs directly against Qdrant (it has no MemoryStore method),
+    # so it is the only op still counted at this edge. Fire-and-forget:
+    # registry stats must never break a memory operation.
+    if not getattr(handle_call_tool, "_skip_stats", False) and name == "update":
+        try:
+            from nexus_memory.agent_detect import record_agent_access
 
-                update_agent_stats(
-                    agent_id,
-                    read=(name == "recall"),
-                    write=name in ("remember", "update"),
-                )
-            except Exception:
-                pass
+            record_agent_access(write=True)
+        except Exception:
+            pass
 
     if name == "remember":
         try:
