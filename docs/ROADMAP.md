@@ -52,6 +52,15 @@ Diese Nexus-Features hat Tencent (Stand 20.09.2026) nicht — das bleibt unser V
 - **Aufwand:** 2-4 Stunden unsere Seite; danach Review durch Nous (Tage bis Wochen, außerhalb unserer Kontrolle). Vor Katalog-Aufnahme funktioniert Repo-Shorthand-Install bereits.
 - **Status:** GO erteilt, Start sobald angefragt (morgen/übermorgen) — frische Session dafür.
 
+## 6. Dashboard-Zugang: Erststart, Ändern, Zurücksetzen (gesetzt 24.10., Ausführung offen)
+
+- **Quelle:** Befund vom 24.10.: Der Leseschutz ist gebaut, die Bedienung drumherum nicht.
+- **Befund (am Code gemessen, `dashboard/server.py`):** (a) Fehlt `~/.nexus-memory/dashboard.pass`, hebt `_basic_auth_ok()` die Anmeldung komplett auf — ein frischer Start ist also offen, ohne dass es jemand merkt; (b) der Benutzername hat einen fest eingebauten Standardwert (`NEXUS_DASHBOARD_USER`); (c) kein Passwort-Ändern im eingeloggten Zustand; (d) kein „Passwort vergessen" — nur Datei löschen im Terminal.
+- **Was:** (1) Erststart-Seite: keine Einrichtung vorhanden → Benutzername + Passwort + Wiederholung, nur als Prüfsumme gespeichert (0600), alles andere bis dahin gesperrt (nicht offen). (2) Passwort ändern im Dashboard gegen altes Passwort. (3) `nexus-memory dashboard-reset` in der Konsole → Erststart-Seite kommt zurück; dieselbe Aktion muss ein Agent per Terminal ausführen können. (4) Bestehende Klartext-Passdatei beim ersten Start übernehmen und danach löschen (kein Aussperren). (5) Tests: Erststart, falsches Passwort, Reset, Alt-Zustand.
+- **Zusatzfrage:** `dashboard/` ist nicht im Wheel (nur Repo-Checkout, siehe `pyproject.toml`-Kommentar) — soll es ins Paket, damit es jeder Installierte überhaupt hat?
+- **Status:** Auf Wunsch (24.10.) NICHT heute — hier geparkt.
+- **Nächster Schritt:** Rückweg zuerst belegen (Alt-Passwort-Übernahme), dann Erststart + Ändern + Reset in einem Zug mit Tests.
+
 ## Prüfregeln für Adaptions-Kandidaten
 
 - Updates an Nexus NUR nach Tests auf `~/nexus-memory-test/` (HART-Regel, siehe Memory).
