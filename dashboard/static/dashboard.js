@@ -153,6 +153,53 @@ document.getElementById('fuel-toggle')?.addEventListener('change', async (e) => 
   }
 });
 
+// ── Recall ordering toggle ──
+async function loadRecallOrdering() {
+  const data = await fetchAPI('/api/settings/rerank');
+  if (!data) return;
+  const modelEl = document.getElementById('stat-recall-model');
+  const toggle = document.getElementById('recall-toggle');
+  const card = document.getElementById('recall-card');
+  const hint = document.getElementById('stat-recall-hint');
+  if (modelEl) {
+    modelEl.textContent = data.llm_model || 'unknown';
+    // Mono data is 11.5-13px (DESIGN.md); fit below the CSS size, never above.
+    fitOneLine(modelEl, 13, 11);
+  }
+  if (toggle) {
+    toggle.checked = data.enabled;
+    toggle.disabled = false;
+  }
+  if (card) {
+    card.classList.toggle('stat-card--warning', !data.llm_configured);
+  }
+  if (hint) {
+    hint.textContent = data.llm_configured
+      ? 'Reordering uses tokens of your own model — one call per search.'
+      : 'Model not configured — old order stays, no calls made.';
+  }
+}
+
+document.getElementById('recall-toggle')?.addEventListener('change', async (e) => {
+  const enabled = e.target.checked;
+  e.target.disabled = true;
+  try {
+    const res = await fetch('/api/settings/rerank', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Nexus-Dashboard': '1'},  // W30-3
+      body: JSON.stringify({enabled})
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || d.error || 'failed');
+    showToast(`Recall ordering ${enabled ? 'enabled' : 'disabled'}`, enabled ? 'success' : 'warn');
+    loadRecallOrdering();
+  } catch (err) {
+    e.target.checked = !enabled;
+    showToast('Recall toggle failed: ' + err.message, 'error');
+    e.target.disabled = false;
+  }
+});
+
 // ── Agents ───────────────────────────────────────────────────
 
 async function loadAgents() {
@@ -379,7 +426,7 @@ async function detectAgents() {
 
 async function refreshAll() {
   showToast('Refreshing...');
-  await Promise.all([loadStatus(), loadAgents(), loadMemoryStats()]);
+  await Promise.all([loadStatus(), loadAgents(), loadMemoryStats(), loadRecallOrdering()]);
   showToast('Refreshed', 'success');
 }
 
@@ -448,12 +495,12 @@ function timeAgo(isoStr) {
 // ── Init ─────────────────────────────────────────────────────
 
 async function init() {
-  await Promise.all([loadStatus(), loadAgents(), loadMemoryStats()]);
+  await Promise.all([loadStatus(), loadAgents(), loadMemoryStats(), loadRecallOrdering()]);
 }
 
 init();
 // Auto-refresh every 30s
-setInterval(() => { loadStatus(); loadAgents(); }, 30000);
+setInterval(() => { loadStatus(); loadAgents(); loadRecallOrdering(); }, 30000);
 
 // Breitere/schmalere Kachel (Fenster, Tablet, Handy): Namen neu einpassen.
 window.addEventListener('resize', () => {
@@ -461,4 +508,5 @@ window.addEventListener('resize', () => {
   // Auch der Fuel-Name muss nach einem Resize wieder einzeilig werden —
   // sonst bricht genau bei schmalem Fenster ein Zeichen in Zeile 2 um.
   fitOneLine(document.getElementById('stat-fuel-model'), 20, 11);
+  fitOneLine(document.getElementById('stat-recall-model'), 13, 11);
 });

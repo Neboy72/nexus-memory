@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,18 +48,129 @@ def _resolve_reranker(reranker: str, _voyage_api_key: Optional[str] = None) -> s
     return "llm"
 
 
+#: Regex-free marker for ``api_key: env:NAME`` indirection in config.yaml.
+_ENV_REF_PREFIX = "env:"
+
+
+def _resolve_api_key(value: Optional[str]) -> Optional[str]:
+    """Expand ``env:NAME`` to ``os.environ["NAME"]``.
+
+    Returns the literal string for any other value.  A missing referenced
+    variable becomes ``None`` so the caller can treat the endpoint as
+    unconfigured.
+    """
+    if not value or not value.startswith(_ENV_REF_PREFIX):
+        return value
+    name = value[len(_ENV_REF_PREFIX):]
+    return os.environ.get(name)
+
+
+def resolve_llm_endpoint(
+    config_path: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
+    """Resolve LLM base URL, API key, and model for the reranker.
+
+    Priority:
+    1. Environment variables ``NEXUS_RERANK_LLM_BASE_URL``,
+       ``NEXUS_RERANK_LLM_API_KEY``, ``NEXUS_RERANK_LLM_MODEL``.
+    2. ``~/.hermes/config.yaml`` (or *config_path*): ``model.default``,
+       ``model.provider`` -> ``providers.<provider>.base_url`` and
+       ``providers.<provider>.api_key``.  ``api_key`` may be ``env:NAME``,
+       which is resolved via ``os.environ["NAME"]``.
+
+    There is no built-in fallback model. The endpoint is only considered
+    configured when ``base_url``, ``api_key`` and ``model`` are all present.
+    Otherwise ``configured`` is False, the rerank step is skipped, and the
+    original vector order is preserved.
+
+    Returns ``(base_url, api_key, model, configured)``.  The API key is never
+    logged; only the model name and the host of ``base_url`` appear in logs.
+    """
+    # --- Source 1: dedicated environment variables ---------------------------------
+    base_url = os.environ.get("NEXUS_RERANK_LLM_BASE_URL")
+    api_key = _resolve_api_key(os.environ.get("NEXUS_RERANK_LLM_API_KEY"))
+    model = os.environ.get("NEXUS_RERANK_LLM_MODEL")
+    if base_url and api_key and model:
+        logger.debug("rerank llm endpoint from env: model=%s host=%s", model, _host_of(base_url))
+        return base_url, api_key, model, True
+
+    # --- Source 2: Hermes config.yaml ---------------------------------------------
+    cfg_path = config_path or os.path.expanduser(os.path.join("~", ".hermes", "config.yaml"))
+    try:
+        import yaml
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f) or {}
+
+        model_cfg = cfg.get("model", {}) or {}
+        config_model = (model_cfg.get("default", "") or "").strip()
+        provider = model_cfg.get("provider", "") or ""
+        providers = cfg.get("providers", {}) or {}
+        provider_block: Dict[str, Any] = {}
+        if provider and provider.startswith("custom:"):
+            provider_block = providers.get(provider[7:], {}) or {}
+        elif provider:
+            provider_block = providers.get(provider, {}) or {}
+
+        config_base_url = (provider_block.get("base_url", "") or "").strip()
+        raw_api_key = provider_block.get("api_key", "")
+        config_api_key = _resolve_api_key(raw_api_key)
+
+        if not model:
+            model = config_model or None
+        if not base_url:
+            base_url = config_base_url or None
+        if not api_key:
+            api_key = config_api_key
+
+        if base_url and api_key and model:
+            logger.debug(
+                "rerank llm endpoint from config: model=%s host=%s",
+                model, _host_of(base_url),
+            )
+            return base_url, api_key, model, True
+    except Exception as exc:  # fail-open: fall through to defaults
+        # Only the exception type: a YAML error message quotes the offending
+        # line, which may be a credential line.
+        logger.debug("rerank llm config read skipped: %s", type(exc).__name__)
+
+    # --- Source 3: no built-in fallback model; endpoint is only configured if all
+    # three pieces (base_url, api_key, model) are known. Otherwise the reranker is
+    # deliberately skipped and the original vector order is preserved.
+    configured = bool(base_url and api_key and model)
+    if configured:
+        logger.debug("rerank llm endpoint resolved: model=%s host=%s", model, _host_of(base_url or ""))
+    return base_url, api_key, model, configured
+
+
+def _host_of(base_url: Optional[str]) -> str:
+    """Return hostname of *base_url* for logging; never raises."""
+    if not base_url:
+        return ""
+    try:
+        from urllib.parse import urlparse
+        return (urlparse(base_url).hostname or "")[:120]
+    except Exception:
+        return ""
+
+
 def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """Read rerank settings from ``~/.hermes/config.yaml`` (nexus-memory block).
 
     Returns a dict with keys: ``enabled`` (bool), ``reranker`` (str),
-    ``pool_k`` (int). All values have safe defaults when the block is missing.
+    ``pool_k`` (int), ``llm_base_url`` (Optional[str]), ``llm_model`` (Optional[str]),
+    ``llm_configured`` (bool). All values have safe defaults when the block is
+    missing.
 
     Env overrides: ``NEXUS_RERANK=0/1`` and ``NEXUS_RERANKER``.
+    LLM endpoint resolution follows ``resolve_llm_endpoint()``.
     """
     cfg: Dict[str, Any] = {
         "enabled": False,
         "reranker": DEFAULT_RERANKER,
         "pool_k": DEFAULT_POOL_K,
+        "llm_base_url": None,
+        "llm_model": None,
+        "llm_configured": False,
     }
     try:
         import os as _os
@@ -90,6 +200,14 @@ def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     env_reranker = os.environ.get("NEXUS_RERANKER")
     if env_reranker:
         cfg["reranker"] = env_reranker
+
+    # Resolve the LLM endpoint once, sharing the same config path.
+    llm_base_url, llm_api_key, llm_model, llm_configured = resolve_llm_endpoint(
+        config_path=config_path
+    )
+    cfg["llm_base_url"] = llm_base_url
+    cfg["llm_model"] = llm_model
+    cfg["llm_configured"] = llm_configured and bool(llm_api_key)
     return cfg
 
 
@@ -216,46 +334,19 @@ def _llm_unavailable(reason: str) -> None:
         _LLM_UNAVAILABLE_LOGGED = True
 
 
-def _get_llm_credentials() -> Tuple[Optional[str], Optional[str], str]:
+def _get_llm_credentials() -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Resolve LLM API credentials for reranking.
 
-    Priority:
-    1. Environment variables ``NEXUS_RERANK_LLM_API_KEY`` / ``NEXUS_RERANK_LLM_BASE_URL``.
-    2. Hermes credential pool entry ``ollama-cloud`` (``runtime_api_key`` or
-       ``access_token`` plus ``runtime_base_url`` or ``base_url``).
+    Thin wrapper around ``resolve_llm_endpoint()`` that returns the credentials
+    in the order expected by ``_rerank_llm``: ``(api_key, base_url, model)``.
 
-    Returns ``(key, base_url, model)``. ``model`` defaults to
-    ``deepseek-v4.1-flash:1017-cloud`` and can be overridden via
-    ``NEXUS_RERANK_LLM_MODEL``.
+    There is no built-in fallback. If any of the three values is missing, the
+    caller receives ``None`` for all of them and must skip the LLM rerank step.
     """
-    key = os.environ.get("NEXUS_RERANK_LLM_API_KEY")
-    base = os.environ.get("NEXUS_RERANK_LLM_BASE_URL")
-    model = os.environ.get("NEXUS_RERANK_LLM_MODEL", "deepseek-v4.1-flash:1017-cloud")
-    if key and base:
-        return key, base, model
-
-    agent_path = os.path.expanduser(os.path.join("~", ".hermes", "hermes-agent"))
-    sys_path_inserted = False
-    try:
-        if agent_path not in sys.path and os.path.isdir(agent_path):
-            sys.path.insert(0, agent_path)
-            sys_path_inserted = True
-        from agent.credential_pool import load_pool
-
-        pool = load_pool("ollama-cloud")
-        entries = pool.entries()
-        if entries:
-            e = entries[0]
-            key = getattr(e, "runtime_api_key", None) or getattr(e, "access_token", None)
-            base = getattr(e, "runtime_base_url", None) or getattr(e, "base_url", None)
-            if key and base:
-                return key, base, model
-    except Exception:
-        pass
-    finally:
-        if sys_path_inserted:
-            sys.path.remove(agent_path)
-    return None, None, model
+    base_url, api_key, model, configured = resolve_llm_endpoint()
+    if not configured:
+        return None, None, None
+    return api_key, base_url, model
 
 
 def _rerank_llm(
@@ -271,8 +362,8 @@ def _rerank_llm(
     empty list so ``rerank_points`` falls back to the original order.
     """
     key, base, model = _get_llm_credentials()
-    if not key or not base:
-        _llm_unavailable("no key/base configured")
+    if not key or not base or not model:
+        _llm_unavailable("no key/base/model configured")
         return []
 
     lines = [
