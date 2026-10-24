@@ -22,8 +22,8 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.29-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-2434-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.22.30-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-2440-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -332,6 +332,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.30** | 2026-10-24 | The two maintenance daemons stay quiet on a fresh install — one INFO line instead of a stack trace and a false quality alarm when the collection does not exist yet; an unusable scroll reply is reported once as a clear warning; the test suite switches both daemons off |
 | **v0.22.29** | 2026-10-24 | Model and endpoint for reranking and consolidation are read from the installation that runs them (nothing built in, no call without configuration); both features can be switched in the dashboard with a monthly cap line; access counting covers every path, unknown agents register themselves, self-checks opt out; dashboard assets carry the release version |
 | **v0.22.28** | 2026-10-24 | Recall can be re-ordered by a chat model instead of the local cross-encoder (`nexus-memory.reranker`); on a fixed 20-question set against a live corpus the top-five hits went from 14 to 17 |
 | **v0.22.27** | 2026-10-24 | The Voyage provider is gone, not merely unused — embeddings, reranker, cost routing, wizards and both plugins can no longer pick it, and the lockfile no longer resolves `voyageai` |
@@ -464,4 +465,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.29 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.30 · One memory for all your agents</sub>

@@ -87,6 +87,44 @@ DEFAULT_QUERIES: List[Tuple[str, str]] = [
 ]
 
 
+# Once-per-process notice: a collection that does not exist yet is a normal
+# state (fresh install, first run before any write). Reporting "3/3 queries
+# failed" for it made the watchdog look broken on a clean installation.
+_missing_collection_noticed: set[str] = set()
+
+
+def _collection_exists(client, name: str) -> bool:
+    """True/False when *client* can answer, True (fail-open) when it cannot.
+
+    Fail-open is deliberate: an unanswerable probe must not silence the
+    watchdog. Same helper as ``trust_service._collection_exists`` — kept
+    local so the two daemons stay independent of each other.
+    """
+    lister = getattr(client, "get_collections", None)
+    if callable(lister):
+        try:
+            collections = getattr(lister(), "collections", None)
+            if isinstance(collections, (list, tuple)):
+                return name in [getattr(c, "name", None) for c in collections]
+        except Exception:
+            pass
+    probe = getattr(client, "collection_exists", None)
+    if callable(probe):
+        try:
+            return bool(probe(name))
+        except Exception:
+            pass
+    return True
+
+
+def _notice_missing_collection(name: str) -> None:
+    """One INFO line per process — never an exception, never a traceback."""
+    if name in _missing_collection_noticed:
+        return
+    _missing_collection_noticed.add(name)
+    log.info("collection %s not present yet — retrieval watch skipped", name)
+
+
 def _hit_text(r: Any) -> str:
     """Lowercased text/content of a search hit (empty string when absent)."""
     pl = getattr(r, "payload", None) or {}
@@ -142,6 +180,21 @@ class RetrievalWatch:
 
     # ── one pass ──────────────────────────────────────────────────────
     def run(self) -> Dict[str, Any]:
+        if not _collection_exists(self._store.client, self._collection):
+            # Nothing to check, and "not found" here says nothing about
+            # retrieval quality — report an empty pass, not a quality alarm.
+            _notice_missing_collection(self._collection)
+            report = {
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "queries_checked": 0,
+                "failed_embeddings": 0,
+                "failures": [],
+                "skipped": f"collection {self._collection} not present",
+            }
+            with self._lock:
+                self._last_report = report
+            return report
+
         failures = []
         checked = 0
         failed_embeddings = 0
@@ -181,7 +234,7 @@ class RetrievalWatch:
                         "reason": "score_below_min",
                     })
             except Exception as exc:
-                log.warning("Retrieval-watch query failed: %s", exc)
+                log.warning("Retrieval-watch query failed: %s", exc, exc_info=True)
                 failures.append({"query": query, "expected": expected, "error": str(exc)})
 
         report = {
@@ -193,7 +246,15 @@ class RetrievalWatch:
         with self._lock:
             self._last_report = report
         if failures:
-            log.warning("Retrieval-watch: %d/%d queries failed", len(failures), checked)
+            reasons = sorted(
+                {f.get("error") or f.get("reason") or "unknown" for f in failures}
+            )
+            log.warning(
+                "Retrieval-watch: %d/%d queries failed (%s)",
+                len(failures),
+                checked,
+                "; ".join(reasons),
+            )
         return report
 
     def _search(self, query: str, limit: int = 5):
@@ -257,7 +318,7 @@ class RetrievalWatch:
                 try:
                     self.run()
                 except Exception as exc:
-                    log.warning("Retrieval-watch pass failed: %s", exc)
+                    log.warning("Retrieval-watch pass failed: %s", exc, exc_info=True)
                 # Respect the configured interval (seconds resolution).
                 # No lower clamp: a short configured interval is honored as
                 # requested (the 60s sleep was an undocumented floor that

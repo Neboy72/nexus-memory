@@ -1,3 +1,15 @@
+## [0.22.30] — 2026-10-24
+
+### Fixed — the maintenance daemons stay quiet on a fresh installation
+
+- The two in-process daemons (trust recompute, retrieval watch) stay quiet on an installation whose
+  collection does not exist yet: one INFO line, no stack trace, no false quality alarm. A fresh
+  install no longer looks broken.
+- A scroll result that cannot be unpacked is reported once as a warning with a clear statement
+  instead of raising a `ValueError` inside the daemon thread.
+- The test suite switches both daemons off, so background work can no longer hide real failures
+  behind unrelated warnings.
+
 ## [0.22.29] — 2026-10-24
 
 ### Changed — model and endpoint come from the installation that runs it
