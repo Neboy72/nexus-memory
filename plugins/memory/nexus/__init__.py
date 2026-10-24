@@ -2821,10 +2821,10 @@ def _repair_command() -> str:
     # ``pip install nexus-memory`` would install a stranger's code. The commit
     # is pinned so a repair fetches exactly the reviewed revision and not
     # whatever happens to be on main — and it is the FULL 40-character sha, the
-    # same revision ``[tool.uv.sources]`` names, not the tag `v0.22.25` that
+    # same revision ``[tool.uv.sources]`` names, not the tag `v0.22.26` that
     # points at it: a tag can be moved, a sha cannot.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
-            "@4a16e9c3ab68f2ccb062be3caaf3eca609892ba4")
+            "@e47be349ee31ac53aa9e7c0ee74297c8a7f4f931")
     # A checkout of THIS repository may be reinstalled in editable mode — handy
     # while developing. It has to prove it is that repository, though: for a
     # catalog-installed plugin `__file__` lives under the Hermes plugin dir and
