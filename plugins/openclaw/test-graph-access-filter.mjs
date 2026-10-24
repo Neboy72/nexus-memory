@@ -147,7 +147,10 @@ const ALL_POINTS = {
 
 function makeClient(points = ALL_POINTS, incoming = INCOMING) {
   return {
+    // A working store answers a known id and 404s on an unknown one — the
+    // strict variant the tools actually call. Both are the same answer here.
     scrollPoint: async (id) => (points[id] ? { id, payload: points[id] } : null),
+    scrollPointStrict: async (id) => (points[id] ? { id, payload: points[id] } : null),
     scrollFiltered: async () => Object.entries(points).map(([id, payload]) => ({ id, payload })),
     findIncomingEdges: async () => incoming,
   }

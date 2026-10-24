@@ -95,6 +95,9 @@ function makeClient(graph, incoming = []) {
   // der Stub respektiert ihn, damit der incoming-Pfad-Filter nicht stumm bleibt.
   return {
     scrollPoint: async (id) => graph[id] ?? null,
+    // The graph tools call the strict variant; this stub models a store that
+    // answers every existing id and 404s on everything else.
+    scrollPointStrict: async (id) => graph[id] ?? null,
     findIncomingEdges: async (_factId, relation) =>
       relation ? incoming.filter((e) => e.relation === relation) : incoming,
   }

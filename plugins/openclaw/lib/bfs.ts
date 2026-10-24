@@ -71,16 +71,15 @@ export interface BfsResult {
  * every other failure — the error reaches the tool's catch and is reported
  * honestly instead of vanishing.
  *
- * A client that predates the strict variant (test stubs) still works through
- * `scrollPoint`; the real QdrantClient always provides both.
+ * There is deliberately no fallback to `scrollPoint`: a caller that cannot
+ * distinguish "gone" from "unreachable" must not be able to re-introduce the
+ * silent truncation this replaced.
  */
 export async function loadPointStrict(
   qdrantClient: QdrantClient,
   id: string,
 ): Promise<{ id: string; payload?: Record<string, unknown> } | null> {
-  const strict = qdrantClient.scrollPointStrict
-  if (typeof strict === "function") return strict.call(qdrantClient, id)
-  return qdrantClient.scrollPoint(id)
+  return qdrantClient.scrollPointStrict(id)
 }
 
 export async function bfsEdges(
