@@ -45,7 +45,7 @@ SICA_RUN_SCHEMA = {"name": "nexus_sica_run", "description": "SICA Self-Improveme
 class _Embedder:
     """Auto-detect embedding provider — reuses the shared EmbeddingProvider.
 
-    Priority: Voyage (1024d) → OpenAI (1536d) → Google (768d) → Jina (1024d)
+    Priority: OpenAI (1536d) → Google (768d) → Jina (1024d)
     → Ollama (768d) → sentence-transformers (384d). Same logic as the MCP
     server so both paths produce compatible vectors for the same collection.
     """
@@ -331,7 +331,7 @@ class NexusMemoryProvider:
         threading.Thread(target=self._do_prefetch, args=(query,), name="nexus-prefetch", daemon=True).start()
 
     def _get_embed_cache(self):
-        """Roadmap 3.1 L0: lazy EmbedCache (repeated queries skip Voyage)."""
+        """Roadmap 3.1 L0: lazy EmbedCache (repeated queries skip cloud roundtrip)."""
         if getattr(self, "_embed_cache", None) is None:
             lock = getattr(self, "_embed_cache_lock", None) or threading.Lock()
             with lock:
@@ -601,9 +601,8 @@ class NexusMemoryProvider:
             from nexus_memory.reranker import rerank_points, DEFAULT_POOL_K
             pts = rerank_points(
                 query, pts,
-                reranker=cfg.get("reranker", "voyage"),
+                reranker=cfg.get("reranker", "cross-encoder"),
                 pool_k=int(cfg.get("pool_k", DEFAULT_POOL_K)),
-                voyage_api_key=cfg.get("voyage_api_key") or None,
             )
         results: List[Dict[str, Any]] = []
         seen_ids: set = set()
@@ -1023,8 +1022,6 @@ class NexusMemoryProvider:
         return [
             {"key": "qdrant_url", "description": "Qdrant server URL", "secret": False,
              "required": False, "default": f"http://{_HOST}:{_PORT}"},
-            {"key": "voyage_api_key", "description": "Voyage AI API key (1024d cloud embeddings). Optional - auto-detects OpenAI, Google, Jina, Ollama, or sentence-transformers if not set.",
-             "secret": True, "required": False, "env_var": "VOYAGE_API_KEY", "url": "https://docs.voyageai.com"},
             {"key": "collection_name", "description": "Qdrant collection name", "secret": False,
              "required": False, "default": _COLLECTION},
         ]
@@ -1034,7 +1031,6 @@ class NexusMemoryProvider:
 
         W37: the previous wholesale rewrite kept only ``qdrant_url`` +
         ``collection_name`` and silently destroyed every other key — notably
-        the ``voyage_api_key`` advertised by :meth:`get_config_schema` and the
         ``access_level`` privacy default that
         :meth:`_load_default_access_level` reads back (so every save reset the
         privacy default).
@@ -1051,7 +1047,7 @@ class NexusMemoryProvider:
             pass
         existing["qdrant_url"] = values.get("qdrant_url", "")
         existing["collection_name"] = values.get("collection_name", _COLLECTION)
-        for key in ("voyage_api_key", "access_level"):
+        for key in ("access_level",):
             if key in values:
                 existing[key] = values[key]
         with open(path, "w") as f:

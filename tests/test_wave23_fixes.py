@@ -383,7 +383,7 @@ class TestNr432BestEffortDoc:
 
 
 class TestNr434LazyLogging:
-    @pytest.mark.parametrize("rel", ["nexus/events.py", "scripts/reembed_voyage4.py"])
+    @pytest.mark.parametrize("rel", ["nexus/events.py", "src/nexus_memory/embeddings.py"])
     def test_no_fstring_in_log_calls(self, rel):
         src = _read(rel)
         tree = ast.parse(src)

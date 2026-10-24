@@ -26,13 +26,11 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
 
 # Provider "get key" URLs
-VOYAGE_KEY_URL = "https://dash.voyageai.com/api-keys"
 OPENAI_KEY_URL = "https://platform.openai.com/api-keys"
 GOOGLE_KEY_URL = "https://aistudio.google.com/apikey"
 JINA_KEY_URL = "https://jina.ai/platform/embeddings"
@@ -120,21 +118,18 @@ _NO_PROVIDER_ERROR = (
     "No embedding provider available.\n"
     "Install a local backend: pip install sentence-transformers\n"
     "Or start Ollama: ollama serve\n"
-    "Or choose a cloud provider explicitly: NEXUS_EMBEDDING_PROVIDER=voyage "
-    "(and set VOYAGE_API_KEY)."
+    "Or choose a cloud provider explicitly: NEXUS_EMBEDDING_PROVIDER=openai "
+    "(or google / jina, and set the matching API key)."
 )
 
 
 # Cloud provider ids. Regel A.2: cloud allowed ONLY when P is one of these
 # AND the provider-specific key is present.
-CLOUD_PROVIDER_IDS = frozenset({"voyage", "openai", "google", "jina"})
+CLOUD_PROVIDER_IDS = frozenset({"openai", "google", "jina"})  # voyage removed 2026-10-17 (zero-Voyage policy)
 
 
 def _cloud_key_present(provider_id: str) -> bool:
     """Return True when the named cloud provider has a key in the environment."""
-    if provider_id == "voyage":
-        key = os.environ.get("VOYAGE_API_KEY") or VOYAGE_API_KEY
-        return bool(key and (key.startswith("vo-") or key.startswith("pa-")))
     if provider_id == "openai":
         key = os.environ.get("OPENAI_API_KEY") or OPENAI_API_KEY
         return bool(key and key.startswith("sk-"))
@@ -175,7 +170,7 @@ def vector_fingerprint(backend: str, model_name: str, dim: int) -> str:
     # NOTE: the parts are already sanitised (single underscores, no double
     # ones at the edges), so we must NOT collapse underscores across the
     # final string — that would eat the ``__`` separators and silently
-    # produce names like ``voyage_voyage-4_1024``.
+    # produce names like ``openai_text-embedding-3-small_1536``.
     return f"{backend_norm}__{model_norm}__{dim}"
 
 
@@ -286,8 +281,6 @@ class EmbeddingProvider:
         return ok
 
     def _try_provider_inner(self, provider_id: str) -> bool:
-        if provider_id == "voyage":
-            return self._try_voyage()
         if provider_id == "openai":
             return self._try_openai()
         if provider_id == "google":
@@ -316,22 +309,6 @@ class EmbeddingProvider:
         if self._try_sentence_transformers():
             return
         self._reset_provider_state()
-
-    def _try_voyage(self) -> bool:
-        """Try Voyage AI. Returns True on success."""
-        key = os.environ.get("VOYAGE_API_KEY") or VOYAGE_API_KEY
-        if not key or not (key.startswith("vo-") or key.startswith("pa-")):
-            return False
-        try:
-            import voyageai
-            self._client = voyageai.Client(api_key=key)
-            self._name = "voyage-4"
-            self._dim = 1024
-            self._backend = "voyage"
-            logger.info("Embedding: %s (1024d, cloud)", self._name)
-            return True
-        except Exception:
-            return False
 
     def _try_openai(self) -> bool:
         """Try OpenAI. Returns True on success."""
@@ -510,9 +487,6 @@ class EmbeddingProvider:
     async def embed(self, text: str, is_query: bool = True) -> list[float]:
         """Embed one text. ``is_query`` selects the query/document mode."""
         backend = getattr(self, "_backend", None)
-        if backend == "voyage":
-            result = await asyncio.to_thread(self._client.embed, [text], model=self._name)
-            return result.embeddings[0]
         if backend == "openai":
             result = await asyncio.to_thread(
                 self._client.embeddings.create,
@@ -571,35 +545,13 @@ class EmbeddingProvider:
         raise RuntimeError(
             f"No embedding provider available ({self._name}).\n"
             "Install: pip install sentence-transformers\n"
-            "Or set VOYAGE_API_KEY or OPENAI_API_KEY"
+            "Or set OPENAI_API_KEY"
         )
 
 
 def detect_available() -> list[dict]:
     """Return ALL available embedding providers with their status."""
     results = []
-
-    # Voyage AI
-    voyage_key = os.environ.get("VOYAGE_API_KEY", "")
-    voyage_valid = bool(voyage_key and (voyage_key.startswith("vo-") or voyage_key.startswith("pa-")))
-    voyage_available = False
-    if voyage_valid:
-        try:
-            import voyageai
-            voyageai.Client(api_key=voyage_key)
-            voyage_available = True
-        except Exception:
-            pass
-    results.append({
-        "id": "voyage",
-        "name": "Voyage AI",
-        "dims": 1024,
-        "quality": QUALITY_EXCELLENT,
-        "type": "cloud",
-        "available": voyage_available,
-        "key_detected": voyage_valid,
-        "url": VOYAGE_KEY_URL,
-    })
 
     # OpenAI
     openai_key = os.environ.get("OPENAI_API_KEY", "")

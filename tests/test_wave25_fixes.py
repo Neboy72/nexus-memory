@@ -347,15 +347,6 @@ class TestNr486EmbedSuggestDead:
         assert "EMBED_SUGGEST" not in src
 
 
-# ── Nr 487: install script Voyage note ───────────────────────────────
-
-class TestNr487InstallScriptVoyageNote:
-    def test_note_present(self):
-        src = _read("plugins/openclaw/scripts/install_openclaw_plugin.sh")
-        assert "Voyage EXAMPLE" in src
-        assert "interpolates" in src
-
-
 # ── Nr 489: pyproject readme ─────────────────────────────────────────
 
 class TestNr489PyprojectReadme:

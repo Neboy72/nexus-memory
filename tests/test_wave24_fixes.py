@@ -253,11 +253,10 @@ class TestNr445LegacyTestMcpGuard:
         assert guarded, "the asyncio.run call must live inside the __main__ guard"
 
     def test_module_import_is_side_effect_free(self):
-        """The Nr-445 fix only guards the RUN; the module-level VOYAGE_API_KEY
-        check deliberately sys.exit(1)s without a key (an honest legacy test
-        refuses to run degraded). Import side-effect test = with key set."""
+        """The Nr-445 fix only guards the RUN; the legacy test refuses to run degraded.
+        Import side-effect test = with key set."""
         import importlib.util
-        monkeypatch_env = {"VOYAGE_API_KEY": "pa-test-not-a-real-key"}
+        monkeypatch_env = {"OPENAI_API_KEY": "sk-test-not-a-real-key"}
         saved = {k: os.environ.get(k) for k in monkeypatch_env}
         os.environ.update(monkeypatch_env)
         try:
@@ -403,21 +402,21 @@ class TestNr453ProviderPriorityExplicit:
         m = re.search(r'PROVIDER_PRIORITY\s*=\s*\(([^)]*)\)', src)
         assert m, "explicit PROVIDER_PRIORITY tuple must exist"
         names = [x.strip().strip('"\'') for x in m.group(1).split(",")]
-        assert names[:3] == ["voyage", "openai", "google"]
+        assert names[:3] == ["openai", "google", "jina"]
 
     def test_tier_providers_sorted_by_priority(self):
         src = _code_lines(_read("src/nexus_memory/cost_router.py"))
         assert "tier_providers.sort(" in src
         assert "PROVIDER_PRIORITY.index(n)" in src
 
-    def test_behavior_voyage_wins_regardless_of_detection_order(
+    def test_behavior_openai_wins_regardless_of_detection_order(
             self, monkeypatch, tmp_path):
         from nexus_memory import cost_router as cr
 
         r = cr.CostAwareRouter.__new__(cr.CostAwareRouter)
-        # sabotage detection order: openai first, voyage last
-        r._available_providers = {"openai": cr.TIER_PREMIUM,
-                                  "voyage": cr.TIER_PREMIUM,
+        # sabotage detection order: google first, openai last
+        r._available_providers = {"google": cr.TIER_PREMIUM,
+                                  "openai": cr.TIER_PREMIUM,
                                   "ollama": cr.TIER_ECONOMY}
         r._routing_enabled = True
         r._routing_config_override = True
@@ -425,7 +424,7 @@ class TestNr453ProviderPriorityExplicit:
         monkeypatch.setattr(cr, "CATEGORY_TIERS",
                             {**cr.CATEGORY_TIERS, "test_cat": cr.TIER_PREMIUM})
         chosen = r.get_provider_for_category("test_cat", record=False)
-        assert chosen == "voyage", "priority list must beat detection order"
+        assert chosen == "openai", "priority list must beat detection order"
 
 
 class TestNr454RuleBranchSentenceSplit:
@@ -680,7 +679,7 @@ class TestNr467RerankerDocstringPoolK:
 
         # fake the local cross-encoder path end-to-end (reranker is a STRING
         # parameter resolved by _resolve_reranker -> 'cross-encoder')
-        monkeypatch.setattr(rr, "_resolve_reranker", lambda r, k: "cross-encoder")
+        monkeypatch.setattr(rr, "_resolve_reranker", lambda r, k=None: "cross-encoder")
 
         class _FakeCE:
             def predict(self, pairs):

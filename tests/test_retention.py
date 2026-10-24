@@ -315,24 +315,17 @@ class TestRerankerEdgeCases:
         assert set(ids) == {p.id for p in pts}  # nothing lost
         assert out[-1].id == "p6"  # dropped pool candidates appended last
 
-    def test_voyage_without_key_falls_back(self):
+    def test_voyage_reranker_rejected(self):
         from nexus_memory.reranker import rerank_points
 
         pts = _pool()
-        out = rerank_points("q", pts, reranker="voyage", voyage_api_key=None)
-        assert [p.id for p in out] == [p.id for p in pts]
+        with pytest.raises(ValueError, match="Voyage reranker has been removed"):
+            rerank_points("q", pts, reranker="voyage")
 
-    def test_voyage_http_error_raises_then_fail_open(self, monkeypatch):
+    def test_local_fail_open_on_http_error(self, monkeypatch):
         import nexus_memory.reranker as rr
 
-        class FakeResp:
-            status_code = 500
-            def json(self):
-                return {"data": []}
-
-        fake = MagicMock()
-        fake.post.return_value = FakeResp()
-        monkeypatch.setattr(rr, "_requests", fake)
+        monkeypatch.setattr(rr, "_rerank_local", MagicMock(side_effect=RuntimeError("boom")))
         pts = _pool()[:3]
-        out = rr.rerank_points("q", pts, reranker="voyage", voyage_api_key="k")
+        out = rr.rerank_points("q", pts, reranker="cross-encoder")
         assert [p.id for p in out] == [p.id for p in pts]  # fail-open order

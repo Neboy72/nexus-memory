@@ -112,7 +112,7 @@ class TestH3RoutingConfigOverride:
         from nexus_memory.cost_router import TIER_ECONOMY, TIER_PREMIUM
 
         router = self._router(
-            tmp_path, False, {"voyage": TIER_PREMIUM, "ollama": TIER_ECONOMY}
+            tmp_path, False, {"openai": TIER_PREMIUM, "ollama": TIER_ECONOMY}
         )
         router.initialize()
         assert router._routing_enabled is False
@@ -132,7 +132,7 @@ class TestH3RoutingConfigOverride:
 
         router = CostAwareRouter(hermes_home=str(tmp_path / "nope"))
         router._detect_available_providers = lambda: router._available_providers.update(
-            {"voyage": TIER_PREMIUM, "ollama": TIER_ECONOMY}
+            {"openai": TIER_PREMIUM, "ollama": TIER_ECONOMY}
         )
         router.initialize()
         assert router._routing_enabled is True
@@ -405,68 +405,3 @@ class TestH9DedupSweepErrorReporting:
         assert "read-only" not in body.lower()
 
 
-# ── H10: reranker tolerates malformed scores / short score vectors ───────────
-
-
-class TestH10RerankerRobustness:
-    def _voyage(self, monkeypatch, data):
-        import nexus_memory.reranker as rr
-
-        class FakeResp:
-            status_code = 200
-
-            def json(self):
-                return {"data": data}
-
-        fake_requests = MagicMock()
-        fake_requests.post.return_value = FakeResp()
-        monkeypatch.setattr(rr, "_requests", fake_requests)
-        return rr
-
-    def test_missing_index_and_null_score_do_not_crash(self, monkeypatch):
-        rr = self._voyage(monkeypatch, [
-            {"relevance_score": 0.9},                 # missing index → dropped
-            {"index": 1, "relevance_score": None},    # null score → 0.0
-            {"index": 99, "relevance_score": 0.5},    # out of range → dropped
-            {"index": "0", "relevance_score": 1.0},   # non-int index → dropped
-            {"index": 0, "relevance_score": "0.8"},   # string score → 0.0
-        ])
-        results = [{"_idx": 0, "text": "a"}, {"_idx": 1, "text": "b"}]
-
-        out = rr._rerank_voyage("q", results, "k")
-
-        assert sorted(r["_idx"] for r in out) == [0, 1]
-        assert all(r["_rerank_score"] == 0.0 for r in out)
-
-    def test_all_entries_malformed_returns_empty(self, monkeypatch):
-        rr = self._voyage(monkeypatch, [{"relevance_score": 1.0}, {"index": 42}])
-        out = rr._rerank_voyage("q", [{"_idx": 0, "text": "a"}], "k")
-        assert out == []
-
-    def test_local_short_predict_fails_open_to_empty(self, monkeypatch):
-        import nexus_memory.reranker as rr
-        import nexus.retrieval as nr
-
-        class _ShortCE:
-            def predict(self, pairs):
-                return [0.1] * (len(pairs) - 1)
-
-        monkeypatch.setattr(nr, "_get_cross_encoder", lambda: _ShortCE())
-        results = [{"_idx": 0, "text": "a"}, {"_idx": 1, "text": "b"}]
-
-        assert rr._rerank_local("q", results) == []
-
-    def test_local_bad_score_values_do_not_crash(self, monkeypatch):
-        import nexus_memory.reranker as rr
-        import nexus.retrieval as nr
-
-        class _BadCE:
-            def predict(self, pairs):
-                return ["nope"] * len(pairs)
-
-        monkeypatch.setattr(nr, "_get_cross_encoder", lambda: _BadCE())
-        results = [{"_idx": 0, "text": "a"}, {"_idx": 1, "text": "b"}]
-
-        out = rr._rerank_local("q", results)
-
-        assert [r["_idx"] for r in out] == [0, 1]  # fallback keeps order

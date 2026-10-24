@@ -115,10 +115,10 @@ The local service on `127.0.0.1:9122` uses a per-installation secret (`x-nexus-s
 > **What this protection does not cover:** the model assumes the machine's own user account is trustworthy. Anything running as the same user, any program with write access to `<data-dir>` (other plugins, backup tools, sync services such as Dropbox/iCloud), or any process that can read `service_auth.key` can impersonate a caller. Keep the data directory restricted and treat backups of it as sensitive.
 
 - **Ollama is not part of the automatic path.** It is extra software that not every machine has, so the automatic path never depends on it. If you run Ollama and want to use it, choose it explicitly: `NEXUS_EMBEDDING_PROVIDER=ollama` (then `ollama pull qwen3-embedding:0.6b`).
-- **A cloud provider** (Voyage, OpenAI, Google, Jina) is only used when you name it explicitly — `NEXUS_EMBEDDING_PROVIDER=<name>` plus its key. A key alone is not enough, and there is no silent cloud fallback.
+- **A cloud provider** (OpenAI, Google, Jina) is only used when you name it explicitly — `NEXUS_EMBEDDING_PROVIDER=<name>` plus its key. A key alone is not enough, and there is no silent cloud fallback.
 - **Not sure?** `python3 -m nexus_memory.wizard` scans your machine, lists every provider with its status and recommends one.
 
-> **The two plugins that talk to Qdrant *directly*** — Claude Code and OpenClaw — ask the local service for their vectors (`POST /embed` on `nexus-memory serve`), so they embed with the same model as everything else: local HuggingFace, nothing to install. If you want a different provider, name it explicitly (`NEXUS_EMBEDDING_PROVIDER=ollama|voyage|openai|google|jina`).
+> **The two plugins that talk to Qdrant *directly*** — Claude Code and OpenClaw — ask the local service for their vectors (`POST /embed` on `nexus-memory serve`), so they embed with the same model as everything else: local HuggingFace, nothing to install. If you want a different provider, name it explicitly (`NEXUS_EMBEDDING_PROVIDER=ollama|openai|google|jina`).
 
 → Full provider table: [🧩 Embedding Providers](#embedding-providers).
 
@@ -133,7 +133,7 @@ python3 scripts/detect-legacy-collection.py
 It reads your collection, works out the vector size, prints the exact `legacy_collections` entry to paste into `~/.hermes/nexus/config.json`, and does nothing else. An *empty* collection needs no entry (it is recreated correctly on the next start), and neither does one that is already *named* — the tool says so in both cases.
 
 ```json
-{ "legacy_collections": { "nexus": "voyage__voyage-4__1024" } }
+{ "legacy_collections": { "nexus": "local__Qwen3-Embedding-0.6B__1024" } }
 ```
 
 The value is the **builder** (`<backend>__<model>__<dim>`), never the model you wish to use from now on.
@@ -222,7 +222,7 @@ or `public` is a deliberate step in the dashboard — and it applies immediately
 
 **Auto-recall & auto-capture 🔄** — The native plugins inject relevant memories before every turn and extract new facts after every turn; the MCP server offers the same as explicit `recall` / `remember`. The injected block is capped at `NEXUS_PREFETCH_CHARS` (default **2400**, ~600 tokens, up to 10 hits). That matters: the block is stamped into the turn it arrived on and is **replayed with every later turn**, so on a metered API you pay for it again on each request. Raise the budget when *correct* facts get cut off — not when the wrong ones show up (that is a filing problem, not a budget problem). The prefetch is a head start, not a guarantee; an explicit `recall` is never budget-capped.
 
-**Retrieval 🛡️** — Hybrid search blends **BM25 + vector + Reciprocal Rank Fusion**, so adversarial text that ranks high semantically but contains garbage cannot take over. An optional cross-encoder rerank (Voyage API when a key is set, free local model otherwise; `nexus-memory.rerank: true`) puts the best candidates in the right order. Sloppy queries are rewritten into concrete search terms before embedding (`v0.19.0`, hit rate 67% → 75% on live data, fail-open in every failure mode, `NEXUS_REWRITE=0` as an emergency brake).
+**Retrieval 🛡️** — Hybrid search blends **BM25 + vector + Reciprocal Rank Fusion**, so adversarial text that ranks high semantically but contains garbage cannot take over. An optional cross-encoder rerank (free local model; `nexus-memory.rerank: true`) puts the best candidates in the right order. Sloppy queries are rewritten into concrete search terms before embedding (`v0.19.0`, hit rate 67% → 75% on live data, fail-open in every failure mode, `NEXUS_REWRITE=0` as an emergency brake).
 
 **Quality gates 🚪** — The quality of recall is decided at ingestion: only what the user actually said becomes a durable fact about them, task state that expires in a conversation or two is never stored, a passing remark is capped so it decays, and text that looks like an embedded instruction is stored but flagged and demoted below the recall threshold. Poisoned entries can never outrank genuine rules.
 
@@ -294,7 +294,7 @@ One server, several backends, same API. The **automatic path is local** — Hugg
 | **HuggingFace** 🏠 | Local | default — nothing to configure (override the model with `NEXUS_HF_MODEL`, e.g. `BAAI/bge-m3`) | 1024 |
 | **Local service** 🔌 | Local | what the two direct-Qdrant plugins (Claude Code, OpenClaw) use: `POST /embed` on `nexus-memory serve` — same model, no setup | 1024 |
 | **Ollama** 🦙 | Local | `NEXUS_EMBEDDING_PROVIDER=ollama` + `ollama pull qwen3-embedding:0.6b` | 1024 |
-| **Voyage** ☁️ | Cloud | `NEXUS_EMBEDDING_PROVIDER=voyage` + `VOYAGE_API_KEY` | 1024 |
+
 | **OpenAI** ☁️ | Cloud | `NEXUS_EMBEDDING_PROVIDER=openai` + `OPENAI_API_KEY` | 1536 |
 | **Google / Vertex AI** 💚 | Cloud | `NEXUS_EMBEDDING_PROVIDER=google` + `GOOGLE_API_KEY` | 768 |
 | **Jina** 💜 | Cloud | `NEXUS_EMBEDDING_PROVIDER=jina` + `JINA_API_KEY` | 1024 |
@@ -417,7 +417,7 @@ pytest tests/ -q     # the full suite (see the badge above for the current count
 - One embedding provider — **the default is local, needs no key and no extra software**:
  - **🏠 HuggingFace (default)**: ships with the package, downloads `Qwen/Qwen3-Embedding-0.6B` on first use (1024d, multilingual, ~1.2 GB, then cached)
  - **🦙 Ollama (explicit choice only)**: `NEXUS_EMBEDDING_PROVIDER=ollama` after `ollama pull qwen3-embedding:0.6b` (1024d)
- - Cloud instead of local (only when named explicitly, together with its key): Voyage (1024d), OpenAI (1536d), Google/Vertex AI (768d), Jina (1024d)
+ - Cloud instead of local (only when named explicitly, together with its key): OpenAI (1536d), Google/Vertex AI (768d), Jina (1024d)
 - Want to pick interactively? `python3 -m nexus_memory.wizard` scans your machine and recommends one.
 
 ---

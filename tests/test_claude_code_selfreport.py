@@ -68,10 +68,10 @@ def _run(sc, monkeypatch, tmp_path, agent_id="claude-code", healthy=True):
     # Der Vorgabewert des Hooks ist "auto" (der lokale Dienst). Hier wird ein
     # Provider fest gewaehlt: der Test prueft den Selbstbericht, nicht ob
     # nebenher ein Dienst laeuft.
-    monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
+    monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "openai")
     if healthy:
         _patch_urlopen_healthy(monkeypatch, sc)
-        monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
     else:
         _patch_urlopen_broken(monkeypatch, sc)
 
@@ -94,7 +94,7 @@ class TestProbeAndFile:
     ):
         monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("NEXUS_AGENT_ID", "claude-code")
-        monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
         _patch_urlopen_broken(monkeypatch, sc)
 
         sc.main()
@@ -166,7 +166,7 @@ class TestFileContract:
         monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("NEXUS_AGENT_ID", "claude-code")
         _patch_urlopen_healthy(monkeypatch, sc)
-        monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
 
         sc.main()
         assert list(tmp_path.glob("agent-selfcheck*.tmp-*")) == []
@@ -183,7 +183,7 @@ class TestFileContract:
         monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("NEXUS_AGENT_ID", "claude-code")
         _patch_urlopen_healthy(monkeypatch, sc)
-        monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
 
         tmp_path.chmod(0o555)
         try:
@@ -197,7 +197,7 @@ class TestFileContract:
         monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("NEXUS_AGENT_ID", "../../evil")
         _patch_urlopen_healthy(monkeypatch, sc)
-        monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
 
         sc.main()
 
@@ -209,7 +209,7 @@ class TestFileContract:
         monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("NEXUS_AGENT_ID", "test-id")
         _patch_urlopen_healthy(monkeypatch, sc)
-        monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
 
         sc.main()
 
@@ -220,7 +220,7 @@ class TestFileContract:
         monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("NEXUS_AGENT_ID", "claude-code")
         _patch_urlopen_healthy(monkeypatch, sc)
-        monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
 
         sc.main()
 
@@ -233,7 +233,7 @@ class TestFileContract:
         monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("NEXUS_AGENT_ID", "claude-code")
         _patch_urlopen_healthy(monkeypatch, sc)
-        monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
 
         sc.main()
 

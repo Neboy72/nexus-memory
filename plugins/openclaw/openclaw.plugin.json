@@ -30,7 +30,7 @@
     "embedding.provider": {
       "label": "Embedding Provider",
       "placeholder": "nexus",
-      "help": "One of: nexus, voyage, openai, ollama, google, jina. 'nexus' embeds through the local Nexus service on 127.0.0.1:9122 (same vector space as the engine). Auto-detected from env vars if not set.",
+      "help": "One of: nexus, openai, ollama, google, jina. 'nexus' embeds through the local Nexus service on 127.0.0.1:9122 (same vector space as the engine). Auto-detected from env vars if not set.",
       "advanced": true
     },
     "embedding.model": {
@@ -125,7 +125,7 @@
             "type": "string",
             "enum": [
               "nexus",
-              "voyage",
+
               "openai",
               "ollama",
               "google",

@@ -47,7 +47,7 @@ try {
     agentId: TEST_AGENT_ID,
     thoughtFilter: true,
     autoCapture: false,
-    embedding: { provider: "voyage", apiKey: TEST_API_KEY },
+    embedding: { provider: "openai", apiKey: TEST_API_KEY },
     nexusUrl: TEST_NEXUS_URL,
   });
 } catch (e) {

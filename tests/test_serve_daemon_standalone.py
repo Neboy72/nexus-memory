@@ -198,7 +198,7 @@ class TestSetupWizardWiring:
 
         monkeypatch.setattr(sd, "ensure_serve_daemon", fake_ensure)
         monkeypatch.setattr(setup_mod, "step_status", lambda: {
-            "embedding": {"provider": "voyage", "qdrant_running": True},
+            "embedding": {"provider": "openai", "qdrant_running": True},
             "agents": {"registered": [
                 {"id": "hermes", "name": "Hermes Agent", "icon": "🦊",
                  "trust_level": "private", "install_type": "plugin+mcp"},
@@ -252,7 +252,7 @@ class TestSetupWizardWiring:
         monkeypatch.setattr(sd, "ensure_serve_daemon",
                             lambda: {"status": "installed", "port": 9122})
         monkeypatch.setattr(setup_mod, "step_status", lambda: {
-            "embedding": {"provider": "voyage", "qdrant_running": True},
+            "embedding": {"provider": "openai", "qdrant_running": True},
             "agents": {"registered": []},
         })
         setup_mod.json_mode(["complete"])

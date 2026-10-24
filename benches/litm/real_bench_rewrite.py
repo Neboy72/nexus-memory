@@ -3,7 +3,7 @@
 
 12 echte Suchanfragen mit Ground-Truth (bekannte Memory-IDs), je mit und
 ohne Rewrite. Metrik: Recall@5 (ist die richtige Memory in den Top-5?).
-Das Voyage-Embedding bleibt identisch; nur der Suchtext aendert sich.
+Das Embedding-Modell bleibt identisch; nur der Suchtext aendert sich.
 """
 import os
 import sys
@@ -18,7 +18,7 @@ _TEST_CLONE = Path(os.environ.get(
 sys.path.insert(0, str(_TEST_CLONE / "src"))
 sys.path.insert(0, str(_TEST_CLONE))
 
-# .env laden (Voyage-Key) — gleicher Mechanismus wie bench_latency.py
+# .env laden (Cloud-Key falls benoetigt) — gleicher Mechanismus wie bench_latency.py
 for env in [Path.home() / '.hermes' / '.env', _TEST_CLONE / '.env']:
     if env.exists():
         for line in env.read_text().splitlines():

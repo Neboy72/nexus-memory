@@ -164,12 +164,6 @@ if [ -n "${OPENAI_API_KEY:-}" ]; then
     ok "OpenAI API key detected"
 fi
 
-# Check Voyage
-if [ -n "${VOYAGE_API_KEY:-}" ]; then
-    EMBED_HINT="$EMBED_HINT | ☁️ Voyage (API key set)"
-    ok "Voyage AI API key detected"
-fi
-
 echo ""
 info "Recommended: $EMBED_HINT"
 info "The MCP server auto-detects the best available backend at startup."
@@ -323,7 +317,7 @@ echo ""
 ok "${REPO} setup complete! 🦊"
 echo ""
 echo "  Next steps:"
-echo "  1. Set your VOYAGE_API_KEY (if not done)"
+echo "  1. Start the local embedding service or set a cloud key (OpenAI, Google, Jina) if desired"
 echo "  2. Start the MCP server: nexus-memory"
 echo "  3. Connect your agent (see AGENTS.md)"
 echo "  4. (Optional) Dashboard: python3 dashboard/server.py --port 9121"

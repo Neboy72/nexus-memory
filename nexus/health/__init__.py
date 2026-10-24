@@ -52,13 +52,6 @@ except ImportError:
 
 # ── Optional embedding dependencies ─────────────────────────────────────────
 
-HAS_VOYAGE = False
-try:
-    import voyageai
-    HAS_VOYAGE = True
-except ImportError:
-    pass
-
 HAS_SENTENCE_TRANSFORMERS = False
 try:
     from sentence_transformers import SentenceTransformer
@@ -442,10 +435,10 @@ class DriftDetector:
     def _get_embedder(self):
         """Return an embedding function or ``None`` if no embedder is available.
 
-        Priority: Voyage (best quality) → sentence-transformers (local).
+        Priority: sentence-transformers (local).
 
         OCR-4 (bug + performance): construction is wrapped in try/except — a
-        Voyage client without an API key raises, and that must degrade to
+        A missing local model or API key raises, and that must degrade to
         ``None`` (no embedder) instead of crashing the health check. The
         constructed embedder is cached on the instance: SentenceTransformer
         loads a ~100 MB model, so re-instantiating it on every health run
@@ -454,12 +447,7 @@ class DriftDetector:
         if self._embedder_fn is not None:
             return self._embedder_fn
         try:
-            if HAS_VOYAGE:
-                client = voyageai.Client()
-                self._embedder_fn = lambda texts: client.embed(
-                    texts, model="voyage-3", input_type="document"
-                ).embeddings
-            elif HAS_SENTENCE_TRANSFORMERS:
+            if HAS_SENTENCE_TRANSFORMERS:
                 model = SentenceTransformer("all-MiniLM-L6-v2")
                 self._embedder_fn = lambda texts: model.encode(texts).tolist()
         except Exception as exc:
@@ -766,7 +754,7 @@ class DriftDetector:
           that talk about the same concept but disagree — e.g. "X is
           enabled" vs "X is disabled".
 
-        Works with Voyage embeddings, sentence-transformers, or
+        Works with sentence-transformers or Ollama embeddings, or
         gracefully returns empty results if neither is available.
 
         Args:

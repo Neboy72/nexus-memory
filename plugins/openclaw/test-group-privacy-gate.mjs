@@ -49,7 +49,7 @@ const mockApi = {
     autoRecall: true,
     autoCapture: true,
     accessLevel: "private",
-    embedding: { provider: "voyage", apiKey: "test" },
+    embedding: { provider: "openai", apiKey: "test" },
   },
 };
 
@@ -69,7 +69,7 @@ const EMBED_RESPONSE = { data: [{ embedding: new Array(1024).fill(0.1) }] }; // 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : url.url;
-  if (u.includes("voyageai.com")) {
+  if (u.includes("openai.com")) {
     return {
       ok: true, status: 200,
       // Nr 379: parseEmbeddingResponse liest resp.text() zuerst — der Mock

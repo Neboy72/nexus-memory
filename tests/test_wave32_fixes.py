@@ -108,13 +108,6 @@ class TestW32AutoCapture:
         assert "prompt" in src or "/api/embed" in src
 
 
-class TestW32ReembedLog:
-    def test_source_no_pct_comma(self):
-        src = _read("scripts/reembed_voyage4.py")
-        assert "%,d" not in src
-        assert "{:,}" in src or ":,.0f}" in src
-
-
 class TestW32SessionScan:
     def test_source_zoneinfo(self):
         src = _read("scripts/session_scan.py")

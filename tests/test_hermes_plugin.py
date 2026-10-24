@@ -152,11 +152,11 @@ class TestProviderBasics:
                         "nexus_sica_run"}
 
     def test_config_schema(self, provider):
-        """get_config_schema returns qdrant_url, voyage_api_key, collection_name."""
+        """get_config_schema returns qdrant_url and collection_name."""
         schema = provider.get_config_schema()
-        assert len(schema) == 3
+        assert len(schema) == 2
         keys = {item["key"] for item in schema}
-        assert keys == {"qdrant_url", "voyage_api_key", "collection_name"}
+        assert keys == {"qdrant_url", "collection_name"}
 
     def test_system_prompt_block(self, provider):
         """system_prompt_block returns a non-empty string mentioning Nexus Memory."""
@@ -171,15 +171,8 @@ class TestEmbedder:
 
     def test_embedder_init(self):
         """_Embedder initialises and reports dim > 0."""
-        if not os.environ.get("VOYAGE_API_KEY"):
-            pytest.skip(
-                "1024-dim assertion requires VOYAGE_API_KEY "
-                "(intentionally absent on CI/fresh containers)"
-            )
         embedder = _Embedder()
         assert embedder.dim > 0
-        # With VOYAGE_API_KEY set, we expect 1024
-        assert embedder.dim == 1024
 
     def test_embedder_embed(self):
         """_Embedder.embed('test') returns a list of floats with len == dim."""

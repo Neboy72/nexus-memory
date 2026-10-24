@@ -320,14 +320,12 @@ def _provider_key_env_var(provider: str) -> "Optional[str]":
     """Environment variable name that carries the API key for *provider*.
 
     The engine's provider list is fixed (see README and
-    ``nexus_memory.embeddings.CLOUD_PROVIDER_IDS``): voyage, openai, google,
-    jina.  Local providers (auto, huggingface, ollama) need no cloud key.
+    ``nexus_memory.embeddings.CLOUD_PROVIDER_IDS``): openai, google, jina.  Local providers (auto, huggingface, ollama) need no cloud key.
     Unknown provider ids are treated like local ones — no key is forwarded,
     which is safe because the engine will fail loudly if it cannot satisfy the
     request.
     """
     return {
-        "voyage": "VOYAGE_API_KEY",
         "openai": "OPENAI_API_KEY",
         "google": "GOOGLE_API_KEY",
         "jina": "JINA_API_KEY",
@@ -949,12 +947,8 @@ class NexusMemoryProvider:
             self._session_id = session_id; self._hermes_home = kwargs.get("hermes_home", "")
             self._agent_context = kwargs.get("agent_context", "primary")
             cfg = self._load_config(); self._collection = cfg.get("collection_name", _COLLECTION)
-            # A key entered through the config UI is persisted by save_config(); the
-            # embedder reads VOYAGE_API_KEY from the environment, so export it when
-            # the env var is not already set (otherwise the setting was ignored).
-            _vkey = (cfg.get("voyage_api_key") or "").strip()
-            if _vkey and not os.environ.get("VOYAGE_API_KEY"):
-                os.environ["VOYAGE_API_KEY"] = _vkey
+            # Cloud keys are read from the environment; the engine's
+            # EmbeddingProvider handles its own key detection.
             self._qdrant = QdrantClient(host=_HOST, port=_PORT)
             self._embedder = _Embedder()
             if self._embedder._impl is not None:
@@ -1388,7 +1382,7 @@ class NexusMemoryProvider:
             logger.warning("Prefetch thread start failed: %s", exc)
 
     def _get_embed_cache(self):
-        """Roadmap 3.1 L0: lazy EmbedCache (repeated queries skip Voyage)."""
+        """Roadmap 3.1 L0: lazy EmbedCache (repeated queries skip cloud roundtrip)."""
         if getattr(self, "_embed_cache", None) is None:
             lock = getattr(self, "_embed_cache_lock", None) or threading.Lock()
             with lock:
@@ -1945,12 +1939,11 @@ class NexusMemoryProvider:
             from nexus_memory.reranker import rerank_points, DEFAULT_POOL_K
             pts = rerank_points(
                 query, pts,
-                reranker=cfg.get("reranker", "voyage"),
+                reranker=cfg.get("reranker", "cross-encoder"),
                 pool_k=int(cfg.get("pool_k", DEFAULT_POOL_K)),
-                voyage_api_key=cfg.get("voyage_api_key") or None,
             )
         # v0.15 Memory Dynamics: effective_score = base x reinforcement x decay.
-        # APPLIED AS A TIE-BREAKER (review fix): the Voyage/cross-encoder reranker
+        # APPLIED AS A TIE-BREAKER (review fix): the cross-encoder reranker
         # above supplies the semantic relevance order — we must NOT re-sort that
         # by vector score (it breaks the rerank integration test).
         # Instead: only for (near-)equal rerank positions does the dynamics
@@ -2392,8 +2385,6 @@ class NexusMemoryProvider:
         return [
             {"key": "qdrant_url", "description": "Qdrant server URL", "secret": False,
              "required": False, "default": f"http://{_HOST}:{_PORT}"},
-            {"key": "voyage_api_key", "description": "Voyage AI API key (1024d cloud embeddings). Optional - auto-detects OpenAI, Google, Jina, Ollama, or sentence-transformers if not set.",
-             "secret": True, "required": False, "env_var": "VOYAGE_API_KEY", "url": "https://docs.voyageai.com"},
             {"key": "collection_name", "description": "Qdrant collection name", "secret": False,
              "required": False, "default": _COLLECTION},
         ]
@@ -2406,7 +2397,7 @@ class NexusMemoryProvider:
                         # get_config_schema() advertises this key — persisting
                         # it keeps the schema honest (initialize() exports it
                         # to the env the embedder reads).
-                        "voyage_api_key": values.get("voyage_api_key", "")}, f, indent=2)
+                       }, f, indent=2)
         logger.info("Nexus config saved to %s/nexus/config.json", hermes_home)
 
     def _enqueue_entity_extraction(self, text: str, source: str = "nexus_remember") -> None:

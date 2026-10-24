@@ -29,24 +29,24 @@ from nexus_memory import env_secret_store as ess
 
 def test_failed_init_leaves_no_phantom_provider(monkeypatch):
     """Crash AFTER _name/_backend are set → state fully reset."""
-    monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "voyage")
-    monkeypatch.setattr(em, "VOYAGE_API_KEY", "vo-testkey123")
+    monkeypatch.setenv("NEXUS_EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setattr(em, "OPENAI_API_KEY", "sk-testkey123")
 
     class _BoomClient:
         def __init__(self, api_key=None):
             self.embed = None  # attribute exists; init "succeeds" partially
 
-    # Simulate: voyageai imports fine, client constructs, but probe crashes
+    # Simulate: openai imports fine, client constructs, but probe crashes
     def _boom():
-        import voyageai  # noqa: F401
+        import openai  # noqa: F401
         raise RuntimeError("network exploded mid-init")
 
     p = EmbeddingProvider.__new__(EmbeddingProvider)
     p._name = "none"; p._dim = 384; p._backend = "none"
     p._client = None; p._model = None
-    p._preferred = "voyage"
+    p._preferred = "openai"
     # Directly test the central reset contract:
-    p._name = "voyage-4"; p._backend = "voyage"; p._client = _BoomClient()
+    p._name = "text-embedding-3-small"; p._backend = "openai"; p._client = _BoomClient()
     p._reset_provider_state()
     assert p._name == "none"
     assert p._backend == "none"
@@ -62,13 +62,13 @@ def test_try_provider_resets_state_on_failure(monkeypatch):
     p._preferred = ""
 
     # A _try_* that partially sets state then fails:
-    def _bad_voyage():
-        p._name = "voyage-4"
-        p._backend = "voyage"
+    def _bad_openai():
+        p._name = "text-embedding-3-small"
+        p._backend = "openai"
         p._client = object()
         return False
-    monkeypatch.setattr(p, "_try_voyage", _bad_voyage)
-    ok = p._try_provider("voyage")
+    monkeypatch.setattr(p, "_try_openai", _bad_openai)
+    ok = p._try_provider("openai")
     assert ok is False
     assert p._name == "none" and p._backend == "none" and p._client is None
 
@@ -150,8 +150,8 @@ def test_ollama_embed_runs_in_worker_thread(monkeypatch):
 
 def test_read_env_key_roundtrip(tmp_path):
     env = tmp_path / ".env"
-    ess.write_env_key(env, "VOYAGE_API_KEY", "vo-roundtrip123")
-    assert ess.read_env_key(env, "VOYAGE_API_KEY") == "vo-roundtrip123"
+    ess.write_env_key(env, "OPENAI_API_KEY", "sk-roundtrip123")
+    assert ess.read_env_key(env, "OPENAI_API_KEY") == "sk-roundtrip123"
     assert ess.read_env_key(env, "MISSING_KEY") == ""
     assert ess.read_env_key(tmp_path / "nope.env", "X") == ""
 
