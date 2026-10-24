@@ -58,7 +58,7 @@ const mockApi = {
 
 const mod = await import(DIST_ENTRY);
 
-const EMBED_RESPONSE = { data: [{ embedding: new Array(1024).fill(0.1) }] };
+const EMBED_RESPONSE = { data: [{ embedding: new Array(1536).fill(0.1) }] };
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : url.url;

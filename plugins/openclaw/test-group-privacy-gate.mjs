@@ -65,7 +65,7 @@ process.env.NEXUS_CAPTURE_QUEUE_FILE = join(SANDBOX_DIR, "capture-retry-queue.js
 const mod = await import(DIST_ENTRY);
 
 // Fetch-Mock: Voyage (Fake-Vektoren) + Qdrant (Recorder) — keine Netzwerk-/API-Abhängigkeit
-const EMBED_RESPONSE = { data: [{ embedding: new Array(1024).fill(0.1) }] }; // Fund W36 (low): einmal gebaut
+const EMBED_RESPONSE = { data: [{ embedding: new Array(1536).fill(0.1) }] }; // Fund W36 (low): einmal gebaut
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : url.url;
