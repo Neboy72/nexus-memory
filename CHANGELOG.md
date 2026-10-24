@@ -1,3 +1,35 @@
+## [0.22.26] — 2026-10-24
+
+### Fixed — the knowledge graph no longer answers "nothing there" when the truth is "you may not look" or "I could not look"
+
+The ClawHub audit of the OpenClaw plugin (`@neboy72/nexus-memory` 1.21.14) flagged one real
+defect among two false positives: the four graph tools read and emitted points **without
+checking `access_level`**, so an agent running at `public` could read `private` entities — and,
+worse, reach nodes hidden *behind* a private one. The same hole sat in the Python core
+(`nexus/graph/traversal.py`), which the Claude Code hook uses.
+
+- **One rule, everywhere.** `GraphTraversal` now takes the caller's level and treats a point
+  without `access_level` as `private`; an unknown level sees nothing (fail-closed). The
+  OpenClaw tools build their gate from the same `visibleAccessLevels()` that `search` and
+  `forget` already used.
+- **Every caller hands its own level in.** `mcp_server`'s four graph tools take an
+  `access_level` parameter (default `private`, the server's own convention) and reject an
+  unknown value by name instead of returning an empty list. The Hermes provider derives the
+  level from its existing `_visible_levels()`, so there is no second source of truth; the
+  bundled integration copy got the same helper so the two cannot drift.
+- **An outage is not invisibility.** Neighbour and target lookups used a call that answers
+  `null` both for "point deleted" and for "request failed", so a brief Qdrant hiccup made edges
+  vanish and the tool claim "No related facts found.". They now use the strict lookup: 404 keeps
+  the silent skip, every other failure surfaces as an error.
+- **`find_entities` counts what the caller can see.** The visibility filter ran after the scroll
+  cap, so a `public` agent got fewer than the requested number of entities while more visible
+  ones existed. The levels are part of the Qdrant filter now; an unknown agent level answers
+  without touching Qdrant at all.
+- **Proof.** `tests/test_graph_callers_access.py` (11 of 14 red before), `tests/test_graph_access_level.py`
+  (22 cases), `plugins/openclaw/test-graph-access-filter.mjs` (11 checks), plus
+  `test-find-entities-visible-cap.mjs` and `test-graph-lookup-failure.mjs` (3 red cases each on
+  the previous commit). All green here.
+
 ## [0.22.25] — 2026-10-15
 
 - **The local HuggingFace model no longer runs on Apple's GPU — and the host stops loading one
