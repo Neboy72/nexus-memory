@@ -42,6 +42,57 @@ TRUST_INTERVAL_SECONDS = int(os.environ.get("NEXUS_TRUST_INTERVAL_SEC", 24 * 360
 # unbounded scroll of the whole collection.
 _MAX_EVENTS = 20000
 
+# Once-per-process notices. A missing collection is a *normal* state (fresh
+# install, or the moment before the first write); logging it on every pass
+# turned a harmless condition into what looked like a server defect.
+_missing_collection_noticed: set[str] = set()
+_malformed_scroll_noticed = False
+
+
+def _collection_exists(client, name: str) -> bool:
+    """True/False when *client* can answer, True (fail-open) when it cannot.
+
+    Fail-open is deliberate: an unanswerable probe must not silence the
+    daemon. ``get_collections`` is preferred over ``collection_exists``
+    because it is the older, universally available call.
+    """
+    lister = getattr(client, "get_collections", None)
+    if callable(lister):
+        try:
+            collections = getattr(lister(), "collections", None)
+            if isinstance(collections, (list, tuple)):
+                return name in [getattr(c, "name", None) for c in collections]
+        except Exception:
+            pass
+    probe = getattr(client, "collection_exists", None)
+    if callable(probe):
+        try:
+            return bool(probe(name))
+        except Exception:
+            pass
+    return True
+
+
+def _notice_missing_collection(name: str) -> None:
+    """One INFO line per process — never an exception, never a traceback."""
+    if name in _missing_collection_noticed:
+        return
+    _missing_collection_noticed.add(name)
+    log.info("collection %s not present yet — trust pass skipped", name)
+
+
+def _warn_malformed_scroll(name: str) -> None:
+    """One WARNING per process when scroll returns something unusable."""
+    global _malformed_scroll_noticed
+    if _malformed_scroll_noticed:
+        return
+    _malformed_scroll_noticed = True
+    log.warning(
+        "Trust: scroll on collection %s returned an unusable page "
+        "(expected a (points, offset) pair) — trust pass aborted",
+        name,
+    )
+
 
 def compute_trust(events: list[dict], belief: dict) -> tuple[float, str, str]:
     """Compute new trust value and status for a belief based on its events.
@@ -202,12 +253,25 @@ class TrustService:
 
     # ── internals ─────────────────────────────────────────────────────
     def _scroll_all(self, limit: int = 500):
+        client = self._store.client
+        if not _collection_exists(client, self._collection):
+            _notice_missing_collection(self._collection)
+            return []
         points, offset = [], None
         while True:
-            batch, offset = self._store.client.scroll(
+            page = client.scroll(
                 self._collection, limit=limit, offset=offset,
                 with_payload=True, with_vectors=False,
             )
+            try:
+                batch, offset = page
+            except (TypeError, ValueError):
+                # A client that answers with something that is not a
+                # (points, offset) pair used to raise "not enough values to
+                # unpack" inside the daemon loop — a stacktrace that read like
+                # a real defect. Abort the pass instead, once, loudly.
+                _warn_malformed_scroll(self._collection)
+                break
             points.extend(batch)
             if offset is None:
                 break
@@ -276,7 +340,7 @@ class TrustService:
                 try:
                     self.run()
                 except Exception as exc:
-                    log.warning("Trust recompute pass failed: %s", exc)
+                    log.warning("Trust recompute pass failed: %s", exc, exc_info=True)
                 for _ in range(max(60, TRUST_INTERVAL_SECONDS // 60)):
                     time.sleep(60)
 

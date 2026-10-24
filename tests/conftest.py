@@ -26,6 +26,16 @@ import pytest
 # ---------------------------------------------------------------------------
 os.environ.setdefault("NEXUS_COLLECTION", "test-collection")
 
+# The in-process maintenance daemons (trust recompute, retrieval watch) are
+# started by ``MemoryStore.__init__`` and would immediately query a collection
+# this suite never creates: their noise ("Trust recompute pass failed",
+# "3/3 queries failed") drowns out real failures and reads like a defect on a
+# fresh installation. Their behaviour is covered by tests that build them
+# directly, so the suite turns them off here — before any nexus import, since
+# ``MemoryStore.__init__`` reads these switches.
+os.environ["NEXUS_TRUST_SWEEP"] = "0"
+os.environ["NEXUS_RETRIEVAL_WATCH"] = "0"
+
 # Make sure both the source-layout (``src/nexus_memory``) and the legacy
 # top-level ``nexus`` package are importable when tests are run from the
 # repo root.
