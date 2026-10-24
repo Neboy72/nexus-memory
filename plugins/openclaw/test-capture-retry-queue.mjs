@@ -39,8 +39,9 @@ const originalFetch = globalThis.fetch
 globalThis.fetch = async (url, opts) => {
   const u = typeof url === "string" ? url : String(url)
   if (u.includes("openai.com")) {
-    // Nr 379: parseEmbeddingResponse liest resp.text() zuerst — Mock erfuellt Contract
-    return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ embedding: new Array(1024).fill(0.1) }] }), json: async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }) }
+    // Nr 379: parseEmbeddingResponse liest resp.text() zuerst — Mock erfuellt Contract.
+    // 1536 floats = der Standard von text-embedding-3-small (validateVector prueft exakt).
+    return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ embedding: new Array(1536).fill(0.1) }] }), json: async () => ({ data: [{ embedding: new Array(1536).fill(0.1) }] }) }
   }
   if (u.includes(QDRANT_BASE)) {
     if (!qdrantUp) return { ok: false, status: 503, text: async () => "simulated outage", json: async () => ({}) }
