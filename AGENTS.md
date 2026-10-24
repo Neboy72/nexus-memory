@@ -75,7 +75,32 @@ loaded but not working — you do not need to build a watchdog.
 
 If you use **OpenClaw**, install Nexus Memory as a native memory plugin. This gives you Auto-Recall (memories injected before every turn) and Auto-Capture (facts extracted after every turn) — all powered by your local Qdrant.
 
-### One-Command Install
+### ClawHub Install (published package)
+
+The fastest way on a fresh machine — no checkout needed:
+
+```bash
+openclaw plugins install clawhub:@neboy72/nexus-memory
+```
+
+The installer places the plugin and sets the memory slot
+(`plugins.slots.memory = "nexus-memory"`) itself — you do not edit that by hand.
+
+Then allow the conversation hooks. OpenClaw blocks conversation access for
+plugins it did not ship with, so the plugin loads but stays silent: **without
+`allowConversationAccess` there is no Auto-Recall and no Auto-Capture**, and
+`openclaw plugins doctor` shows the block. Add both lines to
+`~/.openclaw/openclaw.json`:
+
+```json
+{ "plugins": { "entries": { "nexus-memory": {
+    "enabled": true,
+    "hooks": { "allowPromptInjection": true, "allowConversationAccess": true } } } } }
+```
+
+Restart the gateway afterwards: `openclaw gateway restart`.
+
+### One-Command Install (from a checkout)
 
 ```bash
 cd ~/nexus-memory
@@ -120,9 +145,7 @@ Or, run these commands yourself:
           "qdrantUrl": "http://localhost:6333",
           "collection": "nexus",
           "embedding": {
-            "provider": "voyage",
-            "model": "voyage-4",
-            "apiKey": "${VOYAGE_API_KEY}"
+            "provider": "nexus"
           },
           "autoRecall": true,
           "autoCapture": true,
@@ -140,6 +163,11 @@ Or, run these commands yourself:
   }
 }
 ```
+
+`embedding.provider: "nexus"` is the default: the plugin embeds through the
+local Nexus service (`nexus-memory serve`, `http://127.0.0.1:9122`) — no API key,
+same vector space as the engine. Alternatives, when you name them explicitly:
+`openai`, `google`, `jina`, `ollama` (with their key / base URL).
 
 `cronFormGate` is off by default: unattended cron/heartbeat sends pass through
 unchanged. Enable it (`enabled: true` + `titles`) to accept only fixed-form

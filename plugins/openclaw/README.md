@@ -6,6 +6,29 @@ Long-term memory for [OpenClaw](https://openclaw.ai), powered by [Qdrant](https:
 
 ## Install
 
+### From ClawHub (published package)
+
+```bash
+openclaw plugins install clawhub:@neboy72/nexus-memory
+```
+
+The installer places the plugin and sets the memory slot
+(`plugins.slots.memory = "nexus-memory"`) itself — you do not edit that by hand.
+
+Then allow the conversation hooks. OpenClaw blocks conversation access for
+plugins it did not ship with, so the plugin loads but stays silent: **without
+`allowConversationAccess` there is no Auto-Recall and no Auto-Capture**, and
+`openclaw plugins doctor` shows the block. Add both lines to
+`~/.openclaw/openclaw.json`:
+
+```json
+{ "plugins": { "entries": { "nexus-memory": {
+    "enabled": true,
+    "hooks": { "allowPromptInjection": true, "allowConversationAccess": true } } } } }
+```
+
+Restart the gateway afterwards: `openclaw gateway restart`.
+
 ### One-command install
 
 ```bash
@@ -34,26 +57,48 @@ cp -r ~/nexus-memory/plugins/openclaw ~/.openclaw/plugins/nexus-memory
    docker run -d -p 6333:6333 qdrant/qdrant
    ```
 
-2. **Embedding provider** — set one API key (auto-detected):
+2. **Embedding source** — pick one. Every Recall and every Capture embeds
+   through it, so the plugin has nothing to recall or capture without one.
+
+   **a. Ollama — local, free, recommended for a fresh install**
+
+   ```bash
+   ollama pull qwen3-embedding:0.6b
+   ```
+
+   Then name the provider in the plugin config (see
+   [Configuration](#configuration)): `"embedding": { "provider": "ollama" }`.
+   Default model `qwen3-embedding:0.6b`, 1024 dimensions. Exporting
+   `OLLAMA_HOST` or `OLLAMA_BASE_URL` also selects Ollama — and that endpoint —
+   when the config names no provider.
+
+   **b. A cloud provider with your own key** — name the provider in the config
+   (`"provider": "openai"` etc.) and export its key:
 
    | Provider | Env Var | Default Model | Dimensions |
    |----------|---------|---------------|------------|
-   | **(default) Nexus service** | — (no key needed) | the engine's model (local HuggingFace) | 1024 |
-   | **Voyage** | `VOYAGE_API_KEY` | `voyage-4` | 1024 |
    | **OpenAI** | `OPENAI_API_KEY` | `text-embedding-3-small` | 1536 |
    | **Google** | `GOOGLE_API_KEY` | `text-embedding-004` | 768 |
    | **Jina** | `JINA_API_KEY` | `jina-embeddings-v3` | 1024 |
-   | **Ollama** | — (no key needed) | `qwen3-embedding` | 1024 |
 
    ```bash
-   export VOYAGE_API_KEY="vo-your-key-here"
+   export OPENAI_API_KEY="sk-your-key-here"
    ```
 
-   > **No API key?** Nothing to do. Embeddings come from the local Nexus
-   > service (`nexus-memory serve`, `http://127.0.0.1:9122`), which embeds with
-   > the engine's model — local HuggingFace, nothing to install. Override the
-   > address with `NEXUS_SERVE_URL`, or name a provider explicitly:
-   > `NEXUS_EMBEDDING_PROVIDER=ollama|voyage|openai|google|jina`.
+   **c. The local Nexus service** — only if you run Nexus Memory yourself:
+
+   ```bash
+   pip install nexus-memory && nexus-memory serve   # http://127.0.0.1:9122
+   ```
+
+   This is our in-house setup, not the default for a ClawHub install: the
+   package does not ship that service. Point the plugin elsewhere with
+   `embedding.baseUrl`; the service picks its own embedding backend through the
+   engine's `NEXUS_EMBEDDING_PROVIDER`.
+
+   > **Without one of these three sources** the plugin still loads, but there is
+   > no Recall and no Capture. `openclaw plugins doctor` and the plugin's
+   > self-report show it.
 
 ## Configuration
 
