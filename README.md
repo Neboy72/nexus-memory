@@ -22,8 +22,8 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.28-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-2312-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.22.29-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-2434-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -145,6 +145,31 @@ nexus-memory webui        # → http://127.0.0.1:9121
 ```
 
 Connected agents, memory graph with filters, inspector for every memory, drift status. From a repo checkout: `python3 dashboard/server.py --port 9121`. (The legacy graph-only `webui/` UI was removed in v0.18.7.)
+
+#### Recall ordering and memory AI — your model, your endpoint
+
+Two optional features let a chat model work on your memories: **recall ordering** (re-orders the
+candidate pool of a search) and **memory AI** (consolidation). Both use the model and the endpoint
+of the installation that runs them — `model.default` and the provider block of your agent
+configuration, or the environment overrides named below. **Nothing is built in**: without a
+configured model nothing is called at all, you get one warning per process, and the previous order
+is kept.
+
+- **Switch them in the dashboard.** The *Recall ordering* and *Memory AI* cards each carry a switch,
+  show the model a call would use, and name the monthly cap.
+- **Or over the endpoint.** `GET /api/settings/rerank` returns `enabled`, `reranker`, `pool`,
+  `llm_model` and `llm_configured`; `POST` the same route with `{"enabled": true}` to switch it. The
+  write is atomic, keeps every other key of your configuration and takes a timestamped backup
+  first; invalid input answers `400` and leaves the file untouched.
+- **Environment overrides.** `NEXUS_RERANK=0/1` and `NEXUS_RERANKER` for recall ordering;
+  `NEXUS_RERANK_LLM_BASE_URL`, `NEXUS_RERANK_LLM_API_KEY` and `NEXUS_RERANK_LLM_MODEL` for its
+  endpoint; `NEXUS_CONSOLIDATION=0/1` and `NEXUS_CONSOLIDATION_MODEL` for memory AI. The size of
+  the candidate pool is `nexus-memory.rerank_pool` in your configuration.
+
+**Every agent counts.** Reads and writes are counted in the store itself, not at one protocol edge,
+so an agent that uses the library directly shows up in the dashboard too — an id the registry does
+not know yet registers itself on first contact. A check that should not appear as an agent opts out
+with `NEXUS_AGENT_SELFTEST=1`.
 
 ### 🔌 Platform Configuration
 
@@ -307,6 +332,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.29** | 2026-10-24 | Model and endpoint for reranking and consolidation are read from the installation that runs them (nothing built in, no call without configuration); both features can be switched in the dashboard with a monthly cap line; access counting covers every path, unknown agents register themselves, self-checks opt out; dashboard assets carry the release version |
 | **v0.22.28** | 2026-10-24 | Recall can be re-ordered by a chat model instead of the local cross-encoder (`nexus-memory.reranker`); on a fixed 20-question set against a live corpus the top-five hits went from 14 to 17 |
 | **v0.22.27** | 2026-10-24 | The Voyage provider is gone, not merely unused — embeddings, reranker, cost routing, wizards and both plugins can no longer pick it, and the lockfile no longer resolves `voyageai` |
 | **v0.22.26** | 2026-10-24 | The knowledge graph honours `access_level` end to end — and stops answering "nothing there" when the truth is "you may not look" or "I could not look" |
@@ -438,4 +464,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.28 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.29 · One memory for all your agents</sub>

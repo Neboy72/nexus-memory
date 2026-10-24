@@ -90,7 +90,10 @@ header {
 .health-error { background: #e74c3c; box-shadow: 0 0 8px #e74c3c; }
 .health-unknown { background: #636e72; }
 
-/* Stats Bar */
+/* Stats Bar: sechs Karten in einer Zeile. Die beiden Namenskarten (Fuel,
+   Recall) bekommen 1.5fr — bei 1280px Viewport sind das ~224px, innen ~182px,
+   genug fuer "model-name:tag" (19 Zeichen bei 13px Mono = ~148px). Die
+   Kennung hinter dem letzten ":" wird in dashboard.js nicht angezeigt. */
 .stats-bar {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr 1.3fr 1.5fr 1.5fr;
@@ -106,7 +109,10 @@ header {
   text-align: left;
   transition: all 0.25s ease;
   position: relative;
-  overflow: hidden;
+  /* Kein overflow:hidden: ein Modellname darf nie von der Karte abgeschnitten
+     werden (DESIGN.md: never clip). Der Farbbalken oben bekommt dafuer seine
+     eigene Rundung. */
+  overflow: visible;
   /* Ohne das sprengt ein langer Name (white-space: nowrap) seine Spalte und
      zieht die ganze Leiste breit — 1fr-Spuren haben min-content als Minimum. */
   min-width: 0;
@@ -119,6 +125,7 @@ header {
   left: 0;
   right: 0;
   height: 2px;
+  border-radius: 13px 13px 0 0;
   background: linear-gradient(90deg, #02C1FF, #954EFF);
   opacity: 0;
   transition: opacity 0.25s ease;
@@ -142,17 +149,31 @@ header {
   letter-spacing: -0.02em;
 }
 
-/* Modell-/Anzeigename statt einer Zahl: kleiner als die KPI-Zahlen, damit ein
-   laengerer Name nicht umbricht und die Kachel nicht abschneidet. */
+/* Modell-/Anzeigename statt einer Zahl: feste 13px (DESIGN.md: Mono-Daten
+   11.5-13px), fuer alle drei Namenskarten gleich. Kein Auto-Fit mehr: der Name
+   passt, weil dashboard.js die Hermes-Kennung hinter dem letzten ":" abschneidet.
+   Nie umbrechen (ein einzelnes "b" in Zeile 2 ist unlesbar) und nie abschneiden:
+   kein overflow:hidden, kein Ellipsis. */
 .stat-value--name {
-  font-size: 19px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.25;
-  /* Nie umbrechen: ein einzelnes "b" in Zeile 2 ist unlesbar. Stattdessen
-     verkleinert fitOneLine() in dashboard.js die Schrift, bis es passt. */
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* Die drei Namenskarten (Embedding Provider, Memory AI, Recall ordering) tragen
+   alle denselben Namen-Typo-Satz: JetBrains Mono, 600, 13px, keine Laufweite.
+   Id-Selektoren, damit sie die geerbte Laufweite von .stat-value (-0.02em auf
+   26px = -0.52px) sicher ueberschreiben. Kein Ellipsis, kein overflow:hidden. */
+#stat-provider,
+#stat-fuel-model,
+#stat-recall-model {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: normal;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .stat-value--multi {
@@ -938,9 +959,9 @@ h2 {
 #stat-fuel { white-space: nowrap; overflow: visible; }
 
 
-/* Fuel-Karte: Zeile 1 = Modellname (Auto-Fit-Größe via JS), Zeile 2 = Kosten */
+/* Fuel-Karte: Zeile 1 = Modellname (feste 13px), Zeile 2 = Kosten */
 #stat-fuel { white-space: nowrap; overflow: visible; display: block; line-height: 1.1; }
-#stat-fuel-model { display: block; color: #02C1FF; font-weight: 700; }
+#stat-fuel-model { display: block; color: #02C1FF; }
 #stat-fuel-cost { display: block; font-size: 13px; font-weight: 600; color: #9aa5b5; margin-top: 2px; }
 
 /* ── Fuel-Toggle (iOS-Schieberegler in der Fuel-Karte) ── */
@@ -960,11 +981,7 @@ h2 {
 .stat-card--recall { display: flex; flex-direction: column; }
 .stat-recall-value { display: block; min-height: 1.4em; }
 .stat-recall-model {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  font-size: 13px;
   color: #02C1FF;
-  white-space: nowrap;
-  overflow: hidden;
   display: block;
 }
 .stat-recall-hint {

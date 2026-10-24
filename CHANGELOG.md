@@ -1,3 +1,45 @@
+## [0.22.29] — 2026-10-24
+
+### Changed — model and endpoint come from the installation that runs it
+
+Reranking and consolidation no longer carry a built-in model name or a built-in endpoint. Both
+resolve at call time what the installation that runs them has configured: `model.default` and the
+provider block of the configuration, or the environment overrides. With nothing configured there
+is no call at all — one warning per process, and the previous order is kept.
+
+- Consolidation resolves `NEXUS_CONSOLIDATION_MODEL`, then `nexus-memory.consolidation_model`,
+  then `model.default`. An empty result means the daemon stays idle instead of sending a model
+  name the installation does not have; the module no longer holds a default string, and the
+  legacy `OLLAMA_MODEL` name resolves through that function on every access.
+- The reranker's endpoint counts as configured only when base URL, key and model are all known.
+  Otherwise it is skipped before any request, and the caller keeps the vector order.
+- The station tile in the dashboard reads through the same resolver, so it can only show the name
+  a call would really use — and nothing when the installation has configured no model.
+
+### Added — the dashboard can switch both features
+
+- `GET /api/settings/rerank` returns `enabled`, `reranker`, `pool`, `llm_model` and
+  `llm_configured`.
+- `POST /api/settings/rerank` writes the switch atomically after an automatic timestamped backup
+  of the configuration, keeps every other key and comment, and answers `400` on invalid input
+  without touching the file.
+- The dashboard carries a visible switch for recall ordering and one for memory AI, each with a
+  live hint line (what it does, whether a model is configured) and the monthly cap.
+
+### Fixed — access counting is universal
+
+Counting moved out of the protocol edges and into the store path, so every read and write that
+goes through the service is counted, whichever client performs it. An agent id that is not in the
+registry registers itself on first sight instead of being dropped, and an access without any id is
+counted under a neutral label instead of vanishing. The two plugins that talk to the vector store
+directly report their access to the same registry. Self-checks opt out with
+`NEXUS_AGENT_SELFTEST=1`, so a probe no longer appears as an agent.
+
+### Changed — static assets are versioned
+
+The dashboard loads its script and stylesheet with the release version in the URL, so an update is
+visible after one reload instead of a stale file coming out of the browser cache.
+
 ## [0.22.28] — 2026-10-24
 
 ### Changed — the reranker is the model the agent already runs
