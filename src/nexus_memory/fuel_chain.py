@@ -25,12 +25,22 @@ Safety invariants (fail-closed on the PAID side, fail-safe for the daemon):
   (sleep + retry, never crash).
 * The monthly budget is re-checked before EVERY paid call. Each paid call
   first reserves a conservative max-spend slot under a cross-process file
-  lock (fcntl.flock) and reconciles the reservation with the real cost
-  afterwards, so a long-lived wrapper can never overspend the month.
+  lock (fcntl.flock on POSIX, msvcrt.locking on Windows) and reconciles the
+  reservation with the real cost afterwards, so a long-lived wrapper can
+  never overspend the month.
 * A missing/corrupt budget state, a failed persistence or an invalid budget
   value locks PAID stations only (free Ollama keeps the daemon running).
 """
-import fcntl
+try:  # POSIX
+    import fcntl
+except ImportError:  # Windows has no fcntl; msvcrt below covers the lock
+    fcntl = None
+
+try:  # Windows
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None
+
 import json
 import logging
 import math
@@ -144,7 +154,18 @@ def _budget_lock():
                 pass
             handle = open(_state_lock_path(), "a+")
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                elif msvcrt is not None:
+                    # Windows: lock one byte of the file, same exclusion as
+                    # flock(LOCK_EX). msvcrt.locking retries for ten seconds
+                    # and then raises, which the handler below treats like a
+                    # POSIX lock failure.
+                    if os.fstat(handle.fileno()).st_size == 0:
+                        handle.write("\0")
+                        handle.flush()
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
             except Exception:
                 pass  # keep going under the in-process lock
             yield

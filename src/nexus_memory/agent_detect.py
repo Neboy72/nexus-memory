@@ -26,7 +26,6 @@ Usage:
     → JSON list of detected agents
 """
 
-import fcntl
 import json
 import logging
 import os
@@ -35,10 +34,21 @@ import shutil
 import socket
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TextIO
+
+try:  # POSIX
+    import fcntl
+except ImportError:  # Windows has no fcntl; msvcrt below covers the lock
+    fcntl = None
+
+try:  # Windows
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None
 
 
 def _check_hermes() -> dict:
@@ -435,6 +445,48 @@ def _registry_lock_path() -> Path:
     return path.with_name(path.name + ".lock")
 
 
+def _acquire_registry_lock(lock_file: "TextIO", exclusive: bool) -> None:
+    """Block until this process holds the lock on the registry file.
+
+    POSIX parks the caller in flock(). Windows has no flock, so the same
+    exclusion is built from msvcrt.locking, which locks a byte RANGE of an
+    open file: the range has to exist (one padding byte if the file is
+    empty) and the call refuses instead of waiting, so a short poll loop
+    rebuilds the blocking behaviour. Every caller opens its own descriptor,
+    so both paths also serialize threads, not just processes.
+    """
+    if fcntl is not None:
+        fcntl.flock(
+            lock_file.fileno(),
+            fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
+        )
+        return
+    if msvcrt is None:
+        raise RuntimeError("no advisory file lock is available on this platform")
+    if os.fstat(lock_file.fileno()).st_size == 0:
+        lock_file.write("\0")
+        lock_file.flush()
+    lock_file.seek(0)
+    flag = msvcrt.LK_NBLCK if exclusive else msvcrt.LK_NBRLCK
+    while True:
+        try:
+            msvcrt.locking(lock_file.fileno(), flag, 1)
+            return
+        except OSError:
+            time.sleep(0.05)
+
+
+def _release_registry_lock(lock_file: "TextIO") -> None:
+    """Release the lock taken by _acquire_registry_lock."""
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is None:
+        raise RuntimeError("no advisory file lock is available on this platform")
+    lock_file.seek(0)
+    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 @contextmanager
 def _registry_lock(exclusive: bool = True):
     """Cross-process lock around a WHOLE registry read-modify-write cycle.
@@ -448,14 +500,11 @@ def _registry_lock(exclusive: bool = True):
     lock_path = _registry_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "a+") as lock_file:
-        fcntl.flock(
-            lock_file.fileno(),
-            fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
-        )
+        _acquire_registry_lock(lock_file, exclusive)
         try:
             yield
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _release_registry_lock(lock_file)
 
 
 def _load_registry_unlocked() -> dict:
