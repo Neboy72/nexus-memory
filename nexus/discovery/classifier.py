@@ -113,6 +113,31 @@ def classify_relation(
 # ── Internal heuristics ────────────────────────────────────────────────────
 
 
+def _wikilinks(text: str) -> list[str]:
+    """Return every ``[[target]]`` in *text* via a single left-to-right scan.
+
+    Equivalent to ``WIKILINK_PATTERN.findall(text)`` but O(n): the regex
+    ``\\[\\[([^\\]]+)\\]\\]`` is quadratic on input such as ``"[" * n + "]"``,
+    because every ``[[`` rescans the same bracket run.
+    """
+    out: list[str] = []
+    end = len(text)
+    i = 0
+    while i < end:
+        if text[i] != "[" or i + 1 >= end or text[i + 1] != "[":
+            i += 1
+            continue
+        close = text.find("]", i + 2)
+        if close < 0:
+            break
+        if close > i + 2 and close + 1 < end and text[close + 1] == "]":
+            out.append(text[i + 2 : close])
+            i = close + 2
+        else:
+            i = close + 1
+    return out
+
+
 def _check_explicit_reference(
     source_content: str,
     target_content: str,
@@ -129,7 +154,7 @@ def _check_explicit_reference(
     target_keywords = set(re.findall(r"\b[a-zA-ZäöüßÄÖÜ]{4,}\b", target_lower))
 
     # 1. Wikilink pattern: [[Target Fact Name]]
-    wikilinks = WIKILINK_PATTERN.findall(source_content)
+    wikilinks = _wikilinks(source_content)
     for link in wikilinks:
         link_lower = link.lower()
         # Match if wikilink contains a key term from target.
