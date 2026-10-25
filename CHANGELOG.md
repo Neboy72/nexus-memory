@@ -1,3 +1,21 @@
+## [0.22.32] — 2026-10-25
+
+### Fixed — the wikilink scan no longer runs quadratic on a crafted memory
+
+`WIKILINK_PATTERN` in `nexus/discovery/classifier.py` could not cross a closing bracket, so every
+opening pair without a closing pair rescanned to the next bracket. One stray closing bracket at the
+end of the text made the scan quadratic: 32 001 characters took 1.6 s, 64 001 took 6.4 s, and that
+call runs inside discovery, which is single-threaded, so the agent waited for the whole run. The
+text is the body of a memory fact and an agent writes it from web pages, tool results or injected
+instructions, so an attacker could shape it. Nothing capped the length of a fact.
+
+`_check_explicit_reference()` now uses a single left-to-right scan with two skips. The output is
+identical: 24 edge cases including nested brackets and 200 000 random strings over brackets, letters
+and spaces produce zero differences against the pattern. The same 64 002 bracket characters took
+about 6.5 seconds before and a few microseconds now. `WIKILINK_PATTERN` stays in the module for existing imports.
+
+Reported by Simon Yuan.
+
 ## [0.22.31] — 2026-10-25
 
 ### Changed — lock refreshed for five packages, test runner on pytest 9
