@@ -1,3 +1,21 @@
+## [Unreleased]
+
+### Fixed — the package imports on Windows
+
+`agent_detect.py` and `fuel_chain.py` imported `fcntl` at module level. `fcntl` is POSIX-only, so on
+Windows the import fails and takes the package with it: the autouse fixture in `conftest.py` loads
+the agent registry for every test, so the suite stopped at collection with 2312 errors and no test
+ever ran.
+
+Both modules now guard the import the way `mcp_server.py` already does, and the lock keeps its
+meaning: `_acquire_registry_lock()` uses `fcntl.flock()` on POSIX and `msvcrt.locking` on a one-byte
+range of the same lock file otherwise. Byte-range locks refuse instead of waiting, so a short poll
+loop restores the blocking behaviour of `flock()`, and the exclusion still holds across processes
+and across threads because every caller opens its own descriptor.
+
+On a Windows runner the modules that touch the registry and the budget go from 8 collection errors
+to 97 passing tests; the same 97 pass on Linux and the Linux suite is otherwise unchanged.
+
 ## [0.22.32] — 2026-10-25
 
 ### Fixed — the wikilink scan no longer runs quadratic on a crafted memory
