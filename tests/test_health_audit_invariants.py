@@ -18,6 +18,7 @@ These tests pin the security-relevant invariants after the review fixes:
 - The explicitly passed collection is the collection that is audited.
 """
 import json
+import os
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -207,8 +208,16 @@ def test_no_deletion_when_backup_write_fails(temp_coll, tmp_path, monkeypatch):
     _upsert(client, coll, a, t, _iso(30))
     _upsert(client, coll, b, t, _iso(5))
 
+    _real_replace = os.replace
+
     def _boom(src, dst):
-        raise OSError("simulated atomic-write failure")
+        # Restrict the failure to the sweep backup: this path is the only one
+        # that must be simulated as failing. Patching os.replace globally also
+        # breaks the fixture teardown, where Qdrant local persists the
+        # collection via os.replace (Linux-only teardown error).
+        if "dedup-sweep-backup" in str(dst):
+            raise OSError("simulated atomic-write failure")
+        return _real_replace(src, dst)
     monkeypatch.setattr("os.replace", _boom)
 
     import pytest as _pytest
