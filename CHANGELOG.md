@@ -1,3 +1,25 @@
+## [0.22.33] — 2026-10-27
+
+### Fixed — the agent registry module loads on Windows, and its lock works there
+
+`agent_detect.py` imported `fcntl` at module scope. That is a POSIX module, so on Windows the module
+could not be imported at all, and two consumers import it on module scope themselves: the setup flow
+(`src/nexus_memory/setup.py`) and every test, because the autouse fixture in `tests/conftest.py` pulls
+it in. Both stopped working there.
+
+`fcntl` and `msvcrt` are optional now. `_lock_file`/`_unlock_file` take `flock` on POSIX exactly as
+before, `msvcrt.locking` on Windows (non-blocking on one byte at offset 0, retried for up to 10 s, so a
+stuck peer raises a clear timeout instead of hanging), and warn once and continue when neither module
+exists. A shared request falls back to an exclusive lock on Windows because `msvcrt` has no shared
+mode; that is stricter, never weaker.
+
+On a real Windows host the previous revision raises `ModuleNotFoundError: No module named 'fcntl'`;
+this one imports, registers an agent into the registry, and a second process waited 1.71 s for a 2.0 s
+hold by the first. Nothing else changed: the suite stays green on macOS (2481 passed, 4 skipped in
+the run recorded for this release; the skip count moves with the environment), and the new
+`tests/test_agent_detect_windows_import.py` covers the import without `fcntl`, the Windows branch
+against a recording fake, and the no-lock fallback.
+
 ## [0.22.32] — 2026-10-25
 
 ### Fixed — the wikilink scan no longer runs quadratic on a crafted memory
