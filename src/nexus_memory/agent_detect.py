@@ -26,7 +26,24 @@ Usage:
     → JSON list of detected agents
 """
 
-import fcntl
+# fcntl is POSIX-only and msvcrt is Windows-only: importing either one at
+# module scope made this module unimportable on the other platform, which
+# took the setup flow and the whole test-suite down on Windows. Both are
+# optional now; ``_lock_file``/``_unlock_file`` pick whichever exists.
+try:  # POSIX
+    import fcntl
+    _HAVE_FCNTL = True
+except ImportError:  # Windows
+    fcntl = None
+    _HAVE_FCNTL = False
+
+try:  # Windows
+    import msvcrt
+    _HAVE_MSVCRT = True
+except ImportError:  # POSIX
+    msvcrt = None
+    _HAVE_MSVCRT = False
+
 import json
 import logging
 import os
@@ -35,6 +52,7 @@ import shutil
 import socket
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -448,14 +466,75 @@ def _registry_lock(exclusive: bool = True):
     lock_path = _registry_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "a+") as lock_file:
-        fcntl.flock(
-            lock_file.fileno(),
-            fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
-        )
+        _lock_file(lock_file.fileno(), exclusive=exclusive)
         try:
             yield
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _unlock_file(lock_file.fileno())
+
+
+# Windows: msvcrt has no shared lock mode, so a "shared" request takes an
+# exclusive lock there — correct, just less permissive.
+_MSVCRT_LOCK_BYTES = 1
+_LOCK_ACQUIRE_TIMEOUT_SEC = 10.0
+_LOCK_RETRY_INTERVAL_SEC = 0.05
+_LOCK_UNAVAILABLE_WARNED = False
+
+
+def _warn_lock_unavailable() -> None:
+    """Log the no-locking fallback exactly once per process."""
+    global _LOCK_UNAVAILABLE_WARNED
+    if _LOCK_UNAVAILABLE_WARNED:
+        return
+    _LOCK_UNAVAILABLE_WARNED = True
+    logging.getLogger(__name__).warning(
+        "registry lock unavailable on this platform — writes are not "
+        "serialized against other processes"
+    )
+
+
+def _lock_file(fd: int, exclusive: bool = True) -> None:
+    """Take the registry lock on ``fd``.
+
+    POSIX uses ``fcntl.flock`` (exclusive or shared). Windows uses
+    ``msvcrt.locking`` on a single byte at offset 0; it has no shared mode,
+    so ``exclusive=False`` also locks exclusively. Acquisition is
+    non-blocking and retried for up to ``_LOCK_ACQUIRE_TIMEOUT_SEC`` so a
+    stuck peer produces a clear error instead of a hung process. With
+    neither module available it only warns and proceeds — a registry write
+    without a lock still beats refusing to register agents at all.
+    """
+    if _HAVE_FCNTL:
+        fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        return
+    if _HAVE_MSVCRT:
+        deadline = time.monotonic() + _LOCK_ACQUIRE_TIMEOUT_SEC
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, _MSVCRT_LOCK_BYTES)
+                return
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "could not acquire the agents registry lock within "
+                        f"{_LOCK_ACQUIRE_TIMEOUT_SEC:.0f}s "
+                        f"({_registry_lock_path()})"
+                    ) from exc
+                time.sleep(_LOCK_RETRY_INTERVAL_SEC)
+    _warn_lock_unavailable()
+
+
+def _unlock_file(fd: int) -> None:
+    """Release the lock taken by ``_lock_file`` on ``fd``."""
+    if _HAVE_FCNTL:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    if _HAVE_MSVCRT:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, _MSVCRT_LOCK_BYTES)
+        return
+    _warn_lock_unavailable()
 
 
 def _load_registry_unlocked() -> dict:
