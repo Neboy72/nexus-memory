@@ -22,8 +22,8 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.32-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
-[![Tests](https://img.shields.io/badge/tests-2440-brightgreen?style=flat-square)](tests/)
+[![Version](https://img.shields.io/badge/version-0.22.33-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Tests](https://img.shields.io/badge/tests-green-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
 > **🤖 Bot Self-Install:** Tell your agent: *"Read AGENTS.md and install Nexus Memory."* It does the rest.
@@ -332,6 +332,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.33** | 2026-10-27 | The agent registry module loads on Windows: `fcntl` and `msvcrt` are optional, the registry lock is `flock` on POSIX and `msvcrt.locking` on Windows, and the setup flow and the test suite stop failing there; checked on a real Windows host, the old revision raised `ModuleNotFoundError: No module named 'fcntl'` and the new one imports and registers |
 | **v0.22.32** | 2026-10-25 | Wikilink scan in discovery rewritten as a single linear pass; the regex was quadratic on a crafted memory fact (64 002 bracket characters: about 6.5 s before, a few microseconds now); output verified identical on 24 edge cases and 200 000 random strings |
 | **v0.22.31** | 2026-10-25 | Lockfile refreshed for four advisories — certifi 2026.10.23, filelock 4.2.4, setuptools 84.2.1, opentelemetry-api 1.45.1; the test runner moves to pytest 9, closing the tmpdir advisory, and the full suite runs green on it; no runtime behaviour changed |
 | **v0.22.30** | 2026-10-24 | The two maintenance daemons stay quiet on a fresh install — one INFO line instead of a stack trace and a false quality alarm when the collection does not exist yet; an unusable scroll reply is reported once as a clear warning; the test suite switches both daemons off |
@@ -467,4 +468,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.32 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.33 · One memory for all your agents</sub>
