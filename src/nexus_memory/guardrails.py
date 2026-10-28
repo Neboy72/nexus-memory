@@ -79,6 +79,13 @@ class GuardrailResult:
 # ---------------------------------------------------------------------------
 
 # Regex patterns for destructive commands
+# The "word ... word" patterns below are written as (?m)^(?>.*?A).*?B instead
+# of A.*B: a plain A.*B is retried from every occurrence of A and backtracks
+# through every occurrence of B, which is quadratic (cubic for
+# git.*clean.*-[fd]: doubling the command multiplies the time by about 8). The atomic
+# lazy group commits to the first A on each line, which is always the best
+# choice for fixed-length tokens, so the verdict is unchanged and the scan is
+# linear. Atomic groups need Python 3.11 (requires-python >= 3.11).
 _DESTRUCTIVE_PATTERNS: list[tuple[GuardrailAction, re.Pattern]] = [
     # Delete operations
     # NOTE: rm/rmdir/unlink/shred are destructive regardless of which options
@@ -93,9 +100,9 @@ _DESTRUCTIVE_PATTERNS: list[tuple[GuardrailAction, re.Pattern]] = [
     (GuardrailAction.DELETE, re.compile(r"\btruncate\b", re.IGNORECASE)),
     (GuardrailAction.DELETE, re.compile(r"\buninstall\b", re.IGNORECASE)),
     (GuardrailAction.DELETE, re.compile(r"\bremove-item\b", re.IGNORECASE)),
-    (GuardrailAction.DELETE, re.compile(r"\bfind\b.*-delete", re.IGNORECASE)),
-    (GuardrailAction.DELETE, re.compile(r"\bgit\b.*clean.*-[fd]", re.IGNORECASE)),
-    (GuardrailAction.DELETE, re.compile(r"\bdd\b.*\bof\b", re.IGNORECASE)),
+    (GuardrailAction.DELETE, re.compile(r"(?m)^(?>.*?\bfind\b).*?-delete", re.IGNORECASE)),
+    (GuardrailAction.DELETE, re.compile(r"(?m)^(?>.*?\bgit\b)(?>.*?clean).*?-[fd]", re.IGNORECASE)),
+    (GuardrailAction.DELETE, re.compile(r"(?m)^(?>.*?\bdd\b).*?\bof\b", re.IGNORECASE)),
 
     # Overwrite operations
     (GuardrailAction.OVERWRITE, re.compile(r"\bwrite_file\b", re.IGNORECASE)),
@@ -110,13 +117,13 @@ _DESTRUCTIVE_PATTERNS: list[tuple[GuardrailAction, re.Pattern]] = [
 
     # Recreate operations (Qdrant collection recreation wipes all points)
     (GuardrailAction.RECREATE, re.compile(r"\brecreate_collection\b", re.IGNORECASE)),
-    (GuardrailAction.RECREATE, re.compile(r"DELETE.*collection", re.IGNORECASE)),
-    (GuardrailAction.RECREATE, re.compile(r"\bdrop\b.*collection", re.IGNORECASE)),
+    (GuardrailAction.RECREATE, re.compile(r"(?m)^(?>.*?DELETE).*?collection", re.IGNORECASE)),
+    (GuardrailAction.RECREATE, re.compile(r"(?m)^(?>.*?\bdrop\b).*?collection", re.IGNORECASE)),
 
     # Install operations
-    (GuardrailAction.INSTALL, re.compile(r"\bpip\b.*install", re.IGNORECASE)),
-    (GuardrailAction.INSTALL, re.compile(r"\bnpm\b.*install", re.IGNORECASE)),
-    (GuardrailAction.INSTALL, re.compile(r"\bbrew\b.*install", re.IGNORECASE)),
+    (GuardrailAction.INSTALL, re.compile(r"(?m)^(?>.*?\bpip\b).*?install", re.IGNORECASE)),
+    (GuardrailAction.INSTALL, re.compile(r"(?m)^(?>.*?\bnpm\b).*?install", re.IGNORECASE)),
+    (GuardrailAction.INSTALL, re.compile(r"(?m)^(?>.*?\bbrew\b).*?install", re.IGNORECASE)),
 ]
 
 
