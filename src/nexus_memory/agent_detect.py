@@ -768,7 +768,9 @@ def resolve_agent_id(explicit: Optional[str] = None) -> str:
 # agent wrote ("hermes"); two Hermes instances on two machines — or in two
 # profiles — are still the same id without this.
 INSTANCE_ID_ENV = "NEXUS_INSTANCE_ID"
-INSTANCE_ID_FILE = "instance.json"
+# The id file is named after the instance seed, so profiles that share one
+# Nexus home still get one file each: ``instance-<8 hex of sha256(seed)>.json``.
+INSTANCE_ID_FILE_PREFIX = "instance-"
 # The installation's OWN home. Hermes sets it per profile, so several profiles
 # on one machine that share one Nexus data dir still get separate ids.
 HERMES_HOME_ENV = "HERMES_HOME"
@@ -797,16 +799,28 @@ def _instance_seed() -> str:
     return str(_nexus_home().resolve())
 
 
-def _new_instance_id() -> str:
+def _instance_file_name(seed: str) -> str:
+    """The id file belonging to ONE home: the seed's first 8 hex chars name it.
+
+    Shared Nexus homes therefore hold one file per profile instead of one
+    file that every profile overwrites — the name carries the start value.
+    """
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8]
+    return f"{INSTANCE_ID_FILE_PREFIX}{digest}.json"
+
+
+def _new_instance_id(seed: Optional[str] = None) -> str:
     """A new installation id: 16 hex chars of sha256 over the instance seed.
 
     Deterministic ON PURPOSE. The first id of an installation is derived
     from its home, so four profiles sharing one data dir do not collapse
-    into one id. The value is written to ``instance.json`` immediately and
-    from then on only ever read back — it is a stable label for one home,
+    into one id. The value is written to the home's own id file immediately
+    and from then on only ever read back — it is a stable label for one home,
     not a guess about the user or the machine.
     """
-    return hashlib.sha256(_instance_seed().encode("utf-8")).hexdigest()[:16]
+    if seed is None:
+        seed = _instance_seed()
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
 def _write_instance_id(path: Path, instance_id: str) -> None:
@@ -830,9 +844,14 @@ def _write_instance_id(path: Path, instance_id: str) -> None:
 def resolve_instance_id() -> str:
     """Return this installation's id — never empty, never guessed.
 
-    Order: ``NEXUS_INSTANCE_ID`` → ``instance.json`` in the Nexus home →
-    a NEW id derived from the installation's home, written to that file
-    (or returned in memory if the file cannot be written).
+    Order: ``NEXUS_INSTANCE_ID`` → this home's own id file → a NEW id derived
+    from the installation's home, written to that file (or returned in memory
+    if the file cannot be written).
+
+    The file is named after the seed —
+    ``instance-<8 hex of sha256(seed)>.json`` in the Nexus home — so profiles
+    that SHARE one Nexus home keep one file each instead of reading and
+    overwriting a single shared one.
 
     The path is only the SEED for a new id, never the id itself. The first
     call derives 16 hex chars from ``HERMES_HOME``/``NEXUS_HOME`` (or the
@@ -841,19 +860,24 @@ def resolve_instance_id() -> str:
     An existing id is NEVER recomputed; that is deliberate, not a bug.
 
     This is what separates it from a guessed id (hostname, user name,
-    port): the seed cannot file memories under the wrong installation,
-    because it only names the home the store lives in, and Hermes sets
-    ``HERMES_HOME`` per profile — so four profiles sharing one data dir
-    keep four ids. A broken file is never used as an id; and no read/write
-    error may break the caller — storing a memory must not fail because of
-    an id.
+    port): the seed describes where the store lives, it claims nothing about
+    the person or the machine, and once the id is written it is never derived
+    again. Hermes sets ``HERMES_HOME`` per profile, so four profiles sharing
+    one data dir keep four ids. A broken file is never used as an id; and no
+    read/write error may break the caller — storing a memory must not fail
+    because of an id.
+
+    The older ``instance.json`` is deliberately NOT read any more: it was one
+    shared file, so reading it would hand the same id to every profile again —
+    the exact bug this split fixes. It is left on disk, unread and unmigrated.
     """
     env = os.environ.get(INSTANCE_ID_ENV, "")
     if env.strip():
         return env.strip()
 
-    path = _nexus_home() / INSTANCE_ID_FILE
     try:
+        seed = _instance_seed()
+        path = _nexus_home() / _instance_file_name(seed)
         if path.exists():
             value = None
             try:
@@ -869,7 +893,7 @@ def resolve_instance_id() -> str:
                 "instance id file %s carries no usable instance_id — replacing it",
                 path,
             )
-        instance_id = _new_instance_id()
+        instance_id = _new_instance_id(seed)
         _write_instance_id(path, instance_id)
         return instance_id
     except Exception as exc:
