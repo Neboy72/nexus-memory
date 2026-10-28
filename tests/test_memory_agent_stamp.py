@@ -4,9 +4,10 @@ Every memory must record WHICH agent stored it and from WHICH installation,
 next to ``source`` (which says where the INFORMATION came from: mail, web,
 consolidation). ``agent`` comes from ``agent_detect.resolve_agent_id()``
 (explicit → ``NEXUS_AGENT_ID`` → ``UNIDENTIFIED_AGENT_ID``); ``instance`` from
-``resolve_instance_id()`` (``NEXUS_INSTANCE_ID`` → ``instance.json`` in the
-Nexus home, seeded on first use by ``HERMES_HOME``/``NEXUS_HOME``). Old points
-simply have no field (None); there is no migration and no backfill.
+``resolve_instance_id()`` (``NEXUS_INSTANCE_ID`` → this home's own
+``instance-<seed hash>.json`` in the Nexus home, seeded on first use by
+``HERMES_HOME``/``NEXUS_HOME``). Old points simply have no field (None); there
+is no migration and no backfill.
 
 No Qdrant server needed: the client is replaced by a small fake, the same
 pattern ``tests/test_scope.py`` and ``tests/test_scope_auto.py`` use.
@@ -31,6 +32,12 @@ def _isolated_home(tmp_path, monkeypatch):
     """Never touch the real ~/.nexus-memory and never inherit an id from env."""
     monkeypatch.setenv("NEXUS_HOME", str(tmp_path / "nexus-home"))
     monkeypatch.delenv("NEXUS_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+
+def _id_files(home: Path) -> list:
+    """The per-home id files in ``home`` (the legacy ``instance.json`` is not one)."""
+    return sorted(home.glob("instance-*.json")) if home.exists() else []
 
 
 def _store_capturing(monkeypatch, captured: dict):
@@ -139,7 +146,10 @@ class TestInstanceStamp:
         assert first == second
         assert len(first) == 16
         assert all(c in "0123456789abcdef" for c in first)
-        data = json.loads((home / "instance.json").read_text())
+        files = _id_files(home)
+        assert len(files) == 1
+        assert files[0] != home / "instance.json"
+        data = json.loads(files[0].read_text())
         assert data["instance_id"] == first
         assert data["created_at"]
 
@@ -159,63 +169,119 @@ class TestInstanceStamp:
         )
 
         assert first["payload"]["instance"] == second["payload"]["instance"]
-        assert (home / "instance.json").exists()
+        assert len(_id_files(home)) == 1
 
     def test_broken_instance_file_is_replaced(self, monkeypatch, tmp_path):
-        """(e) A corrupt instance.json yields a new valid id, never raises."""
+        """(e) A corrupt id file yields a new valid id, never raises."""
         home = tmp_path / "nexus-home"
-        home.mkdir(parents=True, exist_ok=True)
-        (home / "instance.json").write_text("{not json at all")
         monkeypatch.setenv("NEXUS_HOME", str(home))
+        resolve_instance_id()
+        id_file = _id_files(home)[0]
+        id_file.write_text("{not json at all")
 
         instance_id = resolve_instance_id()
 
         assert len(instance_id) == 16
         assert all(c in "0123456789abcdef" for c in instance_id)
-        data = json.loads((home / "instance.json").read_text())
+        data = json.loads(id_file.read_text())
         assert data["instance_id"] == instance_id
 
     def test_instance_file_without_id_is_replaced(self, monkeypatch, tmp_path):
         """(e) Valid JSON but no instance_id counts as unusable too."""
         home = tmp_path / "nexus-home"
-        home.mkdir(parents=True, exist_ok=True)
-        (home / "instance.json").write_text(json.dumps({"created_at": "x"}))
         monkeypatch.setenv("NEXUS_HOME", str(home))
+        resolve_instance_id()
+        id_file = _id_files(home)[0]
+        id_file.write_text(json.dumps({"created_at": "x"}))
 
         instance_id = resolve_instance_id()
 
         assert len(instance_id) == 16
-        data = json.loads((home / "instance.json").read_text())
+        data = json.loads(id_file.read_text())
         assert data["instance_id"] == instance_id
 
-    def test_different_hermes_homes_get_different_ids(self, monkeypatch, tmp_path):
-        """(g) Two profiles (own HERMES_HOME + own home) get two ids."""
-        first_home = tmp_path / "nexus-home-a"
-        second_home = tmp_path / "nexus-home-b"
+    def test_shared_nexus_home_still_gives_one_id_per_profile(self, monkeypatch, tmp_path):
+        """(g) Two HERMES_HOME values sharing ONE NEXUS_HOME get TWO ids.
+
+        This is the case the derivation exists for: the Nexus home is shared,
+        so the id files must be per profile, not one file for all of them.
+        """
+        home = tmp_path / "shared-nexus-home"
+        monkeypatch.setenv("NEXUS_HOME", str(home))
+
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
-        monkeypatch.setenv("NEXUS_HOME", str(first_home))
         first = resolve_instance_id()
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
-        monkeypatch.setenv("NEXUS_HOME", str(second_home))
         second = resolve_instance_id()
 
         assert first != second
-        assert json.loads((first_home / "instance.json").read_text())["instance_id"] == first
-        assert json.loads((second_home / "instance.json").read_text())["instance_id"] == second
+        assert len(first) == 16
+        assert len(second) == 16
+        files = _id_files(home)
+        assert len(files) == 2
+        stored = {json.loads(f.read_text())["instance_id"] for f in files}
+        assert stored == {first, second}
 
-    def test_stored_id_wins_over_a_changed_hermes_home(self, monkeypatch, tmp_path):
-        """(h) Same HERMES_HOME → same id; a later change cannot move it."""
-        home = tmp_path / "nexus-home"
-        monkeypatch.setenv("NEXUS_HOME", str(home))
+    def test_profiles_in_the_default_home_get_two_ids(self, monkeypatch, tmp_path):
+        """(g) The real layout: profiles share ~/.nexus-memory, ids still split."""
+        monkeypatch.delenv("NEXUS_HOME", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        home = tmp_path / ".nexus-memory"
+
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
-
         first = resolve_instance_id()
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
         second = resolve_instance_id()
 
-        assert first == second
-        assert json.loads((home / "instance.json").read_text())["instance_id"] == first
+        assert first != second
+        assert len(_id_files(home)) == 2
+
+    def test_a_corrupt_file_of_one_profile_leaves_the_other_alone(self, monkeypatch, tmp_path):
+        """(j) Per-profile files are isolated: one broken file repairs only itself."""
+        home = tmp_path / "shared-nexus-home"
+        monkeypatch.setenv("NEXUS_HOME", str(home))
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
+        id_a = resolve_instance_id()
+        file_a = _id_files(home)[0]
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
+        id_b = resolve_instance_id()
+        file_b = next(f for f in _id_files(home) if f != file_a)
+
+        file_a.write_text("{not json at all")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
+        repaired = resolve_instance_id()
+        assert len(repaired) == 16
+        assert json.loads(file_a.read_text())["instance_id"] == repaired
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
+        assert resolve_instance_id() == id_b
+        assert json.loads(file_b.read_text())["instance_id"] == id_b
+
+    def test_stored_id_wins_over_a_changed_hermes_home(self, monkeypatch, tmp_path):
+        """(h) A → B → A: the id stored for A is read back, never recomputed."""
+        home = tmp_path / "nexus-home"
+        monkeypatch.setenv("NEXUS_HOME", str(home))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
+        resolve_instance_id()
+        id_file_a = _id_files(home)[0]
+
+        # A stored id must beat the derivation, so store one the seed cannot
+        # produce: only a read-back (not a recompute) can return it.
+        stored = "0123456789abcdef"
+        id_file_a.write_text(json.dumps({"instance_id": stored, "created_at": "x"}))
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
+        other = resolve_instance_id()
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
+        again = resolve_instance_id()
+
+        assert other != stored
+        assert again == stored
+        assert json.loads(id_file_a.read_text())["instance_id"] == stored
 
     def test_works_without_hermes_and_nexus_home(self, monkeypatch, tmp_path):
         """(i) Neither variable set: an id is still created and persisted."""
@@ -232,4 +298,26 @@ class TestInstanceStamp:
         assert first == second
         assert len(first) == 16
         assert all(c in "0123456789abcdef" for c in first)
-        assert json.loads((home / "instance.json").read_text())["instance_id"] == first
+        files = _id_files(home)
+        assert len(files) == 1
+        assert json.loads(files[0].read_text())["instance_id"] == first
+
+    def test_legacy_instance_file_is_ignored(self, monkeypatch, tmp_path):
+        """(j) The old shared instance.json is not read any more."""
+        home = tmp_path / "nexus-home"
+        home.mkdir(parents=True, exist_ok=True)
+        legacy = home / "instance.json"
+        legacy.write_text(json.dumps({"instance_id": "aaaaaaaaaaaaaaaa",
+                                      "created_at": "x"}))
+        monkeypatch.setenv("NEXUS_HOME", str(home))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile"))
+
+        instance_id = resolve_instance_id()
+
+        assert instance_id != "aaaaaaaaaaaaaaaa"
+        assert len(instance_id) == 16
+        files = _id_files(home)
+        assert len(files) == 1
+        assert json.loads(files[0].read_text())["instance_id"] == instance_id
+        # The legacy file is left alone: unread, not migrated, not deleted.
+        assert json.loads(legacy.read_text())["instance_id"] == "aaaaaaaaaaaaaaaa"
