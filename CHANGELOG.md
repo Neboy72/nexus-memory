@@ -36,7 +36,10 @@ identical: 24 edge cases including nested brackets and 200 000 random strings ov
 and spaces produce zero differences against the pattern. The same 64 002 bracket characters took
 about 6.5 seconds before and a few microseconds now. `WIKILINK_PATTERN` stays in the module for existing imports.
 
-Reported by Simon Yuan.
+Reported and fixed by Simin Yuan (@simin-yuan). The linear scan in this fix comes from the report:
+the function differs from the reported version only in the docstring, in the position of one local
+assignment, in one slice spacing and in two dropped comment lines. An earlier version of this entry
+credited the work to "Simon Yuan", which is the wrong first name, and named the report only.
 
 ## [0.22.31] — 2026-10-25
 
