@@ -190,6 +190,8 @@ def test_windows_lock_retries_until_available(monkeypatch, registry_path):
     fake = _FakeMsvcrt(failures_before_success=2)
     with _fresh_agent_detect(block_fcntl=True,
                              fake_msvcrt=fake) as ad:
+        monkeypatch.setattr(ad, "_get_agents_registry_path",
+                            lambda: registry_path)
         monkeypatch.setattr(ad, "_LOCK_ACQUIRE_TIMEOUT_SEC", 5.0)
         monkeypatch.setattr(ad, "_LOCK_RETRY_INTERVAL_SEC", 0)
 
@@ -202,11 +204,13 @@ def test_windows_lock_retries_until_available(monkeypatch, registry_path):
             fake.LK_NBLCK, fake.LK_NBLCK, fake.LK_NBLCK, fake.LK_UNLCK]
 
 
-def test_windows_lock_times_out_with_clear_error(monkeypatch):
+def test_windows_lock_times_out_with_clear_error(monkeypatch, registry_path):
     """A never-released lock raises a readable TimeoutError, not a hang."""
     fake = _FakeMsvcrt(failures_before_success=10 ** 6)
     with _fresh_agent_detect(block_fcntl=True,
                              fake_msvcrt=fake) as ad:
+        monkeypatch.setattr(ad, "_get_agents_registry_path",
+                            lambda: registry_path)
         monkeypatch.setattr(ad, "_LOCK_ACQUIRE_TIMEOUT_SEC", 0)
         monkeypatch.setattr(ad, "_LOCK_RETRY_INTERVAL_SEC", 0)
 
