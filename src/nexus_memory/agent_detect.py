@@ -44,6 +44,7 @@ except ImportError:  # POSIX
     msvcrt = None
     _HAVE_MSVCRT = False
 
+import hashlib
 import json
 import logging
 import os
@@ -53,7 +54,6 @@ import socket
 import sys
 import threading
 import time
-import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -769,6 +769,9 @@ def resolve_agent_id(explicit: Optional[str] = None) -> str:
 # profiles — are still the same id without this.
 INSTANCE_ID_ENV = "NEXUS_INSTANCE_ID"
 INSTANCE_ID_FILE = "instance.json"
+# The installation's OWN home. Hermes sets it per profile, so several profiles
+# on one machine that share one Nexus data dir still get separate ids.
+HERMES_HOME_ENV = "HERMES_HOME"
 
 
 def _nexus_home() -> Path:
@@ -779,9 +782,31 @@ def _nexus_home() -> Path:
     return Path(os.environ.get("NEXUS_HOME") or (Path.home() / ".nexus-memory"))
 
 
+def _instance_seed() -> str:
+    """The text a NEW instance id is derived from: the installation's homes.
+
+    ``HERMES_HOME`` and ``NEXUS_HOME`` (a profile's own folder and the
+    memory's folder); when neither is set, the resolved Nexus home. Both
+    are install locations — the seed says where the store lives, it does
+    not claim anything about the person or the machine.
+    """
+    hermes_home = os.environ.get(HERMES_HOME_ENV, "").strip()
+    nexus_home = os.environ.get("NEXUS_HOME", "").strip()
+    if hermes_home or nexus_home:
+        return f"{hermes_home}\x00{nexus_home}"
+    return str(_nexus_home().resolve())
+
+
 def _new_instance_id() -> str:
-    """A fresh installation id: 16 hex chars from uuid4."""
-    return uuid.uuid4().hex[:16]
+    """A new installation id: 16 hex chars of sha256 over the instance seed.
+
+    Deterministic ON PURPOSE. The first id of an installation is derived
+    from its home, so four profiles sharing one data dir do not collapse
+    into one id. The value is written to ``instance.json`` immediately and
+    from then on only ever read back — it is a stable label for one home,
+    not a guess about the user or the machine.
+    """
+    return hashlib.sha256(_instance_seed().encode("utf-8")).hexdigest()[:16]
 
 
 def _write_instance_id(path: Path, instance_id: str) -> None:
@@ -805,13 +830,23 @@ def _write_instance_id(path: Path, instance_id: str) -> None:
 def resolve_instance_id() -> str:
     """Return this installation's id — never empty, never guessed.
 
-    Order: ``NEXUS_INSTANCE_ID`` → ``instance.json`` in the Nexus home
-    (created on first use) → a fresh in-memory id if the file cannot be
-    read or written. As in ``resolve_agent_id``, nothing is derived from
-    the hostname, the user name, an install path or a port: a guessed id
-    files memories under the wrong installation. A broken file is never
-    used as an id; and no read/write error may break the caller — storing
-    a memory must not fail because of an id.
+    Order: ``NEXUS_INSTANCE_ID`` → ``instance.json`` in the Nexus home →
+    a NEW id derived from the installation's home, written to that file
+    (or returned in memory if the file cannot be written).
+
+    The path is only the SEED for a new id, never the id itself. The first
+    call derives 16 hex chars from ``HERMES_HOME``/``NEXUS_HOME`` (or the
+    resolved Nexus home), writes them, and every later call returns that
+    stored value — even if the environment or the path changes afterwards.
+    An existing id is NEVER recomputed; that is deliberate, not a bug.
+
+    This is what separates it from a guessed id (hostname, user name,
+    port): the seed cannot file memories under the wrong installation,
+    because it only names the home the store lives in, and Hermes sets
+    ``HERMES_HOME`` per profile — so four profiles sharing one data dir
+    keep four ids. A broken file is never used as an id; and no read/write
+    error may break the caller — storing a memory must not fail because of
+    an id.
     """
     env = os.environ.get(INSTANCE_ID_ENV, "")
     if env.strip():
