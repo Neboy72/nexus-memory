@@ -205,7 +205,7 @@ Every MCP-compatible agent uses the same stdio config — only the file differs:
 | `update` ✏️ | Update in-place, preserve metadata | `memory_id` (req), `text`, `modified_by` |
 | `subscribe` / `unsubscribe` / `list_subscriptions` 🔔 | Manage webhooks for memory events | see below |
 | `health` ❤️ | Server status, embedding, update availability | none |
-| `check_update` / `do_update` 🔄 | CLI only — the *running* service deliberately does not register them (a self-updating daemon that outlives its host is a security risk). Update from a shell instead. | `confirm` (req, must be `true`) |
+| `check_update` / `do_update` 🔄 | **Not available — neither as a tool nor as a CLI command.** A self-updating daemon that outlives its host is a security risk, so the service no longer polls or updates itself. Update with your package manager or from a shell in the checkout; `NEXUS_UPDATE_CHECK=1` only adds a notification in chat. | — |
 | `backup` / `restore` 💾 | Export all memories to JSON / restore from a backup | `backup_path`, `reembed` (optional) |
 | `guardrail_check` 🛡️ | Check whether an action is safe before running it | `command` (req), `tool_name`, `tool_input` |
 | `guardrail_override` 🔓 | Record an override with audit trail | `command` (req), `reasoning` (req, min 10 chars), `matched_rules`, `agent_id` |
@@ -253,7 +253,7 @@ or `public` is a deliberate step in the dashboard — and it applies immediately
 
 **Memory dynamics 🧠** — Ranking is brain-inspired: every recall hit reinforces a memory (log-capped, max ×4), unused memories lose 5% of ranking weight per month down to a floor of 30% (forgotten ≠ deleted), and salience (0.0–1.0, ≥ 0.8 is decay-immune) marks what matters. Dynamics act only as a tie-breaker inside equal semantic relevance — they never override the reranker.
 
-**Retention & drift 🧹** — Per-category TTLs purge stale entries during SICA runs (`temp` = 1 day, `session` = 7 days by default); everything else stays forever. Drift detection scores stale entries and old patterns 0–10 (🟢 < 1 healthy, 🟡 1–3 attention, 🔴 > 3 action).
+**Retention & drift 🧹** — Per-category TTLs purge stale entries during SICA runs (`session` and `temp` = 7 days by default); everything else stays forever. Drift detection scores stale entries and old patterns 0–10 (🟢 < 1 healthy, 🟡 1–3 attention, 🔴 > 3 action).
 
 **Knowledge graph 🔗** — Entities and 11 typed relations live alongside the vectors (`category="entity"`), so the agent can ask "what connects to X?" instead of only "what is similar" — and auto-recall fetches 1-hop neighbours of the top hits, tagged `[graph:<relation>]`, all three plugins, access-level filtered, capped at 5. Relations between facts are discovered automatically (no manual edges), with hub scores, isolation scores and knowledge gaps on top.
 
