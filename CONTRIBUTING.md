@@ -65,6 +65,14 @@ pytest tests/ --cov=nexus_memory --cov-report=term-missing
 - [ ] Docs updated if API changed
 - [ ] Changelog entry added
 
+## 📄 Licence
+
+Nexus Memory is MIT licensed, see `LICENSE`. By submitting a pull request you agree that
+your contribution is licensed under the same terms. One line in the pull request
+description is enough:
+
+> I license this contribution under the MIT licence of this project.
+
 ## 📐 Code Style
 
 - **Python:** Follow [PEP 8](https://peps.python.org/pep-0008/). We use `ruff` for linting and formatting
