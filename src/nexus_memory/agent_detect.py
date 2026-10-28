@@ -53,6 +53,7 @@ import socket
 import sys
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -761,6 +762,84 @@ def resolve_agent_id(explicit: Optional[str] = None) -> str:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return UNIDENTIFIED_AGENT_ID
+
+
+# Which INSTALLATION a memory came from. The agent id says which KIND of
+# agent wrote ("hermes"); two Hermes instances on two machines — or in two
+# profiles — are still the same id without this.
+INSTANCE_ID_ENV = "NEXUS_INSTANCE_ID"
+INSTANCE_ID_FILE = "instance.json"
+
+
+def _nexus_home() -> Path:
+    """The Nexus data directory: ``NEXUS_HOME`` or ``~/.nexus-memory``.
+
+    Same resolution ``consolidation.py`` uses for its state files.
+    """
+    return Path(os.environ.get("NEXUS_HOME") or (Path.home() / ".nexus-memory"))
+
+
+def _new_instance_id() -> str:
+    """A fresh installation id: 16 hex chars from uuid4."""
+    return uuid.uuid4().hex[:16]
+
+
+def _write_instance_id(path: Path, instance_id: str) -> None:
+    """Atomically write ``{"instance_id": ..., "created_at": ...}`` to ``path``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(
+        f"{path.name}.tmp-{os.getpid()}-{threading.get_ident()}"
+    )
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as tmp_file:
+            json.dump({"instance_id": instance_id,
+                       "created_at": _now_iso()}, tmp_file)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def resolve_instance_id() -> str:
+    """Return this installation's id — never empty, never guessed.
+
+    Order: ``NEXUS_INSTANCE_ID`` → ``instance.json`` in the Nexus home
+    (created on first use) → a fresh in-memory id if the file cannot be
+    read or written. As in ``resolve_agent_id``, nothing is derived from
+    the hostname, the user name, an install path or a port: a guessed id
+    files memories under the wrong installation. A broken file is never
+    used as an id; and no read/write error may break the caller — storing
+    a memory must not fail because of an id.
+    """
+    env = os.environ.get(INSTANCE_ID_ENV, "")
+    if env.strip():
+        return env.strip()
+
+    path = _nexus_home() / INSTANCE_ID_FILE
+    try:
+        if path.exists():
+            value = None
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                value = data.get("instance_id") if isinstance(data, dict) else None
+            except Exception as exc:
+                logging.debug("instance id file %s unreadable: %s", path, exc)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            # Broken file (unparsable, or no usable instance_id): replace it —
+            # a corrupt file must never become the id.
+            logging.debug(
+                "instance id file %s carries no usable instance_id — replacing it",
+                path,
+            )
+        instance_id = _new_instance_id()
+        _write_instance_id(path, instance_id)
+        return instance_id
+    except Exception as exc:
+        logging.debug("instance id unavailable (%s) — using an in-memory id", exc)
+        return _new_instance_id()
 
 
 def update_agent_stats(agent_id: Optional[str] = None, read: bool = False,

@@ -50,6 +50,10 @@ from qdrant_client.http import models as qmodels
 import nexus
 from nexus import MemoryCategory, __version__ as nexus_version
 
+# Who stored a memory (explicit → NEXUS_AGENT_ID → UNIDENTIFIED_AGENT_ID).
+# Distinct from ``source``, which says where the INFORMATION came from.
+from nexus_memory.agent_detect import resolve_agent_id, resolve_instance_id
+
 # Repo-Root dynamisch ableiten (nexus/ liegt im Repo-Root)
 _NEXUS_REPO = os.path.dirname(os.path.dirname(nexus.__file__))
 NEXUS_REPO_PATH = os.environ.get("NEXUS_REPO_PATH", _NEXUS_REPO)
@@ -1193,6 +1197,14 @@ class MemoryStore:
             "access_level": access_level,
             "category": category,
             "source": source,
+            # Who stored this memory. ``source`` above says where the
+            # information came from (mail, web, consolidation) — this says
+            # which agent put it here. Never derived from the caller's
+            # ``source`` argument; old points simply lack the field (None).
+            "agent": resolve_agent_id(),
+            # Which INSTALLATION of that agent — two Hermes seats on two
+            # machines share the agent id but never the instance id.
+            "instance": resolve_instance_id(),
             "source_url": source_url,
             "created_at": created_at,
             "provenance": provenance,
@@ -1416,6 +1428,13 @@ class MemoryStore:
                                         r["category"] = pl.get("category") or MemoryCategory.FACT.value
                                     if not r.get("source"):
                                         r["source"] = pl.get("source")
+                                    # Hybrid/BM25 hits carry no payload fields;
+                                    # stamp who stored the memory so recall()
+                                    # can return it like ``source``.
+                                    if not r.get("agent"):
+                                        r["agent"] = pl.get("agent")
+                                    if not r.get("instance"):
+                                        r["instance"] = pl.get("instance")
                                     if not r.get("created_at"):
                                         r["created_at"] = pl.get("created_at")
                                     if not r.get("provenance"):
@@ -1470,6 +1489,10 @@ class MemoryStore:
                     # fall back to "fact" so the response is always well-typed.
                     "category": payload.get("category") or MemoryCategory.FACT.value,
                     "source": payload.get("source"),
+                    # Older points have no "agent"/"instance" — they return
+                    # None by design (no migration, no backfill).
+                    "agent": payload.get("agent"),
+                    "instance": payload.get("instance"),
                     "source_url": payload.get("source_url"),
                     "provenance": payload.get("provenance", {}),
                     "created_at": payload.get("created_at"),
@@ -1664,6 +1687,8 @@ class MemoryStore:
                 "dynamic_score": dynamic_score,  # v0.15: base × reinforcement × decay
                 "match": match_type,
                 "source": r.get("source"),
+                "agent": r.get("agent"),
+                "instance": r.get("instance"),
                 "source_url": r.get("source_url"),
                 "verification": source_verification.get(r.get("source_url"), "unchecked"),
                 "doc_id": doc_id,
