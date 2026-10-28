@@ -1,3 +1,24 @@
+## [0.22.35] - 2026-10-28
+
+### Security - protected-path rules match on Windows too
+
+`_path_matches` decided whether a target lies inside a protected path, and whether a protected path
+sits inside a directory that is about to be deleted, by appending a literal "/" to the path it
+compared against. On Windows the normalized path carries backslashes, so neither test could ever be
+true: with a rule protecting `C:\data\protected`, both `rm -rf C:\data\protected\file.txt` and
+`rm -rf C:\data` came back as an unprotected target. Exact matches on the protected path itself
+still blocked, so only the two nested cases were lost. macOS and Linux were not affected by this one.
+
+The comparison goes through `commonpath` now, so it uses the platform's own separator. That also
+covers a protected root, and there it turned out the old code was wrong on posix too: "/" plus "/"
+never matched. A module level `_osp` hook lets the test suite run the matcher under `ntpath` and
+`posixpath` on any host, so this class of bug fails on a macOS run instead of waiting for a Windows
+machine.
+
+Reported and fixed by Simin Yuan (@simin-yuan). `tests/test_guardrails_paths_crossplatform.py`
+covers the child path, the parent delete, a sibling with a shared prefix, a protected root and a
+different drive.
+
 ## [0.22.34] - 2026-10-28
 
 ### Security - the guardrail patterns no longer backtrack
