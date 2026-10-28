@@ -516,6 +516,23 @@ if QdrantClient is not None:
 logger = logging.getLogger(__name__)
 
 
+def _agent_stamp() -> Dict[str, Any]:
+    """Who stored this point (``agent``) and from which installation (``instance``).
+
+    Same fields the MCP server writes, so both write paths stamp alike.
+    Fail-open on purpose: this plugin must keep storing memories even when
+    ``nexus_memory`` is not importable in the host interpreter (catalog rule
+    135493 keeps it off the host's import path), so a failed import yields
+    ``None`` stamps instead of an exception.
+    """
+    try:
+        from nexus_memory.agent_detect import resolve_agent_id, resolve_instance_id
+        return {"agent": resolve_agent_id(), "instance": resolve_instance_id()}
+    except Exception as exc:
+        logger.warning("agent stamp unavailable, storing without it: %s", exc)
+        return {"agent": None, "instance": None}
+
+
 def _env_int_bounded(name: str, default: int, lo: int, hi: int) -> int:
     """Parse an int env var defensively — a malformed value must never raise.
 
@@ -1846,6 +1863,9 @@ class NexusMemoryProvider:
         else:
             scope = "default"
         payload = {"id": eid, "content": text, "access_level": access_level, "category": category,
+                    # Who stored it — ``source`` says where the INFORMATION
+                    # came from, this says which agent/installation wrote it.
+                    **_agent_stamp(),
                     "source": source, "source_url": source_url, "created_at": ts,
                     "lifecycle_status": "canonical", "salience": eff_salience, "use_count": 0,
                     "scope": scope,
@@ -2650,6 +2670,8 @@ class NexusMemoryProvider:
             "entity_type": entity.entity_type,
             "entity_name": entity.name,
             "entity_attributes": entity.attributes,
+            # Same stamp as the remember path (who + which installation).
+            **_agent_stamp(),
             "source": source,
             "source_url": "",
             "created_at": ts,
@@ -2821,7 +2843,7 @@ def _repair_command() -> str:
     # same revision ``[tool.uv.sources]`` names, not the tag `v0.22.28` that
     # will point at it: a tag can be moved, a sha cannot.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
-            "@cec362c48e6c48c25dd157117c28d97cbc9fd8c6")
+            "@da19928c70cec07a976250ffb19ca89cecd94dc4")
     # A checkout of THIS repository may be reinstalled in editable mode — handy
     # while developing. It has to prove it is that repository, though: for a
     # catalog-installed plugin `__file__` lives under the Hermes plugin dir and
