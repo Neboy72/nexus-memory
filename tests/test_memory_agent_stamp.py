@@ -5,8 +5,8 @@ next to ``source`` (which says where the INFORMATION came from: mail, web,
 consolidation). ``agent`` comes from ``agent_detect.resolve_agent_id()``
 (explicit → ``NEXUS_AGENT_ID`` → ``UNIDENTIFIED_AGENT_ID``); ``instance`` from
 ``resolve_instance_id()`` (``NEXUS_INSTANCE_ID`` → ``instance.json`` in the
-Nexus home). Old points simply have no field (None); there is no migration and
-no backfill.
+Nexus home, seeded on first use by ``HERMES_HOME``/``NEXUS_HOME``). Old points
+simply have no field (None); there is no migration and no backfill.
 
 No Qdrant server needed: the client is replaced by a small fake, the same
 pattern ``tests/test_scope.py`` and ``tests/test_scope_auto.py`` use.
@@ -187,3 +187,49 @@ class TestInstanceStamp:
         assert len(instance_id) == 16
         data = json.loads((home / "instance.json").read_text())
         assert data["instance_id"] == instance_id
+
+    def test_different_hermes_homes_get_different_ids(self, monkeypatch, tmp_path):
+        """(g) Two profiles (own HERMES_HOME + own home) get two ids."""
+        first_home = tmp_path / "nexus-home-a"
+        second_home = tmp_path / "nexus-home-b"
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
+        monkeypatch.setenv("NEXUS_HOME", str(first_home))
+        first = resolve_instance_id()
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
+        monkeypatch.setenv("NEXUS_HOME", str(second_home))
+        second = resolve_instance_id()
+
+        assert first != second
+        assert json.loads((first_home / "instance.json").read_text())["instance_id"] == first
+        assert json.loads((second_home / "instance.json").read_text())["instance_id"] == second
+
+    def test_stored_id_wins_over_a_changed_hermes_home(self, monkeypatch, tmp_path):
+        """(h) Same HERMES_HOME → same id; a later change cannot move it."""
+        home = tmp_path / "nexus-home"
+        monkeypatch.setenv("NEXUS_HOME", str(home))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
+
+        first = resolve_instance_id()
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
+        second = resolve_instance_id()
+
+        assert first == second
+        assert json.loads((home / "instance.json").read_text())["instance_id"] == first
+
+    def test_works_without_hermes_and_nexus_home(self, monkeypatch, tmp_path):
+        """(i) Neither variable set: an id is still created and persisted."""
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("NEXUS_HOME", raising=False)
+        # Redirect the fallback home (~/.nexus-memory) into the test.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        home = tmp_path / ".nexus-memory"
+
+        first = resolve_instance_id()
+        second = resolve_instance_id()
+
+        assert first == second
+        assert len(first) == 16
+        assert all(c in "0123456789abcdef" for c in first)
+        assert json.loads((home / "instance.json").read_text())["instance_id"] == first
