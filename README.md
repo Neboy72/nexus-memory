@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.36-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.22.37-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-green-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -302,6 +302,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.37** | 2026-10-28 | A new installation id is derived from the installation's own home instead of being random, so four Hermes profiles sharing one data directory get four ids without any setup. An existing id is never recomputed |
 | **v0.22.36** | 2026-10-28 | Every memory now records which agent and which installation stored it. `source` said where the information came from; nothing said who put it there, so a preference could be read without knowing whose it was, and two Hermes installations were indistinguishable. Old points return nothing for the new fields; no migration |
 | **v0.22.35** | 2026-10-28 | Protected-path rules matched only on paths with forward slashes: on Windows, a rule guarding `C:\data\protected` let `rm -rf C:\data\protected\file.txt` and `rm -rf C:\data` through as an unprotected target. The comparison now goes by path component, which also fixes a protected root on macOS and Linux. Reported and fixed by Simin Yuan (@simin-yuan), with tests that run both path flavours on any host |
 | **v0.22.34** | 2026-10-28 | The guardrail patterns for destructive commands no longer backtrack: `find -delete`, `git clean -f`, `dd of`, `DELETE`/`drop collection` and the `pip`/`npm`/`brew install` rules are linear now, so a long crafted command cannot stall the check that runs before every terminal command. Reported and fixed by Simin Yuan (@simin-yuan), with a test per pattern for the input that used to be the worst |
@@ -364,4 +365,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.36 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.37 · One memory for all your agents</sub>
