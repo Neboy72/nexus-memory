@@ -1,3 +1,21 @@
+## [0.22.38] - 2026-10-28
+
+### Memory - every installation keeps its own id file, even in a shared Nexus home
+
+0.22.37 derived a new id from the installation's home but stored it in `instance.json` inside
+NEXUS_HOME. Four Hermes profiles sharing one Nexus home therefore read the same file, so whichever
+profile wrote first decided the id for all of them. Measured before the fix, two profiles with one
+shared home both returned `2ebf77795f48a750`.
+
+The file name now carries the seed: `instance-<8 hex of sha256(seed)>.json`. Four profiles sharing
+one home write four files and read four ids. Measured after the fix with the same setup: `vater`
+`841e9597ff4f2b5a`, `mutter` `2c1c09afd35e304c`, `kind1` `c3319c8826307a52`, `kind2`
+`61f7294371275bd5`, and a second run returns exactly the same four values.
+
+The old `instance.json` is deliberately neither migrated nor read: it arrived in 0.22.36, there is
+no real data behind it, and carrying it over would hand the shared value to every profile, which is
+the bug itself. The test for the shared-home case fails without this change and passes with it.
+
 ## [0.22.37] - 2026-10-28
 
 ### Memory - a new installation id comes from the installation's home, not from a random value
