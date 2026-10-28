@@ -23,12 +23,17 @@ Based on Issue #6 (Active Guardrails) and two real incidents:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
+
+# Path flavour used for protected-path comparison. Module level so tests can
+# exercise Windows semantics (ntpath) on any host.
+_osp = os.path
 
 logger = logging.getLogger(__name__)
 
@@ -676,15 +681,32 @@ class GuardrailEngine:
         Resolves symlinks against the real filesystem where the path exists
         so symlink aliases of protected resources compare equal to the real
         path. Non-existent paths fall back to lexical normalization.
+        normpath already drops trailing separators except on a root, which
+        has to keep its separator to stay a root.
         """
-        import os
-        path = os.path.expanduser(path)
-        path = os.path.normpath(path)
+        path = _osp.expanduser(path)
+        path = _osp.normpath(path)
         try:
-            path = os.path.realpath(path)
+            path = _osp.realpath(path)
         except OSError:
             pass
-        return path.rstrip("/").lower()
+        return path.lower()
+
+    @staticmethod
+    def _is_within(child: str, parent: str) -> bool:
+        """True if normalized ``child`` lies strictly below ``parent``.
+
+        Compares path components with the platform's own separator, so it
+        holds for c:\\data\\sub under c:\\data as well as /data/sub under
+        /data, and for anything under a root (/ or c:\\).
+        """
+        if child == parent:
+            return False
+        try:
+            return _osp.commonpath([child, parent]) == parent
+        except ValueError:
+            # Different drives, or absolute mixed with relative.
+            return False
 
     @staticmethod
     def _path_matches(target: str, protected: str, recursive: bool = False) -> bool:
@@ -705,9 +727,9 @@ class GuardrailEngine:
             prefix = protected_norm[:-1]
             if target_norm.startswith(prefix):
                 return True
-        if target_norm.startswith(protected_norm + "/"):
+        if GuardrailEngine._is_within(target_norm, protected_norm):
             return True
-        if recursive and protected_norm.startswith(target_norm + "/"):
+        if recursive and GuardrailEngine._is_within(protected_norm, target_norm):
             # Parent-dir bypass: deleting the target subtree would also
             # destroy the protected child inside it (e.g. 'rm -rf /data'
             # with a protected /data/protected).
