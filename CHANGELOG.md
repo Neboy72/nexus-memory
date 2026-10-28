@@ -1,3 +1,24 @@
+## [0.22.37] - 2026-10-28
+
+### Memory - a new installation id comes from the installation's home, not from a random value
+
+0.22.36 gave every store a random installation id on first use. It was stable, but it only told
+data directories apart. Four Hermes profiles on one machine that share one Nexus data directory all
+read the same `instance.json` and therefore carried the same id, which is the exact case the field
+exists for. Telling the user to set `NEXUS_INSTANCE_ID` is not an answer, because nobody in that
+situation knows the variable exists.
+
+A NEW id is therefore derived from the home of the installation: `HERMES_HOME`, which Hermes sets
+per profile, together with `NEXUS_HOME`, hashed to 16 hex characters. Four profiles have four homes
+and get four ids with no configuration at all. An id that already exists is still only read back,
+never recomputed, so moving a folder does not re-file memories that were stored before.
+
+The seed is a location, not a guess: it says where the store lives and claims nothing about the
+person or the machine. The rule that ids are never derived from hostname, user name or port stays in
+force for everything else, and the docstring says why this case is different. Three tests cover the
+behaviour: two homes give two ids, one home keeps its id when the environment changes, and no home
+at all still yields a valid stored id.
+
 ## [0.22.36] - 2026-10-28
 
 ### Memory - every entry now says who stored it, and from which installation
