@@ -1,3 +1,15 @@
+## [0.22.40] - 2026-10-29
+
+### Memory - the plugin names the agent instead of leaving it unidentified
+
+0.22.39 stamped the agent name by reading `NEXUS_AGENT_ID`. In practice that variable does not reach
+the plugin process, so Hermes memories were filed as `unidentified` even though the plugin is Hermes
+and knows it. A field that says nothing is worse than no field, because it looks filled in.
+
+The plugin now passes the name: `NEXUS_AGENT_ID` when set, `hermes` otherwise. Measured after the
+change with no environment set, `_agent_stamp()` returns `{'agent': 'hermes', 'instance':
+'a9bd653dda02246b'}`. Two tests pin the behaviour, the default and the environment override.
+
 ## [0.22.39] - 2026-10-28
 
 ### Memory - the Hermes plugin stamps `agent` and `instance` as well
