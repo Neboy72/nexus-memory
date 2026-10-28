@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.33-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.22.34-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-green-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -302,6 +302,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.34** | 2026-10-28 | The guardrail patterns for destructive commands no longer backtrack: `find -delete`, `git clean -f`, `dd of`, `DELETE`/`drop collection` and the `pip`/`npm`/`brew install` rules are linear now, so a long crafted command cannot stall the check that runs before every terminal command. Reported and fixed by Simin Yuan (@simin-yuan), with a test per pattern for the input that used to be the worst |
 | **v0.22.33** | 2026-10-27 | The agent registry module loads on Windows: `fcntl` and `msvcrt` are optional, the registry lock is `flock` on POSIX and `msvcrt.locking` on Windows, and the setup flow and the test suite stop failing there; checked on a real Windows host, the old revision raised `ModuleNotFoundError: No module named 'fcntl'` and the new one imports and registers |
 | **v0.22.32** | 2026-10-25 | Wikilink scan in discovery rewritten as a single linear pass; the regex was quadratic on a crafted memory fact (64 002 bracket characters: about 6.5 s before, a few microseconds now); output verified identical on 24 edge cases and 200 000 random strings |
 | **v0.22.31** | 2026-10-25 | Seven advisories closed across five packages: the lockfile moves certifi to 2026.10.23, filelock to 4.2.4, setuptools to 84.2.1 and opentelemetry-api to 1.45.1, which closes six of them, and the test runner moves to pytest 9, which closes the seventh (tmpdir handling); the full suite runs green on it; no runtime behaviour changed |
@@ -361,4 +362,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.33 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.34 · One memory for all your agents</sub>
