@@ -6,9 +6,11 @@ Behavior tests target the real public APIs: extract_entities
 (consolidation). Source-inspection for the wizard/health_audit seams.
 """
 
+from pathlib import Path
+
 import pytest
 
-REPO = __file__.rsplit("/tests/", 1)[0]
+REPO = Path(__file__).resolve().parent.parent
 
 
 def _read(rel: str) -> str:
