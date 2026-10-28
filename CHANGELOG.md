@@ -1,3 +1,20 @@
+## [0.22.39] - 2026-10-28
+
+### Memory - the Hermes plugin stamps `agent` and `instance` as well
+
+0.22.36 to 0.22.38 put the two provenance fields into the MCP server. Hermes does not store through
+the MCP server, it stores through the plugin, so the fields stayed empty on the path that matters
+most. Measured after the restart: a probe memory written through the plugin came back with
+`agent: None` and `instance: None`.
+
+The plugin now stamps both fields through `_agent_stamp()` and spreads them into the remember and
+the entity payload. The helper is fail-open on purpose: when `nexus_memory` is not importable in the
+host interpreter, which is the normal case by design, the point is stored with `None` stamps instead
+of failing. A memory must never be lost because a label could not be read.
+
+Both write paths now produce the same shape, so a point can be attributed no matter which agent
+wrote it.
+
 ## [0.22.38] - 2026-10-28
 
 ### Memory - every installation keeps its own id file, even in a shared Nexus home
