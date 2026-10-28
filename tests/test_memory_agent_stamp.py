@@ -321,3 +321,95 @@ class TestInstanceStamp:
         assert json.loads(files[0].read_text())["instance_id"] == instance_id
         # The legacy file is left alone: unread, not migrated, not deleted.
         assert json.loads(legacy.read_text())["instance_id"] == "aaaaaaaaaaaaaaaa"
+
+
+# ── the second write path: the Hermes plugin ─────────────────────────────────
+#
+# Hermes stores through ``plugins/memory/nexus/__init__.py``, not through the
+# MCP server. The stamp is only worth anything if this path carries it too, so
+# these tests exercise the plugin's own payload builders. No Qdrant server: the
+# client is replaced by a recorder, the same pattern ``test_fable_calibration``
+# uses for ``_upsert``.
+
+_PLUGIN_PATH = Path(__file__).resolve().parents[1] / "plugins" / "memory" / "nexus" / "__init__.py"
+
+
+def _load_plugin_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("nexus_plugin_agent_stamp", _PLUGIN_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+    return module
+
+
+def _plugin_provider(plugin, captured: dict):
+    """A provider whose next upsert payload lands in ``captured``."""
+
+    class FakeEmbedder:
+        def embed(self, text, is_query=False):
+            return [0.0] * 8
+
+    class FakeQdrant:
+        def upsert(self, collection_name, points):
+            captured["payload"] = points[0].payload
+
+    provider = plugin.NexusMemoryProvider.__new__(plugin.NexusMemoryProvider)
+    provider._embedder = FakeEmbedder()
+    provider._qdrant = FakeQdrant()
+    provider._collection = "nexus"
+    return provider
+
+
+class TestPluginStamp:
+    def test_remember_payload_carries_agent_and_instance(self, monkeypatch):
+        """The plugin's main write path stamps the point like the MCP server."""
+        monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")
+        monkeypatch.setenv("NEXUS_INSTANCE_ID", "abc123def4567890")
+        plugin = _load_plugin_module()
+        captured: dict = {}
+        provider = _plugin_provider(plugin, captured)
+
+        result = provider._upsert("A fact worth remembering", category="fact")
+
+        assert result["status"] == "ok"
+        assert captured["payload"]["agent"] == "hermes"
+        assert captured["payload"]["instance"] == "abc123def4567890"
+        # ``source`` keeps its own meaning (where the information came from).
+        assert captured["payload"]["source"] == ""
+
+    def test_entity_payload_carries_agent_and_instance(self, monkeypatch):
+        """The entity extractor's write path stamps the point too."""
+        from nexus_memory.entity_extractor import Entity
+
+        monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")
+        monkeypatch.setenv("NEXUS_INSTANCE_ID", "fedcba0987654321")
+        plugin = _load_plugin_module()
+        captured: dict = {}
+        provider = _plugin_provider(plugin, captured)
+
+        provider._upsert_entity(Entity("TestDevice", "device", {"ip": "1.2.3.4"}))
+
+        assert captured["payload"]["category"] == "entity"
+        assert captured["payload"]["agent"] == "hermes"
+        assert captured["payload"]["instance"] == "fedcba0987654321"
+
+    def test_missing_agent_detect_does_not_block_storing(self, monkeypatch):
+        """Fail-open: an unimportable ``nexus_memory`` stores with None stamps."""
+        monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")
+        plugin = _load_plugin_module()
+        captured: dict = {}
+        provider = _plugin_provider(plugin, captured)
+        # A ``None`` entry makes ``from nexus_memory.agent_detect import ...``
+        # raise ImportError, exactly like a host where the package is absent.
+        monkeypatch.setitem(sys.modules, "nexus_memory.agent_detect", None)
+
+        result = provider._upsert("A fact worth remembering", category="fact")
+
+        assert result["status"] == "ok"
+        assert captured["payload"]["agent"] is None
+        assert captured["payload"]["instance"] is None
