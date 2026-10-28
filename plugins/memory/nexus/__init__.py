@@ -520,6 +520,9 @@ def _agent_stamp() -> Dict[str, Any]:
     """Who stored this point (``agent``) and from which installation (``instance``).
 
     Same fields the MCP server writes, so both write paths stamp alike.
+    The agent name is *passed* rather than read from the environment: this
+    plugin IS Hermes, so a missing ``NEXUS_AGENT_ID`` must not make Hermes
+    memories look like they came from an unidentified agent.
     Fail-open on purpose: this plugin must keep storing memories even when
     ``nexus_memory`` is not importable in the host interpreter (catalog rule
     135493 keeps it off the host's import path), so a failed import yields
@@ -527,7 +530,10 @@ def _agent_stamp() -> Dict[str, Any]:
     """
     try:
         from nexus_memory.agent_detect import resolve_agent_id, resolve_instance_id
-        return {"agent": resolve_agent_id(), "instance": resolve_instance_id()}
+        return {
+            "agent": resolve_agent_id(os.environ.get("NEXUS_AGENT_ID") or "hermes"),
+            "instance": resolve_instance_id(),
+        }
     except Exception as exc:
         logger.warning("agent stamp unavailable, storing without it: %s", exc)
         return {"agent": None, "instance": None}
