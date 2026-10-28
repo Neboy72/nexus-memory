@@ -382,6 +382,25 @@ class TestPluginStamp:
         # ``source`` keeps its own meaning (where the information came from).
         assert captured["payload"]["source"] == ""
 
+    def test_agent_stamp_defaults_to_hermes_without_env(self, monkeypatch):
+        """(b) Without NEXUS_AGENT_ID the plugin stamps itself as Hermes.
+
+        The variable is configured for Hermes but does not always reach the
+        plugin process (0.22.39 stored ``unidentified`` in practice). The
+        plugin knows what it is, so it must not fall back to the placeholder.
+        """
+        monkeypatch.delenv("NEXUS_AGENT_ID", raising=False)
+        plugin = _load_plugin_module()
+
+        assert plugin._agent_stamp()["agent"] == "hermes"
+
+    def test_agent_stamp_honours_env_when_set(self, monkeypatch):
+        """(b) An explicitly set NEXUS_AGENT_ID still wins."""
+        monkeypatch.setenv("NEXUS_AGENT_ID", "openclaw")
+        plugin = _load_plugin_module()
+
+        assert plugin._agent_stamp()["agent"] == "openclaw"
+
     def test_entity_payload_carries_agent_and_instance(self, monkeypatch):
         """The entity extractor's write path stamps the point too."""
         from nexus_memory.entity_extractor import Entity
