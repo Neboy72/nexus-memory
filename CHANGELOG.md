@@ -1,3 +1,26 @@
+## [0.22.36] - 2026-10-28
+
+### Memory - every entry now says who stored it, and from which installation
+
+A stored point carried `source` (where the information came from) and nothing about who put it
+there. A preference could therefore be read later without anyone knowing whether it came from the
+user, from Hermes or from another agent, and two Hermes installations on two machines looked
+identical because the agent id is the same for both. This surfaced first as a real mix-up between
+two agents on the same store, and it matches the transplant measurement in Yuan (2026): a memory
+store carries more of an agent's identity than it looks.
+
+Every stored point now carries two fields. `agent` comes from `resolve_agent_id` (explicit value,
+then `NEXUS_AGENT_ID`, then the unidentified placeholder). `instance` comes from
+`resolve_instance_id`: `NEXUS_INSTANCE_ID` if set, otherwise `instance.json` in the Nexus home,
+created once on first use with a 16 hex character id. Both are returned wherever `source` is
+returned today, including the hybrid and BM25 hit paths.
+
+The instance id is deliberately never derived from hostname, user name, path or port. A guessed id
+files a memory under the wrong installation, which is worse than no id. A corrupt `instance.json`
+is replaced rather than used, and a read or write error yields an in-memory id instead of failing
+the store call: saving a memory must not fail because of an id. Points stored before this release
+return nothing for both fields; there is no migration.
+
 ## [0.22.35] - 2026-10-28
 
 ### Security - protected-path rules match on Windows too
