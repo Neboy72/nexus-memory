@@ -1,3 +1,24 @@
+## [0.22.34] - 2026-10-28
+
+### Security - the guardrail patterns no longer backtrack
+
+The patterns that classify destructive commands were written as `A.*B`. A plain `A.*B` is
+retried from every occurrence of A and backtracks through every occurrence of B, so a crafted
+command costs time quadratically, and cubically for `git.*clean.*-[fd]` where two `.*` are
+scanned. Nothing caps the command length, and the check runs before every terminal command in
+this setup, so a long enough line stalls the caller.
+
+The eight patterns are now written as `(?m)^(?>.*?A).*?B`. The atomic lazy group commits to the
+first A on each line, which for fixed-length tokens is always the choice that keeps the verdict,
+so the scan is linear and the verdict is unchanged. Measured on this machine: `"git clean "`
+repeated without a terminator takes 3.3 s at 16,000 characters on the old patterns and 0.1 ms on
+the new ones. A seeded generator over 480,000 commands finds no verdict difference between the
+two versions.
+
+Reported and fixed by Simin Yuan (@simin-yuan). `tests/test_guardrails_linear.py` covers each of
+the eight patterns, including the input that used to be the worst case: a repeated prefix that
+never reaches the terminator, 100,000 characters.
+
 ## [0.22.33] — 2026-10-27
 
 ### Fixed — the agent registry module loads on Windows, and its lock works there
