@@ -1,3 +1,14 @@
+## [Unreleased]
+
+### Tests - the symlink guardrail tests skip when the platform refuses a symlink
+
+`os.symlink` raises `OSError` (WinError 1314) on Windows unless the account holds
+SeCreateSymbolicLinkPrivilege, so the two symlink tests in `tests/test_guardrails.py`
+errored instead of running. They now skip with the reason when creation is refused, and
+still run wherever symlinks are permitted, so nothing is skipped on macOS or Linux.
+
+Fixed by Simin Yuan (@simin-yuan).
+
 ## [0.22.34] - 2026-10-28
 
 ### Security - the guardrail patterns no longer backtrack
