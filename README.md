@@ -269,42 +269,13 @@ Only local Ollama is probed up front; a keyed door stays "ready" until the call 
 
 **Fact lifecycle 🧬** — Append-only state machine: `pending → canonical | deprecated | rolled_back`. Every revision carries `fact_id`, `version_id`, `content_hash`, `supersedes` and a mandatory `decision_event` — no silent overwrites, no zombie facts. `create_pending()` / `promote()` / `deprecate()` / `rollback()` drive it; a reranked update no longer stays findable by its refuted wording.
 
-**Active guardrails 🛡️** — The only memory layer that does not just store knowledge but guards it: before a destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`, `find -delete`, `git clean -fdx`, `pip uninstall`, `dd`, …) the guardrail checks Qdrant for stored protection rules and blocks if the target matches. Rules are memory-driven, not hardcoded — storing "never delete ~/that-directory/" registers it. When rules cannot be loaded, destructive checks **block** (fail closed); when Qdrant itself is unreachable they degrade to allow, so they never block work by accident. Overrides require written reasoning and are kept as private audit memories.
+**Active guardrails 🛡️** — A store only keeps what it is told. This one also guards it: before a destructive operation (`rm -rf`, `drop`, `kill -9`, `recreate_collection`, `find -delete`, `git clean -fdx`, `pip uninstall`, `dd`, …) the guardrail checks Qdrant for stored protection rules and blocks if the target matches. Rules are memory-driven, not hardcoded — storing "never delete ~/that-directory/" registers it. When rules cannot be loaded, destructive checks **block** (fail closed); when Qdrant itself is unreachable they degrade to allow, so they never block work by accident. Overrides require written reasoning and are kept as private audit memories.
 
 **SICA self-improvement 🔄** — Automatic memory hygiene: detects stale temp memories (> 7 days), low-confidence entries (< 0.5) and contradiction groups, deletes what is disposable, and turns the rest into suggestions — duplicate entities become merge reviews (oldest wins, nothing auto-deleted), contradictions become one deterministic insight each. Harness-independent: any plugin can call `run_sica()`. Skill export turns clustered canonical facts into a ready `SKILL.md`.
 
 **Operations 💾** — Automatic backup every 6 hours (payload + vectors, last 7 kept), a safety backup before every update, opt-in update notifications in chat (`NEXUS_UPDATE_CHECK=1` — the service itself no longer polls or updates itself), and a self-report layer that notices a broken agent (missing dependency, silence from a plugin that used to call back) and shouts through a webhook or a macOS notification instead of failing quietly. `health` reports the full status; the open `GET /healthz` deliberately answers only liveness (`status`, `qdrant`) so an unauthenticated caller learns nothing beyond "it is up".
 
 **Token & cost hygiene ⚡** — Repeated queries are served from an embedding cache (L0), prefetch has an env-tunable token budget, and cost-aware routing sends premium categories to high-quality providers and ephemeral ones to local embeddings when both are configured.
-
----
-
-## 📊 vs Other Memory Solutions
-
-Compared on what the memory layer *itself* does — not on how it is hosted:
-
-| Capability | **Nexus Memory** | Walrus Memory | mem0 | Honcho | agentmemory |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Semantic search | ✅ local or cloud | ✅ via API | ✅ cloud | ✅ pgvector | ✅ Gemini |
-| Hybrid BM25 + Vector + RRF | **✅** | ❌ | ✅ multi-signal | ❌ | ❌ |
-| Drift detection (scored) | **✅ 0–10** | ❌ | ❌ * | ❌ | ❌ |
-| Anti-poisoning / source tiers | **✅** | ❌ | ❌ | ❌ | ❌ |
-| Provenance (source, confidence, history) | **✅** | ✅ on-chain | ❌ | ❌ | ❌ |
-| Fact lifecycle (append-only, rollback) | **✅** | ❌ | ❌ | ❌ | ❌ |
-| Temporal validity (`as_of` recall) | **✅** | ❌ | ❌ | ❌ | ❌ |
-| Ingestion-time consolidation | **✅** | ❌ | ❌ | ❌ | ❌ |
-| Knowledge graph + analytics | **✅** | ❌ | ❌ | ❌ | ❌ |
-| Active guardrails (memory-driven) | **✅** | ❌ | ❌ | ❌ | ❌ |
-| Memory dynamics (reinforcement/decay) | **✅** | ❌ | ❌ | ❌ | ❌ |
-| Native plugins (Hermes, OpenClaw, Claude Code) | **✅ all three** | ❌ | OpenClaw | OpenClaw | Hermes |
-| Any MCP agent | **✅** | ❌ | ❌ | ❌ | ✅ |
-| Self-hosted, no account | **✅** | ❌ blockchain | ❌ cloud | ❌ cloud | ❌ cloud |
-| Cost | **free** | WAL token | subscription | subscription | API costs |
-| Setup | **1 command** | signup + SDK | API key + signup | Postgres + pgvector | 30+ min + OAuth |
-
-*\*mem0 lists staleness as an "open problem" in their 2026 report but does not ship a solution.*
-
-Nexus is not the only memory project — it is the one that keeps everything in one place: hybrid retrieval, provenance, fact lifecycle, temporal validity, consolidation, graph analytics, access control and guardrails, running on your own machine with no account.
 
 ---
 
@@ -319,7 +290,6 @@ One server, several backends, same API. The **automatic path is local** — Hugg
 | **HuggingFace** 🏠 | Local | default — nothing to configure (override the model with `NEXUS_HF_MODEL`, e.g. `BAAI/bge-m3`) | 1024 |
 | **Local service** 🔌 | Local | what the two direct-Qdrant plugins (Claude Code, OpenClaw) use: `POST /embed` on `nexus-memory serve` — same model, no setup | 1024 |
 | **Ollama** 🦙 | Local | `NEXUS_EMBEDDING_PROVIDER=ollama` + `ollama pull qwen3-embedding:0.6b` | 1024 |
-
 | **OpenAI** ☁️ | Cloud | `NEXUS_EMBEDDING_PROVIDER=openai` + `OPENAI_API_KEY` | 1536 |
 | **Google / Vertex AI** 💚 | Cloud | `NEXUS_EMBEDDING_PROVIDER=google` + `GOOGLE_API_KEY` | 768 |
 | **Jina** 💜 | Cloud | `NEXUS_EMBEDDING_PROVIDER=jina` + `JINA_API_KEY` | 1024 |
@@ -338,86 +308,9 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 | **v0.22.30** | 2026-10-24 | The two maintenance daemons stay quiet on a fresh install — one INFO line instead of a stack trace and a false quality alarm when the collection does not exist yet; an unusable scroll reply is reported once as a clear warning; the test suite switches both daemons off |
 | **v0.22.29** | 2026-10-24 | Model and endpoint for reranking and consolidation are read from the installation that runs them (nothing built in, no call without configuration); both features can be switched in the dashboard with a monthly cap line; access counting covers every path, unknown agents register themselves, self-checks opt out; dashboard assets carry the release version |
 | **v0.22.28** | 2026-10-24 | Recall can be re-ordered by a chat model instead of the local cross-encoder (`nexus-memory.reranker`); on a fixed 20-question set against a live corpus the top-five hits went from 14 to 17 |
-| **v0.22.27** | 2026-10-24 | The Voyage provider is gone, not merely unused — embeddings, reranker, cost routing, wizards and both plugins can no longer pick it, and the lockfile no longer resolves `voyageai` |
-| **v0.22.26** | 2026-10-24 | The knowledge graph honours `access_level` end to end — and stops answering "nothing there" when the truth is "you may not look" or "I could not look" |
-| **v0.22.25** | 2026-10-15 | The local embedding model no longer runs on Apple's GPU: pinned to the CPU on Apple Silicon, and the Hermes plugin loads no model in the host process — the vector comes from the local service |
-| **v0.22.24** | 2026-10-12 | The dashboard stops presenting a window as the whole store — full counts in graph and legend, a working search route, and the two faults "collection missing" and "Qdrant down" finally named separately |
-| **v0.22.23** | 2026-10-11 | The plugin reaches its own venv for every dependency again — a host with a partial environment no longer loses the agent's memory silently |
-| **v0.22.22** | 2026-10-10 | One embedding path for every plugin (the local service), and the engine revision is one full commit sha a guard test closes the chain around |
-| **v0.22.21** | 2026-10-10 | Five access-level gaps closed from the external review — every missing or unknown level now reads as the *most* restrictive one |
-| **v0.22.20** | 2026-10-10 | Conversation history is private: `sync_turn` had stored every turn as `public` |
-| **v0.22.19** | 2026-10-10 | Two more silent failures in the Claude Code write path (POST→PUT repair) |
-| **v0.22.18** | 2026-10-10 | The Claude Code plugin could read from memory but never write to it |
-| **v0.22.17** | 2026-10-10 | The memory provider could not embed at all when Hermes called it |
-| **v0.22.16** | 2026-10-10 | Four engine fixes that existed only in the build copy now reach the shipped tree |
-| **v0.22.15** | 2026-10-10 | Trust heuristic: more generic without becoming looser |
-| **v0.22.14** | 2026-10-10 | A leak marker in the OpenClaw thought filter that could never fire |
-| **v0.22.12** | 2026-10-04 | The update check is now opt-in, off by default (catalog requirement) |
-| **v0.22.11** | 2026-10-04 | A catalog install would have shipped a provider without its engine |
-| **v0.22.10** | 2026-10-04 | The plugin manifest declared the wrong hooks, which would have failed catalog admission |
-| **v0.22.9** | 2026-10-03 | A memory outage could be invisible to every check and survive `/new` — it now heals itself |
-| **v0.22.8** | 2026-10-02 | The documented prefetch budget was three revisions out of date |
-| **v0.22.7** | 2026-10-02 | A corrected memory no longer stays findable by its refuted wording |
 
-<details>
-<summary><strong>Earlier releases</strong> — one line each (full notes: <a href="CHANGELOG.md">CHANGELOG.md</a>)</summary>
+Older versions are in [CHANGELOG.md](CHANGELOG.md), and every version has a page under [releases](https://github.com/Neboy72/nexus-memory/releases).
 
-| Version | Date | Highlight |
-|---------|------|-----------|
-| **v0.22.6** | 2026-09-30 | False-alarm fix: the OpenClaw reachability probe warned "NOT WORKING" while Qdrant was healthy. Now 15 s per attempt with exactly one retry. 5 new tests. |
-| **v0.22.5** | 2026-09-30 | Shutdown race: the prefetch thread was never joined and could hit the closed Qdrant client, leaving a silently empty memory block. 11 regression tests. |
-| **v0.22.4** | 2026-09-30 | Contract fix: the OpenClaw thought filter had never worked (verdict in `message`, host reads `content`). Detection extracted into `scanReasoningLeak()`. |
-| **v0.22.3** | 2026-09-30 | Self-report parity across Claude Code and OpenClaw; installers build the OpenClaw bundle instead of shipping an empty plugin |
-| **v0.22.2** | 2026-09-30 | Self-report: plugins and server speak up when memory breaks — resilient imports, per-agent self-checks, server watchdog, `self_report` in healthz |
-| **v0.22.1** | 2026-09-25 | Review-fix round: serve self-kill guard, dreaming marker timing, verdict stage wired, honest archive report, install armour |
-| **v0.22.0** | 2026-09-25 | Sleep cycle: dreaming (recurring playbooks) + archive-forgetting (backup-then-forget), memory-worthiness filters, injection hardening |
-| **v0.21.0** | 2026-09-23 | Standalone becomes the default: `install_serve.sh`, the wizard installs the daemon, every update re-asserts the service |
-| **v0.20.2** | 2026-09-22 | Standalone independence: `nexus-memory serve` (Streamable HTTP + healthz), launchd service with leader election + HA failover |
-| **v0.20.1** | 2026-09-16 | Post-release verification: a proven prompt-injection bypass closed, session-scan/clamp hardening, 22 findings from the third scan |
-| **v0.20.0** | 2026-09-16 | Review campaign complete: all 513 findings closed (15 critical/high, 258 medium, 240 low), 26 waves with a proof-carrying test file each |
-| **v0.19.1** | 2026-09-13 | Memory quality gates: junk filtered at ingestion, salience follows confidence, poisoned entries flagged and demoted |
-| **v0.19.0** | 2026-09-13 | Query rewriting: sloppy queries rewritten before embedding, hit rate 67% → 75% on the live-store bench |
-| **v0.18.7** | 2026-09-09 | Legacy web UI removed; `nexus-memory webui` starts the current dashboard |
-| **v0.18.6** | 2026-09-07 | Auto-scoping parity across all three plugins |
-| **v0.18.5** | 2026-09-07 | Auto-scoping: the memory organises itself, zero user setup |
-| **v0.18.4** | 2026-09-07 | Scopes: project/agent areas — one scope per memory, prefetch is gated, search stays global |
-| **v0.18.3** | 2026-09-06 | Quality hardening wave: all 36 medium-severity review findings fixed |
-| **v0.18.2** | 2026-09-06 | Security hardening wave: 40 high-severity findings — fail-closed guardrails, opt-in dedup sweep, no silent cloud fallback, locked fuel budget, 0600 key files |
-| **v0.18.1** | 2026-09-06 | Consolidation security: inherited `access_level`, guardrail-override entries excluded from distillation |
-| **v0.18.0** | 2026-09-06 | Ingestion-time consolidation + multi-station fuel chain |
-| **v0.17.0** | 2026-09-04 | `qwen3-embedding:0.6b` as preferred local provider (LongMemEval-S: 66/72/75% vs bge-m3 62/71/73%) |
-| **v0.16.0** | 2026-09-03 | Temporal fact validity: point-in-time recall (`recall as_of`) |
-| **v0.15.0** | 2026-09-03 | Memory dynamics: reinforcement, decay, salience |
-| **v0.14.1** | 2026-09-02 | Trust service as an in-process daemon (belief trust recompute, governance order: retraction > user override > user confirmation) |
-| **v0.14.0** | 2026-09-02 | In-process self-maintenance: dedup sweep with JSON backup before every delete |
-| **v0.13.5** | 2026-08-31 | Self-monitoring health-audit daemon (30-day read-only dedup/health audit) |
-| **v0.13.4** | 2026-08-31 | HuggingFace direct route for local embeddings (bge-m3 via `sentence-transformers`) |
-| **v0.13.3** | 2026-08-31 | bge-m3 as preferred local provider: dynamic dimension probe, modern `/api/embed` endpoint |
-| **v0.13.2** | 2026-08-30 | Prefetch slot-replacement race fix; prefetch capacity doubled (10 hits / 2400 chars) |
-| **v0.13.1** | 2026-08-30 | OpenClaw plugin update check; update-notification parity across agents |
-| **v0.13.0** | 2026-08-31 | Point-in-time queries (`as_of`), supersede reason in the deprecated payload, skill-health monitor |
-| **v0.12.0** | 2026-08-30 | Latency benchmark (p50 485 ms / p95 610 ms), embedding cache L0, prefetch token budget |
-| **v0.11.0** | 2026-08-30 | Superseded-by recall skip, automatic entity enrichment on `remember`, lifecycle filter before rerank |
-| **v0.10.0** | 2026-08-30 | Cross-encoder reranking (auto: cloud key or free local), per-category retention policies, SICA reflect insights |
-| **v0.9.1** | 2026-07-27 | Discovery content-dict handling, SICA session-storage dimension mismatch fixed |
-| **v0.9.0** | 2026-07-27 | Graph-boosted auto-recall in all three plugins, SICA self-improvement cycle, SkillGraph caching |
-| **v0.8.0** | 2026-07-25 | Cost-aware routing: tier-based provider selection for categories |
-| **v0.7.0** | 2026-07-25 | Knowledge-graph layer: entity extraction, 11 typed relationships, multi-hop traversal via NetworkX |
-| **v0.6.0** | 2026-07-25 | Session→memory pipeline: native fact extraction at session end, categorisation, confidence scoring |
-| **v0.5.1** | 2026-07-25 | Auto-supersession: automatic deprecation of near-identical facts (similarity > 0.90) with full trace |
-| **v0.5.0** | 2026-07-25 | Active guardrails: memory-driven prevention of destructive actions |
-| **v0.4.3** | 2026-06-19 | Confidence scores and brain pages in recall (trust, evidence count, lifecycle status) |
-| **v0.4.2** | 2026-06-19 | Automatic TTL/expiry per memory category, expired memories filtered in recall |
-| **v0.4.1** | 2026-06-19 | Auto-backup every 6 h, update notifications, pre-update safety backup, backup/restore tools |
-| **v0.4.0** | 2026-06-19 | OpenClaw native plugin, three-way architecture, time decay, `procedure` category |
-| **v0.3.0** | 2026-06-18 | Hermes native memory provider + embedding wizard, auto-prefetch and auto-sync |
-| **v0.2.5** | 2026-06-13 | `is_success()` replaces raw `status_code == 200` (29 sites), CI audit workflow |
-| **v0.2.4** | 2026-06-12 | Web UI with live D3.js graph, drift ampel, stats cards |
-| **v0.2.3** | 2026-06-08 | Auto-update tools, agent-managed self-restart, macOS setup fixes |
-| **v0.2.2** | 2026-06-08 | Source-URL verification on recall, hybrid-search score fixes |
-| **v0.2.0** | 2026-06-07 | Feature parity with the v2.8.0 core: categories, provenance, guardrails, access control, hybrid search, drift detection |
-| **v0.1.0** | 2026-06-07 | Initial release: MCP server with four tools, Qdrant storage, access control, local-only security |
-</details>
 
 ---
 
