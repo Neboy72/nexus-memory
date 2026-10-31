@@ -30,7 +30,25 @@ Safety invariants (fail-closed on the PAID side, fail-safe for the daemon):
 * A missing/corrupt budget state, a failed persistence or an invalid budget
   value locks PAID stations only (free Ollama keeps the daemon running).
 """
-import fcntl
+# fcntl is POSIX-only and msvcrt is Windows-only: importing either one at
+# module scope made this module unimportable on the other platform, so the
+# consolidation daemon could not start and the test-suite failed to collect
+# on Windows. Both are optional now; ``_lock_budget_file``/``_unlock_budget_file``
+# pick whichever exists and fall back to the in-process lock alone.
+try:  # POSIX
+    import fcntl
+    _HAVE_FCNTL = True
+except ImportError:  # Windows
+    fcntl = None
+    _HAVE_FCNTL = False
+
+try:  # Windows
+    import msvcrt
+    _HAVE_MSVCRT = True
+except ImportError:  # POSIX
+    msvcrt = None
+    _HAVE_MSVCRT = False
+
 import json
 import logging
 import math
@@ -127,16 +145,78 @@ def _state_lock_path() -> Path:
     return state.with_suffix(state.suffix + ".lock")
 
 
+_MSVCRT_LOCK_BYTES = 1
+_LOCK_ACQUIRE_TIMEOUT_SEC = 10.0
+_LOCK_RETRY_INTERVAL_SEC = 0.05
+_LOCK_UNAVAILABLE_WARNED = False
+
+
+def _warn_lock_unavailable() -> None:
+    """Log the no-locking fallback exactly once per process."""
+    global _LOCK_UNAVAILABLE_WARNED
+    if _LOCK_UNAVAILABLE_WARNED:
+        return
+    _LOCK_UNAVAILABLE_WARNED = True
+    log.warning("fuel: cross-process budget lock unavailable on this platform — "
+                "budget writes are NOT serialized against other processes "
+                "(in-process lock only)")
+
+
+def _lock_budget_file(fd: int) -> None:
+    """Take the exclusive cross-process budget lock on ``fd``.
+
+    POSIX uses ``fcntl.flock`` exactly as before. Windows uses
+    ``msvcrt.locking`` on a single byte at offset 0; msvcrt has no blocking
+    mode, so acquisition is non-blocking and retried for up to
+    ``_LOCK_ACQUIRE_TIMEOUT_SEC``. With neither module available it warns
+    once and proceeds — the in-process lock still guards the single daemon.
+    """
+    if _HAVE_FCNTL:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    if _HAVE_MSVCRT:
+        deadline = time.monotonic() + _LOCK_ACQUIRE_TIMEOUT_SEC
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, _MSVCRT_LOCK_BYTES)
+                return
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "could not acquire the fuel budget lock within "
+                        f"{_LOCK_ACQUIRE_TIMEOUT_SEC:.0f}s ({_state_lock_path()})"
+                    ) from exc
+                time.sleep(_LOCK_RETRY_INTERVAL_SEC)
+    _warn_lock_unavailable()
+
+
+def _unlock_budget_file(fd: int) -> None:
+    """Release the lock taken by ``_lock_budget_file`` on ``fd``."""
+    if _HAVE_FCNTL:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    if _HAVE_MSVCRT:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, _MSVCRT_LOCK_BYTES)
+        except OSError:
+            pass
+        return
+    _warn_lock_unavailable()
+
+
 @contextmanager
 def _budget_lock():
-    """Cross-process flock on <state>.lock, nested inside the in-process lock.
+    """Cross-process file lock on <state>.lock, nested inside the in-process lock.
 
-    If flock is unavailable on the running platform the in-process lock still
-    guards the single daemon; the file lock makes concurrent daemon + MCP
-    server processes safe.
+    The file lock (flock on POSIX, msvcrt.locking on Windows) makes concurrent
+    daemon + MCP server processes safe. If neither is available the in-process
+    lock still guards the single daemon and a warning is logged once.
     """
     with BUDGET_LOCK:
         handle = None
+        locked = False
         try:
             try:
                 _state_lock_path().parent.mkdir(parents=True, exist_ok=True)
@@ -144,12 +224,18 @@ def _budget_lock():
                 pass
             handle = open(_state_lock_path(), "a+")
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                _lock_budget_file(handle.fileno())
+                locked = True
             except Exception:
                 pass  # keep going under the in-process lock
             yield
         finally:
             if handle is not None:
+                if locked:
+                    try:
+                        _unlock_budget_file(handle.fileno())
+                    except Exception:
+                        pass
                 try:
                     handle.close()
                 except Exception:
