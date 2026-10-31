@@ -20,6 +20,11 @@ A third run found a test that measured the machine instead of the code: the cold
 fixed two seconds for a helper thread to end, which a slower runner does not finish. It now waits on
 the thread with a real deadline and asserts afterwards.
 
+A fourth run found the last of the class: `tests/test_consolidation.py` imported `fcntl` inside a test
+that proves the leader election through `flock`. That behaviour has no Windows equivalent, so the file
+now imports `fcntl` behind a check and skips only the locking proof, and the shared marker lives in
+`tests/conftest.py`.
+
 The two symlink tests in `tests/test_guardrails.py` skip with a reason where the platform refuses
 to create a link. Patch and tests by Simin Yuan (PR #12).
 
