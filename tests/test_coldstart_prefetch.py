@@ -28,6 +28,13 @@ import pytest
 from plugins.memory.nexus import NexusMemoryProvider, _is_trivial_query
 
 
+# Upper bound for "wait until the concurrent worker has finished / has
+# started". These assertions test behaviour, not the speed of the machine:
+# the waits return the moment the event fires or the thread exits, so a
+# generous bound stays fast on a fast host and only fails on a real hang.
+_WAIT_TIMEOUT = 10.0
+
+
 @pytest.fixture()
 def provider(isolated_env):
     """A provider with an empty buffer and a clean environment.
@@ -179,7 +186,7 @@ def test_timeout_installs_fresh_gate_and_later_prefetch_still_runs(
     ), "the gate swap must be logged loudly (WARNING, not debug)"
 
     provider.queue_prefetch("And now?")  # must squeeze through the fresh gate
-    assert second_started.wait(2.0), \
+    assert second_started.wait(_WAIT_TIMEOUT), \
         "queue_prefetch never ran although the gate is free"
 
 
@@ -231,7 +238,7 @@ def test_zombie_cannot_overwrite_fresh_result(provider, monkeypatch):
         if text == "Coldstart query":
             zombie_thread.append(threading.current_thread())
             zombie_started.set()
-            zombie_release.wait(2.0)  # zombie freezes mid-search
+            zombie_release.wait(_WAIT_TIMEOUT)  # zombie freezes mid-search
             return (1.0, 0.0)
         return (0.0, 1.0)
 
@@ -244,7 +251,7 @@ def test_zombie_cannot_overwrite_fresh_result(provider, monkeypatch):
     # While the zombie is frozen, a fresh prefetch lands through the new gate.
     provider.queue_prefetch("Fresh query")
     fresh_result = ""
-    deadline = time.time() + 2.0
+    deadline = time.time() + _WAIT_TIMEOUT
     while time.time() < deadline:
         with provider._prefetch_lock:
             fresh_result = provider._prefetch_result
@@ -256,10 +263,11 @@ def test_zombie_cannot_overwrite_fresh_result(provider, monkeypatch):
 
     # Now let the zombie finish and try its late write/clear. Wait for the
     # exact captured thread — an earlier test's leftover zombie can share the
-    # thread name.
+    # thread name. join() blocks until the thread is gone; only a thread that
+    # is still running after the generous bound is a real failure.
     zombie_release.set()
     assert zombie_thread, "no zombie thread was captured"
-    zombie_thread[0].join(2.0)
+    zombie_thread[0].join(timeout=_WAIT_TIMEOUT)
     assert not zombie_thread[0].is_alive(), "the zombie never finished"
 
     with provider._prefetch_lock:
@@ -288,7 +296,7 @@ def test_zombie_failure_path_cannot_clear_a_fresh_result(provider, monkeypatch):
     def fake_embed_cached(text, is_query=True):
         if text == "Coldstart query":
             zombie_thread.append(threading.current_thread())
-            zombie_release.wait(2.0)  # zombie freezes mid-search
+            zombie_release.wait(_WAIT_TIMEOUT)  # zombie freezes mid-search
             raise RuntimeError("backend died after the timeout")
         return (0.0, 1.0)
 
@@ -307,7 +315,7 @@ def test_zombie_failure_path_cannot_clear_a_fresh_result(provider, monkeypatch):
     # A fresh prefetch lands through the replacement gate while the zombie hangs.
     provider.queue_prefetch("Fresh query")
     fresh = ""
-    deadline = time.time() + 2.0
+    deadline = time.time() + _WAIT_TIMEOUT
     while time.time() < deadline:
         with provider._prefetch_lock:
             fresh = provider._prefetch_result
@@ -320,7 +328,7 @@ def test_zombie_failure_path_cannot_clear_a_fresh_result(provider, monkeypatch):
     # Let the zombie fail and try its late clear.
     zombie_release.set()
     assert zombie_thread, "no zombie thread was captured"
-    zombie_thread[0].join(2.0)
+    zombie_thread[0].join(timeout=_WAIT_TIMEOUT)
     assert not zombie_thread[0].is_alive(), "the zombie never finished"
 
     with provider._prefetch_lock:
