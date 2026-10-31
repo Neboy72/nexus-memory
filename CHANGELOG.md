@@ -11,6 +11,11 @@ collection. Import and lock are optional now; POSIX keeps `flock`, Windows locks
 same file through `msvcrt.locking`, and with neither available the module books without a
 cross-process lock and says so once.
 
+A second run found the next one of the same kind: `tests/test_analytics.py` removed its temporary
+directory while a `QdrantClient` still held `qdrant/.lock`. Windows refuses to delete an open file
+(WinError 32), Linux does not care, so again only the new job saw it. The fixtures now close their
+client before the directory goes away.
+
 The two symlink tests in `tests/test_guardrails.py` skip with a reason where the platform refuses
 to create a link. Patch and tests by Simin Yuan (PR #12).
 
