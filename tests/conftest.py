@@ -241,6 +241,20 @@ _requires_openclaw_dist = pytest.mark.skipif(
     reason="requires the built openclaw plugin bundle (plugins/openclaw/dist/index.js)",
 )
 
+# ``fcntl`` is POSIX-only (Windows has ``msvcrt``, a different locking model).
+# Tests that prove cross-process behaviour by taking a real ``flock`` are
+# meaningless without it, so they carry this marker instead of importing
+# ``fcntl`` unguarded. Checking the module — not ``os.name`` — is the honest
+# probe: a POSIX box with a stripped stdlib fails the same way.
+import importlib.util as _ilu  # noqa: E402
+
+FCNTL_AVAILABLE = _ilu.find_spec("fcntl") is not None
+
+_requires_fcntl = pytest.mark.skipif(
+    not FCNTL_AVAILABLE,
+    reason="POSIX-only file locking (fcntl.flock)",
+)
+
 # ---------------------------------------------------------------------------
 # 3. Regel B helper — create a collection with a NAMED vector.
 #

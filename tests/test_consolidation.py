@@ -6,13 +6,13 @@ fake qdrant client, no-delete invariant, consolidated_by marking, and the
 config kill-switch. All LLM calls are mocked — no network.
 """
 
-import os
 import time
 
 import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from conftest import FCNTL_AVAILABLE, _requires_fcntl
 from nexus_memory import consolidation as C
 from nexus_memory.consolidation import (
     Consolidator,
@@ -666,10 +666,6 @@ class TestLeaderElection:
         monkeypatch.setenv("NEXUS_CONSOLIDATION_LEADER_LOCK", str(lock))
         return lock
 
-    # P1-2-Fix (K3-Review): Election-Tests sind POSIX-only (fcntl).
-    POSIX_ONLY = pytest.mark.skipif(os.name != "posix",
-                                    reason="flock/leader election requires POSIX")
-
     def test_first_process_becomes_leader(self, monkeypatch, tmp_path):
         self._isolated_lock(monkeypatch, tmp_path)
         started = []
@@ -685,22 +681,25 @@ class TestLeaderElection:
                          llm_fn=lambda p: '{"facts": []}',
                          embed_fn=lambda t: [0.1] * 1024)
         c.start()
-        assert started  # leader actually spawns its daemon loop
+        # The leader spawns its daemon loop on every platform; without fcntl
+        # the module stays fail-open and elects itself (no cross-process
+        # guarantee to prove).
+        assert started
+        if not FCNTL_AVAILABLE:
+            return
         # P2-Fix: beweisen, dass der Leader die Sperre WIRKLICH hält.
         if c._leader_lock_file is not None:
-            import fcntl as _f
+            import fcntl
             try:
-                import os as _os
                 rival = open(str(tmp_path / "leader.lock"), "a")
                 try:
-                    _f.flock(rival, _f.LOCK_EX | _f.LOCK_NB)
+                    fcntl.flock(rival, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     rival_held = True
                 except OSError:
                     rival_held = False
                 finally:
-                    import fcntl as _f2
                     try:
-                        _f2.flock(rival, _f2.LOCK_UN)
+                        fcntl.flock(rival, fcntl.LOCK_UN)
                     except OSError:
                         pass
                     rival.close()
@@ -710,6 +709,7 @@ class TestLeaderElection:
                     c._leader_lock_file.close()
                     c._leader_lock_file = None
 
+    @_requires_fcntl
     def test_second_process_stays_standby(self, monkeypatch, tmp_path):
         lock = self._isolated_lock(monkeypatch, tmp_path)
         # Simulate a foreign leader holding the flock for the whole test.
@@ -736,6 +736,7 @@ class TestLeaderElection:
             _f.flock(holder, _f.LOCK_UN)
             holder.close()
 
+    @_requires_fcntl
     def test_takeover_after_leader_dies(self, monkeypatch, tmp_path):
         lock = self._isolated_lock(monkeypatch, tmp_path)
         monkeypatch.setenv("NEXUS_CONSOLIDATION_LEADER_POLL", "1")
