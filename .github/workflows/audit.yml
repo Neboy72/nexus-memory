@@ -125,3 +125,61 @@ jobs:
           fi
           tail -120 /tmp/pytest-out.txt
           exit $EXIT
+
+  # Why a second job: the suite used to run on ubuntu-latest only, so Windows
+  # breakage went unnoticed. Two symlink tests (tests/test_guardrails.py) and
+  # the POSIX path expectations failed there without anyone seeing it. This job
+  # runs the same suite natively on windows-latest. It deliberately runs only
+  # the tests: the grep/compile guards above are cheap and stay in the Linux
+  # job, so a failure here always means a real Windows test failure.
+  audit-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Same reason as the Linux job: the audit tests read the PINNED engine
+          # commit out of history (test_catalog_admission_round2 reads the pin's
+          # source via `git show`). A shallow clone (actions/checkout default:
+          # depth 1) does not contain that commit, so `git show <pin>:<path>`
+          # fails with exit 128 and the suite goes red for a reason that has
+          # nothing to do with the code.
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          # fastapi/uvicorn: dashboard/server.py ends the process on import without
+          # them, so the dashboard guards would be silently skipped instead of protecting.
+          pip install pytest pytest-asyncio fastapi uvicorn
+
+      - name: Run Tests
+        shell: bash
+        run: |
+          echo "=== Running tests (Windows) ==="
+          # Same exit-code discipline as the Linux job: capture pytest's exit code
+          # explicitly so a failing suite can never be masked by `tail` exiting 0.
+          # -u disables stdout block buffering (a killed process would otherwise
+          # leave an empty file), -x stops at the first failure, faulthandler
+          # guarantees a traceback on hard interpreter crashes.
+          # The output path is under $RUNNER_TEMP instead of /tmp because /tmp is
+          # not where Git Bash on the Windows runner stores temporary files.
+          set +e
+          python -u -X faulthandler -m pytest tests/ -q --tb=short -x > "$RUNNER_TEMP/pytest-out.txt" 2>&1
+          EXIT=$?
+          set -e
+          if [ ! -s "$RUNNER_TEMP/pytest-out.txt" ]; then
+            echo "⚠️ pytest produced NO output (exit=$EXIT) — process likely killed (OOM?) before any output."
+          fi
+          tail -120 "$RUNNER_TEMP/pytest-out.txt"
+          exit $EXIT
