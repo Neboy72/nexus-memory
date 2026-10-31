@@ -35,11 +35,20 @@ FUEL_KEYS = ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "NOUS_API_KEY",
 
 @pytest.fixture(autouse=True)
 def _isolated(monkeypatch, tmp_path):
-    """No env model, no real home, no fuel keys — every test starts at zero."""
+    """No env model, no real home, no fuel keys — every test starts at zero.
+
+    ``os.path.expanduser("~")`` resolves through ``HOME`` on POSIX but through
+    ``USERPROFILE`` on Windows (``HOME`` is ignored there), so both must point
+    into ``tmp_path``. Redirecting only ``HOME`` made the real profile leak in
+    on the Windows runner: configs written by earlier tests in this file were
+    read back by later ones (windows-ci 01.11.: 'from-model-default').
+    """
     monkeypatch.delenv("NEXUS_CONSOLIDATION_MODEL", raising=False)
     for key in FUEL_KEYS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_home = str(tmp_path)
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, fake_home)
     monkeypatch.setattr(consolidation, "_NO_MODEL_LOGGED", False)
 
 

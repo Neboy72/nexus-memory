@@ -25,6 +25,10 @@ that proves the leader election through `flock`. That behaviour has no Windows e
 now imports `fcntl` behind a check and skips only the locking proof, and the shared marker lives in
 `tests/conftest.py`.
 
+A fifth run found a test that redirected `HOME` but not `USERPROFILE`. On Windows `expanduser("~")`
+resolves through `USERPROFILE`, so the test read the real profile and picked up configuration that
+earlier tests in the same file had written.
+
 The two symlink tests in `tests/test_guardrails.py` skip with a reason where the platform refuses
 to create a link. Patch and tests by Simin Yuan (PR #12).
 
