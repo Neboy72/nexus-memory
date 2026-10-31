@@ -213,22 +213,35 @@ class TestPathMatching:
 class TestSymlinkResolution:
     """Symlink aliases must compare equal to the real protected path."""
 
-    def test_symlink_normalization_matches_real_path(self, tmp_path):
+    @staticmethod
+    def _link_or_skip(link, target):
+        """Create a symlink, or skip when the platform refuses to make one.
+
+        Windows raises WinError 1314 from ``os.symlink`` unless the account holds
+        SeCreateSymbolicLinkPrivilege (developer mode or an elevated shell). The
+        test is skipped only when creation is actually refused, so it still runs
+        on Windows where symlinks are permitted.
+        """
         import os
+        try:
+            os.symlink(str(target), str(link))
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"cannot create a symlink here: {exc}")
+
+    def test_symlink_normalization_matches_real_path(self, tmp_path):
         real = tmp_path / "real_secret.txt"
         real.write_text("secret")
         link = tmp_path / "alias.txt"
-        os.symlink(str(real), str(link))
+        self._link_or_skip(link, real)
         engine = GuardrailEngine.__new__(GuardrailEngine)
         assert engine._normalize_path(str(link)) == engine._normalize_path(str(real))
 
     def test_symlink_alias_write_blocks(self, tmp_path):
         """Writing through a symlink to a protected file is blocked."""
-        import os
         real = tmp_path / "config.yaml"
         real.write_text("cfg")
         link = tmp_path / "alias.yaml"
-        os.symlink(str(real), str(link))
+        self._link_or_skip(link, real)
         client = MagicMock()
         client.scroll.return_value = ([MockPoint(
             id="rule1",
