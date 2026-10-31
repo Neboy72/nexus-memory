@@ -1,3 +1,19 @@
+## [0.22.41] - 2026-10-31
+
+### Tests and CI - the suite runs on Windows, and `fuel_chain` loads there
+
+The audit job ran on `ubuntu-latest` only, so a Windows checkout looked like a broken project
+without anyone seeing why. A second job now runs the same suite on `windows-latest`.
+
+Its first run found a real defect: `import fcntl` at module scope made `nexus_memory.fuel_chain`
+unimportable on Windows, so the consolidation daemon could not start and the suite stopped at
+collection. Import and lock are optional now; POSIX keeps `flock`, Windows locks one byte of the
+same file through `msvcrt.locking`, and with neither available the module books without a
+cross-process lock and says so once.
+
+The two symlink tests in `tests/test_guardrails.py` skip with a reason where the platform refuses
+to create a link. Patch and tests by Simin Yuan (PR #12).
+
 ## [0.22.40] - 2026-10-29
 
 ### Memory - the plugin names the agent instead of leaving it unidentified
