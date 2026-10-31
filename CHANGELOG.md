@@ -16,6 +16,10 @@ directory while a `QdrantClient` still held `qdrant/.lock`. Windows refuses to d
 (WinError 32), Linux does not care, so again only the new job saw it. The fixtures now close their
 client before the directory goes away.
 
+A third run found a test that measured the machine instead of the code: the coldstart test waited a
+fixed two seconds for a helper thread to end, which a slower runner does not finish. It now waits on
+the thread with a real deadline and asserts afterwards.
+
 The two symlink tests in `tests/test_guardrails.py` skip with a reason where the platform refuses
 to create a link. Patch and tests by Simin Yuan (PR #12).
 
