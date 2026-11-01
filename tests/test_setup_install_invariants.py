@@ -103,7 +103,7 @@ class TestPluginFallback:
     def test_falls_back_to_mcp_when_plugin_script_fails(self, tmp_path, monkeypatch, isolated_home):
         _write_detection(monkeypatch, "synth-plugin-agent", plugin=True, mcp=True)
         fake_script = tmp_path / "failing_install.sh"
-        fake_script.write_text("#!/bin/bash\nexit 1\n")
+        fake_script.write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
         setup_mod.INSTALL_SCRIPTS["synth-plugin-agent"] = str(fake_script)
         setup_mod.MCP_CONFIG_SNIPPETS["synth-plugin-agent"] = {
             "file": str(tmp_path / "synth" / "mcp.json"),
@@ -127,14 +127,14 @@ class TestPluginFallback:
         # MCP part fails: existing config is broken.
         mcp_file = tmp_path / "synth" / "mcp.json"
         mcp_file.parent.mkdir(parents=True)
-        mcp_file.write_text("{ not json ")
+        mcp_file.write_text("{ not json ", encoding="utf-8")
         calls = _no_register(monkeypatch)
 
         result = setup_mod.install_agent("synth-plugin-agent")
 
         assert "error" in result
         assert calls == []
-        assert mcp_file.read_text() == "{ not json "
+        assert mcp_file.read_text(encoding="utf-8") == "{ not json "
 
     def test_install_type_reflects_only_successful_parts(self, tmp_path, monkeypatch, isolated_home):
         _write_detection(monkeypatch, "synth-plugin-agent", plugin=True, mcp=True)
@@ -156,7 +156,7 @@ class TestPluginFallback:
     def test_both_parts_succeed_reports_plugin_plus_mcp(self, tmp_path, monkeypatch, isolated_home):
         _write_detection(monkeypatch, "synth-plugin-agent", plugin=True, mcp=True)
         fake_script = tmp_path / "ok_install.sh"
-        fake_script.write_text("#!/bin/bash\nexit 0\n")
+        fake_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
         setup_mod.INSTALL_SCRIPTS["synth-plugin-agent"] = str(fake_script)
         setup_mod.MCP_CONFIG_SNIPPETS["synth-plugin-agent"] = {
             "file": str(tmp_path / "synth" / "mcp.json"),
@@ -189,20 +189,20 @@ class TestPerAgentMCPAdapters:
         codex_file = isolated_home / ".codex" / "config.toml"
         assert codex_file.exists()
         assert not (isolated_home / ".codex" / "mcp.json").exists()
-        data = tomllib.loads(codex_file.read_text())
+        data = tomllib.loads(codex_file.read_text(encoding="utf-8"))
         assert data["mcp_servers"]["nexus"]["command"] == "nexus-memory"
 
     def test_codex_appends_to_existing_config_without_touching_other_keys(self, isolated_home):
         codex_dir = isolated_home / ".codex"
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text(
-            'model = "gpt-5"\n\n[mcp_servers.existing]\ncommand = "foo"\n'
+            'model = "gpt-5"\n\n[mcp_servers.existing]\ncommand = "foo"\n', encoding="utf-8"
         )
 
         result = setup_mod._install_mcp("codex")
         assert result["status"] == "installed"
 
-        data = tomllib.loads((codex_dir / "config.toml").read_text())
+        data = tomllib.loads((codex_dir / "config.toml").read_text(encoding="utf-8"))
         assert data["model"] == "gpt-5"
         assert data["mcp_servers"]["existing"]["command"] == "foo"
         assert data["mcp_servers"]["nexus"]["command"] == "nexus-memory"
@@ -213,7 +213,7 @@ class TestPerAgentMCPAdapters:
         assert result["status"] == "installed"
         assert (isolated_home / ".claude.json").exists()
         assert not (isolated_home / ".claude" / "mcp.json").exists()
-        data = json.loads((isolated_home / ".claude.json").read_text())
+        data = json.loads((isolated_home / ".claude.json").read_text(encoding="utf-8"))
         assert data["mcpServers"]["nexus"]["command"] == "nexus-memory"
 
     def test_windsurf_uses_mcp_config_json(self, isolated_home):
@@ -221,7 +221,7 @@ class TestPerAgentMCPAdapters:
         result = setup_mod._install_mcp("windsurf")
         assert result["status"] == "installed"
         assert (isolated_home / ".codeium" / "windsurf" / "mcp_config.json").exists()
-        data = json.loads((isolated_home / ".codeium" / "windsurf" / "mcp_config.json").read_text())
+        data = json.loads((isolated_home / ".codeium" / "windsurf" / "mcp_config.json").read_text(encoding="utf-8"))
         assert data["mcpServers"]["nexus"]["command"] == "nexus-memory"
 
     def test_generic_mcp_json_only_for_agents_that_read_it(self):
@@ -236,7 +236,7 @@ class TestPerAgentMCPAdapters:
                 assert fname in ("mcp.json", ".claude.json", "mcp_config.json"), (agent_id, snippet["file"])
 
     def test_module_documents_which_agent_reads_which_format(self):
-        header = Path(setup_mod.__file__).read_text()
+        header = Path(setup_mod.__file__).read_text(encoding="utf-8")
         assert "config.toml" in header and "mcp_servers" in header
         assert "claude.json" in header or "claude.json" in header  # claude.json mention
         assert "mcp_config.json" in header
@@ -258,7 +258,7 @@ class TestBrokenConfigProtection:
         mcp_file = tmp_path / "broken" / "mcp.json"
         mcp_file.parent.mkdir(parents=True)
         damaged = "{ almost json but not "
-        mcp_file.write_text(damaged)
+        mcp_file.write_text(damaged, encoding="utf-8")
         self._snippet(tmp_path, mcp_file)
         writes = []
 
@@ -275,14 +275,14 @@ class TestBrokenConfigProtection:
         result = setup_mod._install_mcp("synth-mcp-agent")
 
         assert result["status"] == "config_error"
-        assert mcp_file.read_text() == damaged, "broken config must survive untouched"
+        assert mcp_file.read_text(encoding="utf-8") == damaged, "broken config must survive untouched"
         assert not any("w" in (a[0] if a else "") for a, _, _ in [w for w in writes]) and True
 
     def test_unreadable_config_is_never_overwritten(self, tmp_path, monkeypatch, isolated_home):
         mcp_file = tmp_path / "locked" / "mcp.json"
         mcp_file.parent.mkdir(parents=True)
         original = '{"mcpServers": {"other": {"command": "keep"}}}'
-        mcp_file.write_text(original)
+        mcp_file.write_text(original, encoding="utf-8")
         self._snippet(tmp_path, mcp_file)
 
         # Make read_text() raise OSError (simulates unreadable file).
@@ -305,12 +305,12 @@ class TestBrokenConfigProtection:
     def test_schema_error_mcpServers_not_object_aborts(self, tmp_path, isolated_home):
         mcp_file = tmp_path / "schema" / "mcp.json"
         mcp_file.parent.mkdir(parents=True)
-        mcp_file.write_text('{"mcpServers": ["not", "an", "object"]}')
+        mcp_file.write_text('{"mcpServers": ["not", "an", "object"]}', encoding="utf-8")
         self._snippet(tmp_path, mcp_file)
 
         result = setup_mod._install_mcp("synth-mcp-agent")
         assert result["status"] == "config_error"
-        assert mcp_file.read_text() == '{"mcpServers": ["not", "an", "object"]}'
+        assert mcp_file.read_text(encoding="utf-8") == '{"mcpServers": ["not", "an", "object"]}'
 
     def test_missing_file_gets_fresh_config(self, tmp_path, isolated_home):
         mcp_file = tmp_path / "fresh" / "mcp.json"
@@ -318,30 +318,30 @@ class TestBrokenConfigProtection:
 
         result = setup_mod._install_mcp("synth-mcp-agent")
         assert result["status"] == "installed"
-        data = json.loads(mcp_file.read_text())
+        data = json.loads(mcp_file.read_text(encoding="utf-8"))
         assert data == {"mcpServers": {"nexus": {"command": "nexus-memory", "args": [], "env": {}}}}
 
     def test_existing_other_servers_preserved(self, tmp_path, isolated_home):
         mcp_file = tmp_path / "merge" / "mcp.json"
         mcp_file.parent.mkdir(parents=True)
-        mcp_file.write_text(json.dumps({"mcpServers": {"other": {"command": "keep-me"}}}))
+        mcp_file.write_text(json.dumps({"mcpServers": {"other": {"command": "keep-me"}}}), encoding="utf-8")
         self._snippet(tmp_path, mcp_file)
 
         result = setup_mod._install_mcp("synth-mcp-agent")
         assert result["status"] == "installed"
-        data = json.loads(mcp_file.read_text())
+        data = json.loads(mcp_file.read_text(encoding="utf-8"))
         assert data["mcpServers"]["other"] == {"command": "keep-me"}
         assert data["mcpServers"]["nexus"]["command"] == "nexus-memory"
 
     def test_already_installed_short_circuits(self, tmp_path, isolated_home):
         mcp_file = tmp_path / "already" / "mcp.json"
         mcp_file.parent.mkdir(parents=True)
-        mcp_file.write_text(json.dumps({"mcpServers": {"nexus": {"command": "nexus-memory", "args": [], "env": {}}}}))
+        mcp_file.write_text(json.dumps({"mcpServers": {"nexus": {"command": "nexus-memory", "args": [], "env": {}}}}), encoding="utf-8")
         self._snippet(tmp_path, mcp_file)
 
         result = setup_mod._install_mcp("synth-mcp-agent")
         assert result["status"] == "already_installed"
-        assert mcp_file.read_text() == json.dumps({"mcpServers": {"nexus": {"command": "nexus-memory", "args": [], "env": {}}}})
+        assert mcp_file.read_text(encoding="utf-8") == json.dumps({"mcpServers": {"nexus": {"command": "nexus-memory", "args": [], "env": {}}}})
 
     def test_successful_write_is_atomic_temp_then_replace(self, tmp_path, monkeypatch, isolated_home):
         mcp_file = tmp_path / "atomic" / "mcp.json"
@@ -373,11 +373,11 @@ class TestBrokenConfigProtection:
         codex_dir = isolated_home / ".codex"
         codex_dir.mkdir()
         damaged = "[mcp_servers\nbroken =="
-        (codex_dir / "config.toml").write_text(damaged)
+        (codex_dir / "config.toml").write_text(damaged, encoding="utf-8")
 
         result = setup_mod._install_mcp("codex")
         assert result["status"] == "config_error"
-        assert (codex_dir / "config.toml").read_text() == damaged
+        assert (codex_dir / "config.toml").read_text(encoding="utf-8") == damaged
 
 
 # ---------------------------------------------------------------------------

@@ -226,12 +226,12 @@ class TestNr479AtomicWriteKeepsMode:
         setup_mod = importlib.import_module("nexus_memory.setup")
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "cfg.json"
-            target.write_text('{"a": 1}')
+            target.write_text('{"a": 1}', encoding="utf-8")
             os.chmod(target, 0o644)
             setup_mod._atomic_write_text(target, '{"b": 2}')
             mode = target.stat().st_mode & 0o777
             assert mode == 0o644, f"mode tightened to {oct(mode)}"
-            assert json.loads(target.read_text()) == {"b": 2}
+            assert json.loads(target.read_text(encoding="utf-8")) == {"b": 2}
 
     def test_behavior_new_file_still_private(self):
         import importlib
@@ -409,7 +409,7 @@ class TestNr492SharedScopeValidation:
 
 class TestNr493SharedHelpers:
     def test_limit_text_lib_exists(self):
-        src = (PLUGIN / "lib" / "text-preview.ts").read_text()
+        src = (PLUGIN / "lib" / "text-preview.ts").read_text(encoding="utf-8")
         assert "export function limitText" in src
 
     def test_forget_uses_lib(self):
@@ -423,7 +423,7 @@ class TestNr493SharedHelpers:
         assert "params.text.slice(0, 80)" not in src
 
     def test_bfs_lib_exists(self):
-        src = (PLUGIN / "lib" / "bfs.ts").read_text()
+        src = (PLUGIN / "lib" / "bfs.ts").read_text(encoding="utf-8")
         assert "export async function bfsEdges" in src
 
     def test_graph_traverse_uses_bfs_lib(self):

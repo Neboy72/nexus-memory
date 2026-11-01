@@ -3,7 +3,9 @@ sica, scope_auto, plugin guards. One class per root cause."""
 
 import pytest
 
-REPO = __file__.rsplit("/tests/", 1)[0]
+from conftest import REPO_ROOT  # noqa: E402
+
+REPO = str(REPO_ROOT)
 
 
 def _read(rel: str) -> str:

@@ -51,7 +51,7 @@ class TestResolveLlmEndpoint:
             },
         }
         cfg_path = tmp_path / "config.yaml"
-        cfg_path.write_text(yaml.safe_dump(config))
+        cfg_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
         monkeypatch.setenv("NEXUS_RERANK_LLM_BASE_URL", "http://env-host:11434/v1")
         monkeypatch.setenv("NEXUS_RERANK_LLM_API_KEY", "env-secret")
@@ -75,7 +75,7 @@ class TestResolveLlmEndpoint:
             },
         }
         cfg_path = tmp_path / "config.yaml"
-        cfg_path.write_text(yaml.safe_dump(config))
+        cfg_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
         base_url, api_key, model, configured = rr.resolve_llm_endpoint(str(cfg_path))
         assert configured is True
@@ -95,7 +95,7 @@ class TestResolveLlmEndpoint:
             },
         }
         cfg_path = tmp_path / "config.yaml"
-        cfg_path.write_text(yaml.safe_dump(config))
+        cfg_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
         monkeypatch.setenv("TEST_API_KEY", "secret-from-env")
         base_url, api_key, model, configured = rr.resolve_llm_endpoint(str(cfg_path))
@@ -115,7 +115,7 @@ class TestResolveLlmEndpoint:
             },
         }
         cfg_path = tmp_path / "config.yaml"
-        cfg_path.write_text(yaml.safe_dump(config))
+        cfg_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
         base_url, api_key, model, configured = rr.resolve_llm_endpoint(str(cfg_path))
         assert configured is False
@@ -134,7 +134,7 @@ class TestResolveLlmEndpoint:
     def test_malformed_yaml_is_swallowed(self, tmp_path, caplog):
         """Broken YAML does not crash; the endpoint is simply unconfigured."""
         cfg_path = tmp_path / "broken.yaml"
-        cfg_path.write_text("model: [`unbalanced")
+        cfg_path.write_text("model: [`unbalanced", encoding="utf-8")
 
         with caplog.at_level(logging.DEBUG, logger="nexus.hermes_plugin.rerank"):
             base_url, api_key, model, configured = rr.resolve_llm_endpoint(str(cfg_path))
@@ -156,7 +156,7 @@ class TestResolveLlmEndpoint:
             },
         }
         cfg_path = tmp_path / "config.yaml"
-        cfg_path.write_text(yaml.safe_dump(config))
+        cfg_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
         # Force at least one DEBUG log path to run.
         monkeypatch.setenv("PYTEST_CAPTURE_LOGS", "1")
@@ -184,7 +184,7 @@ class TestLoadRerankConfigEndpoint:
             },
         }
         cfg_path = tmp_path / "config.yaml"
-        cfg_path.write_text(yaml.safe_dump(config))
+        cfg_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
         cfg = rr.load_rerank_config(str(cfg_path))
         assert cfg["enabled"] is True
@@ -212,7 +212,7 @@ class TestLoadRerankConfigEndpoint:
             },
         }
         cfg_path = tmp_path / "config.yaml"
-        cfg_path.write_text(yaml.safe_dump(config))
+        cfg_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
         cfg = rr.load_rerank_config(str(cfg_path))
         assert cfg["llm_model"] is None
@@ -255,7 +255,7 @@ class TestRerankLlmWithoutFallback:
 class TestUniversalProduct:
     def test_no_hardcoded_vendor_strings_remain(self):
         """The implementation must not contain our private model or provider names."""
-        source = Path(rr.__file__).read_text()
+        source = Path(rr.__file__).read_text(encoding="utf-8")
         forbidden = ["deepseek-v4.1-flash:1017-cloud", "ollama-cloud", "Neboy"]
         for token in forbidden:
             assert token not in source, f"private token {token!r} remains in reranker.py"

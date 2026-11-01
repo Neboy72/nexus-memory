@@ -209,7 +209,7 @@ class TestNr298FdLeak:
         from nexus_memory import env_secret_store as ess
         env = tmp_path / ".env"
         ess.write_env_key(env, "TEST_KEY_W19", "abc123")
-        body = env.read_text()
+        body = env.read_text(encoding="utf-8")
         # store quotes values (parse-safe); both raw and quoted count
         assert "TEST_KEY_W19=" in body and "abc123" in body
         assert (env.stat().st_mode & 0o777) == 0o600
@@ -466,7 +466,7 @@ class TestNr308FiniteStatus:
     def test_corrupt_ledger_reports_finite(self, monkeypatch, tmp_path):
         from nexus_memory import fuel_chain as fc
         monkeypatch.setattr(fc, "FUEL_STATE", tmp_path / "fuel.json")
-        (tmp_path / "fuel.json").write_text("{corrupt json")
+        (tmp_path / "fuel.json").write_text("{corrupt json", encoding="utf-8")
         info = fc.fuel_exhausted_info()
         assert math.isfinite(info["spent_usd"])
         assert json.dumps(info)  # must not raise on Infinity
@@ -498,7 +498,7 @@ class TestNr309AtomicLatch:
         monkeypatch.setattr(fc, "FUEL_STATE", tmp_path / "fuel.json")
         monkeypatch.setattr(fc, "budget_exhausted", lambda: True)
         fc.budget_notification_pending()
-        raw = json.loads((tmp_path / "fuel.json").read_text())
+        raw = json.loads((tmp_path / "fuel.json").read_text(encoding="utf-8"))
         assert raw.get("notified_month") == fc._current_month()
 
 

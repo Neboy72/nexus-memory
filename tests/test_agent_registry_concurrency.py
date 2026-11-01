@@ -58,7 +58,7 @@ def test_concurrent_writers_all_registrations_survive(tmp_path, monkeypatch):
         "        f'agent-{wid}-{n}', 'A', '*', 'trusted', 'mcp_only')\n"
         "print(json.dumps({'ok': True}))\n"
         % (pkg_root,
-           str(path), per_worker)
+           str(path), per_worker), encoding="utf-8"
     )
 
     procs = [
@@ -97,7 +97,7 @@ def test_trust_change_survives_parallel_stats_update(tmp_path, monkeypatch):
         "for _ in range(20):\n"
         "    ad.update_agent_stats('hermes', read=True)\n"
         % (pkg_root,
-           str(path))
+           str(path)), encoding="utf-8"
     )
     proc = subprocess.Popen(
         [sys.executable, str(child)],
@@ -136,7 +136,7 @@ def test_atomic_write_leaves_no_tmp_and_reader_never_sees_partial(
     monkeypatch.setattr(agent_detect, "_get_agents_registry_path", lambda: path)
 
     agent_detect.register_agent("hermes", "H", "f", "trusted", "mcp_only")
-    doc = json.loads(path.read_text())
+    doc = json.loads(path.read_text(encoding="utf-8"))
     assert [a["id"] for a in doc["agents"]] == ["hermes"]
     leftovers = [p.name for p in tmp_path.iterdir()
                  if p.name.startswith("agents.json.tmp")]
@@ -152,16 +152,16 @@ def test_corrupt_registry_fails_closed(tmp_path, monkeypatch):
     """
     path = tmp_path / "agents.json"
     monkeypatch.setattr(agent_detect, "_get_agents_registry_path", lambda: path)
-    path.write_text("{corrupt json")
+    path.write_text("{corrupt json", encoding="utf-8")
 
     with pytest.raises(json.JSONDecodeError):
         agent_detect.load_agents_registry()
 
     # The same fail-closed rule applies inside the RMW writers: corrupt
     # file -> exception, file untouched, nothing wiped.
-    before = path.read_text()
+    before = path.read_text(encoding="utf-8")
     with pytest.raises(json.JSONDecodeError):
         agent_detect.update_agent_stats("hermes", read=True)
     with pytest.raises(json.JSONDecodeError):
         agent_detect.register_agent("x", "X", "*", "trusted", "mcp_only")
-    assert path.read_text() == before, "corrupt registry must not be overwritten"
+    assert path.read_text(encoding="utf-8") == before, "corrupt registry must not be overwritten"

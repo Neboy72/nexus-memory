@@ -139,7 +139,7 @@ def test_backup_written_before_delete(temp_coll, tmp_path, monkeypatch):
 
     sweep = aud._dedup_sweep()
     assert sweep["merged"] == 1 and sweep["backup_file"]
-    data = json.load(open(sweep["backup_file"]))
+    data = json.load(open(sweep["backup_file"], encoding="utf-8"))
     deleted_ids = {row["id"] for row in data["deleted"]}
     assert deleted_ids == {b}
     assert data["keeper_strategy"] == "oldest_created_at"

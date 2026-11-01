@@ -170,7 +170,7 @@ class TestRunIntegration:
         assert report["scored"] == 2  # alt+frisch session
         # Report auf Platte
         assert os.path.exists(report["report_file"])
-        reloaded = json.loads(open(report["report_file"]).read())
+        reloaded = json.loads(open(report["report_file"], encoding="utf-8").read())
         assert reloaded["candidates_score_ge_060"] == report["candidates_score_ge_060"]
 
     def test_run_never_deletes(self, tmp_path):

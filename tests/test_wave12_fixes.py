@@ -15,9 +15,12 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from conftest import bash_path
 from setuptools import find_packages
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# A bare "bash" on Windows is the WSL stub, not Git for Windows' bash.
+BASH = bash_path()
 SETUP_SH = REPO_ROOT / "setup.sh"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 PLUGINS_INIT = REPO_ROOT / "plugins" / "__init__.py"
@@ -45,7 +48,7 @@ def _run_clause(cond: str, ver: str) -> str:
         f'major="${{ver%.*}}"; minor="${{ver#*.}}"\n'
         f"if {cond}; then echo OK; else echo REJECT; fi\n"
     )
-    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+    r = subprocess.run([BASH, "-c", script], capture_output=True, text=True, timeout=10)
     assert r.returncode == 0, r.stderr
     return r.stdout.strip()
 
@@ -60,14 +63,14 @@ class TestH2VersionCompare:
         # Under `set -o pipefail`, a grep without a match must not abort the
         # script → the assignment needs `|| true`.
         lines = [
-            l for l in SETUP_SH.read_text().splitlines()
+            l for l in SETUP_SH.read_text(encoding="utf-8").splitlines()
             if l.strip().startswith("ver=$(")
         ]
         assert len(lines) == 1, lines
         assert "|| true" in lines[0], lines[0]
 
     def test_new_clause_shape(self):
-        src = SETUP_SH.read_text()
+        src = SETUP_SH.read_text(encoding="utf-8")
         assert '[ "$major" -gt 3 ]' in src
         assert '[ "$major" -eq 3 ]' in src
         assert '[ "$minor" -ge 11 ]' in src
@@ -76,7 +79,7 @@ class TestH2VersionCompare:
         assert '[ "$major" -ge 3 ] && [ "$minor" -ge 11 ]' not in src
 
     def test_clause_matches_reference_semantics(self):
-        cond = _version_clause(SETUP_SH.read_text())
+        cond = _version_clause(SETUP_SH.read_text(encoding="utf-8"))
         cases = {
             "4.0": (4, 0),
             "3.11": (3, 11),
@@ -90,11 +93,11 @@ class TestH2VersionCompare:
             assert _run_clause(cond, ver) == expected, f"ver={ver}"
 
     def test_empty_version_is_rejected(self):
-        cond = _version_clause(SETUP_SH.read_text())
+        cond = _version_clause(SETUP_SH.read_text(encoding="utf-8"))
         assert _run_clause(cond, "") == "REJECT"
 
     def test_syntax_ok(self):
-        assert subprocess.run(["bash", "-n", str(SETUP_SH)]).returncode == 0
+        assert subprocess.run([BASH, "-n", str(SETUP_SH)]).returncode == 0
 
 
 # ── H3: setup.sh venv / PEP 668 ──────────────────────────────────────────────
@@ -102,27 +105,27 @@ class TestH2VersionCompare:
 
 class TestH3Venv:
     def test_venv_dir_is_defined(self):
-        assert 'VENV_DIR=' in SETUP_SH.read_text()
+        assert 'VENV_DIR=' in SETUP_SH.read_text(encoding="utf-8")
 
     def test_venv_is_created(self):
-        src = SETUP_SH.read_text()
+        src = SETUP_SH.read_text(encoding="utf-8")
         assert "-m venv" in src
         assert '"$VENV_DIR"' in src
 
     def test_interpreter_is_rebound_to_venv(self):
-        src = SETUP_SH.read_text()
+        src = SETUP_SH.read_text(encoding="utf-8")
         assert 'PYTHON="$VENV_DIR/bin/python"' in src
 
     def test_pip_install_does_not_suppress_stderr(self):
         bad = [
-            l for l in SETUP_SH.read_text().splitlines()
+            l for l in SETUP_SH.read_text(encoding="utf-8").splitlines()
             if "pip install -e ." in l and "2>/dev/null" in l
         ]
         assert bad == [], bad
 
     def test_pip_self_upgrade_is_visible(self):
         lines = [
-            l for l in SETUP_SH.read_text().splitlines()
+            l for l in SETUP_SH.read_text(encoding="utf-8").splitlines()
             if "pip install --upgrade pip" in l
         ]
         assert len(lines) == 1, lines
@@ -130,7 +133,7 @@ class TestH3Venv:
         assert 'info "pip self-upgrade skipped"' in lines[0]
 
     def test_syntax_ok(self):
-        assert subprocess.run(["bash", "-n", str(SETUP_SH)]).returncode == 0
+        assert subprocess.run([BASH, "-n", str(SETUP_SH)]).returncode == 0
 
 
 # ── H4: plugins* package markers (wheel content) ─────────────────────────────
@@ -156,10 +159,10 @@ class TestH4PluginPackages:
 
 class TestH5NoDeadDataFiles:
     def test_data_files_table_gone(self):
-        src = PYPROJECT.read_text()
+        src = PYPROJECT.read_text(encoding="utf-8")
         assert "[tool.setuptools.data-files]" not in src
         assert "share/nexus-memory/handbook" not in src
 
     def test_comment_points_at_dashboard_handbook(self):
-        src = PYPROJECT.read_text()
+        src = PYPROJECT.read_text(encoding="utf-8")
         assert "dashboard/handbook" in src

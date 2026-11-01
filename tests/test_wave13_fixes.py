@@ -29,7 +29,7 @@ GITIGNORE = REPO_ROOT / ".gitignore"
 
 
 def test_bad_patterns_uses_ere_grep():
-    text = AUDIT_YML.read_text()
+    text = AUDIT_YML.read_text(encoding="utf-8")
     assert "grep -rnE \"$BAD_PATTERNS\"" in text
     # the old BRE invocation must be gone
     assert 'grep -rn "$BAD_PATTERNS"' not in text
@@ -41,7 +41,7 @@ def test_bad_patterns_uses_ere_grep():
 
 def test_status_code_check_is_ere_without_double_backslash():
     line = next(
-        l for l in AUDIT_YML.read_text().splitlines()
+        l for l in AUDIT_YML.read_text(encoding="utf-8").splitlines()
         if "status_code == 200" in l and "grep" in l
     )
     assert "grep -rnE" in line
@@ -52,7 +52,7 @@ def test_status_code_check_is_ere_without_double_backslash():
 
 
 def _grep_probe(pattern: str, sample: str, tmp: Path) -> bool:
-    tmp.write_text(sample)
+    tmp.write_text(sample, encoding="utf-8")
     proc = subprocess.run(
         ["grep", "-rnE", pattern, str(tmp)],
         capture_output=True,
@@ -79,7 +79,7 @@ def test_status_code_ere_matches_raw_checks_but_not_is_success(tmp_path):
 
 
 def test_audit_declares_least_privilege_and_timeout():
-    text = AUDIT_YML.read_text()
+    text = AUDIT_YML.read_text(encoding="utf-8")
     assert "permissions:" in text
     assert "contents: read" in text
     assert "timeout-minutes:" in text
@@ -120,7 +120,7 @@ def test_env_variants_are_ignored():
 
 
 def test_env_example_whitelist_is_declared():
-    text = GITIGNORE.read_text()
+    text = GITIGNORE.read_text(encoding="utf-8")
     assert "!.env.example" in text
 
 

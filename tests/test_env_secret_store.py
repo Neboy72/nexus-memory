@@ -139,7 +139,7 @@ class TestApiKeyValidation:
             ess.write_env_key(env, "OPENAI_API_KEY", payload)
         # No injected entry anywhere in the directory tree.
         for p in d.iterdir():
-            assert "NEXUS_SECURITY_OFF" not in p.read_text()
+            assert "NEXUS_SECURITY_OFF" not in p.read_text(encoding="utf-8")
 
     def test_chat_wizard_apply_choice_rejects_injection(self, tmp_path, monkeypatch):
         monkeypatch.setattr(cw, "_get_config_dir", lambda: tmp_path)
@@ -192,7 +192,7 @@ class TestPermissionsChatWizard:
 
     def test_preexisting_wide_permissions_are_repaired(self, tmp_env):
         d, env = tmp_env
-        env.write_text('OLD_KEY="old"\n')
+        env.write_text('OLD_KEY="old"\n', encoding="utf-8")
         os.chmod(env, 0o644)
         os.chmod(d, 0o755)
         ess.write_env_key(env, "NEW_KEY", "nk-123")
@@ -204,7 +204,7 @@ class TestPermissionsChatWizard:
         ess.write_env_key(env, "A", "a")
         ess.write_env_key(env, "B", "b")
         ess.write_env_key(env, "A", "a2")
-        text = env.read_text()
+        text = env.read_text(encoding="utf-8")
         assert "A='a2'" in text and "B='b'" in text
         # Only one entry per key
         assert text.count("A=") == 1
@@ -216,7 +216,7 @@ class TestPermissionsChatWizard:
         ess.write_env_key(env, "A", "a2")
         after = set(os.listdir(d))
         assert after == before  # no leftover .env-tmp-* files
-        assert "A='a2'" in env.read_text()
+        assert "A='a2'" in env.read_text(encoding="utf-8")
 
     def test_chat_wizard_save_api_key_sets_restrictive_modes(
         self, tmp_path, monkeypatch

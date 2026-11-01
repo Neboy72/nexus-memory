@@ -170,7 +170,7 @@ def test_backup_contains_all_groups_vectors_and_id_types(temp_coll, tmp_path, mo
 
     assert sweep["merged"] == 4
     assert sweep["backup_file"]
-    data = json.load(open(sweep["backup_file"]))
+    data = json.load(open(sweep["backup_file"], encoding="utf-8"))
     rows = data["deleted"]
     assert len(rows) == 4
     by_id = {row["id"]: row for row in rows}
@@ -242,7 +242,7 @@ def test_delete_failure_leaves_backup_complete(temp_coll, tmp_path, monkeypatch)
 
     backups = list((tmp_path / "reports").glob("dedup-sweep-backup-*.json"))
     assert len(backups) == 1
-    data = json.load(open(backups[0]))
+    data = json.load(open(backups[0], encoding="utf-8"))
     assert [row["id"] for row in data["deleted"]] == [b]
     stored_vec = data["deleted"][0]["vector"]
     assert isinstance(stored_vec, list) and len(stored_vec) == DIM

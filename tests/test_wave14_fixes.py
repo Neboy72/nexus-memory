@@ -26,11 +26,11 @@ CC_SCRIPTS = REPO_ROOT / "plugins" / "claude-code" / "scripts"
 
 
 def _json(path: Path) -> dict:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _allowed_keys() -> list[str]:
-    text = CONFIG_TS.read_text()
+    text = CONFIG_TS.read_text(encoding="utf-8")
     m = re.search(r"const ALLOWED_KEYS = \[(.*?)\]", text, re.S)
     assert m, "ALLOWED_KEYS not found in lib/config.ts"
     return re.findall(r'"([^"]+)"', m.group(1))
@@ -57,7 +57,7 @@ def test_h407_evidence_matches_actual_extras():
     assert "installiert in der Test-Umgebung" in evidence
     assert "webui extras" not in evidence
     # there really is no webui extra — fastapi lives in `all`
-    pyproject = PYPROJECT.read_text()
+    pyproject = PYPROJECT.read_text(encoding="utf-8")
     assert not re.search(r"^webui\s*=", pyproject, re.M)
     assert "fastapi>=0.100.0" in pyproject
 
@@ -114,7 +114,7 @@ def test_h157_marketplace_description_lives_in_metadata():
 
 
 def test_h158_license_is_mit_everywhere():
-    assert LICENSE.read_text().lstrip().startswith("MIT License")
+    assert LICENSE.read_text(encoding="utf-8").lstrip().startswith("MIT License")
     assert _json(MARKETPLACE)["plugins"][0]["license"] == "MIT"
     assert _json(PKG)["license"] == "MIT"
 
@@ -165,7 +165,7 @@ def test_h162_plugin_description_documents_agent_id_split():
 
 def test_h162_hooks_document_the_split():
     for name in ("auto_recall.py", "auto_capture.py", "session_start.py"):
-        text = (CC_SCRIPTS / name).read_text()
+        text = (CC_SCRIPTS / name).read_text(encoding="utf-8")
         assert "NEXUS_AGENT_ID" in text, name
         # the note must name the MCP path and its forced id
         assert "MCP" in text, name
@@ -182,7 +182,7 @@ def test_h409_ui_hint_defaults_match_the_code():
     maxRecallResults → toClampedInt(..., 10, 1, 20) default 10, and the ollama
     baseUrl note matches PROVIDER_DEFAULTS in lib/embedder.ts.
     """
-    config = CONFIG_TS.read_text()
+    config = CONFIG_TS.read_text(encoding="utf-8")
     assert 'export const DEFAULT_QDRANT_URL = "http://localhost:6333"' in config
     assert 'export const DEFAULT_COLLECTION = "nexus"' in config
     assert "toClampedInt(cfg.maxRecallResults, 10, 1, 20)" in config
@@ -193,5 +193,5 @@ def test_h409_ui_hint_defaults_match_the_code():
     assert hints["maxRecallResults"]["placeholder"] == "10"
     assert "http://localhost:11434" in hints["embedding.baseUrl"]["help"]
 
-    embedder = (CONFIG_TS.parent / "embedder.ts").read_text()
+    embedder = (CONFIG_TS.parent / "embedder.ts").read_text(encoding="utf-8")
     assert 'baseUrl: "http://localhost:11434"' in embedder

@@ -45,6 +45,13 @@ for _candidate in (_REPO_ROOT / "src", _REPO_ROOT):
     if s not in sys.path:
         sys.path.insert(0, s)
 
+# Public, shared repo root for test modules that read repository files.
+# Derive it from ``__file__`` here and nowhere else: on Windows ``__file__``
+# uses backslashes, so splitting it on ``"/tests/"`` returns the *test file*
+# and every path joined onto it points inside a file ("...test_wave31_fixes.py/
+# plugins/..." → FileNotFoundError).
+REPO_ROOT = _REPO_ROOT
+
 
 # ---------------------------------------------------------------------------
 # 2. Fixtures
@@ -293,6 +300,41 @@ _requires_fcntl = pytest.mark.skipif(
     not FCNTL_AVAILABLE,
     reason="POSIX-only file locking (fcntl.flock)",
 )
+
+
+def bash_path() -> str:
+    """Path to a real POSIX bash, for tests that execute the repo's scripts.
+
+    A bare ``"bash"`` in ``subprocess.run`` is not the shell these tests mean
+    on Windows. ``CreateProcess`` searches ``%SystemRoot%\\System32`` *before*
+    PATH, so the name resolves to the WSL launcher
+    (``C:\\Windows\\System32\\bash.exe``) instead of Git for Windows' bash.
+    On a runner with no WSL distribution that stub prints "Windows Subsystem
+    for Linux has no installed distributions" and exits 1, which made every
+    shell test red for a reason unrelated to the script under test.
+
+    Git for Windows ships the bash the CI itself runs in; prefer it there.
+    On POSIX nothing changes: this is ``shutil.which("bash")``.
+    """
+    import shutil
+
+    if os.name == "nt":
+        roots = [os.environ.get("EXEPATH", "")]
+        roots += [
+            os.path.join(os.environ[key], "Git")
+            for key in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")
+            if os.environ.get(key)
+        ]
+        if os.environ.get("LOCALAPPDATA"):
+            roots.append(os.path.join(os.environ["LOCALAPPDATA"], "Programs", "Git"))
+        for root in roots:
+            if not root:
+                continue
+            for rel in (("bin", "bash.exe"), ("usr", "bin", "bash.exe")):
+                candidate = os.path.join(root, *rel)
+                if os.path.isfile(candidate):
+                    return candidate
+    return shutil.which("bash") or "bash"
 
 # ---------------------------------------------------------------------------
 # 3. Regel B helper — create a collection with a NAMED vector.

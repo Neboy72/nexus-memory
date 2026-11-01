@@ -13,8 +13,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import bash_path
+
 _TESTS = Path(__file__).resolve().parent
 _ROOT = _TESTS.parent
+# A bare "bash" on Windows is the WSL stub, not Git for Windows' bash.
+BASH = bash_path()
 
 
 def _read(rel: str) -> str:
@@ -124,19 +128,19 @@ class TestNr329CorruptConfigBackup:
     def test_backup_and_warn(self, tmp_path, monkeypatch):
         from nexus_memory import wizard as wiz
         cfg = tmp_path / "config.json"
-        cfg.write_text("{not json")
+        cfg.write_text("{not json", encoding="utf-8")
         monkeypatch.setattr(wiz, "_get_config_dir", lambda: tmp_path)
         out = []
         monkeypatch.setattr(wiz, "_print", lambda s: out.append(s))
         wiz._save_config("ollama", "qwen3-embedding:0.6b")
         backups = list(tmp_path.glob("config.json.corrupt-*"))
         assert backups, "corrupt config must be backed up"
-        assert cfg.read_text().startswith("{")
+        assert cfg.read_text(encoding="utf-8").startswith("{")
 
     def test_valid_config_not_backed_up(self, tmp_path, monkeypatch):
         from nexus_memory import wizard as wiz
         cfg = tmp_path / "config.json"
-        cfg.write_text('{"embedding_provider": "openai"}')
+        cfg.write_text('{"embedding_provider": "openai"}', encoding="utf-8")
         monkeypatch.setattr(wiz, "_get_config_dir", lambda: tmp_path)
         wiz._save_config("ollama", "m")
         assert not list(tmp_path.glob("config.json.corrupt-*"))
@@ -384,22 +388,22 @@ class TestNr350BehavioralGate:
         # With only an rc tag present the gate must now fail (GATE-ROT).
         import subprocess
         pyproj = tmp_path / "pyproject.toml"
-        pyproj.write_text('version = "0.19.1"\n')
+        pyproj.write_text('version = "0.19.1"\n', encoding="utf-8")
         repo_dir = tmp_path / "repo"
         repo_dir.mkdir()
-        (repo_dir / "pyproject.toml").write_text('version = "0.19.1"\n')
+        (repo_dir / "pyproject.toml").write_text('version = "0.19.1"\n', encoding="utf-8")
         env = dict(os.environ)
         env["NEXUS_REPO_DIR"] = str(tmp_path)
         # fake gh via PATH shim: rc tag + non-version tag, NO final tag
         shim = tmp_path / "bin"
         shim.mkdir()
         gh = shim / "gh"
-        gh.write_text('#!/bin/sh\necho "v0.19.1-rc1"\necho "nightly"\n')
+        gh.write_text('#!/bin/sh\necho "v0.19.1-rc1"\necho "nightly"\n', encoding="utf-8")
         gh.chmod(0o755)
         env["PATH"] = f"{shim}:{env.get('PATH','')}"
         env["NEXUS_REPO"] = "fake/repo"
         r = subprocess.run(
-            ["bash", str(_ROOT / "scripts" / "release_gate.sh")],
+            [BASH, str(_ROOT / "scripts" / "release_gate.sh")],
             capture_output=True, text=True, env=env, timeout=30)
         assert "GATE-GRUEN" not in r.stdout
         assert "GATE-ROT" in r.stdout  # no final X.Y.Z tag → gate stays red

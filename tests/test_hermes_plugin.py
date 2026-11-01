@@ -86,7 +86,7 @@ def tmp_hermes_home():
     tmp = tempfile.mkdtemp(prefix="test-nexus-")
     coll = f"test-plugin-{uuid.uuid4().hex[:12]}"
     os.makedirs(os.path.join(tmp, "nexus"), exist_ok=True)
-    with open(os.path.join(tmp, "nexus", "config.json"), "w") as f:
+    with open(os.path.join(tmp, "nexus", "config.json"), "w", encoding="utf-8") as f:
         json.dump({"collection_name": coll}, f)
     yield tmp
     # Drop the throwaway collection so the test host stays clean.
@@ -300,7 +300,7 @@ class TestProviderInitialized:
         config_path = Path(tmp_hermes_home) / "nexus" / "config.json"
         assert config_path.is_file()
 
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             data = json.load(f)
         assert data["qdrant_url"] == "http://localhost:6333"
         assert data["collection_name"] == "nexus"

@@ -345,7 +345,7 @@ class TestScopeAutoResolveTrustLevel:
     def _write_registry(self, monkeypatch, tmp_path, payload: str):
         registry = tmp_path / ".nexus-memory" / "agents.json"
         registry.parent.mkdir(parents=True, exist_ok=True)
-        registry.write_text(payload)
+        registry.write_text(payload, encoding="utf-8")
         redirect_home(monkeypatch, tmp_path)
         return registry
 

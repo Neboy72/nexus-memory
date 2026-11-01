@@ -368,7 +368,7 @@ class TestNr451StatsNoFsyncOnHotPath:
         ad.register_agent("a1", "A1", "f", "trusted", "mcp_only")
         ad.update_agent_stats("a1", read=True)
         ad.update_agent_stats("a1", read=True, write=True)
-        doc = json.loads(reg.read_text())
+        doc = json.loads(reg.read_text(encoding="utf-8"))
         a = doc["agents"][0]
         assert a["reads"] == 2 and a["writes"] == 1  # immediate, no buffering
         leftovers = [p.name for p in tmp_path.iterdir()
@@ -380,7 +380,7 @@ class TestNr451StatsNoFsyncOnHotPath:
         from nexus_memory import agent_detect as ad
         reg = tmp_path / "agents.json"
         monkeypatch.setattr(ad, "_get_agents_registry_path", lambda: reg)
-        reg.write_text("{corrupt json")
+        reg.write_text("{corrupt json", encoding="utf-8")
         with pytest.raises(json.JSONDecodeError):
             ad.update_agent_stats("a1", read=True)
 

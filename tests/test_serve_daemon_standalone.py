@@ -23,12 +23,16 @@ from pathlib import Path
 
 import pytest
 
+from conftest import bash_path
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = str(_REPO_ROOT / "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 SCRIPT = _REPO_ROOT / "scripts" / "install_serve.sh"
+# A bare "bash" on Windows is the WSL stub, not Git for Windows' bash.
+BASH = bash_path()
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 from nexus_memory import serve_daemon as sd  # noqa: E402
@@ -56,7 +60,7 @@ def _fake_entrypoint(home: Path) -> None:
     bin_dir = home / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     entry = bin_dir / "nexus-memory"
-    entry.write_text("#!/bin/bash\necho \"FAKE-ENTRY $@\"\n")
+    entry.write_text("#!/bin/bash\necho \"FAKE-ENTRY $@\"\n", encoding="utf-8")
     entry.chmod(entry.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
@@ -67,7 +71,7 @@ def _run_script(home: Path, port: str = "9122", skip: bool = True,
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        ["bash", str(SCRIPT)], capture_output=True, text=True,
+        [BASH, str(SCRIPT)], capture_output=True, text=True,
         timeout=60, env=env, cwd=str(_REPO_ROOT),
     )
 
@@ -81,7 +85,7 @@ class TestInstallServeScript:
 
     def test_service_identity_matches_serve_daemon_module(self):
         """The stable service identity must not drift between script and module."""
-        src = SCRIPT.read_text()
+        src = SCRIPT.read_text(encoding="utf-8")
         assert f'LABEL="{sd.LAUNCHD_LABEL}"' in src
         assert f'UNIT_NAME="{sd.SYSTEMD_UNIT}"' in src
         assert f'TASK_NAME="{sd.WINDOWS_TASK}"' in src
@@ -94,7 +98,7 @@ class TestInstallServeScript:
         assert r.returncode == 0, r.stderr
         assert plist.exists()
 
-        content = plist.read_text()
+        content = plist.read_text(encoding="utf-8")
         # Reference-plist parity: the keys that make the daemon a daemon.
         assert "<string>serve</string>" in content                      # RunAtLoad boots serve
         assert f"<string>{sd.LAUNCHD_LABEL}</string>" in content
@@ -110,7 +114,7 @@ class TestInstallServeScript:
         _fake_entrypoint(tmp_path)
         r = _run_script(tmp_path, force_os="darwin")
         assert r.returncode == 0, r.stderr
-        content = (tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist").read_text()
+        content = (tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist").read_text(encoding="utf-8")
         assert f"<string>{_REPO_ROOT}/logs/serve.log</string>" in content
         assert f"<string>{_REPO_ROOT}/logs/serve.error.log</string>" in content
 
@@ -137,7 +141,7 @@ class TestInstallServeScript:
         # script must abort BEFORE any service-control side effect.
         env = _fake_env(tmp_path, skip=True)
         env["PATH"] = "/nonexistent:/usr/bin:/bin"
-        r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True,
+        r = subprocess.run([BASH, str(SCRIPT)], capture_output=True, text=True,
                            timeout=60, env=env, cwd=str(_REPO_ROOT))
         assert r.returncode != 0
         assert "entrypoint not found" in (r.stdout + r.stderr)
@@ -146,7 +150,7 @@ class TestInstallServeScript:
         _fake_entrypoint(tmp_path)
         r = _run_script(tmp_path, port="9300", force_os="darwin")
         assert r.returncode == 0, r.stderr
-        content = (tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist").read_text()
+        content = (tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist").read_text(encoding="utf-8")
         assert "<string>9300</string>" in content
 
     def test_hermetic_runs_never_touch_launchctl(self, tmp_path, monkeypatch):
@@ -170,7 +174,7 @@ class TestInstallServeScript:
     def test_missing_entrypoint_fails_cleanly(self, tmp_path):
         env = _fake_env(tmp_path)
         env["PATH"] = "/nonexistent:/usr/bin:/bin"
-        r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True,
+        r = subprocess.run([BASH, str(SCRIPT)], capture_output=True, text=True,
                            timeout=60, env=env, cwd=str(_REPO_ROOT))
         assert r.returncode != 0
         assert "entrypoint not found" in (r.stdout + r.stderr)
@@ -262,7 +266,7 @@ class TestSetupWizardWiring:
 
     def test_cli_step5b_serve_daemon_printed_in_interactive_flow(self):
         # The interactive CLI calls step_serve_daemon() before step_complete()
-        src = (Path(setup_mod.__file__)).read_text()
+        src = (Path(setup_mod.__file__)).read_text(encoding="utf-8")
         assert "daemon = step_serve_daemon()" in src
         assert "# Step 5: Serve daemon" in src
         assert "# Step 6: Complete" in src
@@ -275,7 +279,7 @@ class TestSetupWizardWiring:
 
     def test_ensure_runs_script_and_reports_installed(self, daemon_engine, tmp_path, monkeypatch):
         script = tmp_path / "install_serve.sh"
-        script.write_text("#!/bin/bash\necho ' ✅ fake install ok'\n")
+        script.write_text("#!/bin/bash\necho ' ✅ fake install ok'\n", encoding="utf-8")
         script.chmod(0o755)
         monkeypatch.setattr(sd, "INSTALL_SERVE_SCRIPT", script)
         # healthz: down before install, up after
@@ -295,7 +299,7 @@ class TestSetupWizardWiring:
 
     def test_ensure_script_failure_is_returned_not_raised(self, daemon_engine, tmp_path, monkeypatch):
         script = tmp_path / "install_serve.sh"
-        script.write_text("#!/bin/bash\necho boom >&2\nexit 3\n")
+        script.write_text("#!/bin/bash\necho boom >&2\nexit 3\n", encoding="utf-8")
         script.chmod(0o755)
         monkeypatch.setattr(sd, "INSTALL_SERVE_SCRIPT", script)
         monkeypatch.setattr(sd, "_healthz_ok", lambda port, timeout=2.0: False)
@@ -308,7 +312,7 @@ class TestSetupWizardWiring:
 
     def test_ensure_timeout_is_returned_not_raised(self, daemon_engine, tmp_path, monkeypatch):
         script = tmp_path / "install_serve.sh"
-        script.write_text("#!/bin/bash\nsleep 5\n")
+        script.write_text("#!/bin/bash\nsleep 5\n", encoding="utf-8")
         script.chmod(0o755)
         monkeypatch.setattr(sd, "INSTALL_SERVE_SCRIPT", script)
         monkeypatch.setattr(sd, "SERVE_INSTALL_TIMEOUT_S", 1)
@@ -350,7 +354,7 @@ class TestSetupWizardWiring:
 
 class TestDoUpdateWiring:
     def _source_segment(self):
-        src = (_REPO_ROOT / "src" / "nexus_memory" / "mcp_server.py").read_text()
+        src = (_REPO_ROOT / "src" / "nexus_memory" / "mcp_server.py").read_text(encoding="utf-8")
         start = src.index("async def _do_update")
         return src[start:]
 
@@ -403,7 +407,7 @@ class TestInvariants:
     def test_serve_daemon_module_is_import_light(self):
         # setup.py and mcp_server.py import serve_daemon — it must not import
         # either of them back (circular import is ruled out by construction).
-        src = (_REPO_ROOT / "src" / "nexus_memory" / "serve_daemon.py").read_text()
+        src = (_REPO_ROOT / "src" / "nexus_memory" / "serve_daemon.py").read_text(encoding="utf-8")
         assert "import nexus_memory" not in src
         assert "from nexus_memory" not in src
 

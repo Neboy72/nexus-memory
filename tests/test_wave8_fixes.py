@@ -58,7 +58,7 @@ class TestH1GraphTraverseExitCode:
         assert "error" in r.stdout
 
     def test_except_branch_and_validation_exit(self):
-        src = (SCRIPTS / "graph_traverse.py").read_text()
+        src = (SCRIPTS / "graph_traverse.py").read_text(encoding="utf-8")
         # 3 validation branches + unknown-action + except handler
         assert src.count("sys.exit(1)") >= 5
 
@@ -340,7 +340,7 @@ class TestH8TranscriptExtraction:
             ]}}),
         ]
         p = tmp_path / "transcript.jsonl"
-        p.write_text("\n".join(lines))
+        p.write_text("\n".join(lines), encoding="utf-8")
 
         facts = mod.extract_facts_from_transcript(str(p), "sess-1")
         texts = " ".join(f["text"] for f in facts)
@@ -355,7 +355,7 @@ class TestH8TranscriptExtraction:
             ]}),
         ]
         p = tmp_path / "legacy.jsonl"
-        p.write_text("\n".join(lines))
+        p.write_text("\n".join(lines), encoding="utf-8")
 
         facts = mod.extract_facts_from_transcript(str(p), "sess-2")
         assert any("fixed the bug" in f["text"] for f in facts)
@@ -366,14 +366,14 @@ class TestH8TranscriptExtraction:
 
 class TestH9LegacyTestMcpAsserts:
     def test_trust_boundary_is_asserted_not_printed(self):
-        src = (REPO_ROOT / "scripts" / "legacy" / "test_mcp.py").read_text()
+        src = (REPO_ROOT / "scripts" / "legacy" / "test_mcp.py").read_text(encoding="utf-8")
         assert 'assert r["count"] == 0' in src
         assert 'assert r["count"] >= 1' in src
 
 
 class TestH10LegacyTestMinimalRememberId:
     def test_forget_uses_remember_id(self):
-        src = (REPO_ROOT / "scripts" / "legacy" / "test_minimal.py").read_text()
+        src = (REPO_ROOT / "scripts" / "legacy" / "test_minimal.py").read_text(encoding="utf-8")
         assert 'remember_id = data.get("id")' in src
         assert '"memory_id": remember_id' in src
         # must no longer delete via the recall payload's id

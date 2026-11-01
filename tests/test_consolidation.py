@@ -691,7 +691,7 @@ class TestLeaderElection:
         if c._leader_lock_file is not None:
             import fcntl
             try:
-                rival = open(str(tmp_path / "leader.lock"), "a")
+                rival = open(str(tmp_path / "leader.lock"), "a", encoding="utf-8")
                 try:
                     fcntl.flock(rival, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     rival_held = True
@@ -713,7 +713,7 @@ class TestLeaderElection:
     def test_second_process_stays_standby(self, monkeypatch, tmp_path):
         lock = self._isolated_lock(monkeypatch, tmp_path)
         # Simulate a foreign leader holding the flock for the whole test.
-        holder = open(lock, "w")
+        holder = open(lock, "w", encoding="utf-8")
         import fcntl as _f
         _f.flock(holder, _f.LOCK_EX | _f.LOCK_NB)
         try:
@@ -741,7 +741,7 @@ class TestLeaderElection:
         lock = self._isolated_lock(monkeypatch, tmp_path)
         monkeypatch.setenv("NEXUS_CONSOLIDATION_LEADER_POLL", "1")
         monkeypatch.setattr(C, "CONSOLIDATION_START_DELAY_SECONDS", 0)
-        holder = open(lock, "w")
+        holder = open(lock, "w", encoding="utf-8")
         import fcntl as _f
         _f.flock(holder, _f.LOCK_EX | _f.LOCK_NB)
         try:

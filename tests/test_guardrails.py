@@ -230,7 +230,7 @@ class TestSymlinkResolution:
 
     def test_symlink_normalization_matches_real_path(self, tmp_path):
         real = tmp_path / "real_secret.txt"
-        real.write_text("secret")
+        real.write_text("secret", encoding="utf-8")
         link = tmp_path / "alias.txt"
         self._link_or_skip(link, real)
         engine = GuardrailEngine.__new__(GuardrailEngine)
@@ -239,7 +239,7 @@ class TestSymlinkResolution:
     def test_symlink_alias_write_blocks(self, tmp_path):
         """Writing through a symlink to a protected file is blocked."""
         real = tmp_path / "config.yaml"
-        real.write_text("cfg")
+        real.write_text("cfg", encoding="utf-8")
         link = tmp_path / "alias.yaml"
         self._link_or_skip(link, real)
         client = MagicMock()

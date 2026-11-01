@@ -20,7 +20,7 @@ SCRIPTS = REPO_ROOT / "scripts"
 
 
 def _read(name: str) -> str:
-    return (SCRIPTS / name).read_text()
+    return (SCRIPTS / name).read_text(encoding="utf-8")
 
 
 def _load_script(name: str, module_name: str):
@@ -235,7 +235,7 @@ class TestH8StoreFactTuple:
         assert "c._store_fact" not in src
         assert "c.consolidate_point(" in src
 
-        cons_src = (REPO_ROOT / "src" / "nexus_memory" / "consolidation.py").read_text()
+        cons_src = (REPO_ROOT / "src" / "nexus_memory" / "consolidation.py").read_text(encoding="utf-8")
         assert "new_id, _fact_scope = self._store_fact(" in cons_src
 
 

@@ -265,7 +265,7 @@ def test_archive_named_vector_keeps_plain_list(monkeypatch, tmp_path):
     out = archive_forgetting.archive_once(store, "nexus", dry_run=False)
     assert out["deleted"] == out["backed_up"] >= 1
     line = (tmp_path / "bk").glob("session-points-*.jsonl")
-    first = json.loads(next(iter(line)).read_text("utf-8").splitlines()[0])
+    first = json.loads(next(iter(line)).read_text(encoding="utf-8").splitlines()[0])
     assert isinstance(first["vector"], list), f"dict gesichert: {first['vector']}"
     assert first["vector"] == [0.1]
 

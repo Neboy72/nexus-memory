@@ -59,8 +59,8 @@ def test_cleanup_prunes_forget_reports(tmp_path):
     auditor = _auditor(tmp_path)
     # 15 old reports in the writer's naming scheme + 1 noise file.
     for i in range(15):
-        (tmp_path / f"forget-2026-08-{i + 10:02d}.json").write_text("{}")
-    (tmp_path / "forget-audit-legacy.txt").write_text("noise")
+        (tmp_path / f"forget-2026-08-{i + 10:02d}.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "forget-audit-legacy.txt").write_text("noise", encoding="utf-8")
     auditor._write_report({"timestamp": "2026-09-06T23:00:00"})
     remaining = sorted(f.name for f in tmp_path.iterdir()
                        if f.name.startswith("forget-") and f.name.endswith(".json"))

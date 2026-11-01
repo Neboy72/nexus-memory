@@ -201,7 +201,7 @@ def test_reservation_is_capped_per_call(tmp_path, monkeypatch):
     res = reserve_budget(0.05)
     assert res == 0.01  # clamped to MAX_PER_CALL_USD
     release_budget(res)
-    state = json.loads(fuel_chain.FUEL_STATE.read_text())
+    state = json.loads(fuel_chain.FUEL_STATE.read_text(encoding="utf-8"))
     assert state["spent_usd"] == 0.0
 
 
@@ -211,7 +211,7 @@ def test_reservation_persisted_before_call(tmp_path, monkeypatch):
     _clean_state(tmp_path, monkeypatch)
     res = reserve_budget()
     assert res is not None
-    on_disk = json.loads(fuel_chain.FUEL_STATE.read_text())
+    on_disk = json.loads(fuel_chain.FUEL_STATE.read_text(encoding="utf-8"))
     assert on_disk["spent_usd"] >= res
     release_budget(res)
 
@@ -222,7 +222,7 @@ def test_commit_reconciles_reservation_with_actual(tmp_path, monkeypatch):
     _clean_state(tmp_path, monkeypatch)
     res = reserve_budget(0.01)
     commit_budget(res, 0.002)
-    state = json.loads(fuel_chain.FUEL_STATE.read_text())
+    state = json.loads(fuel_chain.FUEL_STATE.read_text(encoding="utf-8"))
     assert abs(state["spent_usd"] - 0.002) < 1e-9
 
 
@@ -232,7 +232,7 @@ def test_commit_unknown_cost_keeps_reservation(tmp_path, monkeypatch):
     _clean_state(tmp_path, monkeypatch)
     res = reserve_budget(0.01)
     commit_budget(res, None)
-    state = json.loads(fuel_chain.FUEL_STATE.read_text())
+    state = json.loads(fuel_chain.FUEL_STATE.read_text(encoding="utf-8"))
     assert abs(state["spent_usd"] - 0.01) < 1e-9
 
 
@@ -248,7 +248,7 @@ def test_failed_generation_releases_reservation(tmp_path, monkeypatch):
         except Exception:
             raised = True
         assert raised
-    state = json.loads(fuel_chain.FUEL_STATE.read_text())
+    state = json.loads(fuel_chain.FUEL_STATE.read_text(encoding="utf-8"))
     assert state["spent_usd"] == 0.0  # nothing spent on the failed call
 
 
@@ -277,9 +277,9 @@ def test_month_turnover_treated_as_zero_spend(tmp_path, monkeypatch):
     against the budget."""
     _clean_state(tmp_path, monkeypatch)
     _budget_add(0.99)
-    state = json.loads(fuel_chain.FUEL_STATE.read_text())
+    state = json.loads(fuel_chain.FUEL_STATE.read_text(encoding="utf-8"))
     state["year_month"] = "2000-01"
-    fuel_chain.FUEL_STATE.write_text(json.dumps(state))
+    fuel_chain.FUEL_STATE.write_text(json.dumps(state), encoding="utf-8")
     assert budget_exhausted() is False  # fresh month: 0 spent vs 1.00 budget
     monkeypatch.setattr(fuel_chain, "FUEL_BUDGET_USD", 0.0)
     assert budget_exhausted() is True  # comparison still applies
@@ -312,7 +312,7 @@ def test_corrupt_state_locks_paid_and_blocks_reservation(tmp_path, monkeypatch):
     instead of resetting the spend to zero."""
     _clean_state(tmp_path, monkeypatch)
     fuel_chain.FUEL_STATE.parent.mkdir(parents=True, exist_ok=True)
-    fuel_chain.FUEL_STATE.write_text("{not valid json!!")
+    fuel_chain.FUEL_STATE.write_text("{not valid json!!", encoding="utf-8")
     assert budget_exhausted() is True
     assert reserve_budget() is None
 
@@ -352,7 +352,7 @@ def test_state_write_is_atomic(tmp_path, monkeypatch):
     src, dst = calls[0]
     assert dst.endswith("fuel.json")
     assert ".tmp" in src
-    state = json.loads(fuel_chain.FUEL_STATE.read_text())
+    state = json.loads(fuel_chain.FUEL_STATE.read_text(encoding="utf-8"))
     assert abs(state["spent_usd"] - 0.25) < 1e-9
 
 
@@ -378,7 +378,7 @@ def test_damaged_state_does_not_crash_free_station(tmp_path, monkeypatch):
     still serves; only paid stations are locked (daemon sleeps, no crash)."""
     _clean_state(tmp_path, monkeypatch)
     fuel_chain.FUEL_STATE.parent.mkdir(parents=True, exist_ok=True)
-    fuel_chain.FUEL_STATE.write_text("corrupt")
+    fuel_chain.FUEL_STATE.write_text("corrupt", encoding="utf-8")
     fake = lambda p: '{"facts": []}'
     fn = get_fuel("http://x", "m", ollama_generate=fake)
     assert fn is not None

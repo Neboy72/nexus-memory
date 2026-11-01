@@ -325,7 +325,7 @@ def test_lesewege_bleiben_POST():
     dateien_mit_leseweg: list[str] = []
 
     for datei in sorted(SKRIPTE.glob("*.py")):
-        quelle = datei.read_text()
+        quelle = datei.read_text(encoding="utf-8")
         # Kommentare und Docstrings ausblenden, damit blosse Erwaehnungen nicht
         # als Leseweg zaehlen (auto_capture.py nennt sie im Kommentar).
         ohne_kommentar = _ohne_kommentare(quelle)

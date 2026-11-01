@@ -101,7 +101,7 @@ class TestH3RoutingConfigOverride:
         nexus_dir = tmp_path / "nexus"
         nexus_dir.mkdir(exist_ok=True)
         (nexus_dir / "config.json").write_text(
-            json.dumps({"cost_aware_routing": routing_value})
+            json.dumps({"cost_aware_routing": routing_value}), encoding="utf-8"
         )
         router = CostAwareRouter(hermes_home=str(tmp_path))
         # Deterministic provider set (no env/socket probing).
@@ -231,7 +231,7 @@ class TestH5EnvValueRoundTrip:
             write_env_key(env, "KEY", value)
             assert read_env_key(env, "KEY") == value
             # read-modify-write parser agrees with the single-key reader
-            assert _parse_env_text(env.read_text())["KEY"] == value
+            assert _parse_env_text(env.read_text(encoding="utf-8"))["KEY"] == value
 
     def test_double_quoted_value_is_unquoted(self, tmp_path):
         from nexus_memory.env_secret_store import (
@@ -239,9 +239,9 @@ class TestH5EnvValueRoundTrip:
         )
 
         env = tmp_path / ".env"
-        env.write_text('K="double-quoted-value"\n')
+        env.write_text('K="double-quoted-value"\n', encoding="utf-8")
         assert read_env_key(env, "K") == "double-quoted-value"
-        assert _parse_env_text(env.read_text())["K"] == "double-quoted-value"
+        assert _parse_env_text(env.read_text(encoding="utf-8"))["K"] == "double-quoted-value"
 
 
 # ── H6: unresolved variable targets must not bypass the guardrail ────────────

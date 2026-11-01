@@ -18,7 +18,7 @@ SCRIPTS = REPO_ROOT / "scripts"
 
 
 def _read(name: str) -> str:
-    return (SCRIPTS / name).read_text()
+    return (SCRIPTS / name).read_text(encoding="utf-8")
 
 
 def _load_script(name: str, module_name: str):
@@ -110,7 +110,7 @@ class TestNr267StreamingScroll:
 
 class TestNr268OllamaModel:
     def test_no_hardcoded_model_in_embed(self):
-        src = (REPO_ROOT / "nexus" / "staging.py").read_text()
+        src = (REPO_ROOT / "nexus" / "staging.py").read_text(encoding="utf-8")
         # the embed call must use the detected model, not a hardcoded one
         assert 'json={"model": "nomic-embed-text", "prompt": text}' not in src
         assert "_OLLAMA_MODEL" in src
@@ -483,7 +483,7 @@ class TestNr285IntervalFloor:
 
 class TestNr286Healthz:
     def test_healthz_not_health(self):
-        src = (REPO_ROOT / "src" / "nexus_memory" / "chat_wizard.py").read_text()
+        src = (REPO_ROOT / "src" / "nexus_memory" / "chat_wizard.py").read_text(encoding="utf-8")
         assert "6333/healthz" in src
         assert "6333/health\"" not in src
 
@@ -493,7 +493,7 @@ class TestNr286Healthz:
 
 class TestNr287EnvBackfill:
     def test_status_reads_env_file_fallback(self):
-        src = (REPO_ROOT / "src" / "nexus_memory" / "chat_wizard.py").read_text()
+        src = (REPO_ROOT / "src" / "nexus_memory" / "chat_wizard.py").read_text(encoding="utf-8")
         gs = src[src.index("def get_status"):]
         assert "read_env_key" in gs
 
@@ -503,7 +503,7 @@ class TestNr287EnvBackfill:
 
 class TestNr288StandaloneImport:
     def test_import_fallback_present(self):
-        src = (REPO_ROOT / "src" / "nexus_memory" / "chat_wizard.py").read_text()
+        src = (REPO_ROOT / "src" / "nexus_memory" / "chat_wizard.py").read_text(encoding="utf-8")
         s = src[src.index("def _save_api_key"):]
         assert "except ImportError" in s
 
@@ -513,7 +513,7 @@ class TestNr288StandaloneImport:
 
 class TestNr289RegistrySync:
     def test_no_ghost_gemini_cli(self):
-        src = (REPO_ROOT / "src" / "nexus_memory" / "agent_detect.py").read_text()
+        src = (REPO_ROOT / "src" / "nexus_memory" / "agent_detect.py").read_text(encoding="utf-8")
         reg = src[src.index("LOCAL_AGENT_IDS = frozenset("):]
         reg = reg[:reg.index("})")]
         assert "gemini-cli" not in reg
@@ -535,7 +535,7 @@ class TestNr289RegistrySync:
 
 class TestNr290ShutdownJoins:
     def test_shutdown_joins_background_threads(self):
-        src = (REPO_ROOT / "plugins" / "memory" / "nexus" / "__init__.py").read_text()
+        src = (REPO_ROOT / "plugins" / "memory" / "nexus" / "__init__.py").read_text(encoding="utf-8")
         s = src[src.index("def shutdown"):]
         assert "_backup_thread" in s
         assert "_update_thread" in s
