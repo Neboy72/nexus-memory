@@ -392,11 +392,13 @@ def _save_config(provider_id: str, embedding_model: str = "") -> None:
 
 def _save_api_key(key_env: str, api_key: str) -> None:
     """Save an API key to the .env file (validated, escaped, 0600, atomic)."""
-    from nexus_memory.env_secret_store import write_env_key
+    from nexus_memory.env_secret_store import fix_dir_permissions, write_env_key
 
     env_path = _get_env_file()
     write_env_key(env_path, key_env, api_key)
-    os.chmod(_get_config_dir(), 0o700)
+    # Shared helper: on Windows os.chmod cannot restrict the directory, the
+    # helper applies the icacls restriction instead.
+    fix_dir_permissions(_get_config_dir())
     _print(f"  {GREEN}✓{RESET} API key saved: {env_path}")
 
 
