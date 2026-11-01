@@ -19,18 +19,11 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from nexus_memory import health_audit as ha
 
 DIM = 4
-
-
-def _mk_client():
-    import tempfile
-    from qdrant_client import QdrantClient
-    return QdrantClient(path=tempfile.mkdtemp())
 
 
 class _FakeStore:
@@ -59,8 +52,8 @@ def _upsert(client, coll, pid, text, created_at, attrs=None, lifecycle=None):
 
 
 @pytest.fixture()
-def temp_coll():
-    client = _mk_client()
+def temp_coll(embedded_qdrant):
+    client = embedded_qdrant()
     name = "test-dedup-sweep"
     client.create_collection(name, vectors_config=VectorParams(size=DIM, distance=Distance.COSINE))
     yield client, name

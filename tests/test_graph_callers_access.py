@@ -33,8 +33,8 @@ PLUGIN_PATH = REPO_ROOT / "plugins" / "memory" / "nexus" / "__init__.py"
 
 
 @pytest.fixture
-def graph(tmp_path):
-    fixture = GraphFixture(tmp_path)
+def graph(embedded_qdrant):
+    fixture = GraphFixture(embedded_qdrant())
     try:
         yield fixture
     finally:

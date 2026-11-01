@@ -174,6 +174,45 @@ def mock_qdrant_client(monkeypatch):
     return mock_cls.return_value
 
 
+@pytest.fixture
+def embedded_qdrant():
+    """Factory for path-backed ``QdrantClient`` objects on one temp directory.
+
+    Every client the factory hands out is closed when the fixture tears down,
+    and that happens *before* the directory is removed. Windows cannot delete
+    a file while a handle is open (``[WinError 32]``) and an embedded Qdrant
+    keeps ``qdrant/.lock`` open for the client's whole lifetime — a client
+    that outlives its directory turns the *next* test's teardown into an
+    error. ``ignore_cleanup_errors`` covers the tail of a shutdown that still
+    holds the handle for a moment.
+
+    ``suffix`` picks a separate storage directory under the same temp root:
+    use it for a second, independent collection, or pass the same suffix
+    twice to get a second client on the same path.
+    """
+    import tempfile
+
+    from qdrant_client import QdrantClient
+
+    clients = []
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+
+        def make(suffix: str = ""):
+            client = QdrantClient(path=os.path.join(tmp, "qdrant" + suffix))
+            clients.append(client)
+            return client
+
+        yield make
+
+        # Close while the directory still exists; the ``with`` block removes
+        # it only after this loop finishes.
+        for client in clients:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
 class _FakePoint:
     """Stand-in for ``qdrant_client.http.models.Record`` / ``ScoredPoint``.
 

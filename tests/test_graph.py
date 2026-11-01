@@ -8,8 +8,6 @@ Note: Qdrant local mode requires Point IDs to be valid UUIDs (32 hex chars)
 or integers. All helper IDs in this file use 32-char zero-padded strings.
 """
 
-import os
-import tempfile
 import uuid
 
 import pytest
@@ -102,16 +100,9 @@ def create_fact_points(client: QdrantClient, collection: str, ids: list[str]) ->
 
 
 @pytest.fixture
-def tmp_qdrant():
-    """Temporary directory for Qdrant embedded storage."""
-    with tempfile.TemporaryDirectory() as tmp:
-        yield tmp
-
-
-@pytest.fixture
-def client(tmp_qdrant):
+def client(embedded_qdrant):
     """Qdrant embedded client backed by temp dir."""
-    return QdrantClient(path=os.path.join(tmp_qdrant, "qdrant"))
+    return embedded_qdrant()
 
 
 @pytest.fixture
@@ -293,12 +284,11 @@ class TestEdgeStore:
         with pytest.raises(Exception, match="already exists"):
             s.add_edge(F_FACT_A, F_FACT_B, "supports")
 
-    def test_persistence(self, tmp_qdrant):
+    def test_persistence(self, embedded_qdrant):
         """Edges survive across EdgeStore instances using same Qdrant path."""
-        qdrant_path = os.path.join(tmp_qdrant, "persist_test")
-
-        # Instance 1
-        c1 = QdrantClient(path=qdrant_path)
+        # Same suffix == same storage path, so instance 2 reopens instance 1's
+        # data (and both clients are closed by the fixture, not by hand).
+        c1 = embedded_qdrant("_persist")
         s1 = EdgeStore(client=c1, collection=TEST_COLLECTION,
                        binding=bind_test_collection(c1, TEST_COLLECTION,
                                                     TEST_VECTOR_SIZE))
@@ -309,7 +299,7 @@ class TestEdgeStore:
         s1.close()
 
         # Instance 2 (same path)
-        c2 = QdrantClient(path=qdrant_path)
+        c2 = embedded_qdrant("_persist")
         # Same collection, same vector space: re-derive the named vector from
         # Qdrant (a fresh binding against the existing collection), exactly as
         # a second process would in production.
