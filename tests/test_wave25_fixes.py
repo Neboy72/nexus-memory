@@ -13,10 +13,13 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 import tempfile
 import textwrap
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src" / "nexus_memory"
@@ -229,10 +232,26 @@ class TestNr479AtomicWriteKeepsMode:
             target.write_text('{"a": 1}', encoding="utf-8")
             os.chmod(target, 0o644)
             setup_mod._atomic_write_text(target, '{"b": 2}')
-            mode = target.stat().st_mode & 0o777
-            assert mode == 0o644, f"mode tightened to {oct(mode)}"
+            if os.name == "nt":
+                # Windows has no POSIX mode bits: ``st_mode`` only mirrors the
+                # read-only attribute (0o666 writable / 0o444 read-only), so
+                # 0o644 cannot exist there. What the guard is really about —
+                # the replace must not leave the user's config read-only — is
+                # still asserted.
+                assert target.stat().st_mode & stat.S_IWRITE, "config became read-only"
+            else:
+                mode = target.stat().st_mode & 0o777
+                assert mode == 0o644, f"mode tightened to {oct(mode)}"
             assert json.loads(target.read_text(encoding="utf-8")) == {"b": 2}
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="0600 is a POSIX-mode guarantee with no Windows counterpart. "
+               "The file written here is an agent MCP config (command/args, "
+               "no secrets) that inherits the directory ACL, and the product "
+               "deliberately does not run icacls on it; there is no "
+               "'new file is private' promise left to assert.",
+    )
     def test_behavior_new_file_still_private(self):
         import importlib
         setup_mod = importlib.import_module("nexus_memory.setup")

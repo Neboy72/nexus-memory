@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -97,10 +98,20 @@ def test_collection_default_is_overridden_by_the_env_file(tmp_path):
         "print(json.dumps({'unrelated': os.environ.get('UNRELATED_SECRET')}))\n"
     )
     py = shutil.which("python3") or sys.executable
+    if os.name == "nt":
+        # A hand-built environment cannot start a child on Windows (no
+        # SystemRoot → the interpreter aborts before exec_module), and
+        # Path.home() reads USERPROFILE there, not HOME. Inherit the real
+        # environment, redirect the home directory, and drop every Nexus key
+        # so the .env file under test is the only source.
+        env = {k: v for k, v in os.environ.items() if not k.startswith("NEXUS_")}
+        env["HOME"] = env["USERPROFILE"] = str(tmp_path)
+    else:
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
     result = subprocess.run(
         [py, "-c", probe],
-        capture_output=True, text=True, timeout=60,
-        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, env=env,
         cwd=str(SCRIPTS),
     )
     assert result.returncode == 0, result.stderr[-800:]

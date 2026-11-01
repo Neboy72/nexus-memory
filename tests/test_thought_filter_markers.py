@@ -21,6 +21,7 @@ non-leak strings, so a refactor that breaks the semantics cannot pass.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -69,15 +70,26 @@ def _run_filter(cases: list[str], extra_names: str = "") -> list[bool]:
     """Run the real filter over the cases and return its verdicts."""
     script = (
         "const { hasReasoningLeak } = await import("
-        f"{json.dumps(str(FILTER))});\n"
+        # A file:// URL, not a bare path: on Windows "D:\..." is read as a URL
+        # with the scheme "d:", so a plain path cannot be imported there.
+        f"{json.dumps(FILTER.as_uri())});\n"
         f"const cases = {json.dumps(cases)};\n"
         "console.log(JSON.stringify(cases.map((c) => hasReasoningLeak(c))));\n"
     )
-    env = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "HOME": "/tmp"}
+    if os.name == "nt":
+        # A hand-built environment kills node on Windows: without SystemRoot
+        # the process aborts in its RNG setup (ncrypto::CSPRNG -> SIGABRT,
+        # rc 134) before it ever evaluates the filter. Inherit the real
+        # environment and only remove what this test must control.
+        env = dict(os.environ)
+        env.pop("NEXUS_AGENT_NAMES", None)
+    else:
+        env = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "HOME": "/tmp"}
     if extra_names:
         env["NEXUS_AGENT_NAMES"] = extra_names
     result = subprocess.run([_node(), "--input-type=module", "-e", script],
-                            capture_output=True, text=True, timeout=120, env=env)
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=120, env=env)
     assert result.returncode == 0, result.stderr[-600:]
     return json.loads(result.stdout.strip().splitlines()[-1])
 

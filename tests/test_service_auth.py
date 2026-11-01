@@ -32,6 +32,14 @@ def test_empty_existing_key_is_not_overwritten(monkeypatch, tmp_path, caplog):
     assert str(path) in caplog.text
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="chmod 000 does not make a file unreadable on Windows: access is "
+           "granted by ACLs there, and os.chmod only toggles the read-only "
+           "attribute. The fail-closed branch this test exercises (an OSError "
+           "on read_text yields an empty key) cannot be triggered this way; "
+           "the sibling test with an empty key covers the same branch.",
+)
 def test_unreadable_existing_key_is_not_overwritten(monkeypatch, tmp_path, caplog):
     """Punkt 4: an unreadable existing key must not be silently replaced."""
     path = tmp_path / "service_auth.key"

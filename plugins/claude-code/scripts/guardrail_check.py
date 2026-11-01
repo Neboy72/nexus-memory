@@ -169,11 +169,21 @@ def extract_targets(command: str) -> list[str]:
 
 
 def normalize_path(path: str) -> str:
-    """Normalize a path for comparison."""
+    """Normalize a path for comparison, always with "/" separators.
+
+    ``os.path.normpath`` is platform-specific: on Windows it rewrites every
+    "/" to "\\", which silently broke the containment checks in
+    ``path_matches`` (they compare with a literal "/"). A protected path never
+    matched there — neither its children (``p + "/"``) nor its parents — so
+    the guardrail allowed deletes and writes it was meant to block. Forcing
+    "/" keeps one canonical form on every OS.
+    """
     import os
     # W27: expand `~` here (not in extract_targets) so bare `~` survives
     # extraction while tilde paths still compare against home-anchored rules.
     p = os.path.normpath(os.path.expanduser(path)).lower()
+    if os.sep != "/":
+        p = p.replace(os.sep, "/")
     if p.endswith("/") and len(p) > 1:
         p = p[:-1]
     return p

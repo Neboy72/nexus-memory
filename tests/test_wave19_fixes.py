@@ -21,6 +21,26 @@ def _read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
+def _assert_secret_file_is_private(path: Path) -> None:
+    """The .env must be owner-only: 0600 on POSIX, owner+SYSTEM on Windows.
+
+    POSIX bits do not express access on Windows (chmod only toggles the
+    read-only attribute), so the guarantee is checked through the ACL there —
+    wide default principals must have been removed by the writer.
+    """
+    if os.name != "nt":
+        assert (path.stat().st_mode & 0o777) == 0o600
+        return
+    import subprocess
+    proc = subprocess.run(["icacls", str(path)], capture_output=True,
+                          text=True, timeout=30)
+    assert proc.returncode == 0, f"icacls {path} failed: {proc.stderr}"
+    acl = proc.stdout.replace(str(path), "").lower()
+    for trustee in ("everyone", "builtin\\users", "authenticated users",
+                    "s-1-1-0", "s-1-5-32-545", "s-1-5-11"):
+        assert trustee not in acl, f"{trustee} still has access to {path}:\n{acl}"
+
+
 def _load_script(name: str, modname: str):
     path = ROOT / "scripts" / name
     spec = importlib.util.spec_from_file_location(modname, path)
@@ -212,7 +232,7 @@ class TestNr298FdLeak:
         body = env.read_text(encoding="utf-8")
         # store quotes values (parse-safe); both raw and quoted count
         assert "TEST_KEY_W19=" in body and "abc123" in body
-        assert (env.stat().st_mode & 0o777) == 0o600
+        _assert_secret_file_is_private(env)
 
 
 # ── Nr 299: chmod failures warned ───────────────────────────────────────────
