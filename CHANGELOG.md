@@ -1,3 +1,26 @@
+## [Unreleased]
+
+### Fix - subprocess output no longer depends on the console code page
+
+Ten `subprocess.run(..., text=True)` calls decoded child output with the parent's
+preferred encoding and never passed `errors=`, so a child writing bytes that
+encoding cannot represent made CPython's reader thread raise and left
+`stdout`/`stderr` as `None` — without raising in the caller. On a Chinese
+Windows install (`cp936`) a plain `git log` whose commit message is not ASCII
+was enough; in UTF-8 mode (`PYTHONUTF8=1`, the default from Python 3.15) the
+same happens to `icacls`, which writes the OEM code page.
+
+Three error paths then raised `AttributeError: 'NoneType' object has no
+attribute 'strip'` instead of reporting the failure they were meant to report
+(`serve_daemon.ensure_serve_daemon`, and both the `git pull` and `pip install`
+steps of the MCP update tool), one reported the wrong reason
+(`setup._install_plugin`), and six silently lost the child's message.
+
+Each call site now names its child's encoding — UTF-8 for `git` and `bash`,
+`oem` for `icacls` on Windows, `PYTHONIOENCODING=utf-8` for child Python/pip
+processes — and falls back to `errors="replace"`, so a wrong guess degrades to
+a few mangled characters instead of a `None` that crashes the caller.
+
 ## [0.22.44] - 2026-11-01
 
 ### Security - the guardrail compared Windows paths in a form that never matched
