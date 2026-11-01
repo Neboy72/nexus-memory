@@ -17,6 +17,21 @@ NEXUS_REPO="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PLUGIN_SRC="${NEXUS_REPO}/plugins/openclaw"
 
 OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-${HOME}/.openclaw}"
+
+# Validate BEFORE deriving OPENCLAW_CONFIG from it, so a relative or root-ish
+# value cannot silently relocate the config this script patches. Absolute means
+# a POSIX path ("/...") or a Windows drive path ("C:\..." / "C:/..."); a bare
+# drive ("C:") is drive-relative and stays rejected. Mirrors the sibling
+# installer in plugins/openclaw/scripts/.
+case "${OPENCLAW_STATE_DIR}" in
+    /*|[A-Za-z]:[\\/]*) ;;
+    *) echo "✗ OPENCLAW_STATE_DIR must be an absolute path (got '${OPENCLAW_STATE_DIR}') — refusing to install"; exit 1 ;;
+esac
+OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR%/}"
+case "${OPENCLAW_STATE_DIR}" in
+    ""|"/"|[A-Za-z]:|[A-Za-z]:[\\/]) echo "✗ refusing to use '${OPENCLAW_STATE_DIR}' as OPENCLAW_STATE_DIR"; exit 1 ;;
+esac
+
 OPENCLAW_CONFIG="${OPENCLAW_STATE_DIR}/openclaw.json"
 
 # --- Colors ---
