@@ -1,3 +1,22 @@
+## [0.22.42] - 2026-11-01
+
+### Security - the secrets file is now protected on Windows, where `os.chmod` protects nothing
+
+`write_env_key` and both wizard write paths set the `.env` to `0600` and its directory to `0700`
+with `os.chmod`. On Windows those calls change nothing that grants or denies access: access comes
+from ACLs, so the file kept the inherited rights of `BUILTIN\Users` and `Authenticated Users` and
+was readable by every local account. The Windows audit job showed it as a single failing
+assertion; the defect was in the code, not in the test.
+
+The store now removes inheritance with `icacls` and grants full control to the current account and
+`SYSTEM` only, for the file and its directory, and the wizard paths go through the same
+restriction. The well-known principals are removed by SID rather than by name, because trustee
+names are localized. A refused `icacls`, or an account name that cannot be resolved, is reported as
+a runtime warning instead of being swallowed.
+
+The tests keep the mode assertions on POSIX and check the ACL content on Windows, so neither
+platform loses its guarantee and neither is skipped.
+
 ## [0.22.41] - 2026-10-31
 
 ### Tests and CI - the suite runs on Windows, and `fuel_chain` loads there
