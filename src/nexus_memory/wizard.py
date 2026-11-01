@@ -167,6 +167,11 @@ def _run_pip(package: str) -> bool:
             capture_output=True,
             text=True,
             timeout=120,
+            # pip is another Python process: force UTF-8 on both sides so the
+            # output does not depend on the user's console code page.
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode == 0:
             return True
@@ -181,6 +186,9 @@ def _run_pip(package: str) -> bool:
                 capture_output=True,
                 text=True,
                 timeout=120,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                encoding="utf-8",
+                errors="replace",
             )
             if retry.returncode != 0:
                 _print(f"  {RED}✗{RESET} pip install failed for '{package}'.")
@@ -199,8 +207,13 @@ def _run_pip(package: str) -> bool:
 def _run_cmd(cmd: list[str], timeout: int = 60) -> tuple[int, str, str]:
     """Run a command, return (returncode, stdout, stderr)."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return result.returncode, result.stdout, result.stderr
+        # ``errors="replace"``: a child that writes bytes the locale cannot
+        # decode must not leave ``stdout`` as None (that crashed callers).
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+            encoding="utf-8", errors="replace",
+        )
+        return result.returncode, result.stdout or "", result.stderr or ""
     except subprocess.TimeoutExpired:
         return -1, "", "timed out"
     except FileNotFoundError:
