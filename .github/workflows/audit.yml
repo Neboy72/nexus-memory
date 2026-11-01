@@ -181,5 +181,5 @@ jobs:
           if [ ! -s "$RUNNER_TEMP/pytest-out.txt" ]; then
             echo "⚠️ pytest produced NO output (exit=$EXIT) — process likely killed (OOM?) before any output."
           fi
-          tail -120 "$RUNNER_TEMP/pytest-out.txt"
+          tail -800 "$RUNNER_TEMP/pytest-out.txt"
           exit $EXIT
