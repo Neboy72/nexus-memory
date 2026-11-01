@@ -1,4 +1,12 @@
-## [Unreleased]
+## [0.22.45] - 2026-11-01
+
+### Fix - dashboard shows a readable category instead of "uncategorized"
+
+Around 4.3k of ~48.7k points carry no `category` field, and they are not one leftover
+bucket: scanned documents (`doc_id`/`document_type` or `source=paperless`) and free-text
+notes from a former collection (`type=turn/memory/index`). Both were displayed as
+"uncategorized", which reads like an unfinished state. The label is now derived for
+display only — `document`, `note`, `other` — and the payloads stay untouched.
 
 ### Fix - subprocess output no longer depends on the console code page
 
