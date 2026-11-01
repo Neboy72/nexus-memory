@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import redirect_home
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nexus_memory.agent_detect import (  # noqa: E402
@@ -226,8 +228,7 @@ class TestInstanceStamp:
     def test_profiles_in_the_default_home_get_two_ids(self, monkeypatch, tmp_path):
         """(g) The real layout: profiles share ~/.nexus-memory, ids still split."""
         monkeypatch.delenv("NEXUS_HOME", raising=False)
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        redirect_home(monkeypatch, tmp_path)
         home = tmp_path / ".nexus-memory"
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
@@ -288,8 +289,7 @@ class TestInstanceStamp:
         monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.delenv("NEXUS_HOME", raising=False)
         # Redirect the fallback home (~/.nexus-memory) into the test.
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        redirect_home(monkeypatch, tmp_path)
         home = tmp_path / ".nexus-memory"
 
         first = resolve_instance_id()

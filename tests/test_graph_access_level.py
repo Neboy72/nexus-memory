@@ -26,7 +26,7 @@ from nexus.graph.graph import SkillGraph
 from nexus.graph.store import EdgeStore
 from nexus.graph.traversal import GraphTraversal
 
-from conftest import bind_test_collection, test_vector_name
+from conftest import bind_test_collection, redirect_home, test_vector_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "plugins" / "claude-code" / "scripts"
@@ -346,7 +346,7 @@ class TestScopeAutoResolveTrustLevel:
         registry = tmp_path / ".nexus-memory" / "agents.json"
         registry.parent.mkdir(parents=True, exist_ok=True)
         registry.write_text(payload)
-        monkeypatch.setenv("HOME", str(tmp_path))
+        redirect_home(monkeypatch, tmp_path)
         return registry
 
     def test_known_agent_gets_its_level(self, monkeypatch, tmp_path):
@@ -372,5 +372,5 @@ class TestScopeAutoResolveTrustLevel:
 
     def test_missing_registry_is_public(self, monkeypatch, tmp_path):
         mod = self._module(monkeypatch)
-        monkeypatch.setenv("HOME", str(tmp_path))
+        redirect_home(monkeypatch, tmp_path)
         assert mod.resolve_trust_level() == "public"

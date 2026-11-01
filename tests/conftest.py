@@ -358,3 +358,25 @@ def named_vector(client, binding, vec: list):
 def fact_uuid(name: str) -> str:
     """Deterministic UUID for a short test name (Qdrant needs UUIDs/ints)."""
     return str(_uuid.uuid5(_uuid.NAMESPACE_DNS, name))
+
+
+# ---------------------------------------------------------------------------
+# 4. Home redirection helper — ``Path.home()`` on EVERY platform.
+# ---------------------------------------------------------------------------
+
+def redirect_home(monkeypatch, tmp_path) -> Path:
+    """Point ``Path.home()`` at ``tmp_path`` on all platforms.
+
+    ``HOME`` alone is POSIX-only: on Windows ``pathlib.Path.home()`` resolves
+    through ``USERPROFILE`` (falling back to ``HOMEDRIVE`` + ``HOMEPATH``), so
+    a test that patched only ``HOME`` kept reading the runner's real profile —
+    it never saw the file it had just written to ``tmp_path``. All four are set
+    here, so the redirect holds on POSIX and on Windows alike.
+    """
+    home = str(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)
+    drive, tail = os.path.splitdrive(home)
+    monkeypatch.setenv("HOMEDRIVE", drive)
+    monkeypatch.setenv("HOMEPATH", tail)
+    return Path(home)

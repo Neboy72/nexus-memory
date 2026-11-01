@@ -25,6 +25,8 @@ from __future__ import annotations
 import pytest
 from qdrant_client import QdrantClient, models
 
+from conftest import redirect_home
+
 from nexus_memory.collection_vectors import (
     CollectionBinding,
     named_point_vector,
@@ -123,11 +125,12 @@ class TestCreateWhenMissing:
     def test_ensure_does_not_write_any_config(self, tmp_path, monkeypatch, client):
         """The binding never writes a JSON config — the model lives in Qdrant.
 
-        Stronger than a glob: HOME/HERMES_HOME are redirected into ``tmp_path``
-        and we snapshot the whole tree before/after, so a write to ANY config
-        path (including ~/.nexus-memory) would show up as a new/changed file.
+        Stronger than a glob: the home dir and HERMES_HOME are redirected into
+        ``tmp_path`` and we snapshot the whole tree before/after, so a write to
+        ANY config path (including ~/.nexus-memory) would show up as a
+        new/changed file.
         """
-        monkeypatch.setenv("HOME", str(tmp_path))
+        redirect_home(monkeypatch, tmp_path)
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
 
         def _snapshot() -> dict:
