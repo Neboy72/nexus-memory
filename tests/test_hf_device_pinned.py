@@ -66,7 +66,7 @@ def _provider():
 
 def test_apple_silicon_gets_cpu(monkeypatch, fake_st):
     """Auf Apple Silicon liegt das Modell auf der CPU — MPS kann den Prozess toeten."""
-    monkeypatch.setattr("os.uname", lambda: _uname("Darwin", "arm64"))
+    monkeypatch.setattr("os.uname", lambda: _uname("Darwin", "arm64"), raising=False)
     provider = _provider()
     assert provider.available, "sentence-transformers must be selected for an explicit preference"
     assert fake_st["device"] == "cpu", (
@@ -77,7 +77,7 @@ def test_apple_silicon_gets_cpu(monkeypatch, fake_st):
 
 def test_explicit_override_wins(monkeypatch, fake_st):
     """NEXUS_HF_DEVICE bleibt der ausdrueckliche Hebel (z. B. cuda auf eigener Karte)."""
-    monkeypatch.setattr("os.uname", lambda: _uname("Darwin", "arm64"))
+    monkeypatch.setattr("os.uname", lambda: _uname("Darwin", "arm64"), raising=False)
     monkeypatch.setenv("NEXUS_HF_DEVICE", "cuda")
     provider = _provider()
     assert provider.available
@@ -86,7 +86,7 @@ def test_explicit_override_wins(monkeypatch, fake_st):
 
 def test_other_platforms_keep_the_library_choice(monkeypatch, fake_st):
     """Wo es kein MPS gibt, entscheidet die Bibliothek selbst (cuda, sonst cpu)."""
-    monkeypatch.setattr("os.uname", lambda: _uname("Linux", "x86_64"))
+    monkeypatch.setattr("os.uname", lambda: _uname("Linux", "x86_64"), raising=False)
     provider = _provider()
     assert provider.available
     assert fake_st["device"] is None, "only Apple Silicon is pinned; elsewhere the library decides"
