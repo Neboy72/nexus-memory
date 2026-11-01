@@ -302,6 +302,9 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.44** | 2026-11-01 | The guardrail blocked nothing on Windows: protected paths were compared in a form that never matched, so the deletes and writes it exists to stop went through. Separately, the automatic backup of the store now carries a real ACL there |
+| **v0.22.43** | 2026-11-01 | The webhook store no longer loses subscriptions on Windows. Two processes writing five each produced eight, because the sidecar file lock was `flock` only and `fcntl` does not exist there |
+| **v0.22.42** | 2026-11-01 | The `.env` holding the API keys was readable by every local account on Windows: `os.chmod` grants and denies nothing there. The store now removes ACL inheritance and keeps the current account plus SYSTEM |
 | **v0.22.41** | 2026-10-31 | The suite runs on windows-latest as well; its first run found `import fcntl` at module scope in `fuel_chain`, which made the module unimportable there |
 | **v0.22.40** | 2026-10-29 | The plugin names the agent `hermes` instead of leaving it `unidentified` when the environment variable is missing |
 | **v0.22.39** | 2026-10-28 | The Hermes plugin now stamps `agent` and `instance` too, so the stamp reaches memories that are stored through the plugin and not only through the MCP server |
