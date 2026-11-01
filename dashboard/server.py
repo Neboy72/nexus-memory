@@ -788,11 +788,45 @@ def _scroll_all_memories(max_points: int = 5000) -> list:
     return all_points
 
 
+# Payload keys that identify a scanned document (Paperless and similar imports).
+_DOCUMENT_KEYS = ("doc_id", "document_id", "document_type")
+# `type` values of the free-text notes from the old openclaw-memory collection.
+_NOTE_TYPES = ("turn", "memory", "index")
+
+
+def _display_category(payload: dict) -> str:
+    """Readable category label for DISPLAY ONLY — never written back to Qdrant.
+
+    ~4.3k points carry no `category` field, and they are not one leftover
+    bucket: ~2.7k are scanned documents (doc_id/title/correspondent,
+    source="paperless"), ~1.6k are free-text notes from the former
+    `openclaw-memory` collection (type=turn/memory/index). Showing both as
+    "uncategorized" reads like an unfinished state. The raw payloads stay
+    untouched — this is a view, not a migration.
+    """
+    category = payload.get("category")
+    if category and (not isinstance(category, str) or category.strip()):
+        return str(category)
+
+    source = payload.get("source")
+    if (
+        any(payload.get(k) for k in _DOCUMENT_KEYS)
+        or source == "paperless"
+        or (payload.get("url") and source)
+    ):
+        return "document"
+
+    if payload.get("type") in _NOTE_TYPES or payload.get("_source_collection"):
+        return "note"
+
+    return "other"
+
+
 def _extract_memory_fields(payload: dict) -> dict:
     """Extract normalized fields from a Qdrant payload, handling 32+ schema variants."""
     text = payload.get("text") or payload.get("content") or payload.get("title") or ""
     source = payload.get("source") or "unknown"
-    category = payload.get("category") or "uncategorized"
+    category = _display_category(payload)
 
     # Access level: PAPERLESS = ALWAYS PRIVATE, no exceptions
     if source == "paperless":
@@ -1040,7 +1074,8 @@ async def get_graph_data():
     by_cat: dict[str, list] = {}
     for p in all_points:
         fields = _extract_memory_fields(p.get("payload", {}))
-        cat = fields.get("category") or "uncategorized"
+        # Same helper as _extract_memory_fields: both display paths must agree.
+        cat = fields.get("category") or _display_category(p.get("payload", {}))
         text = (fields.get("text") or "")[:100]
         by_cat.setdefault(cat, []).append({
             "id": p.get("id", ""),
