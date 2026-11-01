@@ -14,15 +14,20 @@ PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # supplied, so validate it BEFORE deriving any path from it: a relative,
 # root-ish or trailing-slash value would silently relocate TARGET_DIR.
 OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+# Absolute means either a POSIX path ("/...") or a Windows drive path
+# ("C:\..." / "C:/..."): this script also runs under Git Bash in CI. A drive
+# letter alone ("C:") is drive-relative, not absolute, and stays rejected.
 case "$OPENCLAW_STATE_DIR" in
-  /*) ;;
+  /*|[A-Za-z]:[\\/]*) ;;
   *) echo "❌ ERROR: OPENCLAW_STATE_DIR must be an absolute path (got '$OPENCLAW_STATE_DIR') — refusing to install"; exit 1;;
 esac
 # Normalize a trailing slash so PLUGINS_DIR/TARGET_DIR cannot end up doubled
 # ("//plugins") and the guards below compare against the real seat path.
 OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR%/}"
+# A bare drive ("C:", what "C:/" becomes after the strip above) and a drive
+# root ("C:\") are just as unsafe a seat as "/".
 case "$OPENCLAW_STATE_DIR" in
-  ""|"/") echo "❌ ERROR: refusing to use '$OPENCLAW_STATE_DIR' as OPENCLAW_STATE_DIR"; exit 1;;
+  ""|"/"|[A-Za-z]:|[A-Za-z]:[\\/]) echo "❌ ERROR: refusing to use '$OPENCLAW_STATE_DIR' as OPENCLAW_STATE_DIR"; exit 1;;
 esac
 
 PLUGINS_DIR="$OPENCLAW_STATE_DIR/plugins"
