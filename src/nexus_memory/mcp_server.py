@@ -517,6 +517,7 @@ async def _post_webhook(url: str, payload: dict) -> None:
 
 from nexus_memory.embeddings import EmbeddingProvider
 from nexus_memory.collection_vectors import CollectionBinding
+from nexus_memory.env_secret_store import _restrict_windows_acl
 
 # ── Access Levels ──────────────────────────────────────────────────
 
@@ -943,6 +944,10 @@ class MemoryStore:
             # exist_ok=True skips the chmod for pre-existing dirs — tighten
             # an already-loose directory explicitly.
             os.chmod(backup_dir, 0o700)
+        if os.name == "nt":
+            # Windows grants access by ACL, not by POSIX bits: os.chmod
+            # cannot stop other accounts reading the directory.
+            _restrict_windows_acl(Path(backup_dir), is_dir=True)
 
         all_points = []
         offset = None
@@ -982,6 +987,10 @@ class MemoryStore:
                 json.dump(backup_data, f, default=str)
             if (stat_module.S_IMODE(os.stat(backup_path).st_mode) & 0o077) != 0:
                 os.chmod(backup_path, 0o600)
+            if os.name == "nt":
+                # Same gap as above: the file must be limited to the current
+                # account + SYSTEM through the ACL, chmod cannot express it.
+                _restrict_windows_acl(Path(backup_path), is_dir=False)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(backup_path)
