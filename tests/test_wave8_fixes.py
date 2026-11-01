@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -170,11 +171,15 @@ class TestH3GuardrailFailClosed:
 
 
 class TestH4BootstrapResolvedExecv:
-    def test_execv_uses_resolved_path(self, monkeypatch):
+    def test_execv_uses_resolved_path(self, monkeypatch, tmp_path):
         mod = _load("mcp_bootstrap")
         monkeypatch.setenv("NEXUS_PYTHON", "python3")  # bare name — not a file
         monkeypatch.setattr(mod, "interpreter_has_nexus", lambda py: True)
-        monkeypatch.setattr(mod.shutil, "which", lambda py: "/resolved/bin/python3")
+        # A platform-native absolute path: "/resolved/bin/python3" has no drive
+        # letter on Windows, and os.path.realpath would turn it into
+        # "D:\resolved\bin\python3" — a path that cannot exist there.
+        resolved_py = str(tmp_path / "bin" / "python3")
+        monkeypatch.setattr(mod.shutil, "which", lambda py: resolved_py)
 
         calls = []
 
@@ -187,8 +192,10 @@ class TestH4BootstrapResolvedExecv:
         with pytest.raises(RuntimeError, match="stop"):
             mod.main()
 
-        assert calls[0][0] == "/resolved/bin/python3"
-        assert calls[0][1] == ["/resolved/bin/python3", "-m", "nexus_memory.mcp_server"]
+        # main() normalises the candidate with os.path.realpath before execv
+        expected = os.path.realpath(resolved_py)
+        assert calls[0][0] == expected
+        assert calls[0][1] == [expected, "-m", "nexus_memory.mcp_server"]
 
 
 # ── H5: backfill terminates on real progress, not on scanned ─────────────────
