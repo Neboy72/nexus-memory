@@ -22,6 +22,14 @@ try:
 except ImportError:  # pragma: no cover - Windows
     fcntl = None
 
+# msvcrt is Windows-only, the mirror image of the fcntl guard above. Same
+# pattern as fuel_chain: both imports are optional so the module stays
+# importable everywhere.
+try:  # pragma: no cover - POSIX
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
 import ipaddress
 import json
 import logging
@@ -144,6 +152,70 @@ def _assert_ssrf_safe(url: str, *, what: str = "url") -> None:
             raise ValueError(f"{what} must not target a loopback/private/reserved IP")
 
 
+_MSVCRT_LOCK_BYTES = 1
+_LOCK_ACQUIRE_TIMEOUT_SEC = 10.0
+_LOCK_RETRY_INTERVAL_SEC = 0.05
+_LOCK_UNAVAILABLE_WARNED = False
+
+
+def _warn_webhook_lock_unavailable() -> None:
+    """Log the no-cross-process-locking fallback exactly once per process."""
+    global _LOCK_UNAVAILABLE_WARNED
+    if _LOCK_UNAVAILABLE_WARNED:
+        return
+    _LOCK_UNAVAILABLE_WARNED = True
+    logging.warning(
+        "WebhookStore: cross-process file lock unavailable on this platform — "
+        "webhook store writes are NOT serialized against other processes "
+        "(in-process lock only)"
+    )
+
+
+def _lock_webhook_file(fd: int) -> None:
+    """Take the exclusive cross-process webhook-store lock on ``fd``.
+
+    POSIX uses ``fcntl.flock`` exactly as before. Windows uses
+    ``msvcrt.locking`` on a single byte at offset 0; msvcrt has no blocking
+    mode, so acquisition is non-blocking and retried for up to
+    ``_LOCK_ACQUIRE_TIMEOUT_SEC``. Mirrors ``fuel_chain._lock_budget_file``.
+    With neither module available it warns once and proceeds — the asyncio
+    lock still serializes coroutines in this process.
+    """
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    if msvcrt is not None:
+        deadline = time.monotonic() + _LOCK_ACQUIRE_TIMEOUT_SEC
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, _MSVCRT_LOCK_BYTES)
+                return
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "could not acquire the webhook store lock within "
+                        f"{_LOCK_ACQUIRE_TIMEOUT_SEC:.0f}s"
+                    ) from exc
+                time.sleep(_LOCK_RETRY_INTERVAL_SEC)
+    _warn_webhook_lock_unavailable()
+
+
+def _unlock_webhook_file(fd: int) -> None:
+    """Release the lock taken by ``_lock_webhook_file`` on ``fd``."""
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, _MSVCRT_LOCK_BYTES)
+        except OSError:
+            pass
+        return
+    _warn_webhook_lock_unavailable()
+
+
 class WebhookStore:
     """Persistent store for webhook subscriptions.
 
@@ -190,17 +262,15 @@ class WebhookStore:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_file = open(lock_path, "a+")
         try:
-            # W32-14(a): without fcntl (Windows) we still create/open the
-            # sidecar lock file, but cross-process serialization degrades to
-            # none — the asyncio.Lock above still serializes coroutines in
-            # THIS process.
-            if fcntl is not None:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            # W32-14(a): fcntl.flock on POSIX; on Windows msvcrt.locking on a
+            # byte of the same sidecar file (cross-process serialization is
+            # real on both platforms now). Only when neither module exists
+            # does this degrade to the in-process asyncio.Lock — and it warns.
+            _lock_webhook_file(lock_file.fileno())
             try:
                 yield
             finally:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                _unlock_webhook_file(lock_file.fileno())
         finally:
             lock_file.close()
 
