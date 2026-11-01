@@ -17,12 +17,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import bash_path
+
 from nexus_memory import selective_forgetting as SF
 from nexus_memory import retrieval_watch as RW
 from nexus_memory import scope_auto as SA
 from nexus_memory import trust_service as TS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# A bare "bash" on Windows is the WSL stub, not Git for Windows' bash.
+BASH = bash_path()
 HERMES_INSTALLER = REPO_ROOT / "scripts" / "install_hermes_plugin.sh"
 OPENCLAW_INSTALLER = REPO_ROOT / "plugins" / "openclaw" / "scripts" / "install_openclaw_plugin.sh"
 OPENCLAW_PLUGIN_DIR = REPO_ROOT / "plugins" / "openclaw"
@@ -369,7 +373,7 @@ def _run_installer(script: Path, home: Path):
     # Minimal PATH: keeps date/ln/mv/mkdir but drops the 'hermes' CLI so the
     # config step is skipped.
     env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
-    return subprocess.run(["bash", str(script)], capture_output=True, text=True,
+    return subprocess.run([BASH, str(script)], capture_output=True, text=True,
                           env=env, timeout=60)
 
 
@@ -377,7 +381,7 @@ def _hermes_home(tmp_path: Path) -> Path:
     home = tmp_path / "home"
     plugin_src = home / "nexus-memory" / "plugins" / "memory" / "nexus"
     plugin_src.mkdir(parents=True)
-    (plugin_src / "MARKER").write_text("src")
+    (plugin_src / "MARKER").write_text("src", encoding="utf-8")
     (home / ".hermes" / "hermes-agent" / "plugins" / "memory").mkdir(parents=True)
     return home
 
@@ -389,30 +393,30 @@ class TestH8HermesBackup:
     def test_regular_file_is_backed_up_and_replaced(self, tmp_path):
         home = _hermes_home(tmp_path)
         target = self._target(home)
-        target.write_text("stale-content")
+        target.write_text("stale-content", encoding="utf-8")
 
         r = _run_installer(HERMES_INSTALLER, home)
         assert r.returncode == 0, r.stdout + r.stderr
         assert target.is_symlink()
-        assert (target / "MARKER").read_text() == "src"
-        assert target.parent.joinpath("nexus.bak").read_text() == "stale-content"
+        assert (target / "MARKER").read_text(encoding="utf-8") == "src"
+        assert target.parent.joinpath("nexus.bak").read_text(encoding="utf-8") == "stale-content"
 
     def test_existing_bak_gets_timestamped_backup(self, tmp_path):
         home = _hermes_home(tmp_path)
         target = self._target(home)
-        target.write_text("stale-content")
-        (target.parent / "nexus.bak").write_text("previous-backup")
+        target.write_text("stale-content", encoding="utf-8")
+        (target.parent / "nexus.bak").write_text("previous-backup", encoding="utf-8")
 
         r = _run_installer(HERMES_INSTALLER, home)
         assert r.returncode == 0, r.stdout + r.stderr
         # the old .bak is never overwritten
-        assert (target.parent / "nexus.bak").read_text() == "previous-backup"
+        assert (target.parent / "nexus.bak").read_text(encoding="utf-8") == "previous-backup"
         backups = sorted(p for p in target.parent.glob("nexus.bak.*"))
         assert len(backups) == 1
-        assert backups[0].read_text() == "stale-content"
+        assert backups[0].read_text(encoding="utf-8") == "stale-content"
 
     def test_syntax_ok(self):
-        assert subprocess.run(["bash", "-n", str(HERMES_INSTALLER)]).returncode == 0
+        assert subprocess.run([BASH, "-n", str(HERMES_INSTALLER)]).returncode == 0
 
 
 # ── H9: openclaw installer guards the destructive rm -rf (#106) ──────────────
@@ -438,7 +442,7 @@ def _fake_npm(bin_dir: Path, exit_code: int = 0) -> Path:
             "fi",
             "exit 0",
         ]
-    npm.write_text("\n".join(body) + "\n")
+    npm.write_text("\n".join(body) + "\n", encoding="utf-8")
     npm.chmod(0o755)
     return bin_dir
 
@@ -459,7 +463,7 @@ def _run_openclaw(state_dir: str, bin_dir: Path | None = None, installer: Path |
     env["OPENCLAW_STATE_DIR"] = state_dir
     if bin_dir is not None:
         env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    return subprocess.run(["bash", str(installer or OPENCLAW_INSTALLER)], capture_output=True,
+    return subprocess.run([BASH, str(installer or OPENCLAW_INSTALLER)], capture_output=True,
                           text=True, env=env, timeout=60)
 
 
@@ -502,7 +506,7 @@ class TestH9OpenclawGuard:
         env = dict(os.environ)
         env["OPENCLAW_STATE_DIR"] = str(state)
         env["PATH"] = f"{_fake_npm(tmp_path / 'bin', exit_code=1)}{os.pathsep}{env.get('PATH', '')}"
-        r = subprocess.run(["bash", str(plugin / "scripts" / "install_openclaw_plugin.sh")],
+        r = subprocess.run([BASH, str(plugin / "scripts" / "install_openclaw_plugin.sh")],
                            capture_output=True, text=True, env=env, timeout=60)
         assert r.returncode != 0, r.stdout + r.stderr
         out = (r.stdout + r.stderr).lower()
@@ -511,7 +515,7 @@ class TestH9OpenclawGuard:
         assert not (state / "plugins" / "nexus-memory").exists()
 
     def test_guards_precede_the_rm_rf(self):
-        src = OPENCLAW_INSTALLER.read_text()
+        src = OPENCLAW_INSTALLER.read_text(encoding="utf-8")
         rm_cmd = 'rm -rf "$TARGET_DIR"'
         assert rm_cmd in src
         # Both guards sit above the destructive command.
@@ -522,7 +526,7 @@ class TestH9OpenclawGuard:
         assert src.index('case "$TARGET_DIR"') < src.index(rm_cmd)
 
     def test_syntax_ok(self):
-        assert subprocess.run(["bash", "-n", str(OPENCLAW_INSTALLER)]).returncode == 0
+        assert subprocess.run([BASH, "-n", str(OPENCLAW_INSTALLER)]).returncode == 0
 
 
 # ── H10: release_gate diagnostics (#107) ─────────────────────────────────────
@@ -535,14 +539,14 @@ def _stub_gh(bin_dir: Path, output: str | None, exit_code: int = 0) -> None:
     if output is not None:
         body += f'printf "%s\\n" "{output}"\n'
     body += f"exit {exit_code}\n"
-    script.write_text(body)
+    script.write_text(body, encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _pyproject(tmp_path: Path, version: str) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir(parents=True, exist_ok=True)
-    (repo / "pyproject.toml").write_text(f'[project]\nname = "nexus-memory"\nversion = "{version}"\n')
+    (repo / "pyproject.toml").write_text(f'[project]\nname = "nexus-memory"\nversion = "{version}"\n', encoding="utf-8")
     return repo
 
 
@@ -553,7 +557,7 @@ def _run_gate(repo_dir: Path, bin_dir: Path | None = None):
     # installed for the user cannot leak into the test.
     if bin_dir is not None:
         env["PATH"] = f"{bin_dir}:/usr/bin:/bin"
-    return subprocess.run(["bash", str(RELEASE_GATE)], capture_output=True,
+    return subprocess.run([BASH, str(RELEASE_GATE)], capture_output=True,
                           text=True, env=env, timeout=60)
 
 
@@ -615,4 +619,4 @@ class TestH10ReleaseGate:
         assert "GATE-ROT" in r.stdout and "not-a-version" in r.stdout
 
     def test_syntax_ok(self):
-        assert subprocess.run(["bash", "-n", str(RELEASE_GATE)]).returncode == 0
+        assert subprocess.run([BASH, "-n", str(RELEASE_GATE)]).returncode == 0

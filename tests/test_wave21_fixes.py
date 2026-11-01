@@ -122,11 +122,11 @@ class TestNr354AtomicWrite:
         import tempfile as tf
         d = Path(tf.mkdtemp())
         target = d / "cfg.json"
-        target.write_text('{"a": 1}')
+        target.write_text('{"a": 1}', encoding="utf-8")
         tmp = d / "cfg.json.tmp"
-        tmp.write_text('{"a": 2}')
+        tmp.write_text('{"a": 2}', encoding="utf-8")
         os.replace(tmp, target)
-        assert json.loads(target.read_text())["a"] == 2
+        assert json.loads(target.read_text(encoding="utf-8"))["a"] == 2
         assert not tmp.exists()
 
 

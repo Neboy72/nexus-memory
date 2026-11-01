@@ -72,7 +72,7 @@ def test_kilo_vscode_extensions_dir_does_not_detect(monkeypatch, tmp_path):
 def test_kilo_real_config_detects(monkeypatch, tmp_path):
     fake_home = tmp_path / "home"
     (fake_home / ".kilo").mkdir(parents=True)
-    (fake_home / ".kilo" / "mcp.json").write_text("{}")
+    (fake_home / ".kilo" / "mcp.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(agent_detect.Path, "home", staticmethod(lambda: fake_home))
     monkeypatch.setattr(agent_detect.shutil, "which", lambda name: None)
     assert _check_kilo_code()["detected"] is True
@@ -148,7 +148,7 @@ def test_register_remote_agent_roundtrip(isolated_agents_registry):
     assert result["status"] == "registered"
     assert result["agent"]["host_type"] == "remote"
     assert result["agent"]["host_provider"] == "Hetzner"
-    reg = json.loads(isolated_agents_registry.read_text())
+    reg = json.loads(isolated_agents_registry.read_text(encoding="utf-8"))
     assert [a["id"] for a in reg["agents"]] == ["vps-bot"]
 
 
@@ -170,7 +170,7 @@ def test_register_remote_survives_cleanup(isolated_agents_registry, no_detection
     last_seen is fresh within the grace window."""
     register_remote_agent("vps-bot", "VPS Bot", host_label="Hetzner")
     report = agent_detect.cleanup_removed_agents()
-    ids = [a["id"] for a in json.loads(isolated_agents_registry.read_text())["agents"]]
+    ids = [a["id"] for a in json.loads(isolated_agents_registry.read_text(encoding="utf-8"))["agents"]]
     assert report["status"] == "ok"
     assert "vps-bot" in ids, "fresh remote entry must survive cleanup"
 
@@ -182,13 +182,13 @@ def test_stale_remote_ghost_is_cleaned(isolated_agents_registry, monkeypatch):
                           trust_level="trusted")
     from datetime import datetime, timedelta, timezone
     path = isolated_agents_registry
-    reg = json.loads(path.read_text())
+    reg = json.loads(path.read_text(encoding="utf-8"))
     old = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
     reg["agents"][0]["last_seen"] = old
     reg["agents"][0]["connected_at"] = old
-    path.write_text(json.dumps(reg))
+    path.write_text(json.dumps(reg), encoding="utf-8")
     report = agent_detect.cleanup_removed_agents()
-    ids = [a["id"] for a in json.loads(path.read_text())["agents"]]
+    ids = [a["id"] for a in json.loads(path.read_text(encoding="utf-8"))["agents"]]
     assert ids == [], "stale never-called-back remote ghost must be cleaned"
 
 
@@ -196,13 +196,13 @@ def test_backfill_annotates_legacy_entries(isolated_agents_registry, no_detectio
     path = isolated_agents_registry
     path.write_text(json.dumps(
         {"agents": [{"id": "hermes", "last_seen": "2026-08-31T00:00:00+00:00"}]}
-    ))
+    ), encoding="utf-8")
     monkeypatch_detect = {
         "detected_agents": [{"id": "hermes", "detected": True}]
     }
     monkeypatch.setattr(agent_detect, "detect_all_agents", lambda: monkeypatch_detect)
     agent_detect.cleanup_removed_agents()
-    reg = json.loads(path.read_text())
+    reg = json.loads(path.read_text(encoding="utf-8"))
     entry = reg["agents"][0]
     assert entry["host_type"] == "local"
     assert entry["host_label"] == _local_host_label()

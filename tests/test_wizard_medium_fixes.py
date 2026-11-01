@@ -65,7 +65,7 @@ def test_provider_switch_drops_stale_model(tmp_path, capsys):
         "embedding_provider": "ollama",
         "embedding_model": "bge-m3:latest",
         "trust_level": "trusted",
-    }))
+    }), encoding="utf-8")
 
     monkey_dir = tmp_path
     import nexus_memory.wizard as w
@@ -76,7 +76,7 @@ def test_provider_switch_drops_stale_model(tmp_path, capsys):
     finally:
         w._get_config_dir = orig
 
-    saved = json.loads(cfg.read_text())
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
     assert saved["embedding_provider"] == "openai"
     assert "embedding_model" not in saved, \
         "stale Ollama model must not survive a provider switch"
@@ -85,7 +85,7 @@ def test_provider_switch_drops_stale_model(tmp_path, capsys):
 
 def test_local_provider_records_model(tmp_path, capsys):
     cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"embedding_provider": "openai"}))
+    cfg.write_text(json.dumps({"embedding_provider": "openai"}), encoding="utf-8")
 
     import nexus_memory.wizard as w
     orig = w._get_config_dir
@@ -95,6 +95,6 @@ def test_local_provider_records_model(tmp_path, capsys):
     finally:
         w._get_config_dir = orig
 
-    saved = json.loads(cfg.read_text())
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
     assert saved["embedding_provider"] == "ollama"
     assert saved["embedding_model"] == "qwen3-embedding:0.6b"

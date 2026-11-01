@@ -109,7 +109,7 @@ def test_claude_code_schreibt_trusted():
                 {"id": "claude-code", "trust_level": "trusted"},
                 {"id": "fremd", "trust_level": "public"},
             ]
-        })
+        }), encoding="utf-8"
     )
     alt_datei = modul.AGENTS_FILE
     modul.AGENTS_FILE = str(eigen)
@@ -194,14 +194,14 @@ def test_ungueltige_stufe_in_der_registry_faellt_auf_public():
 
     import tempfile
 
-    original = datei.read_text()
+    original = datei.read_text(encoding="utf-8")
     kaputt = json.loads(original)
     if not kaputt.get("agents"):
         pytest.skip("keine Agenten eingetragen")
     kaputt["agents"][0]["trust_level"] = "admin"  # erfundene, hoehere Stufe
 
     ziel = pathlib.Path(tempfile.mkdtemp()) / "agents.json"
-    ziel.write_text(json.dumps(kaputt))
+    ziel.write_text(json.dumps(kaputt), encoding="utf-8")
     alt_datei = modul.AGENTS_FILE
     alt_id = os.environ.get("NEXUS_AGENT_ID")
     modul.AGENTS_FILE = str(ziel)
@@ -232,7 +232,7 @@ def test_gemeldeter_agent_bekommt_seine_stufe():
     if not datei.exists():
         pytest.skip("agents.json nicht vorhanden")
 
-    registry = json.loads(datei.read_text())
+    registry = json.loads(datei.read_text(encoding="utf-8"))
     eintraege = registry.get("agents", [])
     if not eintraege:
         pytest.skip("keine Agenten eingetragen")

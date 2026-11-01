@@ -151,7 +151,7 @@ class TestInstanceStamp:
         files = _id_files(home)
         assert len(files) == 1
         assert files[0] != home / "instance.json"
-        data = json.loads(files[0].read_text())
+        data = json.loads(files[0].read_text(encoding="utf-8"))
         assert data["instance_id"] == first
         assert data["created_at"]
 
@@ -179,13 +179,13 @@ class TestInstanceStamp:
         monkeypatch.setenv("NEXUS_HOME", str(home))
         resolve_instance_id()
         id_file = _id_files(home)[0]
-        id_file.write_text("{not json at all")
+        id_file.write_text("{not json at all", encoding="utf-8")
 
         instance_id = resolve_instance_id()
 
         assert len(instance_id) == 16
         assert all(c in "0123456789abcdef" for c in instance_id)
-        data = json.loads(id_file.read_text())
+        data = json.loads(id_file.read_text(encoding="utf-8"))
         assert data["instance_id"] == instance_id
 
     def test_instance_file_without_id_is_replaced(self, monkeypatch, tmp_path):
@@ -194,12 +194,12 @@ class TestInstanceStamp:
         monkeypatch.setenv("NEXUS_HOME", str(home))
         resolve_instance_id()
         id_file = _id_files(home)[0]
-        id_file.write_text(json.dumps({"created_at": "x"}))
+        id_file.write_text(json.dumps({"created_at": "x"}), encoding="utf-8")
 
         instance_id = resolve_instance_id()
 
         assert len(instance_id) == 16
-        data = json.loads(id_file.read_text())
+        data = json.loads(id_file.read_text(encoding="utf-8"))
         assert data["instance_id"] == instance_id
 
     def test_shared_nexus_home_still_gives_one_id_per_profile(self, monkeypatch, tmp_path):
@@ -222,7 +222,7 @@ class TestInstanceStamp:
         assert len(second) == 16
         files = _id_files(home)
         assert len(files) == 2
-        stored = {json.loads(f.read_text())["instance_id"] for f in files}
+        stored = {json.loads(f.read_text(encoding="utf-8"))["instance_id"] for f in files}
         assert stored == {first, second}
 
     def test_profiles_in_the_default_home_get_two_ids(self, monkeypatch, tmp_path):
@@ -251,15 +251,15 @@ class TestInstanceStamp:
         id_b = resolve_instance_id()
         file_b = next(f for f in _id_files(home) if f != file_a)
 
-        file_a.write_text("{not json at all")
+        file_a.write_text("{not json at all", encoding="utf-8")
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-a"))
         repaired = resolve_instance_id()
         assert len(repaired) == 16
-        assert json.loads(file_a.read_text())["instance_id"] == repaired
+        assert json.loads(file_a.read_text(encoding="utf-8"))["instance_id"] == repaired
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
         assert resolve_instance_id() == id_b
-        assert json.loads(file_b.read_text())["instance_id"] == id_b
+        assert json.loads(file_b.read_text(encoding="utf-8"))["instance_id"] == id_b
 
     def test_stored_id_wins_over_a_changed_hermes_home(self, monkeypatch, tmp_path):
         """(h) A → B → A: the id stored for A is read back, never recomputed."""
@@ -272,7 +272,7 @@ class TestInstanceStamp:
         # A stored id must beat the derivation, so store one the seed cannot
         # produce: only a read-back (not a recompute) can return it.
         stored = "0123456789abcdef"
-        id_file_a.write_text(json.dumps({"instance_id": stored, "created_at": "x"}))
+        id_file_a.write_text(json.dumps({"instance_id": stored, "created_at": "x"}), encoding="utf-8")
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile-b"))
         other = resolve_instance_id()
@@ -282,7 +282,7 @@ class TestInstanceStamp:
 
         assert other != stored
         assert again == stored
-        assert json.loads(id_file_a.read_text())["instance_id"] == stored
+        assert json.loads(id_file_a.read_text(encoding="utf-8"))["instance_id"] == stored
 
     def test_works_without_hermes_and_nexus_home(self, monkeypatch, tmp_path):
         """(i) Neither variable set: an id is still created and persisted."""
@@ -300,7 +300,7 @@ class TestInstanceStamp:
         assert all(c in "0123456789abcdef" for c in first)
         files = _id_files(home)
         assert len(files) == 1
-        assert json.loads(files[0].read_text())["instance_id"] == first
+        assert json.loads(files[0].read_text(encoding="utf-8"))["instance_id"] == first
 
     def test_legacy_instance_file_is_ignored(self, monkeypatch, tmp_path):
         """(j) The old shared instance.json is not read any more."""
@@ -308,7 +308,7 @@ class TestInstanceStamp:
         home.mkdir(parents=True, exist_ok=True)
         legacy = home / "instance.json"
         legacy.write_text(json.dumps({"instance_id": "aaaaaaaaaaaaaaaa",
-                                      "created_at": "x"}))
+                                      "created_at": "x"}), encoding="utf-8")
         monkeypatch.setenv("NEXUS_HOME", str(home))
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-profile"))
 
@@ -318,9 +318,9 @@ class TestInstanceStamp:
         assert len(instance_id) == 16
         files = _id_files(home)
         assert len(files) == 1
-        assert json.loads(files[0].read_text())["instance_id"] == instance_id
+        assert json.loads(files[0].read_text(encoding="utf-8"))["instance_id"] == instance_id
         # The legacy file is left alone: unread, not migrated, not deleted.
-        assert json.loads(legacy.read_text())["instance_id"] == "aaaaaaaaaaaaaaaa"
+        assert json.loads(legacy.read_text(encoding="utf-8"))["instance_id"] == "aaaaaaaaaaaaaaaa"
 
 
 # ── the second write path: the Hermes plugin ─────────────────────────────────

@@ -726,7 +726,7 @@ class TestWebhookStore:
         assert sub["created_at"]
 
         # The file must actually exist on disk and be valid JSON.
-        on_disk = json.loads((tmp_path / "webhooks.json").read_text())
+        on_disk = json.loads((tmp_path / "webhooks.json").read_text(encoding="utf-8"))
         assert on_disk["subscriptions"][0]["id"] == sub["id"]
 
     async def test_unsubscribe_removes_subscription(self, webhook_store):
@@ -780,7 +780,7 @@ class TestWebhookStore:
     async def test_corrupt_store_file_does_not_crash(self, tmp_path):
         # A garbage file must NOT propagate the error — the store stays empty.
         path = tmp_path / "webhooks.json"
-        path.write_text("{not valid json")
+        path.write_text("{not valid json", encoding="utf-8")
         store = mcp.WebhookStore(path=path)
         assert await store.list() == []
 
@@ -1419,7 +1419,7 @@ class TestWebhookWriteFailureReporting:
         sub = await webhook_store.subscribe(
             "memory.remember", "https://hook.example/persist"
         )
-        doc = json.loads(webhook_store.path.read_text())
+        doc = json.loads(webhook_store.path.read_text(encoding="utf-8"))
         assert [s["id"] for s in doc["subscriptions"]] == [sub["id"]]
 
 
@@ -1472,7 +1472,7 @@ class TestWebhookCrossProcessLocking:
         for p, (out, err) in zip(procs, outs):
             assert p.returncode == 0, f"worker failed: {err.decode()[:500]}"
 
-        doc = json.loads(store_path.read_text())
+        doc = json.loads(store_path.read_text(encoding="utf-8"))
         subs = doc["subscriptions"]
         # Every write from BOTH processes survived the RMW race.
         assert len(subs) == 2 * n
@@ -1523,7 +1523,7 @@ class TestAutoBackupPermissions:
         assert dmode & 0o700 == 0o700
 
         # The backup content is still a valid full dump.
-        doc = json.loads(open(backup_path).read())
+        doc = json.loads(open(backup_path, encoding="utf-8").read())
         assert doc["point_count"] == 0
         assert doc["points"] == []
 
@@ -1544,7 +1544,7 @@ class TestAutoBackupPermissions:
         # path only if it collides — instead assert our fresh file is tight
         # even when a loose leftover exists in the directory.
         loose = fake_home / ".nexus-memory" / "backups" / "nexus-backup-old.json"
-        loose.write_text("{}")
+        loose.write_text("{}", encoding="utf-8")
         os.chmod(loose, 0o644)
 
         store = self._bare_store()

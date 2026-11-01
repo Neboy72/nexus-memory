@@ -61,7 +61,7 @@ def _make_store() -> "mcp.MemoryStore":
 def _agents(reg_path) -> list[dict]:
     if not reg_path.exists():
         return []
-    return json.loads(reg_path.read_text()).get("agents", [])
+    return json.loads(reg_path.read_text(encoding="utf-8")).get("agents", [])
 
 
 def _counts(reg_path, agent_id: str) -> tuple[int, int]:
@@ -252,26 +252,26 @@ def test_selftest_does_not_increment_an_existing_entry(
 
 def test_corrupt_registry_never_breaks_the_counting_call(
         isolated_agents_registry):
-    isolated_agents_registry.write_text("{kaputtes json")
+    isolated_agents_registry.write_text("{kaputtes json", encoding="utf-8")
 
     # Must not raise: counting is telemetry.
     ad.record_agent_access("egal", read=True, write=True)
 
 
 def test_corrupt_registry_never_breaks_recall(isolated_agents_registry):
-    isolated_agents_registry.write_text("{kaputtes json")
+    isolated_agents_registry.write_text("{kaputtes json", encoding="utf-8")
     store = _make_store()
 
     results = asyncio.run(store.recall("irgendwas"))
 
     assert results == [], "the memory operation must run to completion"
-    assert isolated_agents_registry.read_text() == "{kaputtes json", (
+    assert isolated_agents_registry.read_text(encoding="utf-8") == "{kaputtes json", (
         "a broken registry must never be overwritten by the counter"
     )
 
 
 def test_corrupt_registry_never_breaks_remember(isolated_agents_registry):
-    isolated_agents_registry.write_text("{kaputtes json")
+    isolated_agents_registry.write_text("{kaputtes json", encoding="utf-8")
     store = _make_store()
 
     result = asyncio.run(store.remember(
