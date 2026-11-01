@@ -306,13 +306,13 @@ class TestC1HookToolMatcher:
     _EXPECTED = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"]
 
     def test_pretooluse_matcher_uses_real_tool_names(self):
-        hooks = json.loads(_HOOKS_JSON.read_text())
+        hooks = json.loads(_HOOKS_JSON.read_text(encoding="utf-8"))
         matcher = hooks["hooks"]["PreToolUse"][0]["matcher"]
         assert matcher == "Bash|Write|Edit|MultiEdit|NotebookEdit"
         assert "Terminal" not in matcher and "Delete" not in matcher
 
     def test_guardrail_script_lists_same_tools(self):
-        tree = ast.parse(_GUARDRAIL_PY.read_text())
+        tree = ast.parse(_GUARDRAIL_PY.read_text(encoding="utf-8"))
         found = None
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
@@ -322,14 +322,14 @@ class TestC1HookToolMatcher:
         assert found == self._EXPECTED
 
     def test_matcher_and_script_agree(self):
-        hooks = json.loads(_HOOKS_JSON.read_text())
+        hooks = json.loads(_HOOKS_JSON.read_text(encoding="utf-8"))
         matcher = hooks["hooks"]["PreToolUse"][0]["matcher"].split("|")
         assert matcher == self._EXPECTED
 
 
 class TestC2HookTimeout:
     def test_pretooluse_timeout_is_15s(self):
-        hooks = json.loads(_HOOKS_JSON.read_text())
+        hooks = json.loads(_HOOKS_JSON.read_text(encoding="utf-8"))
         assert hooks["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] == 15
 
 

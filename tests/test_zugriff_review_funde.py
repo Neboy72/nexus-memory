@@ -50,7 +50,7 @@ def test_guardrails_stufe_faellt_auf_private():
 
 def test_guardrails_hat_kein_fail_open_mehr():
     """Und der Quelltext selbst darf die alte Form nicht mehr enthalten."""
-    quelle = (WURZEL / "src" / "nexus_memory" / "guardrails.py").read_text()
+    quelle = (WURZEL / "src" / "nexus_memory" / "guardrails.py").read_text(encoding="utf-8")
     assert 'payload.get("access_level", "public")' not in quelle, (
         "guardrails.py liest eine Stufe noch mit dem alten fail-open-Standard "
         "'public'. Ersetzt durch _level_or_private(payload)."
@@ -65,7 +65,7 @@ def test_graph_boost_filtert_nach_stufe():
     Prefetch, obwohl der MCP-Server und der OpenClaw-Hook an derselben Stelle
     fail-closed arbeiten.
     """
-    quelle = (WURZEL / "plugins" / "memory" / "nexus" / "__init__.py").read_text()
+    quelle = (WURZEL / "plugins" / "memory" / "nexus" / "__init__.py").read_text(encoding="utf-8")
     baum = ast.parse(quelle)
 
     # Die Funktion _graph_boost finden
@@ -91,7 +91,7 @@ def test_graph_boost_filtert_nach_stufe():
 
 def test_sichtbarkeit_je_agentenkontext():
     """Die Sichtbarkeitsgrenze selbst: Inhaber sieht alles, ein Fremder wenig."""
-    quelle = (WURZEL / "plugins" / "memory" / "nexus" / "__init__.py").read_text()
+    quelle = (WURZEL / "plugins" / "memory" / "nexus" / "__init__.py").read_text(encoding="utf-8")
     baum = ast.parse(quelle)
     ziel = None
     for knoten in ast.walk(baum):
@@ -122,7 +122,7 @@ def test_kein_blankes_public_mehr_in_den_schreibpfaden():
         "integrations/hermes-plugin/__init__.py": "die aeltere Kopie",
     }
     for rel, was in zu_pruefen.items():
-        quelle = (WURZEL / rel).read_text()
+        quelle = (WURZEL / rel).read_text(encoding="utf-8")
         verdaechtig = []
         for nummer, zeile in enumerate(quelle.splitlines(), 1):
             blank = zeile.strip()

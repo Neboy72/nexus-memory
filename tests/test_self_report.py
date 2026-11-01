@@ -223,7 +223,7 @@ def test_dedup_delivers_once_per_window(tmp_path, monkeypatch):
 
     assert daemon.run_pass(now=t)["delivered"] == ["broken:hermes"]
     assert daemon.run_pass(now=t)["delivered"] == []  # suppressed by state file
-    state = json.loads((tmp_path / "selfreport-state.json").read_text())
+    state = json.loads((tmp_path / "selfreport-state.json").read_text(encoding="utf-8"))
     assert "broken:hermes" in state
 
     # Healthy pass: the report disappears -> no issue, state unchanged.
@@ -277,7 +277,7 @@ def test_failed_delivery_is_not_deduped_and_retried(tmp_path, monkeypatch):
     assert daemon.run_pass(now=t)["delivered"] == []
     state_path = tmp_path / "selfreport-state.json"
     assert not state_path.exists() or "broken:hermes" not in json.loads(
-        state_path.read_text())
+        state_path.read_text(encoding="utf-8"))
     # Not recorded -> the next pass offers the alert again.
     assert daemon.run_pass(now=t + 60)["delivered"] == []
     assert len(seen) == 2
@@ -291,7 +291,7 @@ def test_successful_delivery_is_deduped(tmp_path, monkeypatch):
 
     assert daemon.run_pass(now=t)["delivered"] == ["broken:hermes"]
     assert daemon.run_pass(now=t + 60)["delivered"] == []
-    state = json.loads((tmp_path / "selfreport-state.json").read_text())
+    state = json.loads((tmp_path / "selfreport-state.json").read_text(encoding="utf-8"))
     assert "broken:hermes" in state
 
 

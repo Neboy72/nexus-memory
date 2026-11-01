@@ -102,8 +102,8 @@ def ref_from_init(text: str) -> str:
 
 
 def refs_in_working_tree() -> tuple[str, str]:
-    return (ref_from_pyproject((REPO / PLUGIN_PYPROJECT).read_text()),
-            ref_from_init((REPO / PLUGIN_INIT).read_text()))
+    return (ref_from_pyproject((REPO / PLUGIN_PYPROJECT).read_text(encoding="utf-8")),
+            ref_from_init((REPO / PLUGIN_INIT).read_text(encoding="utf-8")))
 
 
 def pinned_ref() -> str:
@@ -221,10 +221,10 @@ def test_pin_is_an_ancestor_of_head() -> None:
 # ─── 5: die Versionen sagen dasselbe ───────────────────────────────────────
 
 def test_advertised_versions_agree() -> None:
-    manifest = (REPO / PLUGIN_YAML).read_text()
-    plugin_toml = (REPO / PLUGIN_PYPROJECT).read_text()
-    root_toml = (REPO / ROOT_PYPROJECT).read_text()
-    readme = (REPO / README).read_text()
+    manifest = (REPO / PLUGIN_YAML).read_text(encoding="utf-8")
+    plugin_toml = (REPO / PLUGIN_PYPROJECT).read_text(encoding="utf-8")
+    root_toml = (REPO / ROOT_PYPROJECT).read_text(encoding="utf-8")
+    readme = (REPO / README).read_text(encoding="utf-8")
 
     advertised = {
         PLUGIN_YAML: re.search(r"^version:\s*(\S+)", manifest, re.M).group(1),

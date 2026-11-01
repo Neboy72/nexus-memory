@@ -82,9 +82,9 @@ def test_budget_add_monthly_reset(tmp_path, monkeypatch):
     _budget_add(5.0)
     assert budget_exhausted() is True
     # simulate month turn
-    s = json.loads(fuel_chain.FUEL_STATE.read_text())
+    s = json.loads(fuel_chain.FUEL_STATE.read_text(encoding="utf-8"))
     s["year_month"] = "2000-01"
-    fuel_chain.FUEL_STATE.write_text(json.dumps(s))
+    fuel_chain.FUEL_STATE.write_text(json.dumps(s), encoding="utf-8")
     assert budget_exhausted() is False
 
 

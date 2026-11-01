@@ -588,6 +588,6 @@ class TestH10GraphTraverseClosesStore:
     def test_close_happens_in_finally(self):
         src = (
             REPO_ROOT / "plugins" / "claude-code" / "scripts" / "graph_traverse.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         assert src.count("finally:") >= 4
         assert src.count("sg.store.close()") >= 4

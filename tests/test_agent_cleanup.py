@@ -33,7 +33,7 @@ def no_detection(monkeypatch):
 
 
 def _write_registry(path, agents):
-    path.write_text(json.dumps({"agents": agents}))
+    path.write_text(json.dumps({"agents": agents}), encoding="utf-8")
 
 
 def test_removed_agent_is_cleaned(registry_file, no_detection):

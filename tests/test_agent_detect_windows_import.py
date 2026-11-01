@@ -145,7 +145,7 @@ def test_windows_branch_locks_one_byte_exclusively(monkeypatch, registry_path):
                             lambda: registry_path)
 
         lock_path = ad._registry_lock_path()
-        with open(lock_path, "a+") as lock_file:
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
             ad._lock_file(lock_file.fileno(), exclusive=True)
             ad._unlock_file(lock_file.fileno())
 
@@ -156,7 +156,7 @@ def test_windows_branch_locks_one_byte_exclusively(monkeypatch, registry_path):
 
         # A shared request has no msvcrt equivalent: it locks exclusively.
         fake.calls.clear()
-        with open(lock_path, "a+") as lock_file:
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
             ad._lock_file(lock_file.fileno(), exclusive=False)
             ad._unlock_file(lock_file.fileno())
 
@@ -196,7 +196,7 @@ def test_windows_lock_retries_until_available(monkeypatch, registry_path):
         monkeypatch.setattr(ad, "_LOCK_RETRY_INTERVAL_SEC", 0)
 
         lock_path = ad._registry_lock_path()
-        with open(lock_path, "a+") as lock_file:
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
             ad._lock_file(lock_file.fileno(), exclusive=True)
             ad._unlock_file(lock_file.fileno())
 
@@ -215,7 +215,7 @@ def test_windows_lock_times_out_with_clear_error(monkeypatch, registry_path):
         monkeypatch.setattr(ad, "_LOCK_RETRY_INTERVAL_SEC", 0)
 
         lock_path = ad._registry_lock_path()
-        with open(lock_path, "a+") as lock_file:
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
             with pytest.raises(TimeoutError) as excinfo:
                 ad._lock_file(lock_file.fileno(), exclusive=True)
 

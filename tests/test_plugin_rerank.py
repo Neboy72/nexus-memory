@@ -76,7 +76,7 @@ class TestLoadRerankConfig:
 
                     }
                 }
-            )
+            ), encoding="utf-8"
         )
         cfg = load_rerank_config(str(cfg_file))
         assert cfg["enabled"] is True
@@ -89,7 +89,7 @@ class TestLoadRerankConfig:
         from nexus_memory.reranker import load_rerank_config
 
         cfg_file = tmp_path / "config.yaml"
-        cfg_file.write_text(yaml.safe_dump({"nexus-memory": {"rerank": True}}))
+        cfg_file.write_text(yaml.safe_dump({"nexus-memory": {"rerank": True}}), encoding="utf-8")
         monkeypatch.setenv("NEXUS_RERANK", "0")
         monkeypatch.setenv("NEXUS_RERANKER", "cross-encoder")
         cfg = load_rerank_config(str(cfg_file))
@@ -100,7 +100,7 @@ class TestLoadRerankConfig:
         from nexus_memory.reranker import load_rerank_config
 
         cfg_file = tmp_path / "broken.yaml"
-        cfg_file.write_text("nexus-memory: [`unbalanced")
+        cfg_file.write_text("nexus-memory: [`unbalanced", encoding="utf-8")
         cfg = load_rerank_config(str(cfg_file))
         assert cfg["enabled"] is False  # defaults hold
 
@@ -327,6 +327,6 @@ class TestAutoMode:
         from nexus_memory.reranker import load_rerank_config
 
         cfg_file = tmp_path / "config.yaml"
-        cfg_file.write_text(yaml.safe_dump({"nexus-memory": {"rerank": True}}))
+        cfg_file.write_text(yaml.safe_dump({"nexus-memory": {"rerank": True}}), encoding="utf-8")
         cfg = load_rerank_config(str(cfg_file))
         assert cfg["reranker"] == "llm"

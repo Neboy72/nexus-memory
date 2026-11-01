@@ -196,7 +196,7 @@ class TestG4DefaultAccessLevel:
         p._hermes_home = str(tmp_path)
         nexus_dir = tmp_path / "nexus"
         nexus_dir.mkdir()
-        (nexus_dir / "config.json").write_text(json.dumps(config))
+        (nexus_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
         return p
 
     def test_default_is_private_without_config(self, tmp_path):
