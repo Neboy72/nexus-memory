@@ -11,14 +11,17 @@ Covers the three HIGH findings from the external code review:
 3. wizard.py — same permissions/atomicity guarantees for the interactive
    wizard's save path.
 
-All tests use real temp directories and assert real filesystem modes via
-``os.stat`` (``st_mode``), per the repo's test conventions.
+All tests use real temp directories and assert real filesystem restrictions:
+POSIX modes via ``os.stat`` (``st_mode``), Windows ACLs via ``icacls`` (mode
+bits do not express access there).
 """
 
 from __future__ import annotations
 
+import getpass
 import os
 import stat
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -42,6 +45,47 @@ def tmp_env(tmp_path):
 
 def _mode(path: Path) -> int:
     return stat.S_IMODE(os.stat(path).st_mode)
+
+
+# Principals that must never see the secrets file on Windows. Checked by name
+# (GitHub's windows-latest is en-US, so icacls prints exactly these) and by
+# well-known SID, which is what the code grants/removes.
+_WIDE_TRUSTEES = ("everyone", "builtin\\users", "authenticated users")
+_WIDE_TRUSTEE_SIDS = ("s-1-1-0", "s-1-5-32-545", "s-1-5-11")
+
+
+def _icacls(path: Path) -> str:
+    """Raw ``icacls`` listing for *path* (Windows only)."""
+    proc = subprocess.run(
+        ["icacls", str(path)], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, f"icacls {path} failed: {proc.stderr}"
+    # The first line is "<path> <first ACE>" — drop the path so a directory
+    # named e.g. "Users" cannot be mistaken for a trustee.
+    return proc.stdout.replace(str(path), "").lower()
+
+
+def _assert_restricted(path: Path, *, is_dir: bool = False) -> None:
+    """Assert *path* is private to its owner.
+
+    POSIX: 0700 for directories, 0600 for files, no group/world bits.
+    Windows: ACL holds the current account and SYSTEM, and none of the
+    wide default principals (Everyone / BUILTIN\\Users / Authenticated
+    Users) — os.chmod alone cannot express this there.
+    """
+    if os.name != "nt":
+        expected = 0o700 if is_dir else 0o600
+        assert _mode(path) == expected
+        assert _mode(path) & 0o077 == 0
+        return
+
+    acl = _icacls(path)
+    for trustee in _WIDE_TRUSTEES:
+        assert trustee not in acl, f"{trustee} still has access to {path}:\n{acl}"
+    for sid in _WIDE_TRUSTEE_SIDS:
+        assert sid not in acl, f"{sid} still has access to {path}:\n{acl}"
+    assert getpass.getuser().lower() in acl, f"owner missing from ACL:\n{acl}"
+    assert "system" in acl, f"SYSTEM missing from ACL:\n{acl}"
 
 
 # ---------------------------------------------------------------------------
@@ -137,14 +181,14 @@ class TestPermissionsChatWizard:
     def test_new_dir_and_file_get_restrictive_modes(self, tmp_env):
         d, env = tmp_env
         ess.write_env_key(env, "OPENAI_API_KEY", "sk-abc123")
-        assert _mode(env) == 0o600
-        assert _mode(d) == 0o700
+        _assert_restricted(env)
+        _assert_restricted(d, is_dir=True)
 
     def test_wizard_save_api_key_sets_restrictive_modes(self, tmp_path, monkeypatch):
         monkeypatch.setattr(wiz, "_get_config_dir", lambda: tmp_path)
         wiz._save_api_key("OPENAI_API_KEY", "sk-validkey123")
-        assert _mode(tmp_path / ".env") == 0o600
-        assert _mode(tmp_path) == 0o700
+        _assert_restricted(tmp_path / ".env")
+        _assert_restricted(tmp_path, is_dir=True)
 
     def test_preexisting_wide_permissions_are_repaired(self, tmp_env):
         d, env = tmp_env
@@ -152,8 +196,8 @@ class TestPermissionsChatWizard:
         os.chmod(env, 0o644)
         os.chmod(d, 0o755)
         ess.write_env_key(env, "NEW_KEY", "nk-123")
-        assert _mode(env) == 0o600
-        assert _mode(d) == 0o700
+        _assert_restricted(env)
+        _assert_restricted(d, is_dir=True)
 
     def test_preserves_existing_entries_on_rewrite(self, tmp_env):
         _, env = tmp_env
@@ -179,8 +223,8 @@ class TestPermissionsChatWizard:
     ):
         monkeypatch.setattr(cw, "_get_config_dir", lambda: tmp_path)
         cw._save_api_key("JINA_API_KEY", "jina_validkey")
-        assert _mode(tmp_path / ".env") == 0o600
-        assert _mode(tmp_path) == 0o700
+        _assert_restricted(tmp_path / ".env")
+        _assert_restricted(tmp_path, is_dir=True)
 
 
 # ---------------------------------------------------------------------------
@@ -192,25 +236,24 @@ class TestPermissionsInteractiveWizard:
     def test_wizard_env_helper_writes_0600(self, tmp_env):
         _, env = tmp_env
         ess.write_env_key(env, "OPENAI_API_KEY", "sk-abc123")
-        assert _mode(env) == 0o600
+        _assert_restricted(env)
 
     def test_wizard_rewrites_keep_0600(self, tmp_env):
         _, env = tmp_env
         ess.write_env_key(env, "A", "1")
         os.chmod(env, 0o666)  # simulate later chmod widening
         ess.write_env_key(env, "A", "2")
-        assert _mode(env) == 0o600
+        _assert_restricted(env)
 
     def test_wizard_dir_0700_after_repeated_saves(self, tmp_env):
         d, env = tmp_env
         ess.write_env_key(env, "A", "1")
         os.chmod(d, 0o777)  # simulate directory permission drift
         ess.write_env_key(env, "B", "2")
-        assert _mode(d) == 0o700
+        _assert_restricted(d, is_dir=True)
 
     def test_no_group_or_world_bits_ever(self, tmp_env):
         _, env = tmp_env
         for key, val in (("A", "a"), ("B", "b")):
             ess.write_env_key(env, key, val)
-            m = _mode(env)
-            assert m & 0o077 == 0
+            _assert_restricted(env)
