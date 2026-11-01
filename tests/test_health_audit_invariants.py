@@ -24,17 +24,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from nexus_memory import health_audit as ha
 
 DIM = 4
-
-
-def _mk_client():
-    import tempfile
-    return QdrantClient(path=tempfile.mkdtemp())
 
 
 class _FakeStore:
@@ -60,8 +54,8 @@ def _upsert_raw(client, coll, pid, payload):
 
 
 @pytest.fixture()
-def temp_coll():
-    client = _mk_client()
+def temp_coll(embedded_qdrant):
+    client = embedded_qdrant()
     name = "test-health-audit-invariants"
     client.create_collection(name, vectors_config=VectorParams(size=DIM, distance=Distance.COSINE))
     yield client, name
@@ -505,8 +499,8 @@ def test_flags_message_matches_actual_behavior(temp_coll, tmp_path, monkeypatch)
 # ── Finding 5 (MEDIUM): explicit collection is respected ───────────────
 
 
-def test_uses_explicit_collection_argument(tmp_path, monkeypatch):
-    client = _mk_client()
+def test_uses_explicit_collection_argument(tmp_path, monkeypatch, embedded_qdrant):
+    client = embedded_qdrant()
     try:
         for name in ("coll-main", "coll-other"):
             client.create_collection(name, vectors_config=VectorParams(size=DIM, distance=Distance.COSINE))

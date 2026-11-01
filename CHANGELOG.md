@@ -29,6 +29,11 @@ A fifth run found a test that redirected `HOME` but not `USERPROFILE`. On Window
 resolves through `USERPROFILE`, so the test read the real profile and picked up configuration that
 earlier tests in the same file had written.
 
+The sixth run showed the same open-handle error in a second file, which is how we learned the cause was
+structural: nine test files each built their own temporary directory and their own path-backed Qdrant
+client, and none closed the client before the directory went away. The `embedded_qdrant` fixture in
+`tests/conftest.py` now owns both, and no path-backed client exists outside it any more.
+
 The two symlink tests in `tests/test_guardrails.py` skip with a reason where the platform refuses
 to create a link. Patch and tests by Simin Yuan (PR #12).
 
