@@ -17,8 +17,11 @@ patched. We exercise:
 from __future__ import annotations
 
 import asyncio
+import getpass
 import json
 import os
+import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,6 +40,47 @@ from nexus.config import is_success
 # ===========================================================================
 # Helpers / shared fixtures
 # ===========================================================================
+
+# Principals that must never see a backup on Windows. Checked by name
+# (GitHub's windows-latest is en-US, so icacls prints exactly these) and by
+# well-known SID, which is what the code grants/removes.
+_WIDE_TRUSTEES = ("everyone", "builtin\\users", "authenticated users")
+_WIDE_TRUSTEE_SIDS = ("s-1-1-0", "s-1-5-32-545", "s-1-5-11")
+
+
+def _icacls(path: Path) -> str:
+    """Raw ``icacls`` listing for *path* (Windows only)."""
+    proc = subprocess.run(
+        ["icacls", str(path)], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, f"icacls {path} failed: {proc.stderr}"
+    # The first line is "<path> <first ACE>" — drop the path so a directory
+    # named e.g. "Users" cannot be mistaken for a trustee.
+    return proc.stdout.replace(str(path), "").lower()
+
+
+def _assert_restricted(path: Path, *, is_dir: bool = False) -> None:
+    """Assert *path* is private to its owner.
+
+    POSIX: 0700 for directories, 0600 for files, no group/world bits.
+    Windows: ACL holds the current account and SYSTEM, and none of the
+    wide default principals (Everyone / BUILTIN\\Users / Authenticated
+    Users) — os.chmod alone cannot express this there.
+    """
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    if os.name != "nt":
+        expected = 0o700 if is_dir else 0o600
+        assert mode == expected
+        assert mode & 0o077 == 0
+        return
+
+    acl = _icacls(path)
+    for trustee in _WIDE_TRUSTEES:
+        assert trustee not in acl, f"{trustee} still has access to {path}:\n{acl}"
+    for sid in _WIDE_TRUSTEE_SIDS:
+        assert sid not in acl, f"{sid} still has access to {path}:\n{acl}"
+    assert getpass.getuser().lower() in acl, f"owner missing from ACL:\n{acl}"
+    assert "system" in acl, f"SYSTEM missing from ACL:\n{acl}"
 
 
 class _FakeHybrid:
@@ -1495,8 +1539,6 @@ class TestAutoBackupPermissions:
     def test_backup_file_0600_and_dir_0700_despite_umask(
         self, tmp_path, monkeypatch
     ):
-        import stat as stat_module
-
         fake_home = tmp_path / "home"
         fake_home.mkdir()
         monkeypatch.setattr(
@@ -1513,14 +1555,8 @@ class TestAutoBackupPermissions:
         finally:
             os.umask(old_umask)
 
-        mode = stat_module.S_IMODE(os.stat(backup_path).st_mode)
-        assert mode & 0o077 == 0, f"backup readable by group/other: {oct(mode)}"
-        assert mode & 0o600 == 0o600
-
-        backup_dir = os.path.dirname(backup_path)
-        dmode = stat_module.S_IMODE(os.stat(backup_dir).st_mode)
-        assert dmode & 0o077 == 0, f"backup dir too open: {oct(dmode)}"
-        assert dmode & 0o700 == 0o700
+        _assert_restricted(Path(backup_path))
+        _assert_restricted(Path(backup_path).parent, is_dir=True)
 
         # The backup content is still a valid full dump.
         doc = json.loads(open(backup_path, encoding="utf-8").read())
@@ -1530,8 +1566,6 @@ class TestAutoBackupPermissions:
     def test_pre_existing_loose_backup_file_gets_tightened(
         self, tmp_path, monkeypatch
     ):
-        import stat as stat_module
-
         fake_home = tmp_path / "home2"
         (fake_home / ".nexus-memory" / "backups").mkdir(parents=True)
         monkeypatch.setattr(
@@ -1550,8 +1584,7 @@ class TestAutoBackupPermissions:
         store = self._bare_store()
         backup_path = store._do_backup()
 
-        mode = stat_module.S_IMODE(os.stat(backup_path).st_mode)
-        assert mode & 0o077 == 0
+        _assert_restricted(Path(backup_path))
 
 
 class TestCliStdoutChannelPurity:
