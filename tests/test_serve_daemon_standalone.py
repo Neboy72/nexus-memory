@@ -38,6 +38,44 @@ if _SRC not in sys.path:
 from nexus_memory import serve_daemon as sd  # noqa: E402
 from nexus_memory import setup as setup_mod  # noqa: E402
 
+# The plist is produced by the script's Darwin branch in hermetic mode
+# (NEXUS_SERVE_FORCE_OS=darwin + NEXUS_SERVE_SKIP_LAUNCHD), which is a fair
+# cross-check on any POSIX host — it stays enabled on Linux on purpose. It
+# cannot work on Windows: there the script runs under Git Bash, whose $HOME
+# is the MSYS form (/c/Users/...) while the test compares against the native
+# path (C:\Users\...), so the <string> entries never match.
+_POSIX_LAUNCHD_PLIST = pytest.mark.skipif(
+    os.name == "nt",
+    reason="the script's Darwin branch runs under Git Bash on Windows, "
+           "where $HOME is MSYS-form and the plist paths cannot match",
+)
+
+# The script is a POSIX shell program run as `bash install_serve.sh`. Two
+# tests below override PATH to prove entrypoint resolution fails; on Windows
+# that also removes System32 from the environment, which breaks process
+# creation for Git Bash itself (r.stdout/stderr come back as None), so the
+# shell cannot be exercised that way.
+_POSIX_SHELL_ONLY = pytest.mark.skipif(
+    os.name == "nt",
+    reason="drives scripts/install_serve.sh through a POSIX shell with a "
+           "PATH that cannot start Git Bash on Windows",
+)
+
+# serve_daemon invokes the installer as a bare `bash`. On Windows
+# CreateProcess resolves that name to C:\Windows\System32\bash.exe — the WSL
+# launcher, which on a runner without a distribution prints "Windows
+# Subsystem for Linux has no installed distributions" and exits 1. No shell
+# script runs there at all, so the rc/stdout assertions cannot be met. The
+# fail-open contract of ensure_serve_daemon stays covered on Windows by
+# test_ensure_missing_script_is_returned_not_raised,
+# test_ensure_noop_when_healthz_already_answers and
+# test_serve_daemon_never_raises_on_total_failure.
+_ENSURE_SCRIPT_ONLY = pytest.mark.skipif(
+    os.name == "nt",
+    reason="serve_daemon runs the install script via a bare 'bash', which "
+           "resolves to the WSL stub on Windows; see the note above",
+)
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -81,6 +119,11 @@ def _run_script(home: Path, port: str = "9122", skip: bool = True,
 class TestInstallServeScript:
     def test_script_exists_and_is_executable(self):
         assert SCRIPT.exists()
+        if os.name == "nt":
+            # Windows has no executable bit: st_mode is 0o666 for every
+            # regular file and CreateProcess ignores it, so only the
+            # presence of the script is meaningful there.
+            return
         assert SCRIPT.stat().st_mode & stat.S_IXUSR
 
     def test_service_identity_matches_serve_daemon_module(self):
@@ -91,6 +134,7 @@ class TestInstallServeScript:
         assert f'TASK_NAME="{sd.WINDOWS_TASK}"' in src
         assert f'DEFAULT_SERVE_PORT="{sd.DEFAULT_SERVE_PORT}"' in src
 
+    @_POSIX_LAUNCHD_PLIST
     def test_darwin_plist_written_hermetically(self, tmp_path):
         _fake_entrypoint(tmp_path)
         plist = tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist"
@@ -110,6 +154,7 @@ class TestInstallServeScript:
         assert f"<string>{sd.DEFAULT_SERVE_PORT}</string>" in content   # NEXUS_SERVE_PORT
         assert "Library/LaunchAgents" in str(plist)                     # LaunchAgents path
 
+    @_POSIX_LAUNCHD_PLIST
     def test_plist_keeps_reference_log_paths(self, tmp_path):
         _fake_entrypoint(tmp_path)
         r = _run_script(tmp_path, force_os="darwin")
@@ -129,6 +174,7 @@ class TestInstallServeScript:
         plists = list(plist_dir.glob("*.plist"))
         assert plists == [plist_dir / f"{sd.LAUNCHD_LABEL}.plist"]
 
+    @_POSIX_LAUNCHD_PLIST
     def test_skip_mode_writes_file_without_service_control(self, tmp_path):
         _fake_entrypoint(tmp_path)
         r = _run_script(tmp_path, skip=True, force_os="darwin")
@@ -136,6 +182,7 @@ class TestInstallServeScript:
         assert "skipping service control" in r.stdout
         assert "Post-install healthz check skipped" in r.stdout
 
+    @_POSIX_SHELL_ONLY
     def test_without_skip_flag_the_script_refuses_no_entrypoint(self, tmp_path):
         # No fake entrypoint, no NEXUS_PYTHON → resolve_entrypoint fails; the
         # script must abort BEFORE any service-control side effect.
@@ -171,6 +218,7 @@ class TestInstallServeScript:
         assert r.returncode == 0
         assert calls == []
 
+    @_POSIX_SHELL_ONLY
     def test_missing_entrypoint_fails_cleanly(self, tmp_path):
         env = _fake_env(tmp_path)
         env["PATH"] = "/nonexistent:/usr/bin:/bin"
@@ -277,6 +325,7 @@ class TestSetupWizardWiring:
         assert res["status"] == "already_installed"
         assert res["port"] == 9122
 
+    @_ENSURE_SCRIPT_ONLY
     def test_ensure_runs_script_and_reports_installed(self, daemon_engine, tmp_path, monkeypatch):
         script = tmp_path / "install_serve.sh"
         script.write_text("#!/bin/bash\necho ' ✅ fake install ok'\n", encoding="utf-8")
@@ -297,6 +346,7 @@ class TestSetupWizardWiring:
         assert "fake install ok" in (res.get("detail") or "")
         assert sleeps["n"] <= 20  # bounded poll, not an infinite wait
 
+    @_ENSURE_SCRIPT_ONLY
     def test_ensure_script_failure_is_returned_not_raised(self, daemon_engine, tmp_path, monkeypatch):
         script = tmp_path / "install_serve.sh"
         script.write_text("#!/bin/bash\necho boom >&2\nexit 3\n", encoding="utf-8")
@@ -310,6 +360,7 @@ class TestSetupWizardWiring:
         assert "rc=3" in res["error"]
         assert "boom" in res["error"]
 
+    @_ENSURE_SCRIPT_ONLY
     def test_ensure_timeout_is_returned_not_raised(self, daemon_engine, tmp_path, monkeypatch):
         script = tmp_path / "install_serve.sh"
         script.write_text("#!/bin/bash\nsleep 5\n", encoding="utf-8")

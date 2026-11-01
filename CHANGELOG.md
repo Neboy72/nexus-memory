@@ -1,5 +1,20 @@
 ## [0.22.44] - 2026-11-01
 
+### Security - the guardrail compared Windows paths in a form that never matched
+
+`guardrail_check.normalize_path` normalised with `os.path.normpath`, which on Windows rewrites every
+`/` to `\`, while the containment checks in `path_matches` compare against a literal `/`. A protected
+path therefore never matched — neither itself, nor its children (`p + "/"`), nor its parents — and the
+guardrail allowed deletes and writes it exists to block. The four failing `wave29` tests were the
+first thing to say so.
+
+The function now forces `/` as the separator on every platform, so one canonical form is compared
+against. POSIX behaviour is unchanged.
+
+Two limits are now written down instead of assumed: plugin installation on Windows degrades to
+MCP-only, because every installer entry is a POSIX shell script, and the per-agent MCP config has no
+`0600` promise there, because it inherits the directory ACL and holds no secrets.
+
 ### Fix - the automatic backup is protected on Windows too
 
 `MemoryStore._do_backup` writes a copy of the store next to it and tightens the directory to `0700`

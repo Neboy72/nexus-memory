@@ -52,10 +52,21 @@ def test_status_code_check_is_ere_without_double_backslash():
 
 
 def _grep_probe(pattern: str, sample: str, tmp: Path) -> bool:
+    """Run the audit's real ``grep -rnE`` over *sample* and report a match.
+
+    The pattern is handed over through ``-f`` instead of as an argument: an
+    ERE containing double quotes (``("a"|"b")``) has to be escaped when Python
+    builds the Windows command line, and the MinGW grep on the Windows runner
+    does not un-escape it like the CRT does — the quotes then arrive as
+    literal backslashes and the probe matches nothing. A pattern file has no
+    quoting to get wrong on any platform.
+    """
     tmp.write_text(sample, encoding="utf-8")
+    pattern_file = tmp.with_name(tmp.name + ".ere")
+    pattern_file.write_text(pattern + "\n", encoding="utf-8")
     proc = subprocess.run(
-        ["grep", "-rnE", pattern, str(tmp)],
-        capture_output=True,
+        ["grep", "-rnE", "-f", str(pattern_file), str(tmp)],
+        capture_output=True, encoding="utf-8", errors="replace",
     )
     return proc.returncode == 0
 
