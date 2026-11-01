@@ -186,7 +186,9 @@ def _install_pip(package: str) -> bool:
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", package, "--quiet"],
-            capture_output=True, text=True, timeout=120
+            capture_output=True, text=True, timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            encoding="utf-8", errors="replace",
         )
         return result.returncode == 0
     except Exception:

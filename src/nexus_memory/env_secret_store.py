@@ -138,7 +138,15 @@ def _restrict_windows_acl(path: Path, *, is_dir: bool) -> None:
     )
     for cmd in commands:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            # icacls is a Windows console program: it writes the OEM code page,
+            # not the ANSI one. Decoding its output with the ANSI code page (or
+            # with UTF-8, when the parent runs in UTF-8 mode) fails inside the
+            # reader thread, which leaves ``stdout`` as None and turns the error
+            # report below into an AttributeError.
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True,
+                encoding="oem", errors="replace", timeout=30,
+            )
         except (OSError, subprocess.SubprocessError) as exc:
             warnings.warn(
                 f"could not restrict the ACL on {path} (icacls unavailable): {exc}",

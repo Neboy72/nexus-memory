@@ -2144,11 +2144,17 @@ async def _do_update(confirm: bool = False) -> dict:
             logging.warning(f"Pre-update backup failed (continuing): {e}")
 
         # git pull --ff-only (fetch + merge in einem)
+        # git writes UTF-8. On a legacy console code page (e.g. a Chinese
+        # Windows install) decoding it fails inside the reader thread, which
+        # leaves stdout as None and made the error line below raise
+        # AttributeError instead of returning an error dict.
         pull = await loop.run_in_executor(None, lambda: subprocess.run(
-            ["git", "pull", "--ff-only"], cwd=repo, capture_output=True, text=True, timeout=30
+            ["git", "pull", "--ff-only"], cwd=repo, capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace",
         ))
         if pull.returncode != 0:
-            _msg = f"git pull failed: {pull.stderr.strip() or pull.stdout.strip()}. Local changes might conflict."
+            _msg = (f"git pull failed: {(pull.stderr or '').strip() or (pull.stdout or '').strip()}. "
+                    "Local changes might conflict.")
             # W32-14(b): dual error key (see repository-not-found above).
             return {"status": "error", "error": _msg, "message": _msg}
 
@@ -2156,9 +2162,11 @@ async def _do_update(confirm: bool = False) -> dict:
         pip = await loop.run_in_executor(None, lambda: subprocess.run(
             [sys.executable, "-m", "pip", "install", "-e", repo],
             capture_output=True, text=True, timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            encoding="utf-8", errors="replace",
         ))
         if pip.returncode != 0:
-            _msg = f"pip install failed: {pip.stderr.strip() or pip.stdout.strip()}"
+            _msg = f"pip install failed: {(pip.stderr or '').strip() or (pip.stdout or '').strip()}"
             # W32-14(b): dual error key.
             return {"status": "error", "error": _msg, "message": _msg}
 
