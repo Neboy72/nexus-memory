@@ -1,3 +1,17 @@
+## [0.22.44] - 2026-11-01
+
+### Fix - the automatic backup is protected on Windows too
+
+`MemoryStore._do_backup` writes a copy of the store next to it and tightens the directory to `0700`
+and the file to `0600` with `os.chmod`. On Windows those calls grant and deny nothing, the inherited
+ACL of the profile directory stays, and the backup was readable by every local account. The windows
+job reported it as `backup readable by group/other: 0o666`.
+
+The backup path now applies the same ACL restriction that already protects the secrets file, for
+the directory and the file, on Windows only. POSIX keeps the mode bits, which do apply there; the
+test asserts the ACL content on Windows and the modes on POSIX, so neither platform loses its
+guarantee and neither is skipped.
+
 ## [0.22.43] - 2026-11-01
 
 ### Fix - the webhook store no longer loses subscriptions on Windows
