@@ -12,14 +12,20 @@ security-relevant behaviour lives in exactly one place:
 - The config directory is created with mode ``0700`` and the ``.env``
   file with ``0600``; pre-existing files/dirs with wider permissions
   are tightened in place.
+- On Windows, where POSIX mode bits do not grant or deny access, the same
+  restriction is enforced with ``icacls`` (ACL inheritance removed; only
+  the current account and SYSTEM keep full control) for the directory and
+  the file.
 - Writes are atomic via a ``0600`` temp file + ``os.replace`` so readers
   never observe a partially written file.
 """
 
 from __future__ import annotations
 
+import getpass
 import os
 import re
+import subprocess
 import tempfile
 import warnings
 from pathlib import Path
@@ -91,12 +97,75 @@ def _parse_env_text(text: str) -> Dict[str, str]:
     return existing
 
 
-def _fix_dir_permissions(config_dir: Path) -> None:
-    """Tighten the config directory to 0700.
+# Well-known SIDs of principals that must never keep access to a secrets
+# file (Everyone, BUILTIN\Users, Authenticated Users). SIDs instead of
+# trustee names because the names are localized on non-English Windows.
+_WIDE_PRINCIPAL_SIDS = ("*S-1-1-0", "*S-1-5-32-545", "*S-1-5-11")
+
+
+def _restrict_windows_acl(path: Path, *, is_dir: bool) -> None:
+    """Restrict *path* to the current account + SYSTEM using ``icacls``.
+
+    ``os.chmod`` cannot enforce this on Windows: access is granted by ACLs,
+    not by POSIX bits, so a file created under ``%TEMP%``/``%USERPROFILE%``
+    keeps the inherited access of BUILTIN\\Users and Authenticated Users and
+    a ``.env`` holding API keys stays readable by every local account.
+    ``icacls`` is part of Windows, so this adds no dependency.
+
+    A failure is surfaced as a warning (never silent) — the restriction is a
+    security guarantee, so an inability to enforce it must be observable.
+    """
+    try:
+        owner = getpass.getuser()
+    except Exception:  # getpass raises when no account name is resolvable
+        owner = ""
+    owner = owner or os.environ.get("USERNAME", "")
+    if not owner:
+        warnings.warn(
+            f"could not determine the current Windows account — ACL on {path} "
+            "left unchanged (API keys there may be readable by other accounts)",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+
+    # (OI)(CI) makes the grant inherit onto new children of a directory.
+    ace = ":(OI)(CI)F" if is_dir else ":F"
+    commands = (
+        ["icacls", str(path), "/inheritance:r"],
+        ["icacls", str(path), "/grant:r", f"{owner}{ace}", f"SYSTEM{ace}"],
+        ["icacls", str(path), "/remove:g", *_WIDE_PRINCIPAL_SIDS],
+    )
+    for cmd in commands:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            warnings.warn(
+                f"could not restrict the ACL on {path} (icacls unavailable): {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            warnings.warn(
+                f"icacls could not restrict {path} to {owner} + SYSTEM "
+                f"(exit {proc.returncode}): {detail}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+
+
+def fix_dir_permissions(config_dir: Path) -> None:
+    """Tighten the config directory to 0700 (owner+SYSTEM only on Windows).
 
     A failure is surfaced as a warning (never silent) — the restrictive mode
     is a security guarantee, so an inability to enforce it must be observable.
     """
+    if os.name == "nt":
+        _restrict_windows_acl(config_dir, is_dir=True)
+        return
     try:
         os.chmod(config_dir, DIR_MODE)
     except OSError as exc:
@@ -125,7 +194,7 @@ def write_env_key(env_path: Path, key_env: str, api_key: str) -> None:
 
     config_dir = env_path.parent
     config_dir.mkdir(parents=True, exist_ok=True)
-    _fix_dir_permissions(config_dir)
+    fix_dir_permissions(config_dir)
 
     existing: Dict[str, str] = {}
     if env_path.exists():
@@ -192,14 +261,18 @@ def write_env_key(env_path: Path, key_env: str, api_key: str) -> None:
 
     # Repair permissions on pre-existing files that may have been created
     # with a wide umask, and enforce 0600 on the freshly replaced file.
-    try:
-        os.chmod(env_path, FILE_MODE)
-    except OSError as exc:
-        warnings.warn(
-            f"could not enforce {FILE_MODE:04o} on {env_path}: {exc}",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+    # Windows has no POSIX bits to enforce — restrict the file ACL instead.
+    if os.name == "nt":
+        _restrict_windows_acl(env_path, is_dir=False)
+    else:
+        try:
+            os.chmod(env_path, FILE_MODE)
+        except OSError as exc:
+            warnings.warn(
+                f"could not enforce {FILE_MODE:04o} on {env_path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
 
 def read_env_key(env_path: Path, key_env: str) -> str:

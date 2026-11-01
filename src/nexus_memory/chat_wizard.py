@@ -168,13 +168,18 @@ def _save_config(config: dict) -> None:
 def _save_api_key(key_env: str, api_key: str) -> None:
     """Save an API key to the .env file (validated, escaped, 0600, atomic)."""
     try:
-        from nexus_memory.env_secret_store import write_env_key
+        from nexus_memory.env_secret_store import fix_dir_permissions, write_env_key
     except ImportError:  # standalone script execution: package not importable
-        from env_secret_store import write_env_key  # type: ignore[no-redef]
+        from env_secret_store import (  # type: ignore[no-redef]
+            fix_dir_permissions,
+            write_env_key,
+        )
 
     env_path = _get_env_path()
     write_env_key(env_path, key_env, api_key)
-    os.chmod(_get_config_dir(), 0o700)
+    # Shared helper: on Windows os.chmod cannot restrict the directory, the
+    # helper applies the icacls restriction instead.
+    fix_dir_permissions(_get_config_dir())
 
 
 def _install_pip(package: str) -> bool:
