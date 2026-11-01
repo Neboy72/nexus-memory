@@ -6,8 +6,6 @@ v2.2.0: Qdrant-Payload backend (was SQLite).
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 
 import pytest
@@ -61,16 +59,15 @@ ALL_TEST_IDS = [
 
 
 @pytest.fixture
-def qdrant_store():
+def qdrant_store(embedded_qdrant):
     """EdgeStore backed by embedded Qdrant with pre-created fact-points."""
-    with tempfile.TemporaryDirectory() as tmp:
-        client = QdrantClient(path=os.path.join(tmp, "qdrant"))
-        binding = bind_test_collection(client, TEST_COLLECTION, 2)
-        create_points(client, TEST_COLLECTION, ALL_TEST_IDS)
+    client = embedded_qdrant()
+    binding = bind_test_collection(client, TEST_COLLECTION, 2)
+    create_points(client, TEST_COLLECTION, ALL_TEST_IDS)
 
-        store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
-        store.initialize()
-        yield store
+    store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
+    store.initialize()
+    yield store
 
 
 class TestProposedEdges:

@@ -22,8 +22,6 @@ All tests use an embedded Qdrant in a temp dir; no server, no network.
 
 from __future__ import annotations
 
-import tempfile
-
 import pytest
 from qdrant_client import QdrantClient, models
 
@@ -54,8 +52,10 @@ class _StubProvider:
         return self.model_name
 
 
-def _client() -> QdrantClient:
-    return QdrantClient(path=tempfile.mkdtemp(prefix="regelb-"))
+@pytest.fixture
+def client(embedded_qdrant):
+    """Embedded Qdrant client in a temp dir, closed before the dir is removed."""
+    return embedded_qdrant()
 
 
 def _fp(backend="test", model="stub-model", dim=4) -> str:
@@ -102,8 +102,8 @@ def _seed_legacy(client: QdrantClient, name: str, dim: int, n: int):
 
 
 class TestCreateWhenMissing:
-    def test_creates_collection_with_named_fingerprint(self):
-        c = _client()
+    def test_creates_collection_with_named_fingerprint(self, client):
+        c = client
         b = CollectionBinding(c, "fresh", _StubProvider())
         b.ensure()
 
@@ -113,14 +113,14 @@ class TestCreateWhenMissing:
         vectors = c.get_collection("fresh").config.params.vectors
         assert list(vectors.keys()) == [_fp()]
 
-    def test_create_is_idempotent(self):
-        c = _client()
+    def test_create_is_idempotent(self, client):
+        c = client
         b = CollectionBinding(c, "fresh", _StubProvider())
         b.ensure()
         again = b.ensure()  # second call must not raise or re-create
         assert again.vector_name() == _fp()
 
-    def test_ensure_does_not_write_any_config(self, tmp_path, monkeypatch):
+    def test_ensure_does_not_write_any_config(self, tmp_path, monkeypatch, client):
         """The binding never writes a JSON config — the model lives in Qdrant.
 
         Stronger than a glob: HOME/HERMES_HOME are redirected into ``tmp_path``
@@ -138,7 +138,7 @@ class TestCreateWhenMissing:
             }
 
         before = _snapshot()
-        c = _client()
+        c = client
         CollectionBinding(c, "fresh", _StubProvider()).ensure()
         after = _snapshot()
 
@@ -154,8 +154,8 @@ class TestCreateWhenMissing:
 
 
 class TestBindOnMatch:
-    def test_matching_fingerprint_binds(self):
-        c = _client()
+    def test_matching_fingerprint_binds(self, client):
+        c = client
         _seed_named(c, "match", _fp(), 4, n=3)
 
         b = CollectionBinding(c, "match", _StubProvider())
@@ -164,8 +164,8 @@ class TestBindOnMatch:
         assert b.vector_name() == _fp()
         assert b.is_named() is True
 
-    def test_using_name_returns_kwarg_only_when_named(self):
-        c = _client()
+    def test_using_name_returns_kwarg_only_when_named(self, client):
+        c = client
         _seed_named(c, "match", _fp(), 4, n=1)
         b = CollectionBinding(c, "match", _StubProvider())
         b.ensure()
@@ -181,8 +181,8 @@ class TestBindOnMatch:
 
 
 class TestMismatchEmptyRecreates:
-    def test_empty_mismatched_collection_is_recreated(self):
-        c = _client()
+    def test_empty_mismatched_collection_is_recreated(self, client):
+        c = client
         other_fp = _fp(model="old-model")
         _seed_named(c, "swap", other_fp, 4, n=0)
 
@@ -200,8 +200,8 @@ class TestMismatchEmptyRecreates:
 
 
 class TestMismatchNonEmpty:
-    def test_explicit_preference_fails_hard(self):
-        c = _client()
+    def test_explicit_preference_fails_hard(self, client):
+        c = client
         other_fp = _fp(model="other")
         _seed_named(c, "occupied", other_fp, 4, n=2)
 
@@ -213,10 +213,10 @@ class TestMismatchNonEmpty:
         assert "occupied" in msg and other_fp in msg
         assert "NEXUS_COLLECTION" in msg or "preference" in msg
 
-    def test_auto_without_local_match_also_fails_hard(self):
+    def test_auto_without_local_match_also_fails_hard(self, client):
         """`auto` may only switch to a LOCAL provider that matches the stored
         name; an unknown/mismatching stored name still fails closed."""
-        c = _client()
+        c = client
         other_fp = _fp(backend="weird", model="unknown", dim=4)
         _seed_named(c, "occupied", other_fp, 4, n=1)
 
@@ -224,10 +224,10 @@ class TestMismatchNonEmpty:
         with pytest.raises(CollectionModelUnavailable):
             b.ensure()
 
-    def test_auto_fallthrough_message_warns_against_mapping_active_provider(self):
+    def test_auto_fallthrough_message_warns_against_mapping_active_provider(self, client):
         """P1: the auto-mode fallthrough must not lead the user into
         'update legacy_collections' (same-dim/different-model would mix)."""
-        c = _client()
+        c = client
         # A stored name whose backend cannot be resolved to a local provider,
         # so auto mode falls through to the instructive error.
         other_fp = _fp(backend="somecloud", model="unknown", dim=4)
@@ -243,9 +243,9 @@ class TestMismatchNonEmpty:
         assert "silently mixes" in msg
         assert "update legacy_collections" not in msg.lower()
 
-    def test_auto_is_not_a_free_pass(self):
+    def test_auto_is_not_a_free_pass(self, client):
         """Regression guard: `auto` must never silently accept a foreign space."""
-        c = _client()
+        c = client
         other_fp = _fp(backend="somecloud", model="x", dim=4)
         _seed_named(c, "occupied", other_fp, 4, n=1)
 
@@ -260,8 +260,8 @@ class TestMismatchNonEmpty:
 
 
 class TestLegacyUnnamed:
-    def test_legacy_without_mapping_fails_hard_with_instruction(self):
-        c = _client()
+    def test_legacy_without_mapping_fails_hard_with_instruction(self, client):
+        c = client
         _seed_legacy(c, "old", 4, n=2)
 
         b = CollectionBinding(c, "old", _StubProvider())
@@ -271,8 +271,8 @@ class TestLegacyUnnamed:
         assert "legacy_collections" in str(excinfo.value)
         assert "old" in str(excinfo.value)
 
-    def test_legacy_with_matching_mapping_binds_without_using(self):
-        c = _client()
+    def test_legacy_with_matching_mapping_binds_without_using(self, client):
+        c = client
         _seed_legacy(c, "old", 4, n=2)
 
         b = CollectionBinding(
@@ -285,8 +285,8 @@ class TestLegacyUnnamed:
         assert b.vector_name() is None, "legacy collections must not get `using`"
         assert using_name(b) == {}
 
-    def test_legacy_mapping_mismatch_fails_hard(self):
-        c = _client()
+    def test_legacy_mapping_mismatch_fails_hard(self, client):
+        c = client
         _seed_legacy(c, "old", 4, n=1)
 
         b = CollectionBinding(
@@ -296,9 +296,9 @@ class TestLegacyUnnamed:
         with pytest.raises(CollectionModelUnavailable):
             b.ensure()
 
-    def test_empty_legacy_is_recreated_as_named(self):
+    def test_empty_legacy_is_recreated_as_named(self, client):
         """An EMPTY unnamed collection carries no data — safe to recreate."""
-        c = _client()
+        c = client
         _seed_legacy(c, "old", 4, n=0)
 
         b = CollectionBinding(c, "old", _StubProvider())
@@ -335,8 +335,8 @@ class TestQdrantUnreachable:
 class TestSharpProofForeignVectorName:
     """The core promise: Qdrant enforces the vector space, not just our code."""
 
-    def test_write_with_foreign_vector_name_is_rejected(self):
-        c = _client()
+    def test_write_with_foreign_vector_name_is_rejected(self, client):
+        c = client
         mine = _fp()
         _seed_named(c, "sharp", mine, 4, n=0)
 
@@ -348,9 +348,9 @@ class TestSharpProofForeignVectorName:
             )
         assert "vector" in str(excinfo.value).lower()
 
-    def test_write_with_raw_vector_is_rejected_on_named_collection(self):
+    def test_write_with_raw_vector_is_rejected_on_named_collection(self, client):
         """A plain list against a named collection is refused by Qdrant too."""
-        c = _client()
+        c = client
         _seed_named(c, "sharp2", _fp(), 4, n=0)
 
         with pytest.raises(Exception) as excinfo:
@@ -360,14 +360,14 @@ class TestSharpProofForeignVectorName:
             )
         assert "unnamed" in str(excinfo.value).lower()
 
-    def test_using_kwarg_on_upsert_is_rejected(self):
+    def test_using_kwarg_on_upsert_is_rejected(self, client):
         """`using` is a READ-side argument — passing it to upsert must fail.
 
         This is the exact bug the worker introduced: `upsert(**{'using': n})`
         raises ``Unknown arguments`` and (when swallowed) silently writes
         nothing. The helper avoids it; this test pins the API behaviour.
         """
-        c = _client()
+        c = client
         _seed_named(c, "sharp3", _fp(), 4, n=0)
         with pytest.raises(Exception) as excinfo:
             c.upsert(
@@ -377,9 +377,9 @@ class TestSharpProofForeignVectorName:
             )
         assert "unknown arguments" in str(excinfo.value).lower()
 
-    def test_upsert_named_wraps_the_vector_correctly(self):
+    def test_upsert_named_wraps_the_vector_correctly(self, client):
         """The helper turns a raw vector into the named-vector dict."""
-        c = _client()
+        c = client
         b = CollectionBinding(c, "helped", _StubProvider())
         b.ensure()
 
@@ -393,9 +393,9 @@ class TestSharpProofForeignVectorName:
         assert isinstance(rec.vector, dict)
         assert list(rec.vector.keys()) == [_fp()]
 
-    def test_upsert_named_keeps_legacy_writes_plain(self):
+    def test_upsert_named_keeps_legacy_writes_plain(self, client):
         """Legacy collection (no name): the vector stays a plain list."""
-        c = _client()
+        c = client
         _seed_legacy(c, "legacy", 4, n=0)
         upsert_named(
             c, "legacy",
@@ -419,8 +419,8 @@ class TestUpsertNormalizesTextContent:
     new lookup paths.
     """
 
-    def test_content_only_gets_text_mirror(self):
-        c = _client()
+    def test_content_only_gets_text_mirror(self, client):
+        c = client
         b = CollectionBinding(c, "content-only", _StubProvider())
         b.ensure()
 
@@ -435,8 +435,8 @@ class TestUpsertNormalizesTextContent:
         assert rec.payload["content"] == "the fact"
         assert rec.payload["text"] == "the fact"
 
-    def test_text_only_gets_content_mirror(self):
-        c = _client()
+    def test_text_only_gets_content_mirror(self, client):
+        c = client
         b = CollectionBinding(c, "text-only", _StubProvider())
         b.ensure()
 
@@ -451,8 +451,8 @@ class TestUpsertNormalizesTextContent:
         assert rec.payload["text"] == "the rule"
         assert rec.payload["content"] == "the rule"
 
-    def test_both_fields_unchanged(self):
-        c = _client()
+    def test_both_fields_unchanged(self, client):
+        c = client
         b = CollectionBinding(c, "both-fields", _StubProvider())
         b.ensure()
 
@@ -467,8 +467,8 @@ class TestUpsertNormalizesTextContent:
         assert rec.payload["text"] == "old"
         assert rec.payload["content"] == "new"
 
-    def test_empty_payload_untouched(self):
-        c = _client()
+    def test_empty_payload_untouched(self, client):
+        c = client
         b = CollectionBinding(c, "empty-payload", _StubProvider())
         b.ensure()
 
@@ -481,9 +481,9 @@ class TestUpsertNormalizesTextContent:
         rec = c.retrieve("empty-payload", ids=[4], with_payload=True)[0]
         assert rec.payload == {}
 
-    def test_no_payload_attr_untouched(self):
+    def test_no_payload_attr_untouched(self, client):
         """A point without a payload attribute must not gain one."""
-        c = _client()
+        c = client
         b = CollectionBinding(c, "no-payload", _StubProvider())
         b.ensure()
 
@@ -513,8 +513,8 @@ class TestAutoSwitchAdoptsProvider:
         p.available = True
         return p
 
-    def test_auto_switches_to_matching_local_provider(self):
-        c = _client()
+    def test_auto_switches_to_matching_local_provider(self, client):
+        c = client
         # Collection was built by ollama/stub-model (fingerprint below).
         stored_fp = vector_fingerprint("ollama", "stub-model", 4)
         _seed_named(c, "auto-coll", stored_fp, 4, n=2)
@@ -535,8 +535,8 @@ class TestAutoSwitchAdoptsProvider:
         assert binding.provider is not active
         assert binding.provider.backend == "ollama"
 
-    def test_auto_without_matching_provider_fails_hard(self):
-        c = _client()
+    def test_auto_without_matching_provider_fails_hard(self, client):
+        c = client
         stored_fp = vector_fingerprint("ollama", "gone-model", 4)
         _seed_named(c, "auto-coll2", stored_fp, 4, n=1)
 
@@ -549,8 +549,8 @@ class TestAutoSwitchAdoptsProvider:
         with pytest.raises(CollectionModelUnavailable):
             binding.ensure()
 
-    def test_explicit_preference_never_switches(self):
-        c = _client()
+    def test_explicit_preference_never_switches(self, client):
+        c = client
         stored_fp = vector_fingerprint("ollama", "stub-model", 4)
         _seed_named(c, "auto-coll3", stored_fp, 4, n=1)
 
@@ -570,8 +570,8 @@ class TestLegacyMessageNeverSuggestsActiveFingerprint:
     collection, where Qdrant cannot enforce anything.
     """
 
-    def test_message_does_not_contain_active_fingerprint(self):
-        c = _client()
+    def test_message_does_not_contain_active_fingerprint(self, client):
+        c = client
         _seed_legacy(c, "legacy-old", 4, n=2)
 
         active_fp = _fp()  # the fingerprint the ACTIVE provider would produce
@@ -587,9 +587,9 @@ class TestLegacyMessageNeverSuggestsActiveFingerprint:
         assert "<backend>__<model>__<dim>" in msg
         assert "BUILT" in msg or "built" in msg
 
-    def test_dimension_mismatch_in_mapping_fails_before_use(self):
+    def test_dimension_mismatch_in_mapping_fails_before_use(self, client):
         """A mapping whose __<dim> contradicts the collection must fail."""
-        c = _client()
+        c = client
         _seed_legacy(c, "legacy-dim", 4, n=1)
 
         # Mapping declares 1024 dims although the collection holds 4.
@@ -602,8 +602,8 @@ class TestLegacyMessageNeverSuggestsActiveFingerprint:
             binding.ensure()
         assert "dimensional" in str(excinfo.value) or "dimensions" in str(excinfo.value)
 
-    def test_correct_mapping_still_binds(self):
-        c = _client()
+    def test_correct_mapping_still_binds(self, client):
+        c = client
         _seed_legacy(c, "legacy-ok", 4, n=1)
         binding = CollectionBinding(
             c, "legacy-ok", _StubProvider(),
@@ -616,9 +616,9 @@ class TestLegacyMessageNeverSuggestsActiveFingerprint:
 class TestNoProviderFailsClosed:
     """P2 (adopted as a guard): never materialise ``none__none__384``."""
 
-    def test_unavailable_provider_blocks_recreate_of_empty_collection(self):
+    def test_unavailable_provider_blocks_recreate_of_empty_collection(self, client):
         """The guard sits at the top of ensure(), so the recreate path is too."""
-        c = _client()
+        c = client
         # Existing EMPTY named collection with a foreign fingerprint -> the
         # normal path would recreate it. With no provider it must refuse.
         _seed_named(c, "recreate-me", _fp(model="old"), 4, n=0)
@@ -632,8 +632,8 @@ class TestNoProviderFailsClosed:
         vectors = c.get_collection("recreate-me").config.params.vectors
         assert list(vectors.keys()) == [_fp(model="old")]
 
-    def test_unavailable_provider_blocks_creation(self):
-        c = _client()
+    def test_unavailable_provider_blocks_creation(self, client):
+        c = client
         p = _StubProvider(backend="none", model="none", dim=384)
         p.available = False
         binding = CollectionBinding(c, "must-not-exist", p)

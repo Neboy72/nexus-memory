@@ -6,13 +6,11 @@ v2.2.0: Qdrant-Payload backend (was SQLite).
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 
 import networkx as nx
 import pytest
-from qdrant_client import QdrantClient, models
+from qdrant_client import models
 
 from nexus.graph.store import EdgeStore
 from nexus.graph.graph import SkillGraph
@@ -62,48 +60,31 @@ def create_points(client, collection):
 
 
 @pytest.fixture
-def qdrant_path():
-    # ignore_cleanup_errors: Windows refuses to delete a file while a handle is
-    # still open ([WinError 32]). The stores below close their client first, so
-    # this only covers the tail end of a shutdown where the file is still held.
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        yield os.path.join(tmp, "qdrant")
+def skillgraph(embedded_qdrant):
+    client = embedded_qdrant()
+    binding = bind_test_collection(client, TEST_COLLECTION, TEST_VECTOR_SIZE)
+    create_points(client, TEST_COLLECTION)
+    store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
+    sg = SkillGraph(store=store)
+    sg.initialize()
+
+    sg.add_edge(F1, F2, "references", reason="test")
+    sg.add_edge(F2, F3, "supports", reason="test")
+    sg.add_edge(F3, F4, "depends_on", reason="test")
+    sg.add_edge(F1, F3, "references", reason="test")
+    sg.add_edge(F5, F6, "references", reason="test")
+
+    yield sg
 
 
 @pytest.fixture
-def skillgraph(qdrant_path):
-    client = QdrantClient(path=qdrant_path)
-    try:
-        binding = bind_test_collection(client, TEST_COLLECTION, TEST_VECTOR_SIZE)
-        create_points(client, TEST_COLLECTION)
-        store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
-        sg = SkillGraph(store=store)
-        sg.initialize()
-
-        sg.add_edge(F1, F2, "references", reason="test")
-        sg.add_edge(F2, F3, "supports", reason="test")
-        sg.add_edge(F3, F4, "depends_on", reason="test")
-        sg.add_edge(F1, F3, "references", reason="test")
-        sg.add_edge(F5, F6, "references", reason="test")
-
-        yield sg
-    finally:
-        # Release the .lock handle before the tmp dir teardown runs; Windows
-        # cannot delete files that are still open.
-        client.close()
-
-
-@pytest.fixture
-def empty_skillgraph(qdrant_path):
-    client = QdrantClient(path=qdrant_path + "_empty")
-    try:
-        binding = bind_test_collection(client, TEST_COLLECTION, TEST_VECTOR_SIZE)
-        store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
-        sg = SkillGraph(store=store)
-        sg.initialize()
-        yield sg
-    finally:
-        client.close()
+def empty_skillgraph(embedded_qdrant):
+    client = embedded_qdrant("_empty")
+    binding = bind_test_collection(client, TEST_COLLECTION, TEST_VECTOR_SIZE)
+    store = EdgeStore(client=client, collection=TEST_COLLECTION, binding=binding)
+    sg = SkillGraph(store=store)
+    sg.initialize()
+    yield sg
 
 
 class TestHubScores:

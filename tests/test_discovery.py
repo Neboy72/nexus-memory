@@ -5,13 +5,11 @@ v2.1.0: ~25 tests covering the full discovery pipeline.
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-from qdrant_client import QdrantClient, models
+from qdrant_client import models
 
 from nexus.discovery.classifier import classify_relation, _check_explicit_reference
 from nexus.discovery.dedup import filter_new_edges
@@ -208,25 +206,24 @@ class TestClassifier:
 
 class TestDedup:
     @pytest.fixture
-    def store(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            from qdrant_client import QdrantClient, models
-            client = QdrantClient(path=os.path.join(tmp, "qdrant"))
-            collection = "test-memory"
-            binding = bind_test_collection(client, collection, 2)
-            # Create needed fact-points
-            all_ids = [F_A, F_B, F_C, F_D]
-            vec = {test_vector_name(2): [0.0, 0.0]}
-            client.upsert(
-                collection_name=collection,
-                points=[
-                    models.PointStruct(id=fid, vector=vec, payload={"content": f"Test {fid}"})
-                    for fid in all_ids
-                ],
-            )
-            store = EdgeStore(client=client, collection=collection, binding=binding)
-            store.initialize()
-            yield store
+    def store(self, embedded_qdrant):
+        from qdrant_client import models
+        client = embedded_qdrant()
+        collection = "test-memory"
+        binding = bind_test_collection(client, collection, 2)
+        # Create needed fact-points
+        all_ids = [F_A, F_B, F_C, F_D]
+        vec = {test_vector_name(2): [0.0, 0.0]}
+        client.upsert(
+            collection_name=collection,
+            points=[
+                models.PointStruct(id=fid, vector=vec, payload={"content": f"Test {fid}"})
+                for fid in all_ids
+            ],
+        )
+        store = EdgeStore(client=client, collection=collection, binding=binding)
+        store.initialize()
+        yield store
 
     def test_filter_new_edges_all_new(self, store):
         """All candidates are new → all pass through."""

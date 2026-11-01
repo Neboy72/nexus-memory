@@ -16,7 +16,6 @@ Qdrant itself, not by a stub that mirrors our own logic.
 """
 
 import importlib.util
-import os
 import uuid
 from pathlib import Path
 
@@ -44,8 +43,8 @@ def fid(name: str) -> str:
 class GraphFixture:
     """Real SkillGraph over embedded Qdrant, with access_levels per point."""
 
-    def __init__(self, tmp_path: Path):
-        self.client = QdrantClient(path=os.path.join(str(tmp_path), "qdrant"))
+    def __init__(self, client: QdrantClient):
+        self.client = client
         binding = bind_test_collection(self.client, COLLECTION, DIM)
         self.store = EdgeStore(client=self.client, collection=COLLECTION, binding=binding)
         self.store.initialize()
@@ -84,8 +83,8 @@ class GraphFixture:
 
 
 @pytest.fixture
-def graph(tmp_path):
-    fixture = GraphFixture(tmp_path)
+def graph(embedded_qdrant):
+    fixture = GraphFixture(embedded_qdrant())
     try:
         yield fixture
     finally:
