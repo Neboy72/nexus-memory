@@ -19,6 +19,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from conftest import redirect_home
+
 import nexus_memory.mcp_server as mcp
 from nexus_memory import retrieval_watch as rw
 from nexus_memory import trust_service as ts
@@ -116,8 +118,9 @@ def test_switches_on_start_both_daemons(monkeypatch, tmp_path, build_store):
     monkeypatch.setattr(RetrievalWatch, "start", lambda self: started.append("watch"))
     monkeypatch.setenv("NEXUS_TRUST_SWEEP", "1")
     monkeypatch.setenv("NEXUS_RETRIEVAL_WATCH", "1")
-    # TrustService writes its report dir under $HOME; keep that in the test.
-    monkeypatch.setenv("HOME", str(tmp_path))
+    # TrustService writes its report dir under the user's home; keep that in
+    # the test.
+    redirect_home(monkeypatch, tmp_path)
 
     store = build_store()
     assert started == ["trust", "watch"]

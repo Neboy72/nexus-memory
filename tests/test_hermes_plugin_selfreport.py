@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import redirect_home
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = str(_REPO_ROOT / "src")
 _PLUGIN_PATH = _REPO_ROOT / "plugins" / "memory" / "nexus" / "__init__.py"
@@ -386,7 +388,7 @@ def test_selfcheck_path_defaults_to_home(tmp_path, monkeypatch):
     from nexus_memory import self_report as sr
 
     monkeypatch.delenv("NEXUS_DATA_DIR", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    redirect_home(monkeypatch, tmp_path)
     path = nexus_plugin._selfcheck_path()
     assert path.parent == tmp_path / ".nexus-memory"
     assert sr.data_dir() == tmp_path / ".nexus-memory"

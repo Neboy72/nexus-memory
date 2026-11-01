@@ -19,6 +19,8 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from conftest import redirect_home
+
 import nexus_memory.reranker as rr
 
 
@@ -195,9 +197,10 @@ class TestLoadRerankConfigEndpoint:
     def test_load_rerank_config_without_model_default(self, tmp_path, monkeypatch):
         """Config without model.default -> llm_configured False, no HTTP call."""
         # _rerank_llm resolves the endpoint on its own (~/.hermes/config.yaml).
-        # Point HOME at the empty tmp dir so a developer's real endpoint — or a
-        # key another test left in os.environ — cannot make this a live call.
-        monkeypatch.setenv("HOME", str(tmp_path))
+        # Point the home dir at the empty tmp dir so a developer's real endpoint
+        # — or a key another test left in os.environ — cannot make this a live
+        # call.
+        redirect_home(monkeypatch, tmp_path)
         config = {
             "nexus-memory": {"rerank": True, "reranker": "llm"},
             "model": {"provider": "ollama-cloud"},  # no default
@@ -235,7 +238,7 @@ class TestRerankLlmWithoutFallback:
     def test_no_fallback_model_no_http_call(self, tmp_path, monkeypatch):
         """Without env, model, key and base, rerank_points keeps vector order and is silent."""
         # Same isolation as above: the resolver must not read the real config.
-        monkeypatch.setenv("HOME", str(tmp_path))
+        redirect_home(monkeypatch, tmp_path)
         # Clear any cached config.
         monkeypatch.setattr(rr, "_LLM_UNAVAILABLE_LOGGED", False)
 
