@@ -136,7 +136,7 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -175,7 +175,7 @@ jobs:
           # The output path is under $RUNNER_TEMP instead of /tmp because /tmp is
           # not where Git Bash on the Windows runner stores temporary files.
           set +e
-          python -u -X faulthandler -m pytest tests/ -q --tb=short -x > "$RUNNER_TEMP/pytest-out.txt" 2>&1
+          python -u -X faulthandler -m pytest tests/ -q --tb=short > "$RUNNER_TEMP/pytest-out.txt" 2>&1
           EXIT=$?
           set -e
           if [ ! -s "$RUNNER_TEMP/pytest-out.txt" ]; then
