@@ -1,3 +1,20 @@
+## [0.22.43] - 2026-11-01
+
+### Fix - the webhook store no longer loses subscriptions on Windows
+
+The store serializes its read-modify-write through a sidecar file lock so two processes cannot
+overwrite each other's subscriptions. That lock was `fcntl.flock`, and the code was honest about
+the gap: without `fcntl`, cross-process serialization degrades to none. On Windows the store
+therefore kept only the asyncio lock of its own process, and two agents sharing
+`~/.nexus-webhooks.json` dropped each other's entries.
+
+The windows job showed it as a plain number: two processes wrote five subscriptions each, ten were
+written, eight survived.
+
+`msvcrt.locking` on one byte of the same sidecar file closes the gap, with the wait loop
+`fuel_chain` already uses, because msvcrt has no blocking mode. POSIX keeps `flock` unchanged. If
+neither module exists the store logs a warning once instead of pretending the lock is there.
+
 ## [0.22.42] - 2026-11-01
 
 ### Security - the secrets file is now protected on Windows, where `os.chmod` protects nothing
