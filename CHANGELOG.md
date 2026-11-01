@@ -1,3 +1,16 @@
+## [Unreleased]
+
+### Fix - the suite could not be collected on Python 3.13
+
+`tests/test_query_rewrite_recon.py` took `os` from `pathlib` (`from pathlib import Path, os`).
+`pathlib` stopped exposing `os` as a module attribute in Python 3.13 (`hasattr(pathlib, "os")` is
+`False` on 3.13, `True` on 3.11), so `pytest tests/ -q` stopped during collection with
+`ImportError: cannot import name 'os' from 'pathlib'`. pytest aborts the whole run on a collection
+error, so no test module ran at all. `pyproject.toml` declares `requires-python = ">=3.11"`, so 3.13
+is inside the supported range.
+
+The file now imports `os` directly. Collection succeeds and the suite runs on 3.11 and on 3.13.
+
 ## [0.22.44] - 2026-11-01
 
 ### Security - the guardrail compared Windows paths in a form that never matched
