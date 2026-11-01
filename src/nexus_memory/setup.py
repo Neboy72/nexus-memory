@@ -121,12 +121,16 @@ def _install_plugin(agent_id: str) -> dict:
     try:
         result = subprocess.run(
             ["bash", str(script_path)],
-            capture_output=True, text=True, timeout=60
+            capture_output=True, text=True, timeout=60,
+            # bash prints the script's own UTF-8 strings; decoding them with a
+            # legacy console code page leaves stdout/stderr as None.
+            encoding="utf-8", errors="replace",
         )
         if result.returncode == 0:
             return {"agent_id": agent_id, "install_type": "plugin", "status": "installed", "message": f"Plugin installed for {agent_id}"}
         else:
-            return {"agent_id": agent_id, "install_type": "plugin", "status": "failed", "message": result.stderr.strip()[:200]}
+            detail = (result.stderr or result.stdout or "").strip()
+            return {"agent_id": agent_id, "install_type": "plugin", "status": "failed", "message": detail[:200]}
     except Exception as e:
         return {"agent_id": agent_id, "install_type": "plugin", "status": "error", "message": str(e)}
 
