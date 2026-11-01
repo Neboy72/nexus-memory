@@ -90,6 +90,7 @@ def serve_daemon_status() -> dict:
             r = subprocess.run(
                 ["systemctl", "--user", "is-enabled", SYSTEMD_UNIT],
                 capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
             )
             service_installed = r.returncode == 0
             detail = SYSTEMD_UNIT
@@ -164,7 +165,13 @@ def ensure_serve_daemon() -> dict:
     try:
         proc = subprocess.run(
             ["bash", str(INSTALL_SERVE_SCRIPT)],
+            # The install script prints its own UTF-8 (colour codes, box
+            # drawing, non-ASCII paths). Decoding that with a legacy console
+            # code page leaves stdout/stderr as None, and the failure report
+            # below then raised AttributeError instead of returning
+            # {"status": "failed"} as this function promises.
             capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=SERVE_INSTALL_TIMEOUT_S,  # must exceed script poll + throttle gap
             cwd=str(_REPO_ROOT),
             env={**os.environ, "NEXUS_SERVE_PORT": str(port)},
@@ -182,11 +189,12 @@ def ensure_serve_daemon() -> dict:
     # is loaded in another session → the script exits non-zero but DID
     # rewrite + reload the service. Verify by healthz, not by exit code.
     if proc.returncode != 0 and not _healthz_ok(port, timeout=2.0):
+        detail = (proc.stderr or proc.stdout or "").strip()
         return {
             "status": "failed",
             "error": (
                 f"install_serve.sh failed (rc={proc.returncode}): "
-                f"{(proc.stderr or proc.stdout).strip()[-400:]}"
+                f"{detail[-400:]}"
             ),
             "port": port,
             "stdout_tail": (proc.stdout or "")[-400:],
