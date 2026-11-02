@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Fix - the reconstruction test only ran where a second checkout existed
+
+`tests/test_query_rewrite_recon.py` put a directory outside the repository on `sys.path`
+(`<parent-of-the-clone>/nexus-memory-test/src`) and imported `nexus_memory` through it. The
+module was also a script rather than a test module: pytest imported it, executed the checks at
+import time and reported zero tests for the file, so a failure only ever surfaced as a
+collection error.
+
+The extra path is gone. The checks are now separate `test_*` functions, so they appear in the
+count and fail like any other test. The module imports `nexus_memory` the way the rest of the
+suite does, through the source layout that `tests/conftest.py` already puts on `sys.path`.
+
 ### Fix - the suite could not be collected on Python 3.13
 
 `tests/test_query_rewrite_recon.py` took `os` from `pathlib` (`from pathlib import Path, os`).
