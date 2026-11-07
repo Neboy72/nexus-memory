@@ -93,7 +93,6 @@ export function buildMessageReceivedHandler(cfg: NexusConfig) {
     try {
       const roomKey = roomKeyOf({
         sessionKey: ctx?.sessionKey ?? event.sessionKey,
-        conversationId: ctx?.conversationId,
         chatId: ctx?.chatId,
         groupId: ctx?.groupId,
         threadId: event.threadId,

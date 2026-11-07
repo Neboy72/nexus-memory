@@ -109,9 +109,9 @@ const handlerFor = (cfg = { ownerUserIds: [] }) => buildMessageReceivedHandler(c
  * `platform` landet als `channelId` im Hook-Kontext (das ist die Plattform,
  * nicht die Chat-ID) — ohne sie wird nichts gelernt.
  */
-const message = (senderId, sessionKey, conversationId, { platform = "discord", event = {} } = {}) => [
+const message = (senderId, sessionKey, chatId, { platform = "discord", event = {} } = {}) => [
   { senderId, ...event },
-  { sessionKey, conversationId, channelId: platform },
+  { sessionKey, chatId, channelId: platform },
 ]
 
 /** Inhalt der gelernten Datei, oder null. */
@@ -476,7 +476,7 @@ await t("n) Nachricht ohne Plattform → nichts gelernt (fail-closed)", () => {
   const dir = freshState()
   const handler = handlerFor()
   // Kein channelId im Kontext: die ID laesst sich keiner Plattform zuordnen.
-  handler({ senderId: "4711" }, { sessionKey: "agent:main:main", conversationId: "555" })
+  handler({ senderId: "4711" }, { sessionKey: "agent:main:main", chatId: "555" })
 
   assert.strictEqual(ownerFileExists(), false, "ohne Plattform darf keine Datei entstehen")
   assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), [], "kein Eigentuemer bekannt")
