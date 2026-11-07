@@ -16,8 +16,8 @@
  *   - `message_received` carries the sender — `event.senderId`, plus a bot
  *     flag only when the channel supplies one.
  *   - `before_prompt_build` carries NO sender (PluginHookAgentContext has
- *     sessionKey/chatId/channelId/senderId-ish fields, but no author of the
- *     inbound message), so the decision cannot be made there — it is looked up.
+ *     sessionKey/chatId/channelId, but no author of the inbound message), so the
+ *     decision cannot be made there — it is looked up.
  *
  * Identifiers (see README + the assignment's mapping question):
  *   - `ctx.groupId` on the agent hook context is the SDK's CONVERSATION id
@@ -25,8 +25,6 @@
  *     group subject/channel (`src/hooks/message-hook-mappers.ts`,
  *     `deriveInboundMessageHookContext`). It is NOT the guild/space id (that is
  *     `guildId` ← `GroupSpace`) and NOT the thread id.
- *   - `message_received.threadId` is `MessageThreadId` — the thread/topic
- *     INSIDE a chat, a different identifier space.
  *   - `ctx.sessionKey` is declared on BOTH hook contexts (PluginHookAgentContext
  *     and PluginHookMessageContext), but in OpenClaw it names the AGENT's
  *     session, not the chat: a Telegram direct message arrived as
@@ -35,9 +33,10 @@
  *     locks all of them. It is the FALLBACK, never the first choice.
  *   - The chat-scoped ids therefore come first: the conversation/chat id, which
  *     both sides derive from the same originating target (`OriginatingTo ?? To
- *     ?? From` on the message hook, `chatId` on the agent hook). The thread id
- *     is only a last resort — and every key is namespaced, so "42" as a thread
- *     can never be confused with "42" as a chat.
+ *     ?? From` on the message hook, `chatId` on the agent hook). There is no
+ *     thread fallback: the reading side never passes a thread id, so a room keyed
+ *     by one would be stored but never found when reading. Every key is
+ *     namespaced, so a chat never collides with a session key.
  *
  * The state is per process and in memory only: nothing is written to disk, so
  * there is no state file to protect. Only a truncated SHA-256 of an author id
@@ -106,19 +105,18 @@ export type RoomKeyFields = {
   groupId?: unknown
   /** Canonical session key — AGENT-wide, so only a fallback (see header). */
   sessionKey?: unknown
-  /** `message_received`: the thread INSIDE a chat — last resort only. */
-  threadId?: unknown
 }
 
 /**
  * Name the room an observation belongs to.
  *
  * Order: the conversation/chat id first (chat-scoped), then the session key
- * (AGENT-scoped in OpenClaw — see the header), then the thread id.
+ * (AGENT-scoped in OpenClaw — see the header). No identifier at all means no
+ * room, and reads on that turn stay capped to the public level.
  *
- * Prefixed by identifier space on purpose: the same number can be a thread id
- * and a chat id, and treating those as the same room would let a stranger in
- * one thread mark an unrelated chat (or fail to mark this one).
+ * Prefixed by identifier space on purpose: the same number can be a chat id on
+ * one platform and a session key on another, and treating those as the same room
+ * would let a stranger in one chat mark an unrelated one (or fail to mark it).
  *
  * `channelId` is deliberately NOT used: on the message hook it is the
  * platform/provider (`telegram`, `discord`), so using it would collapse every
