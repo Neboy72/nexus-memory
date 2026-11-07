@@ -284,8 +284,8 @@ blocked in every group regardless.
 A turn counts as a group turn when the hook payload carries a `groupId`. The
 `message_received` payload has no explicit DM flag (bot flags do exist and are used to
 recognise agents). The room key is built from the chat (`chatId`, then `groupId`) and
-only falls back to the agent-wide `sessionKey`, then the `threadId`, when neither is
-present. Delete `owner.json` to let the next message learn again.
+only falls back to the agent-wide `sessionKey` when neither is present. A room that
+carries none of the three stays unknown, which counts as shared (fail-closed). Delete `owner.json` to let the next message learn again.
 
 ## How it works
 

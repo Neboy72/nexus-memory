@@ -95,7 +95,6 @@ export function buildMessageReceivedHandler(cfg: NexusConfig) {
         sessionKey: ctx?.sessionKey ?? event.sessionKey,
         chatId: ctx?.chatId,
         groupId: ctx?.groupId,
-        threadId: event.threadId,
       })
       if (!roomKey) return
 
