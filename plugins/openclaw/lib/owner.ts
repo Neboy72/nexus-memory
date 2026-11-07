@@ -8,11 +8,13 @@
  * message marked its room shared, and the owner's own private chat stayed
  * artificially narrow until someone edited a config file.
  *
- * This module learns the owner from the first HUMAN who writes to the agent —
- * in ANY chat, not only in a one-to-one conversation. Rationale: on a fresh
- * install the first human contact IS the owner, and OpenClaw only lets senders
- * through that its own allow-lists (`allowFrom`, DM policy) already permitted,
- * so a stranger cannot reach the agent just to take the title.
+ * This module learns the owner from the first HUMAN who writes to the agent — in
+ * ANY chat, not only in a one-to-one conversation. Rationale: on a fresh install
+ * the first human contact IS the owner. This assumes OpenClaw's own admission
+ * rules (`allowFrom`, DM policy, guild allow-lists) already keep strangers away —
+ * the plugin does not verify that itself, and a stranger who does get through
+ * would be learned as the owner. `ownerUserIds` pins the owner explicitly for
+ * setups where that assumption does not hold.
  *
  * The earlier "direct chat only" rule (12.11.2026) never fired in practice:
  * OpenClaw names a Telegram direct session `agent:main:main`, which carries no
