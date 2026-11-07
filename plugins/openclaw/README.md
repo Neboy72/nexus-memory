@@ -259,8 +259,9 @@ the same person has a different ID on Telegram and on Discord:
 "ownerUserIds": ["123456789", "987654321"]
 ```
 
-A non-empty `ownerUserIds` always wins and suppresses learning. Without it,
-the plugin **learns** the owner — per platform, because one human has a
+A non-empty `ownerUserIds` always wins: the room rule then compares every author
+against exactly those ids, nothing is learned, and `owner.json` is not read. Without
+it, the plugin **learns** the owner — per platform, because one human has a
 different id on each: the first human who writes on a platform becomes that
 platform's owner, stored as `<OPENCLAW_STATE_DIR>/nexus/owner.json`
 (default `~/.openclaw`, mode `0600`, one line in the log with a truncated
