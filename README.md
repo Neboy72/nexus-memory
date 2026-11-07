@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.45-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.22.46-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-green-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -302,6 +302,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.46** | 2026-11-07 | In a shared room the plugin served whatever the access level allowed, because nothing looked at who actually wrote there; recall, the tools and the graph now read the room state, which turns shared as soon as a human other than the owner posts, and bots never count. The owner is identified per platform, so one id per platform is enough |
 | **v0.22.45** | 2026-11-01 | The dashboard showed every memory without a category as "uncategorized", so scanned documents and old notes read like unfinished work; they now carry a readable label. Windows also lost child process output whenever the console code page could not decode it, and three error paths crashed on the empty result |
 | **v0.22.44** | 2026-11-01 | The guardrail blocked nothing on Windows: protected paths were compared in a form that never matched, so the deletes and writes it exists to stop went through. Separately, the automatic backup of the store now carries a real ACL there |
 | **v0.22.43** | 2026-11-01 | The webhook store no longer loses subscriptions on Windows. Two processes writing five each produced eight, because the sidecar file lock was `flock` only and `fcntl` does not exist there |
@@ -373,4 +374,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.45 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.46 · One memory for all your agents</sub>
