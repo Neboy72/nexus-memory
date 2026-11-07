@@ -1,4 +1,23 @@
-## [Unreleased]
+## [0.22.46] - 2026-11-07
+
+### Fix - in shared rooms only public memories are served
+
+The plugin decided whether a room is shared from the chat type, so a Discord channel
+counted as shared even when only the owner and its own agents ever wrote there, and the
+owner's private memories stayed suppressed. Worse, nothing looked at who actually wrote:
+in a room where a stranger had posted, recall, the tools and the graph lookups still
+served whatever the configured access level allowed.
+
+The plugin now observes the authors it sees. A room counts as shared as soon as a human
+who is not the owner has written in it; bots never count. Until then the configured level
+applies, and an unknown room counts as shared. Recall, `nexus_recall`, the graph tools and
+`nexus_forget` all read the same room state, and `nexus_forget` also cleans the capture
+retry queue. Auto-Capture stays blocked in every group turn.
+
+The owner is identified per platform (`owner_user_ids` accepts one id per platform), and
+the room state is kept in `~/.hermes/nexus/chat-sharing.json` (mode 0600) as author
+hashes only. A prefetched memory block is rebuilt when the room status changed since it
+was prepared.
 
 ### Fix - the reconstruction test only ran where a second checkout existed
 
