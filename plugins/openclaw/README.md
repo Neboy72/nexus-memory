@@ -278,20 +278,21 @@ owners of **all** platforms, so the owner stays the owner on every one of them.
 An owner counts as known when either `ownerUserIds` is non-empty or `owner.json`
 yields at least one entry; in both cases a human message from that set leaves the
 room private, and every other human marks it shared. A `version: 1` file holds a
-single id without a platform, so it cannot be attributed to one; it is discarded with
-one log line and relearned from the next message. With no known owner at all, every
+single id without a platform, so it cannot be attributed to one; it is ignored (not
+deleted) with one log line and replaced once a message from a platform arrives. With no known owner at all, every
 human message marks its room shared (fail-closed). A corrupt `owner.json` is reported
-once, treated as absent, and replaced by the next learned message. Auto-Capture stays
+once and treated as absent; it stays on disk until the next message with a platform
+overwrites it. Auto-Capture stays
 blocked in every group regardless.
 
 A turn counts as a group turn when the hook payload carries a `groupId`, including an
 empty one. The `message_received` payload has no explicit "is this a DM" flag; it may
 carry bot indicators under several field names (`isBot`, `senderIsBot`, `fromBot`, …),
 which the plugin checks when present, and no indicator simply means "treat as human".
-The room key is built from the chat (`chatId`, then `groupId`) and only falls back to
-the agent-wide `sessionKey` when neither is present; a room that carries neither stays
-unknown, which counts as shared. Delete `owner.json` to let the next message learn
-again.
+The room key is built from the chat (`conversationId` when a caller supplies one,
+then `chatId`, then `groupId`) and only falls back to the agent-wide `sessionKey`
+when none is present; a room that carries none of them stays unknown, which counts
+as shared. Delete `owner.json` to let the next message learn again.
 
 ## How it works
 
