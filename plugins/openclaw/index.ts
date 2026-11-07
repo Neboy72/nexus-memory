@@ -4,6 +4,7 @@ import { QdrantClient } from "./lib/qdrant-client.ts"
 import { nexusConfigSchema, parseConfig } from "./lib/config.ts"
 import { ScopeCentroidCache } from "./lib/scope-auto.ts"
 import { buildCaptureHandler } from "./hooks/capture.ts"
+import { buildMessageReceivedHandler } from "./hooks/room-observer.ts"
 import { buildRecallHandler } from "./hooks/recall.ts"
 import { buildPreToolGateHandler, resolvePlanLockPath } from "./hooks/pre-tool-gate.ts"
 import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts"
@@ -242,6 +243,15 @@ export default {
     registerGetRelatedTool(api, qdrantClient, cfg)
 
     // Register hooks
+
+    // Room observation (09.11.2026): `before_prompt_build` carries no author,
+    // `message_received` does — so the sender is recorded here and the verdict
+    // (shared room or not) is read back by the recall hook and the tools.
+    // Registered UNCONDITIONALLY and independently of autoRecall: the verdict
+    // decides how much a turn may read, so switching auto-recall off must not
+    // silently leave the tools without a room state.
+    api.on("message_received", buildMessageReceivedHandler(cfg))
+
     if (cfg.autoRecall) {
       api.on("before_prompt_build", buildRecallHandler(embedder, qdrantClient, cfg, centroidCache))
     }

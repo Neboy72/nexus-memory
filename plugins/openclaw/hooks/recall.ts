@@ -3,6 +3,8 @@ import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, prefetchFilterScopes } from "../lib/scope-auto.ts"
 import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
+import { resolveReadLevel, setTurnContext } from "../lib/turn-context.ts"
+import { isRoomShared, roomKeyOf } from "../lib/room-state.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
 
@@ -213,11 +215,6 @@ export function buildRecallHandler(
     event: Record<string, unknown>,
     ctx?: Record<string, unknown>,
   ) => {
-    const trigger = ctx?.trigger as string | undefined
-    if (!isInteractiveTrigger(trigger)) {
-      return
-    }
-
     // Group-context privacy cap (Astra-R2 critical finding, 08.09.2026):
     // in group/channel turns the effective access level is capped to "public"
     // regardless of cfg — the agent must never surface private memories into
@@ -228,8 +225,54 @@ export function buildRecallHandler(
     // ABSENT group (null/undefined) keeps the configured level.
     const rawGroupId = ctx?.groupId
     const isGroupTurn = rawGroupId !== null && rawGroupId !== undefined
-    const effectiveAccessLevel =
-      isGroupTurn && cfg.accessLevel !== "public" ? "public" : cfg.accessLevel
+
+    const groupCapActive = isGroupTurn
+
+    // Room observation (09.11.2026, mirrors the Hermes plugin's room rule):
+    // a group turn is not automatically a SHARED room. `message_received`
+    // (hooks/room-observer.ts) records who writes where; if only the owner and
+    // bots have been seen there, nothing foreign reads along and the configured
+    // level applies — exactly like a direct chat. Unknown stays capped.
+    //
+    // The key is derived from the SAME fields on both sides (the
+    // conversation/chat id first, the session key only as a fallback) — see
+    // lib/room-state.ts: the session key is AGENT-wide in OpenClaw, so keying
+    // rooms by it would collapse every chat of one agent into one room.
+    const roomKey = roomKeyOf({
+      sessionKey: ctx?.sessionKey,
+      chatId: ctx?.chatId,
+      groupId: rawGroupId,
+    })
+    const roomShared = isRoomShared(roomKey)
+
+    // One rule for recall and tools (lib/turn-context.ts): shared room → public,
+    // group turn that is not known-private → public, otherwise the cfg level.
+    const effectiveAccessLevel = resolveReadLevel(
+      groupCapActive,
+      roomShared,
+      cfg.accessLevel,
+    )
+
+    // Turn marker for the TOOLS (ClawHub audit 1.22.0): a registered tool gets
+    // no inbound context from the host, so the group decision is recorded here
+    // once per turn and read back by nexus_search / nexus_forget / the graph
+    // tools (lib/turn-context.ts). Recorded BEFORE the trigger check on
+    // purpose — a turn that is not auto-recalled must still refresh the marker,
+    // otherwise a stale decision from the previous turn would govern its tools.
+    // The room verdict travels alongside the marker, because it can loosen a
+    // group turn the same way the raw group id tightens it (a stranger always
+    // wins: shared → public).
+    setTurnContext(
+      groupCapActive,
+      typeof ctx?.sessionKey === "string" ? ctx.sessionKey : undefined,
+      Date.now(),
+      roomShared,
+    )
+
+    const trigger = ctx?.trigger as string | undefined
+    if (!isInteractiveTrigger(trigger)) {
+      return
+    }
 
     const rawPrompt = event.prompt as string | undefined
     if (!rawPrompt || rawPrompt.length < 5) return
@@ -237,7 +280,7 @@ export function buildRecallHandler(
     const query = stripNexusContextBlock(rawPrompt)
     if (query.length < 5) return
 
-    log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${effectiveAccessLevel}${isGroupTurn ? ", GROUP-CAP active" : ""})`)
+    log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${effectiveAccessLevel}${groupCapActive ? ", GROUP-CAP active" : ""})`)
 
     try {
       // Embed the query

@@ -20,6 +20,10 @@ import { register } from "node:module"
 
 register("./_typebox-test-loader.mjs", import.meta.url)
 const { registerFindEntitiesTool } = await import("./tools/graph_traverse.ts")
+// ClawHub-Audit 1.22.0: die Stufe kommt aus dem Turn-Kontext, nicht mehr
+// direkt aus cfg — ohne frisches Merkmal gilt fail-closed "public". Dieser
+// Test prüft den Sichtbarkeits-Deckel, also setzt er einen Direktchat-Turn.
+const { setTurnContext, resetTurnContext } = await import("./lib/turn-context.ts")
 
 let failed = 0
 const t = (name, fn) =>
@@ -79,6 +83,8 @@ function makeClient(points = POINTS) {
 }
 
 function entityTool(cfg, client) {
+  resetTurnContext()
+  setTurnContext(false) // Direktchat-Turn → cfg.accessLevel gilt
   let tool = null
   registerFindEntitiesTool(
     { registerTool: (tt) => { tool = tt } },

@@ -5,6 +5,8 @@ import type { QdrantClient } from "../lib/qdrant-client.ts"
 import { visibleAccessLevels } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { limitText, PREVIEW_MAX } from "../lib/text-preview.ts"
+import { toolAccessLevel } from "../lib/turn-context.ts"
+import { removeQueuedCaptures } from "../hooks/capture-retry-queue.ts"
 import { log } from "../logger.ts"
 
 /**
@@ -75,6 +77,13 @@ export function registerForgetTool(
         const hasMemoryId = typeof normMemoryId === "string" && normMemoryId.length > 0
         const hasQuery = typeof normQuery === "string" && normQuery.length > 0
 
+        // Read level from the TURN, not from the config (ClawHub audit 1.22.0):
+        // a group turn — and every turn without a fresh marker — is "public",
+        // so a tool call can neither find (delete-by-query) nor remove (by id)
+        // a private memory while the agent sits in a shared context. Same rule
+        // as nexus_search and the graph tools (lib/turn-context.ts).
+        const accessLevel = toolAccessLevel(cfg.accessLevel)
+
         // Ambiguous input must never silently pick one of the two paths:
         // `memoryId` takes precedence today, so a stray query would be ignored.
         if (hasMemoryId && hasQuery) {
@@ -132,9 +141,9 @@ export function registerForgetTool(
             const memoryLevel = String(
               (existing.payload as Record<string, unknown> | undefined)?.access_level ?? "",
             )
-            if (!visibleAccessLevels(cfg.accessLevel).includes(memoryLevel)) {
+            if (!visibleAccessLevels(accessLevel).includes(memoryLevel)) {
               log.warn(
-                `forget tool: delete refused — memory access_level "${memoryLevel}" not visible at agent level "${cfg.accessLevel}"`,
+                `forget tool: delete refused — memory access_level "${memoryLevel}" not visible at agent level "${accessLevel}"`,
               )
               return {
                 isError: true,
@@ -148,6 +157,20 @@ export function registerForgetTool(
             }
 
             await qdrantClient.delete(normMemoryId)
+
+            // The queue (ClawHub audit 1.22.0): a capture that failed to store
+            // earlier still sits in capture-retry-queue.jsonl and would come
+            // back on the next drain. Drop it here; never fails the delete.
+            const queuedText =
+              (existing.payload as Record<string, unknown> | undefined)?.text
+            const dropped = removeQueuedCaptures(
+              normMemoryId,
+              typeof queuedText === "string" ? queuedText : undefined,
+            )
+            if (dropped > 0) {
+              log.info(`forget tool: ${dropped} queued capture(s) removed (id=${normMemoryId})`)
+            }
+
             return {
               content: [{ type: "text" as const, text: "Memory forgotten." }],
             }
@@ -171,7 +194,7 @@ export function registerForgetTool(
 
           try {
             const queryVector = await embedder.embed(normQuery)
-            const results = await qdrantClient.searchByVector(queryVector, 5, cfg.accessLevel)
+            const results = await qdrantClient.searchByVector(queryVector, 5, accessLevel)
 
             if (results.length === 0) {
               return {
@@ -231,6 +254,13 @@ export function registerForgetTool(
               return lookupFailedEnvelope("forget tool (by query)", verifyErr)
             }
             await qdrantClient.delete(target.id)
+
+            // Same queue cleanup as the by-id path — this is the path an agent
+            // is most likely to take, so it must not leave a retryable copy.
+            const dropped = removeQueuedCaptures(target.id, target.text)
+            if (dropped > 0) {
+              log.info(`forget tool: ${dropped} queued capture(s) removed (id=${target.id})`)
+            }
 
             const preview = limitText(target.text, PREVIEW_MAX)
             return {
