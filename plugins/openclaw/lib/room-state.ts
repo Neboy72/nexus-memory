@@ -134,9 +134,6 @@ export function roomKeyOf(fields: RoomKeyFields): string | null {
   const sessionKey = normalizeId(fields.sessionKey)
   if (sessionKey) return `session:${sessionKey}`
 
-  const threadId = normalizeId(fields.threadId)
-  if (threadId) return `thread:${threadId}`
-
   return null
 }
 
