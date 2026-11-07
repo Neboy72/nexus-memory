@@ -249,10 +249,10 @@ writes every new memory at the configured `accessLevel` (default `private`).
 
 ### Room rule (`ownerUserIds`)
 
-Group turns are capped to `public` so nothing private leaks into a shared chat.
-A group is not automatically shared, though: the plugin observes who writes
-where, and if only you and your own agents have written there, recall keeps the
-configured `accessLevel`. Tell it who "you" are — one ID per platform, because
+Group turns are capped to `public` so nothing private leaks into a shared chat,
+unless the plugin has seen only the owner and agents in that room; then recall
+keeps the configured `accessLevel`. Every bot counts as an agent here, never as a
+reader, whatever runs it. Tell it who "you" are — one ID per platform, because
 the same person has a different ID on Telegram and on Discord:
 
 ```json
@@ -262,8 +262,9 @@ the same person has a different ID on Telegram and on Discord:
 A non-empty `ownerUserIds` always wins: the room rule then compares every author
 against exactly those ids, nothing is learned, and `owner.json` is not read. Without
 it, the plugin **learns** the owner — per platform, because one human has a
-different id on each: the first human who writes on a platform becomes that
-platform's owner, stored as `<OPENCLAW_STATE_DIR>/nexus/owner.json`
+different id on each. This assumes OpenClaw's own admission rules keep strangers
+away; where they do not, set `ownerUserIds`. The first human who writes on a
+platform becomes that platform's owner, stored as `<OPENCLAW_STATE_DIR>/nexus/owner.json`
 (default `~/.openclaw`, mode `0600`, one line in the log with a truncated
 hash instead of the id):
 
