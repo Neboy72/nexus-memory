@@ -281,9 +281,11 @@ neither an entry nor a learned platform exists is the owner unknown, and then
 any human message marks its room shared (fail-closed). Auto-Capture stays
 blocked in every group regardless.
 
-The chat type is read from `ctx.sessionKey` (`direct:`/`dm:` = one-to-one,
-`group:`/`channel:` = shared); there is no DM flag in the `message_received`
-hook payload. Delete `owner.json` to let the next message learn again.
+A turn counts as a group turn when the hook payload carries a `groupId`; there is no
+DM flag in the `message_received` payload. The room key is built from the chat
+(`conversationId`, then `chatId`, then `groupId`) and only falls back to the
+agent-wide `sessionKey`, then the `threadId`, when none of them is present. Delete
+`owner.json` to let the next message learn again.
 
 ## How it works
 
