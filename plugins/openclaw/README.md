@@ -288,11 +288,16 @@ A turn counts as a group turn when the hook payload carries a `groupId`, includi
 empty one. The `message_received` payload has no explicit "is this a DM" flag; it may
 carry bot indicators under several field names (`isBot`, `senderIsBot`, `fromBot`, …),
 which the plugin checks when present, and no indicator simply means "treat as human".
-The room key is built from the chat (`chatId`, then `groupId`; a caller that also
-passes a `conversationId` takes precedence with it) and only falls back to the
-agent-wide `sessionKey` when none is present; a room that carries none of them stays
-unknown, which counts as shared. Delete `owner.json` to let the next message learn
-again.
+
+The room key is taken from the first identifier that is present, in this order:
+`conversationId`, `chatId`, `groupId`, then `sessionKey`. The observer only ever passes
+`chatId`, `groupId` and `sessionKey`, so in practice the chat id decides and the
+session key is used only for a turn that carries neither of the other two. A turn that
+carries no identifier at all has no room, and reads on it are capped to the public
+level, the same as in a room marked shared.
+
+Auto-Capture is skipped whenever the payload carries a `groupId`, including an empty
+one; only a payload without a `groupId` can be captured.
 
 ## How it works
 
