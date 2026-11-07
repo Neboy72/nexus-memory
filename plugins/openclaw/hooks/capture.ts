@@ -69,6 +69,11 @@ export function buildCaptureHandler(
     // skips capture entirely. Only a truly ABSENT group (null/undefined)
     // leaves private capture allowed; a blank groupId is a group turn whose
     // id failed to resolve, never a DM.
+    //
+    // The room rule (lib/room-state.ts) is NOT an exemption here: even a room where
+    // only the owner and bots have written stays uncaptured. That verdict is
+    // about who may READ along, never about what gets WRITTEN — capture is the
+    // one thing a group turn must not do, so no observation can open it.
     const rawGroupId = ctx.groupId
     if (rawGroupId !== null && rawGroupId !== undefined) {
       if (String(rawGroupId).trim() === "") {

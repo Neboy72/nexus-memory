@@ -165,6 +165,7 @@ Add to `~/.openclaw/openclaw.json`:
 | `autoCapture` | `boolean` | `true` | Store conversation turns to Qdrant after each AI turn |
 | `maxRecallResults` | `number` | `10` | Max memories injected per turn (1–20) |
 | `accessLevel` | `string` | `private` | Agent access level: `public`, `trusted`, or `private` |
+| `ownerUserIds` | `string[]` | `[]` | Owner identities (the human), one per platform. The room rule uses them to tell the owner apart from a stranger; a non-empty list wins, empty = learn the owner per platform (see "Room rule") |
 | `debug` | `boolean` | `false` | Verbose debug logs |
 | `cronFormGate.enabled` | `boolean` | `false` | Master switch for the unattended-send gate (cron/heartbeat sessions) |
 | `cronFormGate.titles` | `string[]` | `[]` | Exact allowed first-line titles; `enabled` with an empty list keeps the gate off |
@@ -245,6 +246,44 @@ exist.
 A stored point without an `access_level` counts as `private` (fail-closed), so
 legacy or foreign writers can never accidentally publish data. Auto-Capture
 writes every new memory at the configured `accessLevel` (default `private`).
+
+### Room rule (`ownerUserIds`)
+
+Group turns are capped to `public` so nothing private leaks into a shared chat.
+A group is not automatically shared, though: the plugin observes who writes
+where, and if only you and your own agents have written there, recall keeps the
+configured `accessLevel`. Tell it who "you" are — one ID per platform, because
+the same person has a different ID on Telegram and on Discord:
+
+```json
+"ownerUserIds": ["123456789", "987654321"]
+```
+
+A non-empty `ownerUserIds` always wins and suppresses learning. Without it,
+the plugin **learns** the owner — per platform, because one human has a
+different id on each: the first human who writes on a platform becomes that
+platform's owner, stored as `<OPENCLAW_STATE_DIR>/nexus/owner.json`
+(default `~/.openclaw`, mode `0600`, one line in the log with a truncated
+hash instead of the id):
+
+```json
+{"version":2,"owners":{"telegram":"5763330319","discord":"373816693522432001"}}
+```
+
+The key is the `channelId` of the hook context (`telegram`, `discord`, …). A
+platform that already has an owner is never overwritten by a later message,
+and a message without a platform learns nothing. Room reads compare against
+the owners of **all** platforms, so the owner stays the owner on every one of
+them. A `version: 1` file (a single id, no platform) is discarded with one log
+line — it cannot be attributed to a platform, and applying it everywhere is
+exactly what made the owner's own Discord channels look shared. Only when
+neither an entry nor a learned platform exists is the owner unknown, and then
+any human message marks its room shared (fail-closed). Auto-Capture stays
+blocked in every group regardless.
+
+The chat type is read from `ctx.sessionKey` (`direct:`/`dm:` = one-to-one,
+`group:`/`channel:` = shared); there is no DM flag in the `message_received`
+hook payload. Delete `owner.json` to let the next message learn again.
 
 ## How it works
 
