@@ -103,6 +103,11 @@
       "placeholder": "",
       "help": "Level-3 plan lock: non-trivial commands require a plan lock file. Level-1 guardrails stay active regardless. Default off.",
       "advanced": true
+    },
+    "ownerUserIds": {
+      "label": "Owner User IDs",
+      "help": "Identities of the owner (the human), one entry per platform. Used by the room rule to tell the owner apart from a stranger. A non-empty list wins. Empty = learn the owner per platform from the first human message on that platform (<stateDir>/nexus/owner.json, {\"version\":2,\"owners\":{\"telegram\":\"…\",\"discord\":\"…\"}}); only if that never happened is the owner unknown and every human message marks its room shared.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -222,6 +227,16 @@
           }
         }
       },
+      "ownerUserIds": {
+        "type": "array",
+        "items": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "default": []
+      },
       "debug": {
         "type": "boolean",
         "default": false
@@ -234,5 +249,5 @@
     },
     "required": []
   },
-  "version": "1.22.0"
+  "version": "1.22.1"
 }

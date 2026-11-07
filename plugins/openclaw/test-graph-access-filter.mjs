@@ -30,6 +30,11 @@ const {
   registerGetSubgraphTool,
   registerGetRelatedTool,
 } = await import("./tools/graph_traverse.ts")
+// ClawHub-Audit 1.22.0: die Werkzeuge lesen ihre Stufe aus dem Turn-Kontext
+// (lib/turn-context.ts), nicht mehr direkt aus cfg. Ohne frisches Merkmal
+// gilt fail-closed "public". Dieser Test prüft die Stufen-FILTER, nicht das
+// Gruppengate — er setzt deshalb pro Werkzeug einen Direktchat-Turn.
+const { setTurnContext, resetTurnContext } = await import("./lib/turn-context.ts")
 
 let failed = 0
 const t = (name, fn) =>
@@ -157,6 +162,10 @@ function makeClient(points = ALL_POINTS, incoming = INCOMING) {
 }
 
 function graphTool(registerFn, cfg, client = makeClient()) {
+  // Direktchat-Turn: cfg.accessLevel ist damit die wirksame Stufe (ohne
+  // Merkmal wären alle vier Werkzeuge fail-closed auf "public").
+  resetTurnContext()
+  setTurnContext(false)
   let tool = null
   registerFn(
     { registerTool: (tt) => { tool = tt } },

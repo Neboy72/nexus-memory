@@ -13,6 +13,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -131,6 +132,141 @@ export function writeQueue(entries: QueuedCapture[]): void {
 
 export function queueSize(): number {
   return readQueue().length
+}
+
+/**
+ * Does one queued entry belong to the memory that was just deleted?
+ *
+ * ID first: `enqueueCapture` always writes the memory id, so an id match is
+ * proof. The TEXT fallback exists only for entries that carry no id of their
+ * own (older/hand-written lines) — an entry with a DIFFERENT id belongs to
+ * another memory even when the text repeats, so it is left alone.
+ */
+function matchesDeleted(entry: unknown, id: string, text: string): boolean {
+  if (!entry || typeof entry !== "object") return false
+  const e = entry as Record<string, unknown>
+  const entryId = typeof e.id === "string" ? e.id.trim() : ""
+  if (entryId !== "") return entryId === id
+  if (text === "") return false
+  const payload =
+    e.payload && typeof e.payload === "object"
+      ? (e.payload as Record<string, unknown>)
+      : {}
+  return e.text === text || payload.text === text
+}
+
+/**
+ * Remove the queued captures of a DELETED memory (ClawHub audit 1.22.0).
+ *
+ * `nexus_forget` only deleted in Qdrant, so a text that failed to store
+ * earlier kept sitting in capture-retry-queue.jsonl and came BACK on the next
+ * drain — a forgotten memory reappearing. Called after a successful delete.
+ *
+ * Returns the number of removed entries. NEVER throws: an unreadable queue is
+ * a warning, and the Qdrant delete still counts as successful.
+ *
+ * Single-writer discipline: `enqueueCapture` is append-only, so the rewrite
+ * happens only when an entry actually matches, and the file is re-read right
+ * before the rename so entries appended meanwhile survive. An unparseable
+ * line never matches (it cannot be proven to belong to the memory) and is
+ * carried over verbatim.
+ */
+export function removeQueuedCaptures(memoryId: string, text?: string): number {
+  const id = typeof memoryId === "string" ? memoryId.trim() : ""
+  const body = typeof text === "string" ? text : ""
+  if (id === "" && body === "") return 0
+
+  const file = queueFile()
+
+  // Read RAW here — readQueue() cannot be used: it reports an unreadable file
+  // as "empty", and rewriting that would wipe every pending capture.
+  let raw: string
+  try {
+    if (!existsSync(file)) return 0
+    raw = readFileSync(file, "utf8")
+  } catch (err) {
+    log.warn(
+      "capture-retry: Queue nicht lesbar — Eintrag bleibt stehen (Loeschen im Store bleibt erfolgreich)",
+      err,
+    )
+    return 0
+  }
+
+  const partition = (content: string): { kept: string[]; removed: number } => {
+    const kept: string[] = []
+    let removed = 0
+    for (const line of content.split("\n")) {
+      if (line === "") continue
+      let entry: unknown
+      try {
+        entry = JSON.parse(line)
+      } catch {
+        kept.push(line) // corrupt/partial line: keep it, we cannot judge it
+        continue
+      }
+      if (matchesDeleted(entry, id, body)) {
+        removed++
+        continue
+      }
+      kept.push(line)
+    }
+    return { kept, removed }
+  }
+
+  const first = partition(raw)
+  // Nothing matched with certainty -> leave the file untouched (no rewrite, no
+  // chance to race a concurrent append).
+  if (first.removed === 0) return 0
+
+  // Re-read immediately before the write: enqueueCapture may have appended
+  // while we were parsing. Unknown means "keep the first snapshot".
+  let latest = raw
+  try {
+    latest = readFileSync(file, "utf8")
+  } catch {
+    // best effort — the first snapshot is still a valid basis
+  }
+  const { kept, removed } = latest === raw ? first : partition(latest)
+  // A concurrent drain may already have restored/removed everything we were
+  // after — then there is nothing left to write.
+  if (removed === 0) return 0
+
+  // Process-unique temp name: drainQueue may rewrite the same file at the same
+  // time, and a SHARED `.tmp` name would let one process rename the other's
+  // half-written file into place.
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+  try {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    // Preserve the file's permissions: a tmp file created with a default mode
+    // would silently loosen (or tighten) what an operator set up.
+    let mode = 0o600
+    try {
+      mode = statSync(file).mode & 0o777
+    } catch {
+      // file vanished between read and stat — fall back to the queue default
+    }
+    writeFileSync(tmp, kept.join("\n") + (kept.length ? "\n" : ""), {
+      encoding: "utf8",
+      mode,
+    })
+    renameSync(tmp, file)
+  } catch (err) {
+    log.warn(
+      "capture-retry: Queue konnte nach dem Loeschen nicht neu geschrieben werden — Eintrag bleibt stehen",
+      err,
+    )
+    try {
+      if (existsSync(tmp)) unlinkSync(tmp)
+    } catch {
+      // best effort — never mask the original error
+    }
+    return 0
+  }
+
+  log.info(
+    `capture-retry: ${removed} Eintrag/Eintraege der geloeschten Erinnerung entfernt (id=${id || "-"})`,
+  )
+  return removed
 }
 
 /**

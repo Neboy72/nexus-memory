@@ -54,6 +54,18 @@ export type NexusConfig = {
   /** Plan-Gate level 3 (the plan lock). Default off; the level-1 guardrails
    *  stay active regardless of this switch. */
   planGate: PlanGateConfig
+  /** Owner identities (09.11.2026): ONE entry per platform, because the same
+   *  person has a different id on every platform. Used only by the room rule
+   *  (lib/room-state.ts) to tell the owner apart from a stranger.
+   *
+   *  Since 12.11.2026 an empty list is no longer "owner unknown forever":
+   *  lib/owner.ts learns the owner from the first human message. Since
+   *  15.11.2026 that happens PER PLATFORM (`<stateDir>/nexus/owner.json`,
+   *  `{"version":2,"owners":{"telegram":"…","discord":"…"}}`), because one
+   *  person has a different id on each. A non-empty list always WINS and
+   *  suppresses that learning. Only when neither exists is the owner unknown
+   *  and every human message marks the room shared (fail-closed). */
+  ownerUserIds: string[]
   debug: boolean
 }
 
@@ -70,6 +82,7 @@ const ALLOWED_KEYS = [
   "scope",
   "cronFormGate",
   "planGate",
+  "ownerUserIds",
   "debug",
 ]
 
@@ -155,6 +168,39 @@ function parseCronFormGate(value: unknown): CronFormGateConfig {
     maxLines: toClampedInt(raw.maxLines, DEFAULT_GATE_MAX_LINES, 1, 50),
     maxChars: toClampedInt(raw.maxChars, DEFAULT_GATE_MAX_CHARS, 50, 5000),
   }
+}
+
+/**
+ * Normalize one group/channel id to its comparable form: strings and finite
+ * numbers only, trimmed. Everything else — including a JSON `null` entry and a
+ * string that trims to "" — yields "". A blank id is a group turn whose id
+ * failed to resolve (see the fail-closed gates), never a channel to release.
+ */
+export function normalizeGroupId(value: unknown): string {
+  if (typeof value === "string") return value.trim()
+  if (typeof value === "number" && Number.isFinite(value)) return String(value)
+  return ""
+}
+
+/**
+ * Parse `ownerUserIds` — the identities that count as "the owner" when the
+ * room rule decides whether a stranger has spoken (lib/room-state.ts).
+ *
+ * One entry per platform: a person has a different id on Telegram and on
+ * Discord, so this is a SET and never a single comparison. Entries are
+ * normalized like every other id (string/number, trimmed); blanks, containers
+ * and duplicates drop out. A non-array (config typo) yields [] — the owner is
+ * then unknown, so any human message marks its room shared. That is the
+ * fail-closed direction on purpose: a broken entry must never widen access.
+ */
+function parseOwnerUserIds(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : []
+  const ids: string[] = []
+  for (const entry of values) {
+    const id = normalizeGroupId(entry)
+    if (id !== "" && !ids.includes(id)) ids.push(id)
+  }
+  return ids
 }
 
 function assertAllowedKeys(
@@ -338,6 +384,7 @@ export function parseConfig(raw: unknown): NexusConfig {
     scope,
     cronFormGate: parseCronFormGate(cfg.cronFormGate),
     planGate: parsePlanGate(cfg.planGate),
+    ownerUserIds: parseOwnerUserIds(cfg.ownerUserIds),
     debug: toBool(cfg.debug, false),
   }
 }
@@ -384,6 +431,10 @@ export const nexusConfigSchema = {
           lockPath: { type: "string" },
           maxAgeSeconds: { type: "number", minimum: 30, maximum: 3600 },
         },
+      },
+      ownerUserIds: {
+        type: "array",
+        items: { type: ["string", "number"] },
       },
       debug: { type: "boolean" },
     },

@@ -26,6 +26,10 @@ register("./_typebox-test-loader.mjs", import.meta.url)
 const { registerGraphTraverseTool, registerGetRelatedTool } = await import(
   "./tools/graph_traverse.ts"
 )
+// ClawHub-Audit 1.22.0: Werkzeuge lesen ihre Stufe aus dem Turn-Kontext.
+// Dieser Test prüft die Fehler-Semantik der BFS/Lookups (cfg = private),
+// also braucht er einen Direktchat-Turn — ohne Merkmal gilt "public".
+const { setTurnContext, resetTurnContext } = await import("./lib/turn-context.ts")
 
 let failed = 0
 const t = (name, fn) =>
@@ -92,6 +96,8 @@ function makeClient({ graph = GRAPH, strictFails = [], lenientNulls = [], incomi
 }
 
 function toolFor(registerFn, client) {
+  resetTurnContext()
+  setTurnContext(false) // Direktchat-Turn → cfg.accessLevel gilt
   let tool = null
   registerFn(
     { registerTool: (tt) => { tool = tt } },

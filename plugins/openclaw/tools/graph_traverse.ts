@@ -13,6 +13,7 @@ import type { NexusConfig } from "../lib/config.ts"
 import { clampInt } from "../lib/num.ts"
 import { isActiveEdge, normalizeEdge } from "../lib/edge.ts"
 import { bfsEdges, loadPointStrict } from "../lib/bfs.ts"
+import { toolAccessLevel } from "../lib/turn-context.ts"
 import { log } from "../logger.ts"
 
 // H123: hard bounds for the graph tools, mirrored by their Typebox schemas.
@@ -58,9 +59,13 @@ const KG_RELATIONS: readonly string[] = [
  * Fail-closed: a payload without `access_level` counts as `private` — the
  * same convention as `mapHit()` in lib/qdrant-client.ts (`?? "private"`).
  * An unknown agent level yields no visible levels at all (W31-16).
+ *
+ * The level is passed in, not read from the config (ClawHub audit 1.22.0):
+ * callers resolve it per execution via `toolAccessLevel()`, which caps a group
+ * turn (and every turn without a fresh marker) to "public".
  */
-function visibilityGate(cfg: NexusConfig): (payload?: Record<string, unknown>) => boolean {
-  const levels = visibleAccessLevels(cfg.accessLevel)
+function visibilityGate(accessLevel: string): (payload?: Record<string, unknown>) => boolean {
+  const levels = visibleAccessLevels(accessLevel)
   return (payload) => levels.includes(String(payload?.access_level ?? "private"))
 }
 
@@ -137,7 +142,7 @@ export function registerGraphTraverseTool(
         const targetType = params.target_type || undefined
 
         try {
-          const isVisible = visibilityGate(cfg)
+          const isVisible = visibilityGate(toolAccessLevel(cfg.accessLevel))
           // 24.10.2026: strict lookup — "not found" may only mean Qdrant
           // confirmed the point is absent (404); a failed request throws into
           // the catch below instead of masquerading as a missing fact.
@@ -242,7 +247,7 @@ export function registerFindEntitiesTool(
         // `public` agent got a silently short (or empty) list although enough
         // visible entities existed. The level filter goes into Qdrant, so
         // `limit` counts visible entities only.
-        const levels = visibleAccessLevels(cfg.accessLevel)
+        const levels = visibleAccessLevels(toolAccessLevel(cfg.accessLevel))
         // W31-16: an unknown agent level sees nothing — and must not fall
         // through to an unfiltered scroll (that returned the whole set).
         if (levels.length === 0) {
@@ -279,7 +284,7 @@ export function registerFindEntitiesTool(
           // a `public` agent saw every `private` entity. Filter BEFORE mapping,
           // so no field of a hidden point can leak into the result. Kept as the
           // SECOND defence behind the Qdrant filter above.
-          const isVisible = visibilityGate(cfg)
+          const isVisible = visibilityGate(toolAccessLevel(cfg.accessLevel))
           const visiblePoints = points.filter((pt) => isVisible(pt.payload))
           const entities = visiblePoints.map((pt) => {
             const payload = (pt.payload ?? {}) as Record<string, unknown>
@@ -370,7 +375,7 @@ export function registerGetSubgraphTool(
           // found" answer as an absent one.
           const { nodes, edges } = await bfsEdges(qdrantClient, factId, maxDepth, {
             collectEdges: true,
-            isVisible: visibilityGate(cfg),
+            isVisible: visibilityGate(toolAccessLevel(cfg.accessLevel)),
           })
 
           if (nodes.length <= 1) {
@@ -437,7 +442,7 @@ export function registerGetRelatedTool(
         const relation = params.relation || undefined
 
         try {
-          const isVisible = visibilityGate(cfg)
+          const isVisible = visibilityGate(toolAccessLevel(cfg.accessLevel))
           // Strict like graph_traverse: a failed lookup must not read as an
           // absent fact (see loadPointStrict in lib/bfs.ts).
           const point = await loadPointStrict(qdrantClient, factId)
