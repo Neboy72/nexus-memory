@@ -76,6 +76,11 @@ STATE_FILE = "chat-sharing.json"
 # read-only. Either way the read-only-folder test below cannot mean what it says.
 _DIRECTORY_MODES_MEAN_NOTHING = (not hasattr(os, "geteuid")) or os.geteuid() == 0
 
+# File permission bits like 0o600 only exist on POSIX systems. On Windows `stat`
+# reports 0o666 no matter what chmod set (chmod only toggles the read-only
+# attribute there), so a mode assertion cannot prove anything on that platform.
+_POSIX_FILE_MODES = hasattr(os, "geteuid")
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -355,6 +360,7 @@ class TestStateFile:
         assert OWNER not in raw
         assert len(_state(tmp_path)["chats"][CHANNEL_A]["last_author"]) == 64
 
+    @pytest.mark.skipif(not _POSIX_FILE_MODES, reason="POSIX mode bits are not enforced on this platform")
     def test_the_file_is_owner_only(self, tmp_path):
         _turn(_owner_provider(tmp_path), author_id=STRANGER)
 
