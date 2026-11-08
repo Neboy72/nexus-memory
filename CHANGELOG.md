@@ -1,3 +1,20 @@
+## [0.22.47] - 2026-11-08
+
+### Fix - a shared room caps writes too, not only reads
+
+The room state added in the previous release guarded the read side only. Recall served public memories in
+a room a stranger had posted in, while `nexus_remember`, `sync_turn` and the OpenClaw store and
+capture paths still wrote with the configured access level — so the owner's private material
+went straight into such a room.
+
+- The OpenClaw pre-check now reads with the room level instead of the configured level, so the
+  gate and the write agree on what is allowed.
+- Saving is capped to `public` in a room that is provably shared: OpenClaw `store` and
+  Auto-Capture, Hermes `nexus_remember` and `sync_turn`.
+- Reading stays fail-closed (an unknown room counts as shared); writing caps only on proof
+  that a human other than the owner wrote there. Bots never count.
+- Nothing is rejected — a memory that would have been private is stored as `public` instead.
+
 ## [0.22.46] - 2026-11-07
 
 ### Fix - in shared rooms only public memories are served
