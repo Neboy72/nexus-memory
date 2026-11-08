@@ -70,6 +70,12 @@ CHANNEL_B = "1497444555666"
 
 STATE_FILE = "chat-sharing.json"
 
+# Directory permission bits are only enforced for a non-root POSIX process. On
+# Windows there is no `os.geteuid` at all (the module would fail while pytest
+# collects, not while running), and `chmod 0o500` does not make a directory
+# read-only. Either way the read-only-folder test below cannot mean what it says.
+_DIRECTORY_MODES_MEAN_NOTHING = (not hasattr(os, "geteuid")) or os.geteuid() == 0
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -974,7 +980,7 @@ class TestTurnStartIngress:
         warnings = [r for r in caplog.records if "on_turn_start ignored" in r.getMessage()]
         assert len(warnings) == 1, [r.getMessage() for r in warnings]
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+    @pytest.mark.skipif(_DIRECTORY_MODES_MEAN_NOTHING, reason="root or Windows ignores directory modes")
     def test_an_unwritable_state_file_does_not_break_the_turn(self, tmp_path, caplog):
         p = _owner_provider(tmp_path, chat_id=CHANNEL_A)
         (tmp_path / "nexus").mkdir(parents=True, exist_ok=True)
