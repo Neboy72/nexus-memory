@@ -6,6 +6,7 @@ import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { limitText } from "../lib/text-preview.ts"
+import { writeAccessLevel } from "../lib/turn-context.ts"
 import { log } from "../logger.ts"
 import { NEXUS_STORE_TOOL } from "../runtime.ts"
 
@@ -52,7 +53,7 @@ export function registerStoreTool(
         params: { text: string; category?: string; access_level?: string; scope?: string },
       ) {
         const category = params.category ?? "fact"
-        const accessLevel = (params.access_level ?? cfg.accessLevel) as string
+        const requestedLevel = (params.access_level ?? cfg.accessLevel) as string
 
         // Fail-closed: the JSON schema declares both as enums, but a host that
         // bypasses the schema could smuggle arbitrary values through the
@@ -88,6 +89,22 @@ export function registerStoreTool(
             ],
           }
         }
+
+        // Write-side room cap (13.11.2026): the level a WRITE may carry is
+        // capped by the turn's room — in a shared room "public" is the ceiling,
+        // even when the call asks for "private". A registered tool gets no
+        // inbound context from the host, so the room verdict comes from the
+        // SAME turn marker the reading tools use (`writeAccessLevel`, see
+        // lib/turn-context.ts). Never a rejection: only the level is lowered.
+        // The requested level itself is the baseline, NOT cfg.accessLevel: only
+        // a provably shared room caps, so an absent or stale marker leaves the
+        // caller's level untouched.
+        const roomLevel = writeAccessLevel(requestedLevel)
+        const levelOrder = ACCESS_LEVELS as readonly string[]
+        const accessLevel =
+          levelOrder.indexOf(requestedLevel) > levelOrder.indexOf(roomLevel)
+            ? roomLevel
+            : requestedLevel
 
         // Scope normalization ([a-z0-9-], max 40; same regex as lib/config.ts,
         // lib/scope-auto.ts and the server).
