@@ -21,6 +21,8 @@ import os from "node:os"
 import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
+import { resolveReadLevel } from "../lib/turn-context.ts"
+import { isRoomShared, roomKeyOf } from "../lib/room-state.ts"
 import { log } from "../logger.ts"
 
 // ── Configuration ────────────────────────────────────────────────
@@ -311,12 +313,15 @@ function checkGuardrails(toolName: string, params: Record<string, unknown>): Gua
 async function preActionRecall(
   embedder: Embedder,
   qdrantClient: QdrantClient,
-  cfg: NexusConfig,
+  accessLevel: string,
   query: string,
 ): Promise<string | null> {
   try {
     const queryVector = await embedder.embed(query)
-    const results = await qdrantClient.search(queryVector, NEXUS_QUERY_LIMIT, cfg.accessLevel)
+    // `accessLevel` is the level resolved for THIS turn's room (see the
+    // handler) — never the configured one: the hits land in `blockReason`,
+    // i.e. in plain text the model repeats.
+    const results = await qdrantClient.search(queryVector, NEXUS_QUERY_LIMIT, accessLevel)
 
     if (results.length === 0) return null
 
@@ -363,8 +368,22 @@ export function buildPreToolGateHandler(
     const recallQuery = extractRecallQuery(toolName, params)
     let recallContext: string | null = null
     if (recallQuery) {
-      log.info(`nexus-gate: pre-action recall — query="${recallQuery}"`)
-      recallContext = await preActionRecall(embedder, qdrantClient, cfg, recallQuery)
+      // Room-capped read level, resolved exactly like hooks/recall.ts: a
+      // pre-action recall from a shared room must not pull private memories
+      // into `blockReason`. Same helpers, same rule — no second derivation.
+      const rawGroupId = ctx?.groupId
+      const isGroupTurn = rawGroupId !== null && rawGroupId !== undefined
+      const roomShared = isRoomShared(
+        roomKeyOf({
+          sessionKey: ctx?.sessionKey,
+          chatId: ctx?.chatId,
+          groupId: rawGroupId,
+        }),
+      )
+      const effectiveAccessLevel = resolveReadLevel(isGroupTurn, roomShared, cfg.accessLevel)
+
+      log.info(`nexus-gate: pre-action recall — query="${recallQuery}" accessLevel=${effectiveAccessLevel}`)
+      recallContext = await preActionRecall(embedder, qdrantClient, effectiveAccessLevel, recallQuery)
     }
 
     // ── 3. PLAN-ZWANG (Ebene 3 — schaltbar, Default aus) ──
