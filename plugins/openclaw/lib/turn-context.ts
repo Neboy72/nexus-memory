@@ -108,10 +108,12 @@ export function resolveReadLevel(
 }
 
 /**
- * Effective access level for a READING tool.
+ * The room's access level for READING in THIS turn.
  *
  * In a group turn — and whenever no fresh marker exists — this is always
- * "public": too little is better than a leak.
+ * "public": too little is better than a leak. That fail-closed stance is right
+ * for reads (the content is shown to someone) but wrong for writes; see
+ * `writeAccessLevel` below, which is the only helper a write may use.
  */
 export function toolAccessLevel(
   cfgAccessLevel: string,
@@ -120,6 +122,32 @@ export function toolAccessLevel(
   const turn = getTurnContext(now)
   if (turn === null) return "public"
   return resolveReadLevel(turn.isGroup, turn.shared, cfgAccessLevel)
+}
+
+/**
+ * The level a WRITE may carry — the counterpart of `toolAccessLevel`.
+ *
+ * A write is capped only when the room is PROVEN shared (`turn.shared === true`).
+ * With no marker, a stale marker, or a room whose verdict is unknown, the
+ * requested level comes back UNCHANGED.
+ *
+ * Why not fail-closed like reads: capping a write changes what is stored in the
+ * user's own store. An unknown room would silently turn a private note into a
+ * public one — that harms the user's archive instead of protecting it, and it
+ * would hit every long work turn, cron run and tool chain that writes more than
+ * `TURN_MARKER_TTL_MS` after the last user message. Reads can be narrowed
+ * afterwards; a record that was written too openly cannot be un-leaked. So:
+ * cap only on evidence, never on doubt. Like the read cap this never rejects —
+ * it only lowers the level.
+ */
+export function writeAccessLevel(
+  requested: string,
+  now: number = Date.now(),
+): string {
+  const turn = getTurnContext(now)
+  if (turn === null) return requested
+  if (turn.shared !== true) return requested
+  return "public"
 }
 
 /** Test seam: drop any recorded marker. */

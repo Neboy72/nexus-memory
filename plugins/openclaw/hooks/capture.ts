@@ -4,6 +4,7 @@ import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
+import { isRoomShared, roomKeyOf } from "../lib/room-state.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
 import { enqueueCapture, drainQueue } from "./capture-retry-queue.ts"
@@ -152,10 +153,24 @@ export function buildCaptureHandler(
     // ID und Payload VOR dem try: der Retry-Requeue (catch) muss exakt dieselbe
     // ID und denselben (ggf. inferierten) Scope wiederverwenden — sonst kann
     // derselbe Text unter 2 IDs doppelt im Store landen.
+
+    // Write-side room cap (13.11.2026): in a shared room "public" is the
+    // ceiling for what this turn writes, whatever the configured level says.
+    // Same verdict and same key derivation as the recall hook
+    // (`lib/room-state.ts`); a room that was never observed as shared stays
+    // exactly as before, and nothing is ever rejected — only the level drops.
+    const roomShared = isRoomShared(
+      roomKeyOf({
+        sessionKey: ctx.sessionKey,
+        chatId: ctx.chatId,
+        groupId: rawGroupId,
+      }),
+    )
+
     const id = randomUUID()
     let payload: Record<string, unknown> = {
       text: content,
-      access_level: cfg.accessLevel,
+      access_level: roomShared === true ? "public" : cfg.accessLevel,
       category: "session",
       // fetchCentroids() (lib/scope-auto.ts) scrolls with a
       // lifecycle_status == "canonical" filter; a point without the field is

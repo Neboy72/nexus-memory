@@ -2474,8 +2474,15 @@ class NexusMemoryProvider:
             # including one connected tomorrow. Tightening later is always possible;
             # un-ringing a bell is not. Narrowing the level per agent is a one-line
             # change when a new agent arrives; exposure is not.
+            #
+            # Room cap (13.11.2026): the ONE exception is a shared room. What is
+            # said there is not private by any reading, and storing it as
+            # "private" would hide where it came from — so "public" is the
+            # ceiling. A room that is not shared (or not determinable) writes
+            # "private" exactly as before. This lowers a level; it never rejects.
+            _turn_level = "public" if self._chat_is_shared() is True else "private"
             self._write_queue.append({"text": f"User: {user_content}\nAssistant: {assistant_content}",
-                                       "category": "session", "access_level": "private",
+                                       "category": "session", "access_level": _turn_level,
                                        "source": "hermes-plugin", "confidence": 0.5})
 
         # Auto entity detection (2026-08-30): store hardware facts as an entity
@@ -3038,8 +3045,16 @@ class NexusMemoryProvider:
                 # v0.15 (review fix, CRITICAL): actually pass salience/confidence/
                 # source_url through — the tool schema promises them, and they
                 # were previously ignored silently.
+                #
+                # Room cap (13.11.2026): in a SHARED room "public" is the ceiling
+                # for a write — the call may ask for "private", it just does not
+                # get it. A room that is not shared (or not determinable) keeps
+                # today's behaviour exactly; nothing is ever rejected, only the
+                # level is lowered.
+                _write_level = "public" if self._chat_is_shared() is True \
+                    else args.get("access_level", "private")
                 result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
-                                      access_level=args.get("access_level", "private"),
+                                      access_level=_write_level,
                                       source=args.get("source", ""),
                                       confidence=args.get("confidence", 0.7),
                                       salience=args.get("salience"),
