@@ -587,6 +587,7 @@ class TestOwnerIdsPerPlatform:
         fresh._owner_user_ids()
         assert calls == []
 
+    @pytest.mark.skipif(not _POSIX_FILE_MODES, reason="POSIX mode bits are not enforced on this platform")
     def test_the_migrated_file_is_owner_only(self, tmp_path):
         _provider(tmp_path, config={"owner_user_id": OWNER})._owner_user_ids()
 
