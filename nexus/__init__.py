@@ -369,6 +369,42 @@ def nexus_remember(
             prov["confidence"] = confidence
             payload["provenance"] = prov
 
+    # ── Gemeinsames Schreibtor (10.11.2026) ────────────────────────────
+    # Der Bibliotheksweg schrieb als einziger ungeprueft direkt in die
+    # Sammlung. Er laeuft jetzt durch dasselbe Tor wie Plugin, MCP-Server und
+    # /write: leerer Inhalt, Etiketten, Herkunft, Zugriffsstufe und die
+    # Regelherkunft gelten auch hier. Eine Abweisung ist ein Fehler, kein
+    # stiller Erfolg — der Aufrufer soll sie sehen.
+    from nexus.write_gate import prepare as _gate_prepare, last_reason as _gate_reason
+
+    _requested_level = ""
+    if isinstance(metadata, dict) and isinstance(metadata.get("access_level"), str):
+        _requested_level = metadata["access_level"]
+    elif isinstance(kwargs.get("access_level"), str):
+        _requested_level = kwargs["access_level"]
+
+    _prepared = _gate_prepare(
+        content=payload["content"],
+        category=payload["category"],
+        access_level=_requested_level,
+        source=str(payload.get("source") or ""),
+        provenance=payload.get("provenance") if isinstance(payload.get("provenance"), dict) else None,
+        source_type=source_type,
+        # Ein Aufruf dieser Funktion ist eine bewusste Handlung (Werkzeug,
+        # Skript, Cron-Job) — nicht die automatische Extraktion eines Turns.
+        explicit=True,
+    )
+    if _prepared is None:
+        raise ValueError(f"nexus_remember abgewiesen: {_gate_reason() or 'abgewiesen'}")
+    content = _prepared["content"]
+    category = _prepared["category"]
+    payload["content"] = content
+    payload["category"] = category
+    payload["access_level"] = _prepared["access_level"]
+    payload["provenance"] = _prepared["provenance"]
+    if _prepared["source"]:
+        payload["source"] = _prepared["source"]
+
     # ── Tiered Enrichment ──────────────────────────────────────────────
     from nexus.enrich import decide_tier, enrich, EnrichmentTier
 

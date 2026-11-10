@@ -42,12 +42,10 @@ os.environ["NEXUS_RETRIEVAL_WATCH"] = "0"
 # Deshalb hier abschalten — die Grenze selbst steht in der Plugin-Doku.
 os.environ.setdefault("NEXUS_PREFETCH_MIN_CHARS", "0")
 
-# Dasselbe fuer das Schreibtor: es weist ``fact``-Inhalte unter 20 Zeichen ab
-# (Etikett, kein Fakt, gemessen 10.11.2026). Sehr viele Tests schreiben kurze
-# Beispieltexte wie "x" oder "legacy fact" und pruefen Kategorien, Stufen und
-# Reihenfolge — nicht die Laengengrenze. Die Grenze selbst prueft
-# ``tests/test_write_gate.py``.
-os.environ.setdefault("NEXUS_WRITE_GATE_MIN_FACT_CHARS", "0")
+# Das Schreibtor prueft Etiketten an der FORM ("wort: wert" ohne Satzzeichen
+# und Verb), nicht an der Laenge (10.11.2026) — kurze Beispieltexte wie "x"
+# oder "legacy fact" gehen deshalb von selbst durch und brauchen keinen
+# Schalter. Die Regeln selbst prueft ``tests/test_write_gate.py``.
 
 # Make sure both the source-layout (``src/nexus_memory``) and the legacy
 # top-level ``nexus`` package are importable when tests are run from the

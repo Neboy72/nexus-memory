@@ -5,10 +5,6 @@ Hermes-Plugins (``_upsert``): leerer Inhalt und Dokumenttext als Regel muessen
 dort abgewiesen werden, ohne dass ein Punkt in die Sammlung geht. Zum Schluss
 der Stichwortindex: ein nachgezogener Punkt muss auffindbar sein, und ein
 Indexfehler darf das Schreiben nicht verhindern.
-
-Die Laengengrenze fuer ``fact`` ist in ``tests/conftest.py`` fuer die uebrige
-Suite abgeschaltet (kurze Beispieltexte); hier wird sie ausdruecklich
-eingeschaltet.
 """
 
 from __future__ import annotations
@@ -19,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from nexus.write_gate import MIN_FACT_CHARS, last_reason, prepare
+from nexus.write_gate import last_reason, prepare
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO / "src") not in sys.path:
@@ -33,13 +29,6 @@ _spec.loader.exec_module(plugin)
 
 LANGE_QUELLE = "Eine Quelle mit ausreichend Text fuer das Schreibtor"
 FAKT = "Der Verteiler liegt im Flur neben der Kellertuer"  # 47 Zeichen
-
-
-@pytest.fixture
-def strenge_grenze(monkeypatch):
-    """Die Vorgabegrenze fuer ``fact`` (conftest schaltet sie fuer andere Tests ab)."""
-    monkeypatch.setenv("NEXUS_WRITE_GATE_MIN_FACT_CHARS", str(MIN_FACT_CHARS))
-    return MIN_FACT_CHARS
 
 
 # ── 1. Leerer Inhalt ─────────────────────────────────────────────────
@@ -58,34 +47,51 @@ class TestLeererInhalt:
         assert prepare(None) is None
 
 
-# ── 2. Etikett statt Fakt ────────────────────────────────────────────
+# ── 2. Etikett statt Fakt (Etikettenerkennung, keine Laengengrenze) ──
 
 
-class TestLaengengrenze:
-    def test_kurzer_fakt_wird_abgewiesen(self, strenge_grenze):
-        assert prepare("zu kurz", category="fact") is None
-        assert "Zeichen" in last_reason()
+class TestEtikettenerkennung:
+    """Nicht die Laenge entscheidet, sondern die Form: ``wort: wert`` ohne
+    Satzzeichen und ohne Verb ist ein Etikett. Ein kurzer Fakt mit Zahl oder
+    Kennung geht durch — die alte Laengengrenze hat echte Fakten verloren."""
 
-    def test_genau_an_der_grenze_wird_angenommen(self, strenge_grenze):
-        text = "x" * strenge_grenze
-        assert prepare(text, category="fact") is not None
+    @pytest.mark.parametrize("text", [
+        "Farbe: blau",
+        "Kategorie: Werkzeug",
+        "Standort: Keller",
+        "concept: Heizoel",
+        "software: Skill.md",
+    ])
+    def test_etikett_wird_abgewiesen(self, text):
+        assert prepare(text, category="fact") is None
+        assert "Etikett" in last_reason()
 
-    def test_ein_zeichen_zu_kurz_wird_abgewiesen(self, strenge_grenze):
-        assert prepare("x" * (strenge_grenze - 1), category="fact") is None
+    @pytest.mark.parametrize("text", [
+        "Tuer-Code: 4711",
+        "Blutgruppe: A+",
+        "PIN: 1234",
+        "Seriennummer: AB-12",
+    ])
+    def test_kurzer_fakt_mit_zahl_oder_kennung_geht_durch(self, text):
+        prepared = prepare(text, category="fact")
+        assert prepared is not None, last_reason()
+        assert prepared["content"] == text
 
-    @pytest.mark.parametrize("kategorie", ["temp", "session", "belief", "rule", "entity"])
-    def test_kurzer_text_in_anderer_kategorie_bleibt_erlaubt(self, strenge_grenze, kategorie):
+    def test_satz_mit_doppelpunkt_ist_kein_etikett(self):
+        assert prepare("Status: Der Verteiler laeuft wieder", category="fact") is not None
+
+    def test_satz_ohne_doppelpunkt_ist_kein_etikett(self):
+        assert prepare("Kurz", category="fact") is not None
+
+    @pytest.mark.parametrize("kategorie", ["temp", "session", "belief", "entity"])
+    def test_etikett_in_anderer_kategorie_bleibt_erlaubt(self, kategorie):
         """Etiketten sind nur bei ``fact`` ein Problem; Entities heissen so."""
-        assert prepare("kurz", category=kategorie, source_type="chat") is not None
+        assert prepare("Farbe: blau", category=kategorie) is not None
 
-    def test_vorgabe_gilt_ohne_umgebungsvariable(self, monkeypatch):
-        monkeypatch.delenv("NEXUS_WRITE_GATE_MIN_FACT_CHARS", raising=False)
-        assert prepare("x" * (MIN_FACT_CHARS - 1), category="fact") is None
-        assert prepare("x" * MIN_FACT_CHARS, category="fact") is not None
-
-    def test_null_schaltet_die_grenze_ab(self, monkeypatch):
+    def test_die_grenze_haengt_nicht_an_der_umgebung(self, monkeypatch):
+        """Der Schwellwert steht in der Bibliothek, nicht beim Aufrufer."""
         monkeypatch.setenv("NEXUS_WRITE_GATE_MIN_FACT_CHARS", "0")
-        assert prepare("x", category="fact") is not None
+        assert prepare("Farbe: blau", category="fact") is None
 
 
 # ── 3. Herkunft nie leer ─────────────────────────────────────────────
@@ -131,6 +137,30 @@ class TestZugriffsstufe:
     @pytest.mark.parametrize("quelle", ["paperless", "wiki", "Paperless-Import"])
     def test_dokumentquellen_sind_privat(self, quelle):
         assert prepare(FAKT, source=quelle)["access_level"] == "private"
+
+    @pytest.mark.parametrize("quelle", [
+        "mail", "email", "postfach", "kalender", "termin", "gesundheit",
+        "arzt", "befund", "diagnose", "blutdruck", "medikament",
+        "konto", "iban", "versicherung", "steuer", "rechnung",
+    ])
+    def test_post_kalender_und_gesundheitsquellen_sind_privat(self, quelle):
+        """Diese Quellen sind immer ``private`` — egal, was der Aufrufer sagt."""
+        assert prepare(FAKT, source=quelle)["access_level"] == "private"
+        assert prepare(FAKT, access_level="public", source=quelle)["access_level"] == "private"
+
+    def test_geld_und_gesundheit_aus_dem_gespraech_bleiben_privat(self):
+        """Auch als Quellentyp statt Quelle (OpenClaw/MCP setzen source_type)."""
+        assert prepare(FAKT, source_type="email")["access_level"] == "private"
+        assert prepare(FAKT, source_type="gesundheit")["access_level"] == "private"
+
+    @pytest.mark.parametrize("quelle", ["nicht-oeffentlich", "/srv/public/notizen", "/public/wiki"])
+    def test_kein_teilstring_und_kein_pfad_macht_oeffentlich(self, quelle):
+        """``nicht-oeffentlich`` verneint, ``/public/`` ist ein Verzeichnis."""
+        assert prepare(FAKT, source=quelle)["access_level"] == "private"
+
+    def test_ganzes_wort_oeffentlich_bleibt_oeffentlich(self):
+        assert prepare(FAKT, source="public")["access_level"] == "public"
+        assert prepare(FAKT, source="oeffentlich")["access_level"] == "public"
 
     @pytest.mark.parametrize("quelle", [
         "hermes-plugin-session-end", "sitzung", "transcript", "protokoll",
@@ -192,12 +222,40 @@ class TestRegelherkunft:
                        source_type=quellentyp) is None
         assert "Regel" in last_reason()
 
-    @pytest.mark.parametrize("quellentyp", ["chat", "manual", "conversation"])
-    def test_gespraech_und_handeingabe_duerfen_regel_werden(self, quellentyp):
-        assert prepare(self.REGEL, category="rule", source_type=quellentyp) is not None
+    @pytest.mark.parametrize("quellentyp", ["paperless", "wiki", "cron"])
+    def test_dokument_bleibt_gesperrt_auch_ausdruecklich(self, quellentyp):
+        """Eine bewusste Angabe hebt die Dokument-Sperre nicht auf."""
+        assert prepare(self.REGEL, category="rule", source_type=quellentyp,
+                       explicit=True) is None
+
+    def test_handeingabe_darf_regel_werden(self):
+        assert prepare(self.REGEL, category="rule", source_type="manual") is not None
+
+    def test_ausdruecklicher_aufruf_darf_regel_werden(self):
+        assert prepare(self.REGEL, category="rule", source_type="chat",
+                       explicit=True) is not None
+
+    def test_automatische_extraktion_schreibt_keine_regel(self):
+        """Der Turn-Extraktor schickt ``chat`` ohne ``explicit`` — bisher
+        durfte genau das eine Regel schreiben."""
+        assert prepare(self.REGEL, category="rule", source_type="chat") is None
+        assert "Regel" in last_reason()
 
     def test_regel_ohne_herkunft_wird_abgewiesen(self):
         assert prepare(self.REGEL, category="rule") is None
+
+    @pytest.mark.parametrize("text", [
+        '"Der Verteiler bleibt dauerhaft aus"',
+        "„Der Verteiler bleibt dauerhaft aus",
+        "Laut Dokument bleibt der Verteiler dauerhaft aus",
+        "Im Schreiben steht, der Verteiler bleibt dauerhaft aus",
+        "Der Verteiler bleibt aus. Das gilt ab sofort. So steht es geschrieben.",
+    ])
+    def test_zitatmerkmale_werden_keine_regel(self, text):
+        """Auch ein ausdruecklicher Aufruf macht keinen Dokumenttext zur Regel."""
+        assert prepare(text, category="rule", source_type="chat",
+                       explicit=True) is None
+        assert "Regel" in last_reason()
 
 
 # ── 6. Rueckgabe ────────────────────────────────────────────────────
@@ -250,7 +308,7 @@ def _provider(monkeypatch):
 
 
 class TestPluginSchreibweg:
-    def test_leerer_inhalt_wird_abgewiesen(self, monkeypatch, strenge_grenze):
+    def test_leerer_inhalt_wird_abgewiesen(self, monkeypatch):
         provider, gespeichert = _provider(monkeypatch)
         ergebnis = provider._upsert(text="   ")
 
@@ -282,6 +340,27 @@ class TestPluginSchreibweg:
         assert payload["content"] == FAKT
         assert payload["provenance"]["source_type"] == "hermes-plugin"
         assert payload["provenance"]["created_by"] == "nexus-memory-provider"
+
+    def test_fehlendes_tor_weist_ab_statt_ungeprueft_zu_schreiben(self, monkeypatch):
+        """Ein Fehler im Tor darf den alten, ungepruefte Zustand nicht
+        wiederherstellen: ohne ladbares Tor wird abgewiesen und nichts
+        geschrieben."""
+        provider, gespeichert = _provider(monkeypatch)
+
+        class _KaputterImport:
+            def find_spec(self, name, path, target=None):
+                if name == "nexus.write_gate":
+                    raise ImportError("Tor absichtlich nicht ladbar")
+                return None
+
+        monkeypatch.setattr(sys, "meta_path", [_KaputterImport()] + list(sys.meta_path))
+        monkeypatch.delitem(sys.modules, "nexus.write_gate", raising=False)
+
+        ergebnis = provider._upsert(text=FAKT, category="fact")
+
+        assert ergebnis["status"] == "rejected"
+        assert "Schreibtor nicht ladbar" in ergebnis["reason"]
+        assert gespeichert == [], "ohne Tor darf kein Punkt geschrieben werden"
 
     def test_fehler_im_stichwortindex_verhindern_das_schreiben_nicht(self, monkeypatch):
         provider, gespeichert = _provider(monkeypatch)
@@ -356,3 +435,66 @@ class TestStichwortindexNachziehen:
         index = ki.KeywordIndex(db, "nexus")
         assert index.count() == 1
         assert len(index.search("Kellertuer")) == 1
+
+
+# ── 9. Bibliotheksweg ``nexus_remember`` ────────────────────────────
+
+
+class TestBibliotheksweg:
+    """``nexus.nexus_remember`` schrieb als einziger Weg ungeprueft direkt in
+    die Sammlung. Er laeuft jetzt durch dasselbe Tor; eine Abweisung ist ein
+    Fehler, kein stiller Erfolg."""
+
+    @pytest.fixture
+    def qdrant_put(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        antwort = MagicMock()
+        antwort.status_code = 200
+        antwort.json.return_value = {"result": {"status": "ok"}}
+        antwort.text = '{"result": {"status": "ok"}}'
+        put = MagicMock(return_value=antwort)
+        monkeypatch.setattr("requests.put", put)
+        return put
+
+    def test_leerer_inhalt_wird_abgewiesen_und_nichts_geschrieben(self, qdrant_put):
+        import nexus
+
+        with pytest.raises(ValueError, match="abgewiesen"):
+            nexus.nexus_remember("", collection_name="test-collection")
+        assert not qdrant_put.called, "ein abgewiesener Eintrag darf Qdrant nicht erreichen"
+
+    def test_etikett_wird_abgewiesen(self, qdrant_put):
+        import nexus
+
+        with pytest.raises(ValueError, match="abgewiesen"):
+            nexus.nexus_remember("Farbe: blau", collection_name="test-collection")
+        assert not qdrant_put.called
+
+    def test_kurzer_fakt_mit_zahl_geht_durch(self, qdrant_put):
+        import nexus
+
+        nexus.nexus_remember("Tuer-Code: 4711", collection_name="test-collection")
+
+        payload = qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
+        assert payload["content"] == "Tuer-Code: 4711"
+        assert payload["access_level"] == "private"
+
+    def test_dokumentquelle_setzt_die_stufe_auf_privat(self, qdrant_put):
+        import nexus
+
+        nexus.nexus_remember(FAKT, source_type="paperless", access_level="public",
+                             collection_name="test-collection")
+
+        payload = qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
+        assert payload["access_level"] == "private"
+
+    def test_regel_aus_dem_cron_ist_keine_regel(self, qdrant_put):
+        """Paperless- und Wiki-Cron-Jobs schreiben ueber diesen Weg."""
+        import nexus
+
+        with pytest.raises(ValueError, match="abgewiesen"):
+            nexus.nexus_remember("Der Verteiler bleibt dauerhaft aus",
+                                 category="rule", source_type="cron",
+                                 collection_name="test-collection")
+        assert not qdrant_put.called

@@ -1092,20 +1092,29 @@ def _load_keyword_index_module() -> Any:
 _keyword_index_mod = _load_keyword_index_module()
 
 
+#: Grund, wenn das Tor selbst nicht ladbar ist. Ein fehlendes Tor ist eine
+#: Abweisung, kein Freischein: sonst stellt jeder Fehler im Tor den alten,
+#: ungepruefte Zustand wieder her.
+_gate_load_error = ""
+
+
 def _gate_prepare(**fields: Any) -> Optional[Dict[str, Any]]:
     """Bereinigter Schreibvorgang aus dem gemeinsamen Schreibtor.
 
     Das Tor wird beim ersten Schreiben geladen, nicht beim Laden des Plugins:
     der Wirt importiert dieses Modul, bevor ``nexus``/``nexus_memory``
-    importierbar sind. Fehlt das Tor, wird ungeprueft geschrieben — ein
-    fehlendes Pruefmodul darf das Gedaechtnis nicht stilllegen; der Fall wird
-    aber protokolliert, nicht verschwiegen.
+    importierbar sind. Laesst es sich nicht laden, wird der Schreibvorgang
+    abgewiesen und der Grund laut protokolliert (10.11.2026). Reine
+    Lesezugriffe sind davon nicht betroffen — sie rufen das Tor nicht auf.
     """
+    global _gate_load_error
     try:
         from nexus.write_gate import prepare
     except Exception as exc:
-        logger.warning("Schreibtor nicht verfuegbar (%s) — schreibe ungeprueft", exc)
-        return dict(fields)
+        _gate_load_error = f"Schreibtor nicht ladbar: {type(exc).__name__}: {exc}"
+        logger.error("%s — Schreibvorgang abgewiesen", _gate_load_error)
+        return None
+    _gate_load_error = ""
     return prepare(**fields)
 
 
@@ -1114,9 +1123,9 @@ def _gate_rejection() -> Dict[str, Any]:
     reason = "abgewiesen"
     try:
         from nexus.write_gate import last_reason
-        reason = last_reason() or reason
+        reason = last_reason() or _gate_load_error or reason
     except Exception:
-        pass
+        reason = _gate_load_error or reason
     return {"status": "rejected", "reason": reason}
 
 
@@ -2839,7 +2848,8 @@ class NexusMemoryProvider:
 
     def _upsert(self, text: str, category: str = "fact", access_level: str = "private",
                 source: str = "", confidence: float = 0.7, salience: Optional[float] = None,
-                source_url: str = "", scope: str = "default", **_: Any) -> Dict[str, Any]:
+                source_url: str = "", scope: str = "default",
+                explicit: bool = False, **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         # Gemeinsames Schreibtor (10.11.2026): leerer Inhalt und Etiketten
@@ -2848,12 +2858,15 @@ class NexusMemoryProvider:
         # Abweisung ist eine Antwort mit Grund, kein Schreibvorgang.
         # ``chat`` ist die Herkunftsart dieses Weges — das Plugin sieht
         # Gespraeche, keine Dokumente; die feinere Quelle steht in ``source``.
+        # ``explicit`` nur beim Werkzeugaufruf (nexus_remember): automatische
+        # Extraktion nach einem Turn darf nie eine Regel schreiben.
         prepared = _gate_prepare(
             content=text, category=category, access_level=access_level,
             source=source,
             provenance={"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                         "timestamp": ts, "confidence": confidence},
             source_type="chat",
+            explicit=explicit,
         )
         if prepared is None:
             return _gate_rejection()
@@ -3391,7 +3404,10 @@ class NexusMemoryProvider:
                                       source=args.get("source", ""),
                                       confidence=args.get("confidence", 0.7),
                                       salience=args.get("salience"),
-                                      source_url=args.get("source_url", ""))
+                                      source_url=args.get("source_url", ""),
+                                      # Ausdruecklicher Werkzeugaufruf: nur er
+                                      # darf Kategorie ``rule`` schreiben.
+                                      explicit=True)
                 # Roadmap 1.1/4.1: auto-enrich with entities + edges (async, fail-open)
                 try:
                     self._enqueue_entity_extraction(args.get("text", ""))
