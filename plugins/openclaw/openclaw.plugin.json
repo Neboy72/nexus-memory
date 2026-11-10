@@ -81,6 +81,20 @@
       "help": "Area label (a-z, 0-9, '-', max 40 chars). Auto-recall then surfaces only 'default'-scoped memories plus this agent's own scope; explicit search is never filtered. Empty = no gating.",
       "advanced": true
     },
+    "writeGate": {
+      "label": "Write Gate (Nexus service)",
+      "help": "Required for every write: url + key of the local Nexus service. Without it the plugin refuses to write rather than bypass the checks."
+    },
+    "writeGate.url": {
+      "label": "Write Gate URL",
+      "placeholder": "http://127.0.0.1:9122",
+      "help": "Base URL of the local Nexus service. Every write goes to POST /write there and is checked by the shared write gate. No default: without it writes fail loudly."
+    },
+    "writeGate.key": {
+      "label": "Write Gate Service Key",
+      "sensitive": true,
+      "help": "Per-installation service key (<data-dir>/service_auth.key, same header as /embed). Required together with writeGate.url."
+    },
     "debug": {
       "label": "Debug Logging",
       "help": "Enable verbose debug logs for Qdrant and embedding API calls",
@@ -182,6 +196,22 @@
         "type": "string",
         "maxLength": 40,
         "pattern": "^$|^[a-z0-9][a-z0-9-]{0,39}$"
+      },
+      "writeGate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "key"
+        ]
       },
       "cronFormGate": {
         "type": "object",

@@ -2,7 +2,10 @@
 
 Long-term memory for [OpenClaw](https://openclaw.ai), powered by [Qdrant](https://qdrant.tech). Automatically recalls relevant context before every AI turn and captures conversations after each turn — all through Qdrant's vector search, with no Python dependency.
 
-> **Thin TypeScript plugin** that talks to Qdrant REST API directly. Embeddings via OpenAI, Ollama, Google, or Jina — all over HTTP.
+> **Thin TypeScript plugin** that reads from Qdrant REST directly and writes
+> through the local Nexus service's shared write gate (`POST /write`).
+> Embeddings via the Nexus service, OpenAI, Ollama, Google, or Jina — all over
+> HTTP.
 
 ## Install
 
@@ -110,6 +113,14 @@ cp -r ~/nexus-memory/plugins/openclaw ~/.openclaw/plugins/nexus-memory
    > no Recall and no Capture. `openclaw plugins doctor` and the plugin's
    > self-report show it.
 
+3. **The Nexus service for writes** — since 10.11.2026 every write goes to
+   `POST /write` on `writeGate.url`, where the shared write gate checks it
+   before anything reaches Qdrant. Run it from a repository checkout with
+   `nexus-memory serve` (http://127.0.0.1:9122) and put its per-installation
+   key (`~/.nexus-memory/service_auth.key`) in `writeGate.key`. Reads still talk
+   to Qdrant directly; without this service the plugin **refuses to write**
+   rather than bypassing the gate.
+
 ## Configuration
 
 Add to `~/.openclaw/openclaw.json`:
@@ -130,6 +141,10 @@ Add to `~/.openclaw/openclaw.json`:
         "config": {
           "qdrantUrl": "http://localhost:6333",
           "collection": "nexus",
+          "writeGate": {
+            "url": "http://127.0.0.1:9122",
+            "key": "${NEXUS_SERVICE_AUTH_KEY}"
+          },
           "embedding": {
             "provider": "openai",
             "model": "text-embedding-3-small",
@@ -154,8 +169,10 @@ Add to `~/.openclaw/openclaw.json`:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `qdrantUrl` | `string` | `http://localhost:6333` | Qdrant REST API endpoint |
+| `qdrantUrl` | `string` | `http://localhost:6333` | Qdrant REST API endpoint (reads) |
 | `collection` | `string` | `nexus` | Qdrant collection name |
+| `writeGate.url` | `string` | — (required) | Nexus service base URL; writes go to `POST /write` there, never straight to Qdrant |
+| `writeGate.key` | `string` | — (required) | Per-installation service key (`<data-dir>/service_auth.key`, same header as `/embed`); supports `${ENV_VAR}` |
 | `embedding.provider` | `string` | auto-detected | `openai`, `ollama`, `google`, or `jina` |
 | `embedding.model` | `string` | provider default | Embedding model name |
 | `embedding.apiKey` | `string` | env var | API key (supports `${ENV_VAR}` interpolation) |
@@ -174,6 +191,14 @@ Add to `~/.openclaw/openclaw.json`:
 | `planGate.enabled` | `boolean` | `false` | Level-3 plan lock: non-trivial commands require a plan lock file. Level-1 guardrails stay active either way |
 | `planGate.lockPath` | `string` | `<os tmpdir>/nexus-plan-gate.lock` | Where the plan lock is expected (portable per-user default) |
 | `planGate.maxAgeSeconds` | `number` | `300` | Lock validity in seconds (30–3600) |
+
+> **Writes require `writeGate`.** Since 10.11.2026 the plugin does not write
+> to Qdrant directly. Every store/capture/guardrail-override sends the text to
+> the Nexus service, which runs it through the shared write gate (empty content,
+> short `fact` labels, missing provenance, access level from the source, and
+> `rule` only from a conversation/manual origin). Without `writeGate.url` and
+> `writeGate.key` the write fails loudly instead of bypassing the checks.
+> Reads (recall/search/scroll) still talk to Qdrant directly.
 
 ### Unattended send gate (`cronFormGate`)
 

@@ -7,6 +7,11 @@
  *                                 must now read and write
  *
  * Nothing here touches the live collection; both are created and dropped.
+ *
+ * NOT a memory write path: this proves the low-level Qdrant transport
+ * (named vs anonymous vector space) against throwaway collections, so it
+ * deliberately uses ``QdrantClient.upsert`` directly. Memory writes go
+ * through the shared gate (lib/write-gate.ts).
  */
 import { randomUUID } from "node:crypto"
 

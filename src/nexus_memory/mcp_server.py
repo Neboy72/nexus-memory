@@ -44,7 +44,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlsplit
 
 import mcp.server.stdio
@@ -659,6 +659,22 @@ def _write_origin(source: str) -> str:
     return str(source or "").strip().lower() or "chat"
 
 
+def _valid_memory_id(value: Any) -> Optional[str]:
+    """Eine vom Aufrufer gelieferte Kennung, aber nur als echtes UUID.
+
+    Der HTTP-Schreibweg (``/write``) reicht die Kennung des Plugins durch,
+    damit ein Wiederholungsversuch denselben Punkt ersetzt statt ihn zu
+    verdoppeln. Alles andere wird verworfen; die Kennung wird dann frisch
+    erzeugt.
+    """
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return str(uuid.UUID(str(value).strip()))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 _KEYWORD_INDEX_MODULE: object = False  # False = noch nicht geladen
 
 
@@ -1159,6 +1175,8 @@ class MemoryStore:
         salience: Optional[float] = None,
         effective_from: Optional[str] = None,
         scope: str = "default",
+        memory_id: Optional[str] = None,
+        source_type: str = "",
     ) -> dict:
         """Store a memory with full v2.8.0 metadata support + auto TTL + auto supersession.
 
@@ -1176,6 +1194,13 @@ class MemoryStore:
         memories whose scope is 'default' or matches the agent's own NEXUS_SCOPE;
         explicit recall() is NEVER scope-filtered. Empty/invalid values fall back to
         'default' (behaves exactly like pre-scope memories).
+
+        ``memory_id`` lets a caller (the OpenClaw write-gate endpoint) keep its
+        own id, so a retried write replaces instead of duplicating. It is only
+        honoured when it is a well-formed UUID; anything else gets a fresh one.
+        ``source_type`` is the ORIGIN kind for the write gate (``chat``,
+        ``session``, ``manual`` ...). Empty keeps the previous behaviour:
+        derived from ``source``.
         """
         # Universal access counting: one write per remember() — every client
         # path lands here (fail-open, see _count_memory_access).
@@ -1191,7 +1216,7 @@ class MemoryStore:
         # to the pre-scope behavior, never a hard error for callers.
         scope = _normalize_scope(scope)
 
-        entry_id = str(uuid.uuid4())
+        entry_id = _valid_memory_id(memory_id) or str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
 
         # Build provenance (v2.8.0 feature) — before the gate, which fills in
@@ -1218,7 +1243,7 @@ class MemoryStore:
             access_level=access_level,
             source=source,
             provenance=provenance,
-            source_type=_write_origin(source),
+            source_type=source_type or _write_origin(source),
         )
         if prepared is None:
             return {"status": "rejected", "reason": _write_refusal()}
@@ -3657,6 +3682,9 @@ def build_serve_app():
 
     Routes:
       GET /healthz  → JSON health (status, qdrant, version, uptime_s)
+      POST /embed   → the engine's embedder (local plugins)
+      POST /write   → the shared write gate for plugins that used to write
+                      Qdrant directly (rejects before anything is stored)
       /mcp          → MCP Streamable HTTP, same `server` object as stdio
 
     Kept separate from serve() so tests can drive it with an in-process
@@ -3851,10 +3879,78 @@ def build_serve_app():
             "dim": len(vector),
         })
 
+    async def write(request):
+        """POST /write — the shared write gate for direct-writing plugins.
+
+        The TypeScript plugins speak HTTP to Qdrant and used to bypass every
+        check. They now send the write intent here; ``MemoryStore.remember``
+        runs it through ``nexus.write_gate`` before anything is embedded or
+        stored, so the five rules hold on this path too.
+
+        Request:  {"content": "...", "category": "fact", "access_level": "...",
+                   "source": "...", "source_type": "chat", "source_url": "",
+                   "confidence": 0.9, "scope": "default", "id": "<uuid>"}
+        Response: 200 with the stored memory, or 422 with
+                  {"status": "rejected", "reason": "..."} — nothing written.
+        """
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse(
+                {"error": "body must be a JSON object"}, status_code=400)
+
+        content = payload.get("content")
+        if not isinstance(content, str):
+            return JSONResponse(
+                {"error": "field 'content' must be a string"}, status_code=400)
+        if len(content) > MAX_EMBED_CHARS:
+            return JSONResponse(
+                {"error": f"content is longer than {MAX_EMBED_CHARS} characters"},
+                status_code=413)
+
+        memory_id = payload.get("id")
+        if memory_id is not None and not isinstance(memory_id, str):
+            return JSONResponse(
+                {"error": "field 'id' must be a string"}, status_code=400)
+
+        def _text_field(key: str) -> str:
+            value = payload.get(key)
+            return value if isinstance(value, str) else ""
+
+        confidence = payload.get("confidence")
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            confidence = None
+
+        try:
+            store = await asyncio.to_thread(get_store)
+            result = await store.remember(
+                content,
+                access_level=_text_field("access_level") or ACCESS_PRIVATE,
+                category=_text_field("category") or "fact",
+                source=_text_field("source"),
+                source_url=_text_field("source_url"),
+                confidence=float(confidence) if confidence is not None else None,
+                scope=_text_field("scope") or "default",
+                memory_id=memory_id,
+                source_type=_text_field("source_type"),
+            )
+        except Exception as exc:
+            logging.exception("write endpoint failed")
+            return JSONResponse(
+                {"error": f"write failed: {type(exc).__name__}"},
+                status_code=500)
+
+        if result.get("status") == "rejected":
+            return JSONResponse(result, status_code=422)
+        return JSONResponse(result)
+
     return Starlette(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
             Route("/embed", embed, methods=["POST"]),
+            Route("/write", write, methods=["POST"]),
             # Mount("/") not Mount("/mcp"): a mount at a subpath makes
             # Starlette 307-redirect the exact "/mcp" path to "/mcp/", and
             # real MCP clients POST to "/mcp" without following redirects.
