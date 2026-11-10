@@ -15,6 +15,7 @@ Oeffentliche Schnittstelle:
     tokenize            Wortmarken einer Zeile (Umlaute gefaltet, Versionen ganz)
     build_index         Index aus einer Punktliste bauen (atomar)
     build_from_qdrant   Index aus der Sammlung bauen (nur lesend)
+    upsert_point        einen Punkt nach einem Schreiben nachziehen
     KeywordIndex        Lesen/Suchen, mit Eignungspruefung
     ensure_index        Index liefern oder im Hintergrund nachziehen
     rrf_fuse            Verschmelzung zweier Ranglisten (Reciprocal Rank Fusion)
@@ -57,6 +58,10 @@ _INSERT_BATCH = 1000
 # gleichzeitige Laeufe wuerden nur dieselbe Datei ueberschreiben.
 _BUILD_LOCK = threading.Lock()
 _BUILDING: set = set()
+
+# Ein Nachziehen je Indexdatei; SQLite vertraegt zwar mehrere Schreiber, aber
+# der Index ist klein und ein Wartender soll nicht in die Sperrfrist laufen.
+_WRITE_LOCK = threading.Lock()
 
 
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
@@ -319,6 +324,71 @@ class KeywordIndex:
                 payload = {}
             hits.append((str(doc_id), payload if isinstance(payload, dict) else {}))
         return hits
+
+
+def upsert_point(point: Any, path: Optional[os.PathLike] = None,
+                 collection: str = "") -> bool:
+    """Zieht einen Punkt nach einem erfolgreichen Schreiben in den Index nach.
+
+    Der Index wird sonst nur aus einem vollstaendigen Lesen der Sammlung
+    gebaut; ein frisch geschriebener Punkt fehlte darin bis zum naechsten
+    Aufbau und war damit ueber seltene Stichwoerter nicht auffindbar.
+
+    Geschrieben wird nur in eine vorhandene, lesbare Indexdatei derselben
+    Sammlung. Fehlt sie, laeuft gerade ein Neuaufbau, gehoert sie zu einer
+    anderen Sammlung oder ist sie gesperrt, bleibt der Index unveraendert
+    (Rueckgabe ``False``). Der Aufrufer darf das Schreiben davon nicht
+    abhaengig machen: der Index ist eine Zugabe, sonst faellt die Einspielung
+    auf die Aehnlichkeitssuche zurueck.
+    """
+    db_path = Path(path) if path is not None else default_db_path()
+    key = str(db_path)
+    if not db_path.exists():
+        return False
+    with _WRITE_LOCK:
+        with _BUILD_LOCK:
+            if key in _BUILDING:
+                # Der Aufbau schreibt die Datei am Ende neu (os.replace);
+                # ein Eintrag jetzt ginge dabei verloren.
+                return False
+        try:
+            con = sqlite3.connect(str(db_path), timeout=2.0)
+        except sqlite3.Error as exc:
+            logger.debug("Stichwortindex nicht schreibbar: %s", exc)
+            return False
+        try:
+            row = con.execute(
+                "SELECT value FROM meta WHERE key = 'collection'"
+            ).fetchone()
+            stored_collection = str(row[0]) if row else ""
+            if collection and stored_collection != collection:
+                # Eine andere Sammlung teilt sich die Datei nicht.
+                return False
+            pid, payload = _point_parts(point)
+            body = index_body(payload.get("content"), payload.get("search_terms"))
+            with con:
+                # Alte Zeile zuerst entfernen: ein FTS5-Eintrag wird nicht
+                # durch INSERT OR REPLACE ersetzt, sondern ein zweites Mal
+                # angelegt.
+                con.execute("DELETE FROM docs_fts WHERE doc_id = ?", (pid,))
+                con.execute(
+                    "INSERT OR REPLACE INTO docs VALUES (?, ?)",
+                    (pid, json.dumps(payload, ensure_ascii=False)),
+                )
+                con.execute(
+                    "INSERT INTO docs_fts (doc_id, body) VALUES (?, ?)", (pid, body)
+                )
+                total = con.execute("SELECT count(*) FROM docs").fetchone()
+                con.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('points', ?)",
+                    (str(int(total[0])),),
+                )
+            return True
+        except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+            logger.debug("Stichwortindex nicht nachgezogen: %s", exc)
+            return False
+        finally:
+            con.close()
 
 
 def collection_count(qdrant: Any, collection: str) -> Optional[int]:

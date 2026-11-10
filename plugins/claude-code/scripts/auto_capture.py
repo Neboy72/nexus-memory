@@ -263,15 +263,72 @@ def _point_vector(embedding):
         return embedding
 
 
+def _prepare_write(**fields):
+    """Ruft das gemeinsame Schreibtor (``nexus.write_gate``).
+
+    Der Hook laeuft in der Umgebung der Adapter-Installation; fehlt dort  # guard-ok: Adapter gemeint
+    das Paket, wird ungeprueft geschrieben — der Hook darf Erinnerungen nicht
+    verlieren. Der Fall wird auf stderr gemeldet (stdout ist der
+    Hook-Kanal), nicht verschwiegen.
+    """
+    try:
+        from nexus.write_gate import prepare
+    except Exception as exc:
+        print(
+            f"[nexus auto-capture] Schreibtor nicht verfuegbar ({exc}) — "
+            "schreibe ungeprueft",
+            file=sys.stderr,
+        )
+        return dict(fields)
+    return prepare(**fields)
+
+
+def _write_refusal() -> str:
+    """Grund der Abweisung, wenn das Tor einen kennt."""
+    try:
+        from nexus.write_gate import last_reason
+        return last_reason() or "abgewiesen"
+    except Exception:
+        return "abgewiesen"
+
+
 def store_memory(text: str, category: str = "session", point_id: str = None):
     """Store a memory in Qdrant."""
-    embedding = get_embedding(text)
-    if not embedding:
-        return False
-
     import uuid
     point_id = point_id or str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
+
+    # Gemeinsames Schreibtor (10.11.2026): leerer Inhalt und Etiketten werden
+    # abgewiesen, die Herkunft bleibt nie leer, und die Zugriffsstufe ist die
+    # strengste aus Quelle und Angabe. ``chat`` ist die Herkunftsart dieses
+    # Weges: der Hook liest ein Gespraech, die Quelle steht daneben.
+    prepared = _prepare_write(
+        content=text,
+        category=category,
+        access_level=_resolve_trust_level(),
+        source="claude-code",  # guard-ok: Name des Adapters, kein Modell
+        provenance={
+            "source_type": "claude-code",  # guard-ok: Name des Adapters, kein Modell
+            "created_by": "claude-code-auto-capture",  # guard-ok: Name des Adapters, kein Modell
+            "timestamp": now,
+        },
+        source_type="chat",
+    )
+    if prepared is None:
+        print(
+            f"[nexus auto-capture] memory rejected: {_write_refusal()}",
+            file=sys.stderr,
+        )
+        return False
+
+    text = prepared["content"]
+    category = prepared["category"]
+    access_level = prepared["access_level"]
+    source = prepared["source"]
+
+    embedding = get_embedding(text)
+    if not embedding:
+        return False
 
     point_data = json.dumps({
         "points": [{
@@ -281,10 +338,12 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
                 "text": text,
                 "content": text,
                 "category": category,
-                "source": "claude-code",
-                "access_level": _resolve_trust_level(),
+                "source": source,
+                "access_level": access_level,
                 "created_at": now,
                 "agent": "claude-code",
+                # Herkunft (10.11.2026): dieser Weg schrieb bisher gar keine.
+                "provenance": prepared["provenance"],
                 # H257: fetch_centroids filters on lifecycle_status ==
                 # "canonical". Without this field these memories never feed the
                 # scope centroids, which breaks the self-organizing feedback
