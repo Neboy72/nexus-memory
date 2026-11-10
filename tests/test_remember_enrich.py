@@ -303,10 +303,11 @@ def test_nexus_remember_passthrough_salience_source_url():
     captured = {}
 
     def _fake_upsert(text="", category="fact", access_level="public",
-                     source="", confidence=0.7, salience=None, source_url=""):
+                     source="", confidence=0.7, salience=None, source_url="",
+                     explicit=False):
         captured.update(text=text, category=category, access_level=access_level,
                         source=source, confidence=confidence, salience=salience,
-                        source_url=source_url)
+                        source_url=source_url, explicit=explicit)
         return {"status": "ok", "id": "x"}
 
     prov._upsert = _fake_upsert
@@ -319,6 +320,9 @@ def test_nexus_remember_passthrough_salience_source_url():
     assert captured["confidence"] == 0.9
     assert captured["source_url"] == "https://example.com"
     assert captured["source"] == "Unit-Test"
+    # Ein Werkzeugaufruf ist eine bewusste Handlung — nur so darf eine Regel
+    # entstehen (10.11.2026).
+    assert captured["explicit"] is True
 
 
 def test_salience_fallback_parity_with_normalize_salience():
