@@ -15,9 +15,12 @@ Aufruf ueber ``last_reason()`` abholbar.
 Die Regeln:
 
 1. Leerer Inhalt wird abgewiesen.
-2. Unter ``MIN_FACT_CHARS`` Zeichen und Kategorie ``fact`` wird abgewiesen
-   (Etikett, kein Fakt). Die Grenze ist ueber
-   ``NEXUS_WRITE_GATE_MIN_FACT_CHARS`` einstellbar; ``0`` schaltet sie ab.
+2. Ein ``fact``, der nur ein Etikett ist, wird abgewiesen: die Form
+   ``wort: wert`` ohne Satzzeichen und ohne Verb, oder ein Name mit
+   Kategorie-Praefix (``concept: Heizoel``). Kurze Fakten mit Zahl oder
+   Kennung (``Tuer-Code: 4711``, ``Blutgruppe: A+``) sind keine Etiketten
+   und gehen durch. Die Schwellen stehen hier als Konstanten, nicht in der
+   Umgebung des jeweiligen Aufrufers.
 3. Die Herkunft wird nie leer: fehlt sie, wird sie aus Quelle und Quellentyp
    gebaut (``unbekannt``, wenn beides fehlt).
 4. Die Zugriffsstufe ist die strengste aus Quelle und Angabe. Paperless und
@@ -25,28 +28,24 @@ Die Regeln:
    bleibt, wird aber nie lockerer als die Quelle — privater Inhalt aus einem
    Paperless-Dokument wird also nicht oeffentlich, nur weil der Aufrufer
    ``public`` sagt. ``public`` vergibt das Tor nie von sich aus: es entsteht
-   nur aus einer ausdruecklich oeffentlichen Quelle oder aus einer
-   ausdruecklichen Angabe des Aufrufers.
-5. Kategorie ``rule`` nur aus einem Gespraech oder einer Handeingabe. Text aus
-   Dokument oder Webseite darf nie Regel werden: Regeln werden bei jedem Turn
-   eingespielt und wirken damit dauerhaft.
+   nur aus einer ausdruecklich oeffentlichen Quelle (als ganzes Wort, nie als
+   Pfadbestandteil) oder aus einer ausdruecklichen Angabe des Aufrufers.
+5. Kategorie ``rule`` nur ausdruecklich: bei ``source_type="manual"`` oder
+   wenn der Aufrufer den Schreibvorgang als bewusst markiert (``explicit``).
+   Automatische Extraktion nach einem Turn darf nie Regeln schreiben, und
+   Text mit Zitatmerkmalen (Anfuehrungszeichen am Anfang, "laut Dokument",
+   "steht im Schreiben", mehr als zwei Saetze) nie — auch nicht ausdruecklich.
+   Regeln werden bei jedem Turn eingespielt und wirken damit dauerhaft.
 """
 
 from __future__ import annotations
 
 import logging
-import os
+import re
 import threading
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("nexus.write_gate")
-
-#: Ab dieser Laenge ist ein ``fact`` ein Satz und kein Etikett.
-MIN_FACT_CHARS = 20
-
-#: Umgebungsvariable fuer die Laengengrenze; ``0`` schaltet sie ab (Tests,
-#: Messlaeufe). Der Vorgabewert gilt, wenn sie fehlt oder unlesbar ist.
-MIN_FACT_CHARS_ENV = "NEXUS_WRITE_GATE_MIN_FACT_CHARS"
 
 #: Stufe, wenn weder Quelle noch Angabe etwas anderes sagen.
 DEFAULT_LEVEL = "private"
@@ -63,8 +62,13 @@ _KNOWN_CATEGORIES = frozenset({
 })
 
 # Quellen, deren Inhalt nie oeffentlich oder geteilt sein darf.
+# Post, Kalender und Gesundheitsdaten (10.11.2026): sie fehlten — eine Mail
+# ueber einen Arzttermin kam als "trusted" durch.
 _PRIVATE_MARKERS = (
     "paperless", "wiki", "document", "dokument", "pdf", "scan",
+    "mail", "email", "postfach", "kalender", "termin",
+    "gesundheit", "arzt", "befund", "diagnose", "blutdruck", "medikament",
+    "konto", "iban", "versicherung", "steuer", "rechnung",
 )
 
 # Sitzungen: Inhalt einer Unterhaltung, nicht zur Verbreitung bestimmt.
@@ -74,13 +78,11 @@ _TRUSTED_MARKERS = (
 
 # Ausdruecklich oeffentliche Quellen. Ohne einen dieser Marker entsteht
 # ``public`` nie aus der Quelle — nur aus einer ausdruecklichen Angabe.
-_PUBLIC_MARKERS = ("public", "oeffentlich", "öffentlich", "open-data")
+_PUBLIC_MARKERS = ("public", "oeffentlich", "öffentlich", "open", "open-data")
 
-# Woher Text stammen darf, damit er als Regel gespeichert wird.
-_RULE_ALLOWED = frozenset({
-    "chat", "conversation", "unterhaltung", "gespraech", "gespräch",
-    "manual", "manuell", "user", "human",
-})
+# Woher Text stammen darf, damit er als Regel gespeichert wird: nur
+# ``source_type == "manual"``. Alles andere braucht ``explicit``.
+_RULE_MANUAL_SOURCE = "manual"
 
 # Text aus diesen Quellen ist nie eine Regel (Dauer-Injektion).
 _RULE_DENIED = (
@@ -88,6 +90,33 @@ _RULE_DENIED = (
     "web", "website", "webseite", "http", "url", "mail", "email",
     "import", "crawl", "crawler", "scrape", "rss", "cron", "protokoll",
 )
+
+# Etikett statt Aussage ("Farbe: blau"). Nur bei ``fact`` geprueft.
+_LABEL_RE = re.compile(r"^\s*([^:\n]{1,40}?)\s*:\s*(\S.*?)\s*$")
+#: Satzzeichen, das einen Satz beendet — ein Punkt in "Skill.md" nicht.
+_SENTENCE_PUNCT = re.compile(r"[!?;]|\.(?=\s|$)")
+_DIGIT = re.compile(r"\d")
+#: Kurze Kennung ohne Zahl, etwa eine Blutgruppe (``A+``).
+_SHORT_CODE = re.compile(r"^[A-ZÄÖÜ][A-ZÄÖÜ0-9+\-/.]{0,7}$")
+#: Finite Verbform im Wert — dann ist der Wert ein Satz, kein Etikett.
+_FINITE_VERB = re.compile(r"\b\w{3,}(?:t|en|iert)\b")
+
+#: Namen mit Kategorie-Praefix sind Etiketten, keine Fakten.
+_CATEGORY_PREFIXES = frozenset({
+    "concept", "entity", "entitaet", "entität", "software", "person", "ort",
+    "organization", "organisation", "project", "projekt", "tool", "geraet",
+    "gerät", "event", "ereignis", "fakt", "fact",
+})
+
+#: Zitatmerkmale im Inhalt einer behaupteten Regel.
+_QUOTE_STARTS = ('"', "„", "“", "”", "»", "«", "‘", "‚")
+_QUOTE_PHRASES = (
+    "laut dokument", "laut dem dokument", "laut unterlage", "laut unterlagen",
+    "laut anleitung", "laut vertrag", "steht im schreiben",
+    "im schreiben steht", "heisst es", "heißt es", "zitat",
+)
+#: Mehr als so viele Saetze gelten als abgeschriebener Dokumenttext.
+_MAX_RULE_SENTENCES = 2
 
 _local = threading.local()
 
@@ -114,15 +143,49 @@ def _has(text: str, markers: tuple) -> bool:
     return any(marker in text for marker in markers)
 
 
-def _min_fact_chars() -> int:
-    """Laengengrenze fuer ``fact`` (0 = aus); ein kaputter Wert faellt zurueck."""
-    raw = str(os.environ.get(MIN_FACT_CHARS_ENV, "") or "").strip()
-    if not raw:
-        return MIN_FACT_CHARS
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return MIN_FACT_CHARS
+def _is_label(text: str) -> bool:
+    """Reines Etikett statt Aussage ("Farbe: blau", "concept: Heizoel").
+
+    Kurze Fakten mit Zahl oder Kennung sind keine Etiketten: "Tuer-Code: 4711"
+    und "Blutgruppe: A+" gehen durch. Satzzeichen im Text heisst: es ist ein
+    Satz. Im Zweifel wird angenommen, dass es kein Etikett ist — ein Etikett,
+    das durchrutscht, ist harmloser als ein echter Fakt, der abgewiesen wird.
+    """
+    if _SENTENCE_PUNCT.search(text):
+        return False
+    match = _LABEL_RE.match(text)
+    if not match:
+        return False
+    head, value = match.group(1).strip(), match.group(2).strip()
+    if not head or not value:
+        return False
+    if _DIGIT.search(value) or _SHORT_CODE.match(value):
+        return False
+    words = head.split()
+    if len(words) == 1 and head.lower() in _CATEGORY_PREFIXES:
+        return True
+    if len(words) > 3:
+        return False
+    return not _FINITE_VERB.search(value)
+
+
+def _sentence_count(text: str) -> int:
+    return len([part for part in re.split(r"[.!?]+", text) if part.strip()])
+
+
+def _looks_document_quoted(text: str) -> bool:
+    """Zitatmerkmale: Anfuehrungszeichen am Anfang, woertliches Zitat, Absatz.
+
+    Eine Regel ist ein Satz, den jemand formuliert — kein Absatz aus einer
+    Anleitung. Mehr als ``_MAX_RULE_SENTENCES`` Saetze gelten deshalb als
+    abgeschriebener Dokumenttext.
+    """
+    if text.lstrip()[:1] in _QUOTE_STARTS:
+        return True
+    lowered = text.lower()
+    if any(phrase in lowered for phrase in _QUOTE_PHRASES):
+        return True
+    return _sentence_count(text) > _MAX_RULE_SENTENCES
 
 
 def _origin_text(source: Any, source_type: Any,
@@ -150,6 +213,21 @@ def _normalize_level(level: Any) -> Optional[str]:
     return value if value in _LEVEL_ORDER else None
 
 
+def _public_in_origin(origin_text: str) -> bool:
+    """Oeffentlich nur als ganzes Wort und nie als Pfadbestandteil.
+
+    ``nicht-oeffentlich`` verneint, ``/public/`` ist ein Verzeichnisname —
+    beides ist keine oeffentliche Quelle. Die Zeichen links und rechts des
+    Treffers duerfen deshalb weder Wortzeichen noch Bindestrich noch
+    Pfadtrenner sein.
+    """
+    for marker in _PUBLIC_MARKERS:
+        pattern = r"(?<![\w\-/\\])" + re.escape(marker) + r"(?![\w\-/\\])"
+        if re.search(pattern, origin_text):
+            return True
+    return False
+
+
 def _level_from_origin(origin_text: str) -> Optional[str]:
     """Stufe, die die Quelle verlangt; ``None``, wenn sie nichts verlangt.
 
@@ -161,7 +239,7 @@ def _level_from_origin(origin_text: str) -> Optional[str]:
         return "private"
     if _has(origin_text, _TRUSTED_MARKERS):
         return "trusted"
-    if _has(origin_text, _PUBLIC_MARKERS):
+    if _public_in_origin(origin_text):
         return "public"
     return None
 
@@ -189,23 +267,36 @@ def _build_provenance(provenance: Optional[Dict[str, Any]], source: str,
     return built
 
 
-def _rule_origin_allowed(origin_text: str) -> bool:
-    """Regel nur aus Gespraech oder Handeingabe — nie aus Dokument oder Web."""
+def _rule_origin_allowed(source_type: Any, explicit: bool,
+                         origin_text: str) -> bool:
+    """Regel nur ausdruecklich — nie automatisch aus einem Turn.
+
+    Zwei Wege: ``source_type == "manual"`` (Handeingabe) oder ein bewusster
+    Aufruf (``explicit``, etwa das Werkzeug ``nexus_remember``). Die blosse
+    Behauptung "chat" genuegt nicht mehr: ein im Gespraech zitiertes Dokument
+    kam bisher als ``chat`` an und durfte Regel werden. Dokument- und
+    Webquellen bleiben in jedem Fall gesperrt.
+    """
     if _has(origin_text, _RULE_DENIED):
         return False
-    tokens = origin_text.replace(",", " ").replace(";", " ").split()
-    return bool(_RULE_ALLOWED.intersection(tokens))
+    if str(source_type or "").strip().lower() == _RULE_MANUAL_SOURCE:
+        return True
+    return bool(explicit)
 
 
 def prepare(content: Any, category: str = "fact", access_level: Any = "",
             source: Any = "", provenance: Optional[Dict[str, Any]] = None,
-            source_type: Any = "") -> Optional[Dict[str, Any]]:
+            source_type: Any = "", explicit: bool = False) -> Optional[Dict[str, Any]]:
     """Prueft einen Schreibvorgang und liefert das bereinigte Payload-Dict.
 
     ``source_type`` ist die Herkunftsart (``chat``, ``manual``, ``paperless``
     ...); ein bereits vorhandener ``provenance["source_type"]`` (etwa
     ``hermes-plugin``) bleibt unangetastet — er benennt den Schreiber, nicht
     die Herkunft des Textes.
+
+    ``explicit`` markiert einen bewussten Schreibvorgang (Werkzeugaufruf,
+    Handeingabe). Automatische Extraktion laesst es weg und darf damit nie
+    eine Regel schreiben.
 
     Rueckgabe ``None`` heisst abgewiesen; ``last_reason()`` nennt den Grund.
     Sonst ein Dict mit ``content``, ``category``, ``access_level``, ``source``
@@ -218,17 +309,19 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
         return _refuse("leerer Inhalt", category, source)
 
     cat = _normalize_category(category)
-    min_fact_chars = _min_fact_chars()
-    if cat == "fact" and min_fact_chars and len(text) < min_fact_chars:
-        return _refuse(
-            f"fact kuerzer als {min_fact_chars} Zeichen ({len(text)})", cat, source
-        )
+    if cat == "fact" and _is_label(text):
+        return _refuse("Etikett statt Aussage (kein Satz)", cat, source)
 
     prov_input = provenance if isinstance(provenance, dict) else {}
     origin_text = _origin_text(source, source_type, prov_input)
 
-    if cat == "rule" and not _rule_origin_allowed(origin_text):
-        return _refuse("Regel aus einer Dokument- oder Webquelle", cat, source)
+    if cat == "rule":
+        if not _rule_origin_allowed(source_type, explicit, origin_text):
+            return _refuse(
+                "Regel nur aus Handeingabe oder ausdruecklichem Aufruf", cat, source
+            )
+        if _looks_document_quoted(text):
+            return _refuse("Regel mit Zitatmerkmalen (Dokumenttext)", cat, source)
 
     src = str(source or "").strip()
     return {

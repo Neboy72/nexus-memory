@@ -1177,6 +1177,7 @@ class MemoryStore:
         scope: str = "default",
         memory_id: Optional[str] = None,
         source_type: str = "",
+        explicit: bool = True,
     ) -> dict:
         """Store a memory with full v2.8.0 metadata support + auto TTL + auto supersession.
 
@@ -1201,6 +1202,11 @@ class MemoryStore:
         ``source_type`` is the ORIGIN kind for the write gate (``chat``,
         ``session``, ``manual`` ...). Empty keeps the previous behaviour:
         derived from ``source``.
+
+        ``explicit`` marks a deliberate write (a tool call, a hand-entered
+        memory). Only such a write may store a ``rule``; automatic extraction
+        of a turn passes ``False`` (the ``/write`` endpoint does for the
+        OpenClaw capture hook).
         """
         # Universal access counting: one write per remember() — every client
         # path lands here (fail-open, see _count_memory_access).
@@ -1244,6 +1250,7 @@ class MemoryStore:
             source=source,
             provenance=provenance,
             source_type=source_type or _write_origin(source),
+            explicit=explicit,
         )
         if prepared is None:
             return {"status": "rejected", "reason": _write_refusal()}
@@ -3889,7 +3896,11 @@ def build_serve_app():
 
         Request:  {"content": "...", "category": "fact", "access_level": "...",
                    "source": "...", "source_type": "chat", "source_url": "",
-                   "confidence": 0.9, "scope": "default", "id": "<uuid>"}
+                   "confidence": 0.9, "scope": "default", "id": "<uuid>",
+                   "explicit": false}
+                  ``explicit`` is only true for a deliberate write (the store
+                  tool); auto-capture leaves it out and can therefore never
+                  store a ``rule``.
         Response: 200 with the stored memory, or 422 with
                   {"status": "rejected", "reason": "..."} — nothing written.
         """
@@ -3935,6 +3946,10 @@ def build_serve_app():
                 scope=_text_field("scope") or "default",
                 memory_id=memory_id,
                 source_type=_text_field("source_type"),
+                # Ein bewusster Werkzeugaufruf setzt ``explicit``; die
+                # automatische Erfassung eines Turns laesst es weg und darf
+                # damit nie eine Regel schreiben.
+                explicit=payload.get("explicit") is True,
             )
         except Exception as exc:
             logging.exception("write endpoint failed")

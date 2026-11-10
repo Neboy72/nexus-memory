@@ -112,7 +112,10 @@ class TestSalienceFollowsConfidence:
         result = provider._upsert(
             text="the user said: always answer briefly", category="rule",
             access_level="public", source="hermes-plugin-session-end",
-            confidence=0.45, salience=0.45)
+            confidence=0.45, salience=0.45,
+            # Eine Regel schreibt seit 10.11.2026 nur ein ausdruecklicher
+            # Aufruf; dieser Test prueft die Salienz, nicht die Regelherkunft.
+            explicit=True)
         assert result["status"] == "ok"
         payload = FakeQdrant.last_points[0].payload
         assert payload["salience"] == pytest.approx(0.45)

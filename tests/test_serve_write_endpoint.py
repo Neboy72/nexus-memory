@@ -115,7 +115,11 @@ def test_dokumenttext_als_regel_wird_abgewiesen_und_nicht_geschrieben(monkeypatc
 
 
 def test_regel_aus_dem_gespraech_wird_geschrieben(monkeypatch, written):
-    """Gegenprobe: dieselbe Laenge, aber aus dem Gespraech — das Tor oeffnet."""
+    """Gegenprobe: dieselbe Laenge, aber ausdruecklich aus dem Gespraech.
+
+    ``explicit`` setzt nur das Werkzeug (Store-Tool), nie die automatische
+    Erfassung eines Turns — deshalb steht es im Antrag.
+    """
     r = _post(monkeypatch, {
         "content": REGEL,
         "category": "rule",
@@ -123,6 +127,7 @@ def test_regel_aus_dem_gespraech_wird_geschrieben(monkeypatch, written):
         "source": "openclaw_tool",
         "source_type": "chat",
         "scope": "work",
+        "explicit": True,
     })
 
     assert r.status_code == 200
@@ -133,6 +138,26 @@ def test_regel_aus_dem_gespraech_wird_geschrieben(monkeypatch, written):
     assert payload["content"] == REGEL
     assert payload["category"] == "rule"
     assert payload["provenance"]["source"]
+
+
+def test_regel_aus_automatischer_erfassung_wird_abgewiesen(monkeypatch, written):
+    """Die automatische Erfassung eines Turns laesst ``explicit`` weg.
+
+    Sie laeuft bei jedem Turn; eine so entstandene Regel wuerde dauerhaft
+    eingespielt. Deshalb: 422 und nichts in der Sammlung.
+    """
+    r = _post(monkeypatch, {
+        "content": REGEL,
+        "category": "rule",
+        "access_level": "private",
+        "source": "openclaw",
+        "source_type": "chat",
+        "scope": "work",
+    })
+
+    assert r.status_code == 422
+    assert "Regel" in r.json()["reason"]
+    assert written == [], "automatische Erfassung darf nie eine Regel schreiben"
 
 
 def test_sitzungsquelle_hebt_die_stufe_mindestens_auf_trusted(monkeypatch, written):
