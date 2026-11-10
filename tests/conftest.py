@@ -36,6 +36,12 @@ os.environ.setdefault("NEXUS_COLLECTION", "test-collection")
 os.environ["NEXUS_TRUST_SWEEP"] = "0"
 os.environ["NEXUS_RETRIEVAL_WATCH"] = "0"
 
+# Die Einspielung laesst Inhalte unter 40 Zeichen weg (Etiketten ohne Aussage,
+# gemessen 10.11.2026). Tests arbeiten mit kurzen Beispieltexten wie "fresh";
+# sie pruefen Reihenfolge, Zugriffsstufen und Lifecycle, nicht die Laengengrenze.
+# Deshalb hier abschalten — die Grenze selbst steht in der Plugin-Doku.
+os.environ.setdefault("NEXUS_PREFETCH_MIN_CHARS", "0")
+
 # Make sure both the source-layout (``src/nexus_memory``) and the legacy
 # top-level ``nexus`` package are importable when tests are run from the
 # repo root.
