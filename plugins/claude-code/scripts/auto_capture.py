@@ -263,23 +263,26 @@ def _point_vector(embedding):
         return embedding
 
 
+_GATE_LOAD_ERROR = ""
+
+
 def _prepare_write(**fields):
     """Ruft das gemeinsame Schreibtor (``nexus.write_gate``).
 
-    Der Hook laeuft in der Umgebung der Adapter-Installation; fehlt dort  # guard-ok: Adapter gemeint
-    das Paket, wird ungeprueft geschrieben — der Hook darf Erinnerungen nicht
-    verlieren. Der Fall wird auf stderr gemeldet (stdout ist der
-    Hook-Kanal), nicht verschwiegen.
+    Der Hook laeuft in der Umgebung der Adapter-Installation. Laesst sich das
+    Tor dort nicht laden, wird der Schreibvorgang abgewiesen und der Grund auf
+    stderr gemeldet (stdout ist der Hook-Kanal) — ein fehlendes Tor darf nicht
+    still den ungepruefte Zustand wiederherstellen (10.11.2026).
     """
+    global _GATE_LOAD_ERROR
     try:
         from nexus.write_gate import prepare
     except Exception as exc:
-        print(
-            f"[nexus auto-capture] Schreibtor nicht verfuegbar ({exc}) — "
-            "schreibe ungeprueft",
-            file=sys.stderr,
-        )
-        return dict(fields)
+        _GATE_LOAD_ERROR = f"Schreibtor nicht ladbar: {type(exc).__name__}: {exc}"
+        print(f"[nexus auto-capture] {_GATE_LOAD_ERROR} — abgewiesen",
+              file=sys.stderr)
+        return None
+    _GATE_LOAD_ERROR = ""
     return prepare(**fields)
 
 
@@ -287,9 +290,9 @@ def _write_refusal() -> str:
     """Grund der Abweisung, wenn das Tor einen kennt."""
     try:
         from nexus.write_gate import last_reason
-        return last_reason() or "abgewiesen"
+        return last_reason() or _GATE_LOAD_ERROR or "abgewiesen"
     except Exception:
-        return "abgewiesen"
+        return _GATE_LOAD_ERROR or "abgewiesen"
 
 
 def store_memory(text: str, category: str = "session", point_id: str = None):

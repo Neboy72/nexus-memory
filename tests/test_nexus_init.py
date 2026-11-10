@@ -61,10 +61,15 @@ class TestNexusRememberCategory:
         "cat", ["fact", "belief", "session", "rule", "preference", "temp"]
     )
     def test_valid_category_passes_through(self, cat, mocked_qdrant_put, caplog):
+        # A `rule` additionally needs the human proof (see write_gate); every
+        # other category passes through untouched.
+        from nexus.rule_confirm import issue
+
         with caplog.at_level(logging.WARNING, logger="nexus"):
             nexus_remember(
                 content="hello",
                 category=cat,
+                rule_proof=issue("hello") if cat == "rule" else "",
                 qdrant_host="localhost",
                 qdrant_port=6333,
                 collection_name="test-collection",

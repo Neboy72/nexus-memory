@@ -25,7 +25,7 @@ process.env.NEXUS_AGENT_SELFTEST = "1"
 
 register("./_typebox-test-loader.mjs", import.meta.url)
 const { registerStoreTool } = await import("./tools/store.ts")
-const { WriteGateClient } = await import("./lib/write-gate.ts")
+const { WriteGateClient, WriteGateRejected } = await import("./lib/write-gate.ts")
 
 const SERVICE = "http://127.0.0.1:9122"
 const KEY = "test-service-key"
@@ -63,6 +63,9 @@ globalThis.fetch = async (url, opts) => {
         reason: "Regel aus einer Dokument- oder Webquelle",
       })
     }
+    if (String(body?.content ?? "") === "dienst kaputt") {
+      return antwort(503, { error: "service unavailable" })
+    }
     return antwort(200, { status: "ok", id: body?.id })
   }
 
@@ -77,7 +80,8 @@ function makeTool(writeGate) {
   registerStoreTool(
     { registerTool: (t) => { tool = t } },
     { embed: async () => [0.1, 0.2] },
-    new WriteGateClient(cfg, "chat"),
+    // Wie in index.ts: das Store-Tool ist ein bewusster Aufruf.
+    new WriteGateClient(cfg, "chat", true),
     cfg,
   )
   assert.ok(tool && typeof tool.execute === "function", "registerStoreTool hat kein Tool registriert")
@@ -182,7 +186,37 @@ try {
     assert.strictEqual(body.source, "openclaw_tool", "Herkunft ist Pflicht")
     assert.strictEqual(body.source_type, "chat", "Gespraechsregel darf Regel werden")
     assert.strictEqual(body.access_level, "private")
+    assert.strictEqual(body.explicit, true, "Werkzeugaufruf ist ausdruecklich")
     keineQdrantBeruehrung()
+  })
+
+  await t("Abweisung (4xx) ist ein WriteGateRejected, ein 5xx nicht", async () => {
+    const writer = new WriteGateClient(
+      { accessLevel: "private", writeGate: { url: SERVICE, key: KEY } },
+      "chat",
+      true,
+    )
+    await assert.rejects(
+      () => writer.upsert("id", [], { content: "   ", category: "fact" }),
+      (err) => err instanceof WriteGateRejected && err.status === 422,
+      "422 muss als WriteGateRejected kommen (nie erneut versuchen)",
+    )
+    await assert.rejects(
+      () => writer.upsert("id", [], { content: "dienst kaputt", category: "fact" }),
+      (err) => err instanceof Error && !(err instanceof WriteGateRejected),
+      "ein Ausfall ist kein Urteil ueber den Text — er darf wiederholt werden",
+    )
+  })
+
+  await t("automatische Erfassung sendet explicit=false", async () => {
+    calls = []
+    const writer = new WriteGateClient(
+      { accessLevel: "private", writeGate: { url: SERVICE, key: KEY } },
+      "session",
+    )
+    await writer.upsert("id", [], { text: "Ein Satz aus dem Gespraech", category: "session" })
+    assert.strictEqual(calls[0].body.explicit, false)
+    assert.strictEqual(calls[0].body.source_type, "session")
   })
 
   await t("kein einziger Aufruf ging an eine Qdrant-Adresse", () => {

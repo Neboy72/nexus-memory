@@ -98,7 +98,7 @@ def test_leerer_inhalt_wird_abgewiesen_und_nicht_geschrieben(monkeypatch, writte
     assert written == [], "ein abgewiesener Eintrag darf die Sammlung nicht erreichen"
 
 
-def test_dokumenttext_als_regel_wird_abgewiesen_und_nicht_geschrieben(monkeypatch, written):
+def test_dokumenttext_als_regel_wird_als_fakt_gespeichert(monkeypatch, written):
     r = _post(monkeypatch, {
         "content": REGEL,
         "category": "rule",
@@ -107,19 +107,19 @@ def test_dokumenttext_als_regel_wird_abgewiesen_und_nicht_geschrieben(monkeypatc
         "source_type": "paperless",
     })
 
-    assert r.status_code == 422
-    body = r.json()
-    assert body["status"] == "rejected"
-    assert "Regel" in body["reason"]
-    assert written == [], "Dokumenttext darf nie als Regel in der Sammlung landen"
+    assert r.status_code == 200
+    assert written[0].payload["category"] == "fact", \
+        "ohne menschlichen Nachweis entsteht keine Regel"
 
 
-def test_regel_aus_dem_gespraech_wird_geschrieben(monkeypatch, written):
-    """Gegenprobe: dieselbe Laenge, aber ausdruecklich aus dem Gespraech.
+def test_regel_mit_menschlichem_nachweis_wird_geschrieben(monkeypatch, written):
+    """Gegenprobe: derselbe Text mit dem Token aus ``rule-confirm``.
 
-    ``explicit`` setzt nur das Werkzeug (Store-Tool), nie die automatische
-    Erfassung eines Turns — deshalb steht es im Antrag.
+    Das Token erzeugt ein Mensch am Terminal; ``explicit`` allein genuegt
+    nicht mehr.
     """
+    from nexus.rule_confirm import issue
+
     r = _post(monkeypatch, {
         "content": REGEL,
         "category": "rule",
@@ -128,6 +128,7 @@ def test_regel_aus_dem_gespraech_wird_geschrieben(monkeypatch, written):
         "source_type": "chat",
         "scope": "work",
         "explicit": True,
+        "rule_proof": issue(REGEL),
     })
 
     assert r.status_code == 200
@@ -138,13 +139,15 @@ def test_regel_aus_dem_gespraech_wird_geschrieben(monkeypatch, written):
     assert payload["content"] == REGEL
     assert payload["category"] == "rule"
     assert payload["provenance"]["source"]
+    assert payload["provenance"]["rule_confirmed"] is True
 
 
-def test_regel_aus_automatischer_erfassung_wird_abgewiesen(monkeypatch, written):
+def test_regel_aus_automatischer_erfassung_wird_fakt(monkeypatch, written):
     """Die automatische Erfassung eines Turns laesst ``explicit`` weg.
 
     Sie laeuft bei jedem Turn; eine so entstandene Regel wuerde dauerhaft
-    eingespielt. Deshalb: 422 und nichts in der Sammlung.
+    eingespielt. Ohne Nachweis wird der Inhalt als ``fact`` gespeichert —
+    nicht verworfen, aber auch nicht als Regel.
     """
     r = _post(monkeypatch, {
         "content": REGEL,
@@ -155,9 +158,9 @@ def test_regel_aus_automatischer_erfassung_wird_abgewiesen(monkeypatch, written)
         "scope": "work",
     })
 
-    assert r.status_code == 422
-    assert "Regel" in r.json()["reason"]
-    assert written == [], "automatische Erfassung darf nie eine Regel schreiben"
+    assert r.status_code == 200
+    assert written[0].payload["category"] == "fact", \
+        "automatische Erfassung darf nie eine Regel schreiben"
 
 
 def test_sitzungsquelle_hebt_die_stufe_mindestens_auf_trusted(monkeypatch, written):

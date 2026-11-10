@@ -29,6 +29,22 @@ export interface MemoryWriter {
   ): Promise<WriteResult | undefined>
 }
 
+/**
+ * The gate said no. This is a JUDGEMENT, not a hiccup: retrying the same
+ * content will be refused again, so it must never reach the retry queue
+ * (measured 10.11.2026: a rejected capture was re-queued and re-sent on
+ * every turn, forever).
+ */
+export class WriteGateRejected extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = "WriteGateRejected"
+    this.status = status
+  }
+}
+
 /** Where the text came from, for the write gate's origin rules. */
 export type WriteSourceType = "chat" | "session" | "manual"
 
@@ -52,10 +68,16 @@ const WRITE_GATE_TIMEOUT_MS = 30_000
 export class WriteGateClient implements MemoryWriter {
   private readonly cfg: NexusConfig
   private readonly sourceType: WriteSourceType
+  /**
+   * True only for a deliberate write (the store tool): the gate lets a
+   * deliberate write store a `rule`, automatic capture never does.
+   */
+  private readonly explicit: boolean
 
-  constructor(cfg: NexusConfig, sourceType: WriteSourceType) {
+  constructor(cfg: NexusConfig, sourceType: WriteSourceType, explicit = false) {
     this.cfg = cfg
     this.sourceType = sourceType
+    this.explicit = explicit
   }
 
   private endpoint(): { url: string; key: string } {
@@ -99,6 +121,11 @@ export class WriteGateClient implements MemoryWriter {
         typeof payload.confidence === "number" ? payload.confidence : undefined,
       scope: typeof payload.scope === "string" ? payload.scope : "default",
       source_type: this.sourceType,
+      explicit: this.explicit,
+      // Only a `rule` uses it: the token a HUMAN generated with
+      // `rule-confirm` at a terminal. Without it the gate stores the entry as
+      // `fact` — a model cannot produce this token in a conversation.
+      rule_proof: typeof payload.rule_proof === "string" ? payload.rule_proof : "",
     }
 
     log.debugRequest("write-gate", {
@@ -144,10 +171,16 @@ export class WriteGateClient implements MemoryWriter {
           reason = ""
         }
       }
-      throw new Error(
+      const message =
         `nexus: write gate rejected (HTTP ${resp.status})` +
-          (reason ? `: ${reason}` : ""),
-      )
+        (reason ? `: ${reason}` : "")
+      // A 4xx is the gate's verdict on THIS content (empty, label, document
+      // rule, malformed request): it stays the same on every retry. Anything
+      // else (5xx, timeout, network) may be transient and is retried.
+      if (resp.status >= 400 && resp.status < 500) {
+        throw new WriteGateRejected(message, resp.status)
+      }
+      throw new Error(message)
     }
 
     // Direct Qdrant writes used to count themselves in the agent registry.

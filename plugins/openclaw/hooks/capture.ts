@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { Embedder } from "../lib/embedder.ts"
-import type { MemoryWriter } from "../lib/write-gate.ts"
+import { WriteGateRejected, type MemoryWriter } from "../lib/write-gate.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
@@ -211,12 +211,20 @@ export function buildCaptureHandler(
             await writer.upsert(rid, rvec, rpayload)
           },
           (rtext) => embedder.embed(rtext),
+          (err) => err instanceof WriteGateRejected,
         )
         if (restored > 0) log.info(`capture-retry: ${restored} nachgeholt`)
       } catch {
         // Drain-Fehler darf frisches Capture nicht torpedieren
       }
     } catch (err) {
+      // Eine Abweisung des Tors ist ein Urteil ueber genau diesen Text, kein
+      // Ausfall: dieselbe Zeile wuerde bei jedem Versuch erneut abgewiesen.
+      // Deshalb NICHT in die Warteschlange (10.11.2026).
+      if (err instanceof WriteGateRejected) {
+        log.warn(`capture rejected by write gate — not retried: ${err.message}`)
+        return
+      }
       log.error("capture failed", err)
       // Retry-Queue (Astra-R6 P1): nichts geht verloren — dieselbe ID + Payload
       // (mit inferiertem Scope) in die Warteschlange, Drain beim nächsten Versuch.

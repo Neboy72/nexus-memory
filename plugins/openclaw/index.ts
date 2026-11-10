@@ -232,9 +232,12 @@ export default {
 
     // One writer per origin kind. All of them POST to the Nexus service's
     // /write gate; none falls back to a direct Qdrant write.
-    const chatWriter = new WriteGateClient(cfg, "chat")
+    // The store tool and the guardrail override are deliberate calls: only
+    // they pass `explicit: true`, so only they may store a rule. The capture
+    // hook is automatic extraction and never may.
+    const chatWriter = new WriteGateClient(cfg, "chat", true)
     const sessionWriter = new WriteGateClient(cfg, "session")
-    const manualWriter = new WriteGateClient(cfg, "manual")
+    const manualWriter = new WriteGateClient(cfg, "manual", true)
 
     // Register tools
     registerSearchTool(api, embedder, qdrantClient, cfg)
