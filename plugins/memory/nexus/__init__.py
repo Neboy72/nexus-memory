@@ -999,7 +999,9 @@ laeuft laufen haben habe hat hatten ist sind war waren wird werden
 kann koennen muss muessen soll sollen darf duerfen
 nicht kein keine fuer mit und oder aber auch noch nur schon sehr
 bitte danke jetzt heute gestern morgen bei aus auf im in am ans
-viele viel gerade etwa ungefaehr welche welcher welches sowas alles etwas
+viele viel gerade etwa ungefaehr solche sowas alles etwas
+der die das den dem des ein eine einer eines einem einen
+unser unsere unserem unseren euer eure
 """.split())
 
 # Mindestlaenge eines eingespielten Inhaltstextes. Etiketten wie "concept: Heizöl"
@@ -1034,7 +1036,11 @@ def _fold_umlauts(text: str) -> str:
 
 
 def _keyword_boost_order(points: List[Any], query: str) -> List[Any]:
-    """Kandidaten mit woertlichem Fragwort vor rein aehnliche sortieren."""
+    """Kandidaten mit woertlichem Fragwort vor rein aehnliche sortieren.
+
+    Nicht mehr im Einspielweg: dort verschmilzt ``_rrf_order`` Aehnlichkeit und
+    BM25-Stichwortliste. Die Funktion bleibt fuer Messvergleiche und Tests.
+    """
     toks = [_fold_umlauts(t) for t in _query_tokens(query)]
     if not toks:
         return points
@@ -1055,6 +1061,102 @@ _KEYWORD_CANDIDATE_LIMIT = 10  # 12 lange Volltexttreffer frassen den Zeichenvor
 _KEYWORD_CANDIDATE_TOKENS = 3
 
 
+def _load_keyword_index_module() -> Any:
+    """Laedt das Nachbarmodul ``keyword_index`` (Stichwortindex).
+
+    Das Plugin wird sowohl als Paket (``plugins.memory.nexus``) als auch als
+    einzelne Datei geladen (Hermes, Messskripte); ein relativer Import scheitert
+    im zweiten Fall. Das Modul nutzt nur die Standardbibliothek und beruehrt den
+    Wirt nicht. Schlaegt das Laden fehl, laeuft die Einspielung wie bisher mit
+    reiner Aehnlichkeit weiter.
+    """
+    try:
+        from . import keyword_index as _mod  # Paketfall (Tests, Repo)
+        return _mod
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        path = Path(__file__).with_name("keyword_index.py")
+        spec = importlib.util.spec_from_file_location("nexus_keyword_index", path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as exc:
+        logger.debug("Stichwortindex-Modul nicht ladbar (%s)", exc)
+        return None
+
+
+_keyword_index_mod = _load_keyword_index_module()
+
+# Stichwortliste je Einspielung und RRF-Daempfung. Ueber die Umgebung
+# einstellbar, damit Messlaeufe die Werte variieren koennen.
+_FTS_CANDIDATE_LIMIT = _env_int_bounded("NEXUS_FTS_CANDIDATES", 32, 1, 500)
+_FTS_MIN_TERM_LEN = _env_int_bounded("NEXUS_FTS_MIN_TERM_LEN", 2, 1, 20)
+_RRF_K = _env_int_bounded("NEXUS_RRF_K", 60, 1, 1000)
+
+
+class _KeywordPoint:
+    """Minimaler Punkt aus dem Stichwortindex (Kennung, Payload, Anzeigewert)."""
+
+    __slots__ = ("id", "payload", "score")
+
+    def __init__(self, pid: Any, payload: Optional[Dict[str, Any]], score: float = 0.0) -> None:
+        self.id = pid
+        self.payload = payload or {}
+        # Keyword-Treffer tragen keinen Aehnlichkeitswert. Null ist ehrlicher
+        # als ein umgerechneter BM25-Wert, der wie eine Aehnlichkeit aussaehe.
+        self.score = float(score)
+
+
+def _keyword_candidates_from_index(qdrant: Any, collection: str, query: str,
+                                   vector_points: List[Any]) -> List[Any]:
+    """Stichwortkandidaten aus dem FTS5-Index (BM25, seltene Woerter zuerst).
+
+    Punkte, die schon in der Aehnlichkeitsliste stehen, werden mit ihrem
+    Originalobjekt zurueckgegeben: es traegt den echten Aehnlichkeitswert.
+    """
+    if _keyword_index_mod is None:
+        return []
+    index = _keyword_index_mod.ensure_index(qdrant, collection)
+    if index is None:
+        return []
+    hits = index.search(query, limit=_FTS_CANDIDATE_LIMIT,
+                        min_len=_FTS_MIN_TERM_LEN,
+                        stopwords=_KEYWORD_STOPWORDS)
+    known = {str(getattr(p, "id", "")): p for p in vector_points}
+    out: List[Any] = []
+    for pid, payload in hits:
+        out.append(known.get(pid) or _KeywordPoint(pid, payload))
+    return out
+
+
+def _rrf_order(vector_points: List[Any], keyword_points: List[Any]) -> List[Any]:
+    """Verschmilzt Aehnlichkeits- und Stichwortliste zu einem Kandidatenkreis.
+
+    Reciprocal Rank Fusion (k aus ``NEXUS_RRF_K``): der Rang in jeder Liste
+    zaehlt, nicht der rohe Wert. Ein Punkt, der nur ueber das seltene Stichwort
+    gefunden wurde, steht damit gleichberechtigt neben einem aehnlichen Punkt.
+    """
+    if _keyword_index_mod is None:
+        return list(vector_points)
+    ids = _keyword_index_mod.rrf_fuse(
+        [[str(getattr(p, "id", "")) for p in vector_points],
+         [str(getattr(p, "id", "")) for p in keyword_points]],
+        k=_RRF_K,
+    )
+    by_id: Dict[str, Any] = {}
+    for point in keyword_points:
+        by_id[str(getattr(point, "id", ""))] = point
+    # Die Aehnlichkeitsliste gewinnt bei Doppeltreffern: ihr Objekt traegt den
+    # echten Score und den vollstaendigen Payload.
+    for point in vector_points:
+        by_id[str(getattr(point, "id", ""))] = point
+    return [by_id[pid] for pid in ids if pid in by_id]
+
+
 def _cosine(a: Any, b: Any) -> float:
     """Aehnlichkeit zweier Vektoren (Qdrant speichert normiert)."""
     if not a or not b or len(a) != len(b):
@@ -1070,6 +1172,9 @@ def _keyword_candidate_points(qdrant: Any, collection: str, query: str,
                                limit: int = _KEYWORD_CANDIDATE_LIMIT,
                                pool: int = 64) -> List[Any]:
     """Punkte, die ein Wort der Frage woertlich tragen, nach Aehnlichkeit geordnet.
+
+    Nicht mehr im Einspielweg: dort liefert der FTS5-Index die Stichwortliste
+    (BM25). Die Funktion bleibt fuer Messvergleiche und Tests.
 
     Warum (gemessen 10.11.2026): Reine Aehnlichkeit holte den Fakt "Heizöl-Bestellung
     ... bei Marsolek" nur auf Platz 58 von 64; die Frage selbst liefert den Gegencheck,
@@ -2524,21 +2629,23 @@ class NexusMemoryProvider:
                 collection_name=self._collection, query=vector, limit=32,
                 **using_name(getattr(self, "vector_name", None)),
             ).points
-            # Stichwortkandidaten (10.11.2026): Eintraege, die ein Wort der Frage
-            # woertlich tragen, kommen zusaetzlich in den Kandidatenkreis. Ohne
-            # diesen Zug erreicht eine Antwort wie "Heizöl-Bestellung ... bei
-            # Marsolek" bei der Frage "Heizöl-Lieferant" nur Platz 58 von 64.
+            # Kandidatenkreis (10.11.2026): Stichwortliste (BM25, seltene
+            # Woerter zuerst) und Aehnlichkeitsliste werden per RRF verschmolzen.
+            # Die fruehere Ja/Nein-Umsortierung ("enthaelt irgendein Fragewort")
+            # ist ersetzt: sie wog "nutzt" so schwer wie "Ina" und liess den
+            # tragenden Punkt oft ausserhalb des Kreises. Faellt der Index aus,
+            # bleibt es bei der reinen Aehnlichkeitsliste.
             try:
-                bekannt = {str(getattr(p, "id", "")) for p in pts}
-                extra = [p for p in _keyword_candidate_points(
-                    self._qdrant, self._collection, query, vector)
-                    if str(getattr(p, "id", "")) not in bekannt]
-                if extra:
-                    pts = list(pts) + extra
+                keyword_pts = _keyword_candidates_from_index(
+                    self._qdrant, self._collection, query, list(pts))
+                if keyword_pts:
+                    pts = _rrf_order(list(pts), keyword_pts)
+                else:
+                    pts = list(pts)
             except Exception as exc:
-                logger.debug("keyword candidates skipped (%s)", exc)
+                logger.debug("keyword fusion skipped (%s)", exc)
+                pts = list(pts)
             toks = _query_tokens(query)
-            pts = _keyword_boost_order(pts, query)
             total = 0
             items: List[str] = []
             for p in pts:
