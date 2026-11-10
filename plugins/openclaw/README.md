@@ -195,9 +195,12 @@ Add to `~/.openclaw/openclaw.json`:
 > **Writes require `writeGate`.** Since 10.11.2026 the plugin does not write
 > to Qdrant directly. Every store/capture/guardrail-override sends the text to
 > the Nexus service, which runs it through the shared write gate (empty content,
-> short `fact` labels, missing provenance, access level from the source, and
-> `rule` only from a conversation/manual origin). Without `writeGate.url` and
-> `writeGate.key` the write fails loudly instead of bypassing the checks.
+> `fact` labels without a statement, missing provenance, access level from the
+> source, and `rule` only from a manual origin or a deliberate call — the store
+> tool sets `explicit: true`, auto-capture never may, and quoted document text
+> is refused either way). Without `writeGate.url` and `writeGate.key` the write
+> fails loudly instead of bypassing the checks. A rejection (HTTP 4xx) is final:
+> it is never put into the capture retry queue and never retried.
 > Reads (recall/search/scroll) still talk to Qdrant directly.
 
 ### Unattended send gate (`cronFormGate`)

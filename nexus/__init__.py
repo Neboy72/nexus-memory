@@ -254,6 +254,7 @@ def nexus_remember(
     qdrant_host: str = "localhost",
     qdrant_port: int = 6333,
     collection_name: Optional[str] = None,
+    rule_proof: str = "",
     **kwargs: Any,
 ) -> dict:
     """Store a new memory with bi-temporal metadata and optional provenance.
@@ -286,6 +287,9 @@ def nexus_remember(
         qdrant_host: Qdrant host.
         qdrant_port: Qdrant port.
         collection_name: Qdrant collection name.
+        rule_proof: Token from ``rule-confirm`` (human, terminal). Only with it
+                    a ``rule`` is stored as a rule; otherwise the entry is
+                    stored as ``fact``.
         **kwargs: Extra keyword arguments forwarded as metadata fields.
 
     Returns:
@@ -392,7 +396,9 @@ def nexus_remember(
         source_type=source_type,
         # Ein Aufruf dieser Funktion ist eine bewusste Handlung (Werkzeug,
         # Skript, Cron-Job) — nicht die automatische Extraktion eines Turns.
+        # Eine Regel entsteht trotzdem nur mit ``rule_proof``.
         explicit=True,
+        rule_proof=rule_proof,
     )
     if _prepared is None:
         raise ValueError(f"nexus_remember abgewiesen: {_gate_reason() or 'abgewiesen'}")

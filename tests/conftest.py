@@ -103,6 +103,20 @@ def isolated_nexus_data_dir(tmp_path, monkeypatch):
     yield data_dir
 
 
+@pytest.fixture(autouse=True)
+def isolated_rule_confirm(tmp_path, monkeypatch):
+    """Redirect the human rule-proof store to a temp file for EVERY test.
+
+    The gate reads ``~/.hermes/state/rule-confirm.json`` (the HMAC secret and
+    the consumed tokens). A test run must never touch the developer's real
+    installation — same reasoning as ``isolated_agents_registry``. Tests that
+    need a valid proof call ``nexus.rule_confirm.issue``, which uses this path.
+    """
+    path = tmp_path / "rule-confirm.json"
+    monkeypatch.setenv("NEXUS_RULE_CONFIRM_FILE", str(path))
+    yield path
+
+
 @pytest.fixture
 def isolated_env(monkeypatch):
     """Strip embedding-provider API keys from the environment.

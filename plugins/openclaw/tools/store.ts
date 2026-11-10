@@ -52,8 +52,17 @@ export function registerStoreTool(
             description:
               "Where the text came from: 'paperless', 'wiki', 'document', " +
               "'web', 'mail' ... for imported material; omit for a statement " +
-              "made in this conversation. The write gate uses this to keep " +
-              "document text out of category 'rule' and to set the access level.",
+              "made in this conversation. The write gate uses this to set the " +
+              "access level.",
+          }),
+        ),
+        rule_proof: Type.Optional(
+          Type.String({
+            description:
+              "Only for category 'rule': the token a HUMAN generated with " +
+              "'rule-confirm \"<text>\"' at a terminal (valid 10 minutes, " +
+              "single use, bound to that text). Without it a rule write is " +
+              "stored as 'fact'. You cannot produce this token yourself.",
           }),
         ),
       }),
@@ -65,6 +74,7 @@ export function registerStoreTool(
           access_level?: string
           scope?: string
           source?: string
+          rule_proof?: string
         },
       ) {
         const category = params.category ?? "fact"
@@ -211,6 +221,11 @@ export function registerStoreTool(
             confidence: 0.9,
             created_at: new Date().toISOString(),
             scope,
+            // Human proof for a `rule` (see tools/store.ts parameters). An
+            // automatic capture never carries one, so it can never create a
+            // rule on its own.
+            rule_proof:
+              typeof params.rule_proof === "string" ? params.rule_proof.trim() : "",
           }
 
           // Every write goes through the shared gate (lib/write-gate.ts):

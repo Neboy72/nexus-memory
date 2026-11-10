@@ -203,6 +203,38 @@ try {
     assert.strictEqual(q[0].id, seenIds[0], "Requeue muss dieselbe ID nutzen (kein Doppel-Speicher)")
     assert.strictEqual(q[0].payload.scope, "work", `inferierter Scope erwartet, bekam ${q[0].payload.scope}`)
   })
+  // ── Abweisung ist ein Urteil, kein Ausfall (10.11.2026) ──
+  await t("422-Abweisung landet NICHT in der Warteschlange", async () => {
+    writeQueue([])
+    const { WriteGateRejected } = await import("./lib/write-gate.ts")
+    const embedder = { embed: async () => [1, 0, 0] }
+    const writer = {
+      upsert: async () => {
+        throw new WriteGateRejected(
+          "nexus: write gate rejected (HTTP 422): leerer Inhalt", 422,
+        )
+      },
+    }
+    const handler = buildCaptureHandler(embedder, writer, { accessLevel: "private" })
+    await handler(
+      { success: true, messages: [{ role: "user", content: "Ein Text den das Tor abweisen wird" }] },
+      { trigger: "user", messageProvider: "telegram", groupId: null },
+    )
+    assert.strictEqual(queueSize(), 0, "eine Abweisung darf nie erneut versucht werden")
+  })
+
+  await t("drainQueue wirft abgewiesene Eintraege raus statt sie ewig zu wiederholen", async () => {
+    writeQueue([])
+    const { WriteGateRejected } = await import("./lib/write-gate.ts")
+    enqueueCapture({ id: "abgewiesen", text: "abgewiesen", payload: { scope: "default" } })
+    const restored = await drainQueue(
+      async () => { throw new WriteGateRejected("rejected", 422) },
+      async () => [0.1],
+      (err) => err instanceof WriteGateRejected,
+    )
+    assert.strictEqual(restored, 0)
+    assert.strictEqual(queueSize(), 0, "der abgewiesene Eintrag muss aus der Queue fallen")
+  })
 } finally {
   // T3: Mock IMMER restaurieren (läuft vor dem finalen process.exit).
   globalThis.fetch = originalFetch

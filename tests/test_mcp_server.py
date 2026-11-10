@@ -252,7 +252,12 @@ class TestMemoryStoreRemember:
 
     @pytest.mark.parametrize("good", ["fact", "belief", "session", "rule", "preference", "temp"])
     async def test_remember_accepts_every_valid_category(self, store, good):
-        result = await store.remember(text="x", category=good)
+        # A `rule` additionally needs the human proof (see write_gate); the
+        # other categories are stored verbatim.
+        from nexus.rule_confirm import issue
+
+        proof = issue("x") if good == "rule" else ""
+        result = await store.remember(text="x", category=good, rule_proof=proof)
         assert result["category"] == good
 
     async def test_remember_records_source_url_and_confidence(self, store, mock_qdrant_client):
@@ -468,10 +473,17 @@ class TestCallToolRemember:
     """End-to-end test of the MCP ``remember`` tool dispatcher."""
 
     async def test_category_accepted_verbatim(self, mcp_store, mock_qdrant_client):
+        out = await mcp.handle_call_tool("remember", {"text": "x", "category": "belief"})
+        body = _decode(out[0].text)
+        assert body["status"] == "ok"
+        assert body["category"] == "belief"
+
+    async def test_rule_without_proof_is_stored_as_fact(self, mcp_store, mock_qdrant_client):
+        """Eine Regel entsteht nur mit dem Token aus ``rule-confirm``."""
         out = await mcp.handle_call_tool("remember", {"text": "x", "category": "rule"})
         body = _decode(out[0].text)
         assert body["status"] == "ok"
-        assert body["category"] == "rule"
+        assert body["category"] == "fact"
 
     async def test_missing_category_coerced_to_fact(self, mcp_store):
         # Simulate an old client that doesn't send `category` at all.
