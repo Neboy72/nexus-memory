@@ -49,14 +49,20 @@ class TestFoldUmlauts:
 
 
 class TestKeywordCandidates:
-    def test_holt_punkte_und_gibt_ihnen_den_sockel_score(self):
-        rec = SimpleNamespace(id="abc", payload={"content": "Heizöl bestellt"})
-        fake = _FakeQdrant([rec])
-        pts = _keyword_candidate_points(fake, "nexus_hf", "Heizöl-Lieferant", 0.632)
-        assert len(pts) == 1
-        assert pts[0].id == "abc"
-        assert pts[0].score == 0.632
-        assert pts[0].payload["content"] == "Heizöl bestellt"
+    def test_ordnet_nach_aehnlichkeit_zur_frage(self):
+        # Die Volltextsuche liefert in Kennungsreihenfolge; erst die Aehnlichkeit
+        # zum Fragevektor sagt, welcher der Treffer der brauchbare ist.
+        fern = SimpleNamespace(id="a", payload={"content": "passt kaum"}, vector=[1.0, 0.0])
+        nah = SimpleNamespace(id="b", payload={"content": "passt genau"}, vector=[0.0, 1.0])
+        pts = _keyword_candidate_points(_FakeQdrant([fern, nah]), "nexus_hf",
+                                        "Heizöl-Lieferant", [0.0, 1.0])
+        assert [p.id for p in pts] == ["b", "a"]
+        assert pts[0].score == 1.0
+
+    def test_ohne_vektor_bleibt_es_bei_null(self):
+        rec = SimpleNamespace(id="abc", payload={"content": "Heizöl bestellt"}, vector=None)
+        pts = _keyword_candidate_points(_FakeQdrant([rec]), "nexus_hf", "Heizöl-Lieferant", None)
+        assert len(pts) == 1 and pts[0].score == 0.0
 
     def test_sucht_im_inhalt_des_punktes(self):
         fake = _FakeQdrant([])
