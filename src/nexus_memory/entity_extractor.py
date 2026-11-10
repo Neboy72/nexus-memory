@@ -46,7 +46,7 @@ RELATION_TYPES = {
 class Entity:
     """An extracted entity (device, service, person, etc.)."""
 
-    __slots__ = ("name", "entity_type", "attributes", "confidence")
+    __slots__ = ("name", "entity_type", "attributes", "confidence", "evidence")
 
     def __init__(
         self,
@@ -54,11 +54,17 @@ class Entity:
         entity_type: str,
         attributes: Optional[Dict[str, Any]] = None,
         confidence: float = 0.8,
+        evidence: str = "",
     ):
         self.name = name.strip()[:200]
         self.entity_type = entity_type if entity_type in ENTITY_TYPES else "concept"
         self.attributes = attributes or {}
         self.confidence = max(0.0, min(1.0, confidence))
+        # Der Satz aus dem Quelltext, in dem der Name vorkommt. Ohne ihn bleibt
+        # beim Speichern nur ein Etikett uebrig ("concept: Heizöl"), und ein
+        # Etikett beantwortet keine Frage (gemessen 10.11.2026: 97 Prozent der
+        # Entity-Punkte waren reine Etiketten).
+        self.evidence = (evidence or "").strip()[:400]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -66,6 +72,7 @@ class Entity:
             "entity_type": self.entity_type,
             "attributes": self.attributes,
             "confidence": self.confidence,
+            "evidence": self.evidence,
         }
 
     def __repr__(self) -> str:
@@ -678,6 +685,39 @@ def _find_nearest_entity(
 
 # ─── Public API ──────────────────────────────────────────────────────────────
 
+def evidence_sentence(text: str, name: str, max_chars: int = 280) -> str:
+    """Der Satz aus dem Quelltext, in dem der Name vorkommt.
+
+    Ein Etikett ("concept: Heizöl") beantwortet keine Frage; der Satz, aus dem
+    es stammt, schon. Ohne dieses Feld warfen Extraktion und Speicherung genau
+    die Information weg, die den Treffer nuetzlich macht.
+    """
+    needle = (name or "").strip().lower()
+    if not needle or not text:
+        return ""
+    for chunk in re.split(r"(?<=[.!?])\s+|\n+", text):
+        flat = " ".join(chunk.split())
+        if needle in flat.lower():
+            if len(flat) <= max_chars:
+                return flat
+            at = flat.lower().find(needle)
+            start = max(0, at - max_chars // 3)
+            window = flat[start:start + max_chars].strip()
+            return ("…" if start else "") + window + "…"
+    return ""
+
+
+def attach_evidence(result: "ExtractionResult", text: str) -> "ExtractionResult":
+    """Fuellt ``evidence`` fuer jede Entitaet, die es noch nicht hat."""
+    for entity in getattr(result, "entities", []) or []:
+        if not getattr(entity, "evidence", ""):
+            try:
+                entity.evidence = evidence_sentence(text, entity.name)
+            except Exception:  # fail-open: Beweis ist eine Zugabe, kein Muss
+                pass
+    return result
+
+
 def extract_entities(
     text: str,
     hermes_home: str = "",
@@ -695,9 +735,9 @@ def extract_entities(
         try:
             result = _llm_extract_entities(text, hermes_home)
             if not result.is_empty():
-                return result
+                return attach_evidence(result, text)
         except Exception as exc:
             logger.warning("EntityExtractor: LLM path failed: %s", exc)
 
     # Fallback to heuristic
-    return _heuristic_extract_entities(text)
+    return attach_evidence(_heuristic_extract_entities(text), text)
