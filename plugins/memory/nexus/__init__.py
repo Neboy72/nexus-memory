@@ -999,6 +999,7 @@ laeuft laufen haben habe hat hatten ist sind war waren wird werden
 kann koennen muss muessen soll sollen darf duerfen
 nicht kein keine fuer mit und oder aber auch noch nur schon sehr
 bitte danke jetzt heute gestern morgen bei aus auf im in am ans
+viele viel gerade etwa ungefaehr welche welcher welches sowas alles etwas
 """.split())
 
 # Mindestlaenge eines eingespielten Inhaltstextes. Etiketten wie "concept: Heizöl"
@@ -1101,6 +1102,27 @@ def _keyword_candidate_points(qdrant: Any, collection: str, query: str,
     gewertet.sort(key=lambda t: t[0], reverse=True)
     return [qm.ScoredPoint(id=r.id, version=0, score=float(s), payload=r.payload)
             for s, r in gewertet[:limit]]
+
+
+
+def _fenster(text: str, tokens: List[str], max_chars: int = 400) -> str:
+    """Ausschnitt, in dem die Fragewoerter wirklich stehen.
+
+    Gemessen 10.11.2026: In den laengsten Punkten steht die Antwort weit hinten
+    (Stichwort bei Zeichen 921 von 929, 713 von 929, 1269 von 2000). Ein harter
+    Schnitt bei 400 Zeichen schnitt sie weg — der Eintrag galt dann als Fehlschlag,
+    obwohl er der richtige war. Geschnitten wird jetzt um die erste Fundstelle.
+    """
+    t = str(text or "")
+    if len(t) <= max_chars:
+        return t
+    tief = t.lower()
+    pos = min((tief.find(x) for x in tokens if x and x in tief), default=-1)
+    if pos < 0:
+        return t[:max_chars]
+    start = max(0, min(pos - max_chars // 3, len(t) - max_chars))
+    teil = t[start:start + max_chars].strip()
+    return ("…" if start else "") + teil + ("…" if start + max_chars < len(t) else "")
 
 
 class NexusMemoryProvider:
@@ -2515,6 +2537,7 @@ class NexusMemoryProvider:
                     pts = list(pts) + extra
             except Exception as exc:
                 logger.debug("keyword candidates skipped (%s)", exc)
+            toks = _query_tokens(query)
             pts = _keyword_boost_order(pts, query)
             total = 0
             items: List[str] = []
@@ -2547,7 +2570,8 @@ class NexusMemoryProvider:
                 elif my_scope and p_scope != "default" and p_scope != my_scope:
                     continue
                 if text:
-                    item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:400]}"
+                    item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: " \
+                       f"{_fenster(text, toks, 400)}"
                     # Review fix R2: whole-item slicing (konsistent mit recall-Slice)
                     if total + len(item) > budget:
                         if budget - total < 80:
