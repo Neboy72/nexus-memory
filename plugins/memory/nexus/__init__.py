@@ -1054,23 +1054,32 @@ _KEYWORD_CANDIDATE_LIMIT = 10  # 12 lange Volltexttreffer frassen den Zeichenvor
 _KEYWORD_CANDIDATE_TOKENS = 3
 
 
-def _keyword_candidate_points(qdrant: Any, collection: str, query: str, floor: float,
-                               *, limit: int = _KEYWORD_CANDIDATE_LIMIT) -> List[Any]:
-    """Punkte, die ein Wort der Frage woertlich im Inhalt tragen.
+def _cosine(a: Any, b: Any) -> float:
+    """Aehnlichkeit zweier Vektoren (Qdrant speichert normiert)."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    s = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    return s / (na * nb) if na and nb else 0.0
 
-    Warum (gemessen 10.11.2026): Die Frage "Heizöl-Lieferant" holte den Fakt,
-    der die Antwort traegt ("Heizöl-Bestellung 10.11.2026 ... bei Marsolek
-    Brennstoffe"), auf Platz 58 von 64 — ausserhalb jeder Umsortierung. Reine
-    Aehnlichkeit verliert gegen kurze Etiketten, die das Fragwort tragen, aber
-    nichts aussagen. Die Stichwortsuche ist der Gegencheck, den die Frage selbst
-    hergibt: das Wort steht im Text oder nicht.
 
-    Kosten: eine Volltextabfrage ueber die Sammlung, gemessen 180-200 ms bei
-    51.768 Punkten. Sie laeuft im Vorlauf des Hintergrunds, nicht im Antwortpfad.
+def _keyword_candidate_points(qdrant: Any, collection: str, query: str,
+                               query_vector: Any = None, *,
+                               limit: int = _KEYWORD_CANDIDATE_LIMIT,
+                               pool: int = 64) -> List[Any]:
+    """Punkte, die ein Wort der Frage woertlich tragen, nach Aehnlichkeit geordnet.
 
-    Die zurueckgegebenen Punkte bekommen ``floor`` als Score — den schwaechsten
-    Wert der Aehnlichkeitssuche. Damit stehen sie in der Umsortierung hinter
-    echten Aehnlichkeitstreffern und vor allen, die kein Fragwort tragen.
+    Warum (gemessen 10.11.2026): Reine Aehnlichkeit holte den Fakt "Heizöl-Bestellung
+    ... bei Marsolek" nur auf Platz 58 von 64; die Frage selbst liefert den Gegencheck,
+    weil das Wort im Text steht oder nicht.
+
+    Warum ein grosser Topf: Die Volltextsuche liefert die Treffer in Kennungsreihenfolge,
+    nicht nach Brauchbarkeit. Bei einem haeufigen Wort sind hunderte Punkte betroffen, der richtige
+    stand nicht unter den ersten zehn (gemessen: 12 von 20 Fragen trafen, sechs Fehlfaelle
+    waren genau dieser Art). Deshalb werden 64 Treffer geholt, gegen den Fragevektor
+    gerechnet und die zehn aehnlichsten genommen. Ohne Vektor faellt es auf einen
+    gemeinsamen Sockelwert zurueck.
     """
     toks = _query_tokens(query, min_len=5)
     if not toks:
@@ -1080,9 +1089,18 @@ def _keyword_candidate_points(qdrant: Any, collection: str, query: str, floor: f
     flt = qm.Filter(should=[qm.FieldCondition(key="content",
                                              match=qm.MatchText(text=t)) for t in toks])
     records, _ = qdrant.scroll(collection_name=collection, scroll_filter=flt,
-                               limit=limit, with_payload=True, with_vectors=False)
-    return [qm.ScoredPoint(id=r.id, version=0, score=float(floor), payload=r.payload)
-            for r in records]
+                               limit=pool, with_payload=True,
+                               with_vectors=bool(query_vector))
+    gewertet = []
+    for r in records:
+        vec = getattr(r, "vector", None)
+        if isinstance(vec, dict):
+            vec = next(iter(vec.values()), None)
+        score = _cosine(query_vector, vec) if (query_vector and vec) else 0.0
+        gewertet.append((score, r))
+    gewertet.sort(key=lambda t: t[0], reverse=True)
+    return [qm.ScoredPoint(id=r.id, version=0, score=float(s), payload=r.payload)
+            for s, r in gewertet[:limit]]
 
 
 class NexusMemoryProvider:
@@ -2489,10 +2507,9 @@ class NexusMemoryProvider:
             # diesen Zug erreicht eine Antwort wie "Heizöl-Bestellung ... bei
             # Marsolek" bei der Frage "Heizöl-Lieferant" nur Platz 58 von 64.
             try:
-                floor = min((float(getattr(p, "score", 0.0) or 0.0) for p in pts), default=0.0)
                 bekannt = {str(getattr(p, "id", "")) for p in pts}
                 extra = [p for p in _keyword_candidate_points(
-                    self._qdrant, self._collection, query, floor)
+                    self._qdrant, self._collection, query, vector)
                     if str(getattr(p, "id", "")) not in bekannt]
                 if extra:
                     pts = list(pts) + extra
