@@ -987,6 +987,104 @@ def _is_trivial_query(text: Optional[str]) -> bool:
     return bool(_TRIVIAL_QUERY_RE.match(stripped))
 
 
+# Wortgewichtung fuer die Vorauswahl (10.11.2026): Reine Aehnlichkeit findet
+# technische Begriffe schlecht, wenn die Notiz anders formuliert ist als die
+# Frage ("Anthropic-Schluessel" gegen "Nous-Portal"). Ein Kandidat, der ein
+# deutliches Wort der Frage woertlich enthaelt, rueckt deshalb vor. Es werden
+# keine Eintraege hinzugefuegt, nur die gefundenen umsortiert (gemessen: 16 auf
+# 17 von 20 Testfragen, keine Verschlechterung).
+_KEYWORD_STOPWORDS = frozenset("""
+welche welcher welches welchen welchem wie was wer wo wann warum wieso
+laeuft laufen haben habe hat hatten ist sind war waren wird werden
+kann koennen muss muessen soll sollen darf duerfen
+nicht kein keine fuer mit und oder aber auch noch nur schon sehr
+bitte danke jetzt heute gestern morgen bei aus auf im in am ans
+""".split())
+
+# Mindestlaenge eines eingespielten Inhaltstextes. Etiketten wie "concept: Heizöl"
+# tragen hohe Aehnlichkeit, aber keinen Inhalt. 40 Zeichen ist gemessen (12/20 auf
+# 15/20 Treffer); NEXUS_PREFETCH_MIN_CHARS=0 laesst Testlaeufe mit kurzen Texten zu.
+_MIN_CONTENT_CHARS = int(os.environ.get("NEXUS_PREFETCH_MIN_CHARS", "40") or 40)
+
+
+def _query_tokens(query: str, min_len: int = 4) -> List[str]:
+    """Wortmarken der Frage, Umlaute eingeschlossen.
+
+    Das alte Muster ``[A-Za-z0-9.]`` zerschnitt deutsche Woerter am Umlaut:
+    "Heizöl-Lieferant" ergab "heiz" — und "heiz" trifft dann auch "Heizung",
+    "Heizkörper" und alles andere. Die Umlaute gehoeren in die Wortmarke.
+    """
+    raw = re.findall(r"[A-Za-z0-9ÄÖÜäöüß.]{%d,}" % min_len, query or "")
+    out: List[str] = []
+    for t in raw:
+        t = t.lower().strip(".")
+        if len(t) >= min_len and t not in _KEYWORD_STOPWORDS and t not in out:
+            out.append(t)
+    return out
+
+
+_UMLAUT_FOLD = {"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
+                "Ä": "ae", "Ö": "oe", "Ü": "ue"}
+
+
+def _fold_umlauts(text: str) -> str:
+    """Heizoel und Heizöl sollen als dasselbe Wort zaehlen (Umlautschreibweise)."""
+    return "".join(_UMLAUT_FOLD.get(ch, ch) for ch in (text or "")).lower()
+
+
+def _keyword_boost_order(points: List[Any], query: str) -> List[Any]:
+    """Kandidaten mit woertlichem Fragwort vor rein aehnliche sortieren."""
+    toks = [_fold_umlauts(t) for t in _query_tokens(query)]
+    if not toks:
+        return points
+
+    def _key(p: Any):
+        payload = getattr(p, "payload", None) or {}
+        # Suchvarianten (10.11.2026): beim Schreiben erzeugte Wortteile und
+        # Umlautschreibweisen. Ohne sie findet eine Frage wie "Heizöl-Lieferant"
+        # den Eintrag "type=Oellieferant" nicht, obwohl "Lieferant" darin steckt.
+        text = _fold_umlauts(str(payload.get("content") or "") + " "
+                             + str(payload.get("search_terms") or ""))
+        return (1 if any(t in text for t in toks) else 0, float(getattr(p, "score", 0.0) or 0.0))
+
+    return sorted(points, key=_key, reverse=True)
+
+
+_KEYWORD_CANDIDATE_LIMIT = 12
+_KEYWORD_CANDIDATE_TOKENS = 3
+
+
+def _keyword_candidate_points(qdrant: Any, collection: str, query: str, floor: float,
+                               *, limit: int = _KEYWORD_CANDIDATE_LIMIT) -> List[Any]:
+    """Punkte, die ein Wort der Frage woertlich im Inhalt tragen.
+
+    Warum (gemessen 10.11.2026): Die Frage "Heizöl-Lieferant" holte den Fakt,
+    der die Antwort traegt ("Heizöl-Bestellung 10.11.2026 ... bei Marsolek
+    Brennstoffe"), auf Platz 58 von 64 — ausserhalb jeder Umsortierung. Reine
+    Aehnlichkeit verliert gegen kurze Etiketten, die das Fragwort tragen, aber
+    nichts aussagen. Die Stichwortsuche ist der Gegencheck, den die Frage selbst
+    hergibt: das Wort steht im Text oder nicht.
+
+    Kosten: eine Volltextabfrage ueber die Sammlung, gemessen 180-200 ms bei
+    51.768 Punkten. Sie laeuft im Vorlauf des Hintergrunds, nicht im Antwortpfad.
+
+    Die zurueckgegebenen Punkte bekommen ``floor`` als Score — den schwaechsten
+    Wert der Aehnlichkeitssuche. Damit stehen sie in der Umsortierung hinter
+    echten Aehnlichkeitstreffern und vor allen, die kein Fragwort tragen.
+    """
+    toks = _query_tokens(query, min_len=5)
+    if not toks:
+        return []
+    toks = sorted(toks, key=len, reverse=True)[:_KEYWORD_CANDIDATE_TOKENS]
+    from qdrant_client import models as qm
+    flt = qm.Filter(should=[qm.FieldCondition(key="content",
+                                             match=qm.MatchText(text=t)) for t in toks])
+    records, _ = qdrant.scroll(collection_name=collection, scroll_filter=flt,
+                               limit=limit, with_payload=True, with_vectors=False)
+    return [qm.ScoredPoint(id=r.id, version=0, score=float(floor), payload=r.payload)
+            for r in records]
+
+
 class NexusMemoryProvider:
     """MemoryProvider backed by Nexus Memory + Qdrant. Shares collection with MCP server."""
 
@@ -2383,15 +2481,39 @@ class NexusMemoryProvider:
                 logger.debug("scope_auto: prefetch inference skipped (%s)", exc)
                 allowed_scopes = None
             pts = self._qdrant.query_points(
-                collection_name=self._collection, query=vector, limit=10,
+                collection_name=self._collection, query=vector, limit=32,
                 **using_name(getattr(self, "vector_name", None)),
             ).points
+            # Stichwortkandidaten (10.11.2026): Eintraege, die ein Wort der Frage
+            # woertlich tragen, kommen zusaetzlich in den Kandidatenkreis. Ohne
+            # diesen Zug erreicht eine Antwort wie "Heizöl-Bestellung ... bei
+            # Marsolek" bei der Frage "Heizöl-Lieferant" nur Platz 58 von 64.
+            try:
+                floor = min((float(getattr(p, "score", 0.0) or 0.0) for p in pts), default=0.0)
+                bekannt = {str(getattr(p, "id", "")) for p in pts}
+                extra = [p for p in _keyword_candidate_points(
+                    self._qdrant, self._collection, query, floor)
+                    if str(getattr(p, "id", "")) not in bekannt]
+                if extra:
+                    pts = list(pts) + extra
+            except Exception as exc:
+                logger.debug("keyword candidates skipped (%s)", exc)
+            pts = _keyword_boost_order(pts, query)
             total = 0
             items: List[str] = []
             for p in pts:
                 if total >= budget:
                     break
                 pl = p.payload or {}; text = pl.get("content", "")
+                # Stub-Filter (10.11.2026): entity/concept-Etiketten wie
+                # "device: INAS LAPTOP" tragen hohe Aehnlichkeitswerte, aber
+                # keinen Inhalt. Sie belegten die wenigen Kandidatenplaetze und
+                # verdraengten die Notizen mit der Antwort (gemessen: 12/20
+                # Treffer ohne Filter, 15/20 mit, bei 32 Kandidaten).
+                # Die Grenze ist einstellbar, damit Tests mit kurzen
+                # Beispieltexten weiter pruefen koennen, was sie meinen.
+                if len(str(text).strip()) < _MIN_CONTENT_CHARS:
+                    continue
                 # Roadmap 4.6: superseded facts never surface in prefetch.
                 if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
                     continue
@@ -3371,8 +3493,22 @@ class NexusMemoryProvider:
         if entity.attributes:
             attr_str = ", ".join(f"{k}={v}" for k, v in entity.attributes.items())
             text += f" ({attr_str})"
+        # Suchvarianten (10.11.2026): Der sichtbare Text bleibt, wie er ist; die
+        # Wortteile zusammengeschriebener Woerter und Umlautschreibweisen kommen
+        # in ``search_terms`` und zusaetzlich in den Einbettungstext. Grund
+        # (gemessen): "organization: Marsolek (type=Oellieferant)" lag bei der
+        # Frage "Heizöl-Lieferant" auf 0.579 und damit ausserhalb der 32
+        # Kandidaten — "Lieferant" steckt im Wort, nur ohne Fuge.
+        terms = ""
+        try:
+            from nexus.variants import search_variants
+            terms = search_variants(f"{entity.name} {' '.join(str(v) for v in (entity.attributes or {}).values())}")
+        except Exception as exc:  # fail-open: Varianten sind eine Zugabe, kein Muss
+            logger.debug("search_variants: skipped (%s)", exc)
         # Review fix R1: deterministic entity text - cache the embed (doc text)
-        vector = self._embed_cached(text, is_query=False)
+        vector = self._embed_cached(
+            f"{text} {terms}".strip() if terms else text, is_query=False
+        )
         payload = {
             "id": eid,
             "content": text,
@@ -3381,6 +3517,8 @@ class NexusMemoryProvider:
             "entity_type": entity.entity_type,
             "entity_name": entity.name,
             "entity_attributes": entity.attributes,
+            # Suchvarianten fuer die Umsortierung der Einspielung (10.11.2026).
+            "search_terms": terms,
             # Same stamp as the remember path (who + which installation).
             **_agent_stamp(),
             "source": source,
