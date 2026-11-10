@@ -1050,7 +1050,7 @@ def _keyword_boost_order(points: List[Any], query: str) -> List[Any]:
     return sorted(points, key=_key, reverse=True)
 
 
-_KEYWORD_CANDIDATE_LIMIT = 6  # 12 lange Volltexttreffer frassen den Zeichenvorrat
+_KEYWORD_CANDIDATE_LIMIT = 10  # 12 lange Volltexttreffer frassen den Zeichenvorrat
 _KEYWORD_CANDIDATE_TOKENS = 3
 
 
