@@ -3493,6 +3493,12 @@ class NexusMemoryProvider:
         if entity.attributes:
             attr_str = ", ".join(f"{k}={v}" for k, v in entity.attributes.items())
             text += f" ({attr_str})"
+        # Belegsatz (10.11.2026): Ohne ihn war jeder Entity-Punkt ein Etikett ohne
+        # Aussage (gemessen: 97 Prozent der Stichprobe). Der Satz steht im
+        # Quelltext und wird jetzt mitgespeichert und mit eingebettet.
+        evidence = str(getattr(entity, "evidence", "") or "").strip()
+        if evidence:
+            text += f" — {evidence}"
         # Suchvarianten (10.11.2026): Der sichtbare Text bleibt, wie er ist; die
         # Wortteile zusammengeschriebener Woerter und Umlautschreibweisen kommen
         # in ``search_terms`` und zusaetzlich in den Einbettungstext. Grund
@@ -3519,6 +3525,7 @@ class NexusMemoryProvider:
             "entity_attributes": entity.attributes,
             # Suchvarianten fuer die Umsortierung der Einspielung (10.11.2026).
             "search_terms": terms,
+            "entity_evidence": evidence,
             # Same stamp as the remember path (who + which installation).
             **_agent_stamp(),
             "source": source,
