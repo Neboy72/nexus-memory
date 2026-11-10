@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
+import type { MemoryWriter } from "../lib/write-gate.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { log } from "../logger.ts"
 
@@ -378,6 +379,7 @@ export function registerGuardrailOverrideTool(
   qdrantClient: QdrantClient,
   cfg: NexusConfig,
   embedder: { embed: (text: string) => Promise<number[]> },
+  writer: MemoryWriter,
   toolName = "nexus_guardrail_override",
 ): void {
   api.registerTool({
@@ -497,7 +499,9 @@ export function registerGuardrailOverrideTool(
         const auditText = `GUARDRAIL OVERRIDE: ${command} | Reasoning: ${trimmedReasoning} | Agent: ${trimmedAgentId}`
         const vector = await embedder.embed(auditText)
 
-        await qdrantClient.upsert(overrideId, vector, {
+        // The audit record is a memory write too: it goes through the same
+        // gate as every other point (lib/write-gate.ts).
+        await writer.upsert(overrideId, vector, {
           content: auditText,
           category: "session",
           access_level: "private",

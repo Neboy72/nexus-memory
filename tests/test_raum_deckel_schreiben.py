@@ -132,7 +132,9 @@ class TestWritePathsAreCapped:
         )
 
         # Geschrieben wird die gedeckelte Stufe — nicht die angeforderte.
-        payload = _slice(src, "const payload = {", "await qdrantClient.upsert", rel=STORE)
+        # Schreibtransport seit 10.11.2026: writer.upsert (WriteGateClient),
+        # nicht mehr qdrantClient.upsert. Die Zusicherung bleibt dieselbe.
+        payload = _slice(src, "const payload = {", "await writer.upsert", rel=STORE)
         assert "access_level: accessLevel," in payload, (
             "der Payload muss die gedeckelte Stufe tragen."
         )

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { Embedder } from "../lib/embedder.ts"
-import type { QdrantClient } from "../lib/qdrant-client.ts"
+import type { MemoryWriter } from "../lib/write-gate.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
@@ -50,7 +50,7 @@ function getLastTurn(messages: unknown[]): unknown[] {
 
 export function buildCaptureHandler(
   embedder: Embedder,
-  qdrantClient: QdrantClient,
+  writer: MemoryWriter,
   cfg: NexusConfig,
   centroidCache?: ScopeCentroidCache,
 ) {
@@ -197,14 +197,19 @@ export function buildCaptureHandler(
         scope: await inferCaptureScope(vector, centroidCache, cfg.scope),
       }
 
-      await qdrantClient.upsert(id, vector, payload)
+      // Shared gate (lib/write-gate.ts): a captured session is not written
+      // unchecked either — the service enforces content, provenance, access
+      // level and the rule-origin rules.
+      await writer.upsert(id, vector, payload)
 
       log.debug(`capture stored (id=${id})`)
 
       // Drain: nachholen, was bei früherem Storage-Ausfall angestanden hat
       try {
         const restored = await drainQueue(
-          (rid, rvec, rpayload) => qdrantClient.upsert(rid, rvec, rpayload),
+          async (rid, rvec, rpayload) => {
+            await writer.upsert(rid, rvec, rpayload)
+          },
           (rtext) => embedder.embed(rtext),
         )
         if (restored > 0) log.info(`capture-retry: ${restored} nachgeholt`)

@@ -22,6 +22,19 @@ export type PlanGateConfig = {
   maxAgeSeconds: number
 }
 
+/**
+ * The local Nexus service that owns the shared write gate.
+ *
+ * Both values are required: the address is where `POST /write` lives, the
+ * key is the per-installation secret (same header as /embed and /mcp). There
+ * is deliberately no default — a missing block makes every write fail loudly
+ * instead of silently writing unvalidated points to Qdrant.
+ */
+export type WriteGateConfig = {
+  url: string
+  key: string
+}
+
 export type CronFormGateConfig = {
   /** Master switch. Default false: an unconfigured deployment must never block. */
   enabled: boolean
@@ -48,6 +61,9 @@ export type NexusConfig = {
    *  'default'-scoped memories plus this agent's own scope. Explicit
    *  search (nexus_search) is never scope-filtered. Empty = no gating. */
   scope: string
+  /** Shared write gate (Nexus service). Required for every write: without it
+   *  the plugin refuses to write rather than bypass the checks. */
+  writeGate: WriteGateConfig | undefined
   /** Cron-Form-Gate (Astra-R6): unattended (cron/heartbeat) sends must match one
    *  exact title. Ships neutral (enabled: false) — deployments opt in. */
   cronFormGate: CronFormGateConfig
@@ -80,6 +96,7 @@ const ALLOWED_KEYS = [
   "forgetMinScore",
   "accessLevel",
   "scope",
+  "writeGate",
   "cronFormGate",
   "planGate",
   "ownerUserIds",
@@ -99,6 +116,43 @@ const VALID_ACCESS_LEVELS: AccessLevel[] = ["public", "trusted", "private"]
 const VALID_PROVIDERS: EmbeddingProvider[] = ["nexus", "openai", "ollama", "google", "jina"]
 
 const ALLOWED_GATE_KEYS = ["enabled", "titles", "maxLines", "maxChars"]
+
+const ALLOWED_WRITE_GATE_KEYS = ["url", "key"]
+
+/**
+ * Parse the write-gate block.
+ *
+ * Absent/empty means "not configured": writes fail loudly at call time.
+ * HALF a block is a configuration error and throws here — a url without a key
+ * (or the reverse) must not look usable and then fail opaquely per write.
+ */
+function parseWriteGate(value: unknown): WriteGateConfig | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("nexus-memory writeGate config must be an object")
+  }
+  const raw = value as Record<string, unknown>
+  assertAllowedKeys(raw, ALLOWED_WRITE_GATE_KEYS, "nexus-memory writeGate config")
+
+  const urlRaw = typeof raw.url === "string" ? raw.url.trim() : ""
+  const keyRaw = typeof raw.key === "string" ? raw.key.trim() : ""
+  if (!urlRaw && !keyRaw) return undefined
+  if (!urlRaw || !keyRaw) {
+    throw new Error(
+      "nexus-memory writeGate config requires both url and key " +
+        "(one side missing would let writes look configured but fail)",
+    )
+  }
+
+  const url = resolveEnvVars(urlRaw, "writeGate.url").replace(/\/+$/, "")
+  const key = resolveEnvVars(keyRaw, "writeGate.key")
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error(
+      `Invalid writeGate.url "${url}". Expected an http:// or https:// URL.`,
+    )
+  }
+  return { url, key }
+}
 
 const ALLOWED_PLAN_GATE_KEYS = ["enabled", "lockPath", "maxAgeSeconds"]
 
@@ -382,6 +436,7 @@ export function parseConfig(raw: unknown): NexusConfig {
         : 0.8,
     accessLevel,
     scope,
+    writeGate: parseWriteGate(cfg.writeGate),
     cronFormGate: parseCronFormGate(cfg.cronFormGate),
     planGate: parsePlanGate(cfg.planGate),
     ownerUserIds: parseOwnerUserIds(cfg.ownerUserIds),
@@ -413,6 +468,15 @@ export const nexusConfigSchema = {
       forgetMinScore: { type: "number", minimum: 0, maximum: 1 },
       accessLevel: { type: "string", enum: VALID_ACCESS_LEVELS },
       scope: { type: "string" },
+      writeGate: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          url: { type: "string" },
+          key: { type: "string" },
+        },
+        required: ["url", "key"],
+      },
       cronFormGate: {
         type: "object",
         additionalProperties: false,
