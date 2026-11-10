@@ -802,7 +802,7 @@ def _memory_injection_score(text: str) -> int:
 # Tool schemas (OpenAI function-calling format)
 RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
                   "as_of": {"type": "string", "description": "Point-in-time: YYYY-MM-DD - only memories created on/before this date.", "default": ""}}, "required": ["query"]}}
-REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "private"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}, "salience": {"type": "number", "description": "Importance 0.0-1.0. >= 0.8 is immune to decay. Default: depends on category."}}, "required": ["text"]}}
+REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "private"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}, "salience": {"type": "number", "description": "Importance 0.0-1.0. >= 0.8 is immune to decay. Default: depends on category."}, "rule_proof": {"type": "string", "description": "Only for category 'rule': the token a HUMAN generated with 'rule-confirm \"<text>\"' at a terminal (valid 10 minutes, single use, bound to that text). Without it a rule write is stored as 'fact'.", "default": ""}}, "required": ["text"]}}
 FORGET_SCHEMA = {"name": "nexus_forget", "description": "Delete a memory from Nexus Memory by ID.", "parameters": {"type": "object", "properties": {"memory_id": {"type": "string", "description": "The memory ID to delete."}}, "required": ["memory_id"]}}
 GUARDRAIL_CHECK_SCHEMA = {"name": "nexus_guardrail_check", "description": "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (a recursive delete, a table drop, a process kill, an overwrite).", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command string to check (e.g. a recursive delete of a project directory)"}, "tool_name": {"type": "string", "description": "The tool being called (e.g. 'terminal', 'write_file')", "default": ""}, "tool_input": {"type": "object", "description": "Full tool input dict for path-based checks", "default": {}}}, "required": ["command"]}}
 GUARDRAIL_OVERRIDE_SCHEMA = {"name": "nexus_guardrail_override", "description": "Active Guardrails: Record a guardrail override with full audit trail. Required when guardrail_check returns 'block' but the action is explicitly authorized.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command that was blocked"}, "reasoning": {"type": "string", "description": "Explicit reasoning why this action is safe despite the guardrail block. Minimum 10 characters."}, "matched_rules": {"type": "array", "items": {"type": "object"}, "description": "The matched_rules array from the guardrail_check response", "default": []}, "agent_id": {"type": "string", "description": "Agent identifier for audit trail", "default": "unknown"}}, "required": ["command", "reasoning"]}}
@@ -2849,7 +2849,7 @@ class NexusMemoryProvider:
     def _upsert(self, text: str, category: str = "fact", access_level: str = "private",
                 source: str = "", confidence: float = 0.7, salience: Optional[float] = None,
                 source_url: str = "", scope: str = "default",
-                explicit: bool = False, **_: Any) -> Dict[str, Any]:
+                explicit: bool = False, rule_proof: str = "", **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         # Gemeinsames Schreibtor (10.11.2026): leerer Inhalt und Etiketten
@@ -2858,8 +2858,10 @@ class NexusMemoryProvider:
         # Abweisung ist eine Antwort mit Grund, kein Schreibvorgang.
         # ``chat`` ist die Herkunftsart dieses Weges — das Plugin sieht
         # Gespraeche, keine Dokumente; die feinere Quelle steht in ``source``.
-        # ``explicit`` nur beim Werkzeugaufruf (nexus_remember): automatische
-        # Extraktion nach einem Turn darf nie eine Regel schreiben.
+        # ``explicit`` nur beim Werkzeugaufruf (nexus_remember). Eine Regel
+        # entsteht trotzdem nur mit ``rule_proof`` — dem Token, das ein Mensch
+        # am Terminal mit ``rule-confirm`` erzeugt hat. Ohne es wird der
+        # Eintrag als ``fact`` gespeichert.
         prepared = _gate_prepare(
             content=text, category=category, access_level=access_level,
             source=source,
@@ -2867,6 +2869,7 @@ class NexusMemoryProvider:
                         "timestamp": ts, "confidence": confidence},
             source_type="chat",
             explicit=explicit,
+            rule_proof=rule_proof,
         )
         if prepared is None:
             return _gate_rejection()
@@ -3405,9 +3408,11 @@ class NexusMemoryProvider:
                                       confidence=args.get("confidence", 0.7),
                                       salience=args.get("salience"),
                                       source_url=args.get("source_url", ""),
-                                      # Ausdruecklicher Werkzeugaufruf: nur er
-                                      # darf Kategorie ``rule`` schreiben.
-                                      explicit=True)
+                                      # Ausdruecklicher Werkzeugaufruf. Eine
+                                      # Regel braucht zusaetzlich ``rule_proof``
+                                      # (Token von ``rule-confirm`` am Terminal).
+                                      explicit=True,
+                                      rule_proof=args.get("rule_proof", ""))
                 # Roadmap 1.1/4.1: auto-enrich with entities + edges (async, fail-open)
                 try:
                     self._enqueue_entity_extraction(args.get("text", ""))

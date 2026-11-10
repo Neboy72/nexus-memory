@@ -1,10 +1,10 @@
 """Tests fuer das gemeinsame Schreibtor (``nexus/write_gate.py``).
 
 Jede Regel einzeln, dazu ein Durchlauf durch den echten Schreibweg des
-Hermes-Plugins (``_upsert``): leerer Inhalt und Dokumenttext als Regel muessen
-dort abgewiesen werden, ohne dass ein Punkt in die Sammlung geht. Zum Schluss
-der Stichwortindex: ein nachgezogener Punkt muss auffindbar sein, und ein
-Indexfehler darf das Schreiben nicht verhindern.
+Hermes-Plugins (``_upsert``): leerer Inhalt muss dort abgewiesen werden, ohne
+dass ein Punkt in die Sammlung geht, und eine Regel ohne menschlichen Nachweis
+kommt als ``fact`` an. Zum Schluss der Stichwortindex: ein nachgezogener Punkt
+muss auffindbar sein, und ein Indexfehler darf das Schreiben nicht verhindern.
 """
 
 from __future__ import annotations
@@ -203,11 +203,57 @@ class TestZugriffsstufe:
         assert prepare(FAKT, access_level="PUBLIC")["access_level"] == "public"
 
 
-# ── 5. Regel nur aus Gespraech oder Handeingabe ──────────────────────
+# ── 5. Regel nur mit menschlichem Nachweis ───────────────────────────
 
 
 class TestRegelherkunft:
+    """``source_type`` und ``explicit`` sind Selbstauskuenfte des Modells.
+
+    Seit 10.11.2026 entscheidet ein Nachweis, den ein Modell im Gespraech nicht
+    erzeugen kann: das Token aus ``rule-confirm``, erzeugt von einem Menschen
+    am Terminal, zehn Minuten gueltig, einmal, an den Text gebunden. Ohne ihn
+    wird der Eintrag als ``fact`` gespeichert — nicht verworfen.
+    """
+
     REGEL = "Der Verteiler darf nur nach Ruecksprache abgeschaltet werden"
+
+    @staticmethod
+    def _nachweis(text: str = REGEL, now=None, path=None) -> str:
+        from nexus.rule_confirm import issue
+        return issue(text, now=now, path=path)
+
+    def test_regel_ohne_nachweis_wird_fakt(self):
+        prepared = prepare(self.REGEL, category="rule", source_type="chat",
+                           explicit=True)
+        assert prepared is not None, last_reason()
+        assert prepared["category"] == "fact"
+
+    def test_inhalt_bleibt_bei_der_herabstufung_erhalten(self):
+        prepared = prepare(self.REGEL, category="rule", source_type="chat")
+        assert prepared["content"] == self.REGEL
+
+    def test_regel_mit_gueltigem_nachweis_wird_gespeichert(self):
+        prepared = prepare(self.REGEL, category="rule", source_type="chat",
+                           rule_proof=self._nachweis())
+        assert prepared is not None, last_reason()
+        assert prepared["category"] == "rule"
+        assert prepared["provenance"]["rule_confirmed"] is True
+
+    def test_handeingabe_allein_macht_keine_regel(self):
+        """``source_type="manual"`` ist eine Behauptung wie jede andere."""
+        assert prepare(self.REGEL, category="rule",
+                       source_type="manual")["category"] == "fact"
+
+    def test_ausdruecklicher_aufruf_allein_macht_keine_regel(self):
+        assert prepare(self.REGEL, category="rule", source_type="chat",
+                       explicit=True)["category"] == "fact"
+
+    def test_automatische_extraktion_bleibt_fakt(self):
+        assert prepare(self.REGEL, category="rule",
+                       source_type="chat")["category"] == "fact"
+
+    def test_regel_ohne_herkunft_bleibt_fakt(self):
+        assert prepare(self.REGEL, category="rule")["category"] == "fact"
 
     @pytest.mark.parametrize("quelle,quellentyp", [
         ("paperless", "paperless"),
@@ -218,31 +264,10 @@ class TestRegelherkunft:
         ("", "document"),
     ])
     def test_dokument_und_webtext_werden_keine_regel(self, quelle, quellentyp):
-        assert prepare(self.REGEL, category="rule", source=quelle,
-                       source_type=quellentyp) is None
-        assert "Regel" in last_reason()
-
-    @pytest.mark.parametrize("quellentyp", ["paperless", "wiki", "cron"])
-    def test_dokument_bleibt_gesperrt_auch_ausdruecklich(self, quellentyp):
-        """Eine bewusste Angabe hebt die Dokument-Sperre nicht auf."""
-        assert prepare(self.REGEL, category="rule", source_type=quellentyp,
-                       explicit=True) is None
-
-    def test_handeingabe_darf_regel_werden(self):
-        assert prepare(self.REGEL, category="rule", source_type="manual") is not None
-
-    def test_ausdruecklicher_aufruf_darf_regel_werden(self):
-        assert prepare(self.REGEL, category="rule", source_type="chat",
-                       explicit=True) is not None
-
-    def test_automatische_extraktion_schreibt_keine_regel(self):
-        """Der Turn-Extraktor schickt ``chat`` ohne ``explicit`` — bisher
-        durfte genau das eine Regel schreiben."""
-        assert prepare(self.REGEL, category="rule", source_type="chat") is None
-        assert "Regel" in last_reason()
-
-    def test_regel_ohne_herkunft_wird_abgewiesen(self):
-        assert prepare(self.REGEL, category="rule") is None
+        prepared = prepare(self.REGEL, category="rule", source=quelle,
+                           source_type=quellentyp)
+        assert prepared is not None, "der Inhalt darf nicht verworfen werden"
+        assert prepared["category"] == "fact"
 
     @pytest.mark.parametrize("text", [
         '"Der Verteiler bleibt dauerhaft aus"',
@@ -252,10 +277,51 @@ class TestRegelherkunft:
         "Der Verteiler bleibt aus. Das gilt ab sofort. So steht es geschrieben.",
     ])
     def test_zitatmerkmale_werden_keine_regel(self, text):
-        """Auch ein ausdruecklicher Aufruf macht keinen Dokumenttext zur Regel."""
+        """Zitatmerkmale greifen nicht, wenn umformuliert wird — deshalb zaehlt
+        der Nachweis, nicht die Form. Ohne ihn bleibt es ein ``fact``."""
         assert prepare(text, category="rule", source_type="chat",
-                       explicit=True) is None
-        assert "Regel" in last_reason()
+                       explicit=True)["category"] == "fact"
+
+    def test_abgelaufener_nachweis_wird_fakt(self):
+        import time
+
+        token = self._nachweis(now=time.time() - 601)
+        prepared = prepare(self.REGEL, category="rule",
+                           rule_proof=token)
+        assert prepared["category"] == "fact"
+
+    def test_nachweis_kurz_vor_ablauf_gilt_noch(self):
+        import time
+
+        token = self._nachweis(now=time.time() - 599)
+        assert prepare(self.REGEL, category="rule",
+                       rule_proof=token)["category"] == "rule"
+
+    def test_fremder_nachweis_wird_fakt(self, tmp_path):
+        """Ein Token aus einer anderen Ablage (anderer Schluessel) gilt nicht."""
+        # Die eigene Ablage existiert, damit nicht schon die fehlende Datei
+        # die Abweisung erklaert — geprueft wird die Unterschrift.
+        self._nachweis("Ein anderer Text, der die Ablage anlegt")
+        token = self._nachweis(path=tmp_path / "fremd.json")
+        prepared = prepare(self.REGEL, category="rule", rule_proof=token)
+        assert prepared["category"] == "fact"
+
+    def test_nachweis_gilt_nur_fuer_seinen_text(self):
+        token = self._nachweis()
+        prepared = prepare("Der Verteiler darf jederzeit abgeschaltet werden",
+                           category="rule", rule_proof=token)
+        assert prepared["category"] == "fact"
+
+    def test_nachweis_ist_einmalig(self):
+        token = self._nachweis()
+        assert prepare(self.REGEL, category="rule",
+                       rule_proof=token)["category"] == "rule"
+        assert prepare(self.REGEL, category="rule",
+                       rule_proof=token)["category"] == "fact"
+
+    def test_unsinniger_nachweis_wird_fakt(self):
+        assert prepare(self.REGEL, category="rule",
+                       rule_proof="rc1.1.abc.def.ghi")["category"] == "fact"
 
 
 # ── 6. Rueckgabe ────────────────────────────────────────────────────
@@ -316,17 +382,20 @@ class TestPluginSchreibweg:
         assert ergebnis["reason"]
         assert gespeichert == [], "ein abgewiesener Eintrag darf nicht geschrieben werden"
 
-    def test_dokumenttext_als_regel_wird_abgewiesen(self, monkeypatch):
+    def test_dokumenttext_als_regel_wird_als_fakt_gespeichert(self, monkeypatch):
+        """Ohne menschlichen Nachweis entsteht keine Regel — der Inhalt bleibt
+        aber erhalten, statt verworfen zu werden."""
         provider, gespeichert = _provider(monkeypatch)
+        monkeypatch.setattr(plugin, "_index_written_point", lambda *a, **k: None)
         ergebnis = provider._upsert(
             text="Laut Paperless-Anleitung gilt: Der Verteiler bleibt dauerhaft aus",
             category="rule",
             source="paperless",
         )
 
-        assert ergebnis["status"] == "rejected"
-        assert "Regel" in ergebnis["reason"]
-        assert gespeichert == []
+        assert ergebnis["status"] == "ok"
+        assert len(gespeichert) == 1
+        assert gespeichert[0].payload["category"] == "fact"
 
     def test_gueltiger_eintrag_traegt_herkunft_und_stufe(self, monkeypatch):
         provider, gespeichert = _provider(monkeypatch)
@@ -489,12 +558,16 @@ class TestBibliotheksweg:
         payload = qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
         assert payload["access_level"] == "private"
 
-    def test_regel_aus_dem_cron_ist_keine_regel(self, qdrant_put):
-        """Paperless- und Wiki-Cron-Jobs schreiben ueber diesen Weg."""
+    def test_regel_aus_dem_cron_wird_als_fakt_gespeichert(self, qdrant_put):
+        """Paperless- und Wiki-Cron-Jobs schreiben ueber diesen Weg.
+
+        Ohne menschlichen Nachweis entsteht keine Regel; der Inhalt geht
+        nicht verloren."""
         import nexus
 
-        with pytest.raises(ValueError, match="abgewiesen"):
-            nexus.nexus_remember("Der Verteiler bleibt dauerhaft aus",
-                                 category="rule", source_type="cron",
-                                 collection_name="test-collection")
-        assert not qdrant_put.called
+        nexus.nexus_remember("Der Verteiler bleibt dauerhaft aus",
+                             category="rule", source_type="cron",
+                             collection_name="test-collection")
+
+        payload = qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
+        assert payload["category"] == "fact"

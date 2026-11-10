@@ -30,12 +30,15 @@ Die Regeln:
    ``public`` sagt. ``public`` vergibt das Tor nie von sich aus: es entsteht
    nur aus einer ausdruecklich oeffentlichen Quelle (als ganzes Wort, nie als
    Pfadbestandteil) oder aus einer ausdruecklichen Angabe des Aufrufers.
-5. Kategorie ``rule`` nur ausdruecklich: bei ``source_type="manual"`` oder
-   wenn der Aufrufer den Schreibvorgang als bewusst markiert (``explicit``).
-   Automatische Extraktion nach einem Turn darf nie Regeln schreiben, und
-   Text mit Zitatmerkmalen (Anfuehrungszeichen am Anfang, "laut Dokument",
-   "steht im Schreiben", mehr als zwei Saetze) nie — auch nicht ausdruecklich.
-   Regeln werden bei jedem Turn eingespielt und wirken damit dauerhaft.
+5. Kategorie ``rule`` nur mit menschlichem Nachweis: einem signierten
+   Zeitfenster-Token aus ``nexus/rule_confirm.py``, das ein Mensch am
+   Terminal erzeugt hat (``rule-confirm "<Regeltext>"``). ``source_type`` und
+   ``explicit`` sind Selbstauskuenfte des Modells und genuegen nicht mehr —
+   ein im Gespraech zitiertes Dokument kam bisher als ``chat`` an und durfte
+   Regel werden, sobald das Modell ausdruecklich aufrief. Ohne gueltigen
+   Nachweis wird der Eintrag als ``fact`` gespeichert, nicht verworfen: kein
+   Inhalt geht verloren, aber eine Regel entsteht so nicht. Regeln werden bei
+   jedem Turn eingespielt und wirken damit dauerhaft.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("nexus.write_gate")
@@ -79,17 +83,6 @@ _TRUSTED_MARKERS = (
 # Ausdruecklich oeffentliche Quellen. Ohne einen dieser Marker entsteht
 # ``public`` nie aus der Quelle — nur aus einer ausdruecklichen Angabe.
 _PUBLIC_MARKERS = ("public", "oeffentlich", "öffentlich", "open", "open-data")
-
-# Woher Text stammen darf, damit er als Regel gespeichert wird: nur
-# ``source_type == "manual"``. Alles andere braucht ``explicit``.
-_RULE_MANUAL_SOURCE = "manual"
-
-# Text aus diesen Quellen ist nie eine Regel (Dauer-Injektion).
-_RULE_DENIED = (
-    "paperless", "wiki", "document", "dokument", "pdf", "scan",
-    "web", "website", "webseite", "http", "url", "mail", "email",
-    "import", "crawl", "crawler", "scrape", "rss", "cron", "protokoll",
-)
 
 # Etikett statt Aussage ("Farbe: blau"). Nur bei ``fact`` geprueft.
 _LABEL_RE = re.compile(r"^\s*([^:\n]{1,40}?)\s*:\s*(\S.*?)\s*$")
@@ -139,6 +132,10 @@ def _refuse(reason: str, category: str, source: Any) -> None:
     return None
 
 
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def _has(text: str, markers: tuple) -> bool:
     return any(marker in text for marker in markers)
 
@@ -173,12 +170,16 @@ def _sentence_count(text: str) -> int:
     return len([part for part in re.split(r"[.!?]+", text) if part.strip()])
 
 
-def _looks_document_quoted(text: str) -> bool:
+def looks_document_quoted(text: str) -> bool:
     """Zitatmerkmale: Anfuehrungszeichen am Anfang, woertliches Zitat, Absatz.
 
     Eine Regel ist ein Satz, den jemand formuliert — kein Absatz aus einer
     Anleitung. Mehr als ``_MAX_RULE_SENTENCES`` Saetze gelten deshalb als
-    abgeschriebener Dokumenttext.
+    abgeschriebener Dokumenttext. Seit dem menschlichen Nachweis (10.11.2026)
+    entscheidet das nicht mehr ueber das Speichern — die Merkmale greifen
+    nicht, sobald ein Modell umformuliert. Die Bestandsdurchsicht
+    (``scripts/regeln-pruefen.py``) markiert damit alte Regeln, die nach
+    Dokumenttext aussehen.
     """
     if text.lstrip()[:1] in _QUOTE_STARTS:
         return True
@@ -267,26 +268,34 @@ def _build_provenance(provenance: Optional[Dict[str, Any]], source: str,
     return built
 
 
-def _rule_origin_allowed(source_type: Any, explicit: bool,
-                         origin_text: str) -> bool:
-    """Regel nur ausdruecklich — nie automatisch aus einem Turn.
+def _confirmed(rule_proof: Any, text: str) -> bool:
+    """Nur ein menschlicher Nachweis macht aus Text eine Regel.
 
-    Zwei Wege: ``source_type == "manual"`` (Handeingabe) oder ein bewusster
-    Aufruf (``explicit``, etwa das Werkzeug ``nexus_remember``). Die blosse
-    Behauptung "chat" genuegt nicht mehr: ein im Gespraech zitiertes Dokument
-    kam bisher als ``chat`` an und durfte Regel werden. Dokument- und
-    Webquellen bleiben in jedem Fall gesperrt.
+    ``source_type`` und ``explicit`` sind Selbstauskuenfte des Modells: ein
+    Dokument, das "merke dir als Regel ..." enthaelt, wurde vom Modell
+    ausdruecklich aufgerufen und kam als Regel durch. Der Nachweis ist ein
+    signiertes Token, das ein Mensch am Terminal erzeugt hat (siehe
+    ``nexus/rule_confirm.py``) — einmal, zehn Minuten, an diesen Text
+    gebunden.
     """
-    if _has(origin_text, _RULE_DENIED):
+    try:
+        from nexus.rule_confirm import consume
+    except Exception as exc:
+        # Fail-closed fuer die Regel, nicht fuer den Schreibweg: ohne pruefbaren
+        # Nachweis entsteht keine Regel, der Inhalt bleibt als ``fact``.
+        logger.error("Regel-Nachweis nicht pruefbar (%s) — als fact gespeichert", exc)
         return False
-    if str(source_type or "").strip().lower() == _RULE_MANUAL_SOURCE:
-        return True
-    return bool(explicit)
+    ok, reason = consume(rule_proof, text)
+    if not ok:
+        logger.warning("Regel ohne gueltigen Nachweis (%s) — als fact gespeichert",
+                       reason)
+    return ok
 
 
 def prepare(content: Any, category: str = "fact", access_level: Any = "",
             source: Any = "", provenance: Optional[Dict[str, Any]] = None,
-            source_type: Any = "", explicit: bool = False) -> Optional[Dict[str, Any]]:
+            source_type: Any = "", explicit: bool = False,
+            rule_proof: Any = "") -> Optional[Dict[str, Any]]:
     """Prueft einen Schreibvorgang und liefert das bereinigte Payload-Dict.
 
     ``source_type`` ist die Herkunftsart (``chat``, ``manual``, ``paperless``
@@ -295,8 +304,9 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
     die Herkunft des Textes.
 
     ``explicit`` markiert einen bewussten Schreibvorgang (Werkzeugaufruf,
-    Handeingabe). Automatische Extraktion laesst es weg und darf damit nie
-    eine Regel schreiben.
+    Handeingabe); es allein macht keinen Text zur Regel. Dafuer braucht es
+    ``rule_proof`` — das Token, das ``rule-confirm`` am Terminal ausgegeben
+    hat. Fehlt es, wird der Eintrag als ``fact`` gespeichert.
 
     Rueckgabe ``None`` heisst abgewiesen; ``last_reason()`` nennt den Grund.
     Sonst ein Dict mit ``content``, ``category``, ``access_level``, ``source``
@@ -309,19 +319,25 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
         return _refuse("leerer Inhalt", category, source)
 
     cat = _normalize_category(category)
-    if cat == "fact" and _is_label(text):
-        return _refuse("Etikett statt Aussage (kein Satz)", cat, source)
+    war_regel = cat == "rule"
 
     prov_input = provenance if isinstance(provenance, dict) else {}
     origin_text = _origin_text(source, source_type, prov_input)
 
-    if cat == "rule":
-        if not _rule_origin_allowed(source_type, explicit, origin_text):
-            return _refuse(
-                "Regel nur aus Handeingabe oder ausdruecklichem Aufruf", cat, source
-            )
-        if _looks_document_quoted(text):
-            return _refuse("Regel mit Zitatmerkmalen (Dokumenttext)", cat, source)
+    if war_regel:
+        # Herabstufen statt abweisen: der Inhalt bleibt erhalten, nur die
+        # Dauerwirkung einer Regel entsteht ohne menschliche Bestaetigung nicht.
+        if _confirmed(rule_proof, text):
+            prov_input = dict(prov_input)
+            prov_input["rule_confirmed"] = True
+            prov_input["rule_confirmed_at"] = _now_iso()
+        else:
+            cat = "fact"
+
+    # Eine herabgestufte Regel wird nicht zusaetzlich als Etikett abgewiesen:
+    # der Inhalt soll erhalten bleiben, auch wenn seine Form schwach ist.
+    if cat == "fact" and not war_regel and _is_label(text):
+        return _refuse("Etikett statt Aussage (kein Satz)", cat, source)
 
     src = str(source or "").strip()
     return {

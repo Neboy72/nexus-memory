@@ -274,21 +274,38 @@ export function removeQueuedCaptures(memoryId: string, text?: string): number {
  * erfolgreichen frischen Capture. Gibt die Anzahl wiederhergestellter
  * Captures zurück. Gelingt ein Eintrag nicht, bleibt er in der Queue
  * (reihenweise, kein Block des frischen Captures).
+ *
+ * ``isPermanentRejection`` trennt ein Urteil von einem Ausfall: eine
+ * Abweisung des Schreibtors (4xx) wird nicht erneut versucht, sondern fällt
+ * aus der Queue (10.11.2026).
  */
 export async function drainQueue(
   upsert: (id: string, vector: number[], payload: Record<string, unknown>) => Promise<void>,
   embed: (text: string) => Promise<number[]>,
+  isPermanentRejection?: (err: unknown) => boolean,
 ): Promise<number> {
   const entries = readQueue()
   if (entries.length === 0) return 0
   const restoredIds = new Set<string>()
+  // Abgewiesene Eintraege fallen aus der Queue: ein Urteil des Tors ueber den
+  // Text aendert sich beim naechsten Versuch nicht (10.11.2026). Sie zaehlen
+  // nicht als wiederhergestellt, werden aber auch nicht erneut geschickt.
+  const droppedIds = new Set<string>()
   for (const e of entries) {
     try {
       const vector = await embed(e.text)
       await upsert(e.id, vector, e.payload)
       restoredIds.add(e.id)
       log.info(`capture-retry: restored (id=${e.id})`)
-    } catch {
+    } catch (err) {
+      if (isPermanentRejection?.(err)) {
+        droppedIds.add(e.id)
+        log.warn(
+          `capture-retry: abgewiesen, nicht erneut versucht (id=${e.id})`,
+          err,
+        )
+        continue
+      }
       // Storage noch immer down → Eintrag bleibt in der Queue
       continue
     }
@@ -298,7 +315,7 @@ export async function drainQueue(
   // rebuilding `kept` from a fresh read keeps them (restoredIds only
   // contains ids from the snapshot, so appends survive).
   const fresh = readQueue()
-  const kept = fresh.filter((e) => !restoredIds.has(e.id))
+  const kept = fresh.filter((e) => !restoredIds.has(e.id) && !droppedIds.has(e.id))
   const restored = restoredIds.size
   try {
     writeQueue(kept)
