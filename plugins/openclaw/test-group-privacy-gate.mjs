@@ -27,6 +27,9 @@ const EP_SEARCH = "/points/search";
 // wenn qdrant-client.ts kuenftig auf /points/query migriert, greift der Mock dort
 // bereits und der Test zeigt sofort, ob der Filter-Mittransport noch klappt.
 const EP_QUERY = "/points/query";
+// A test write must not count in the live agent registry.
+process.env.NEXUS_AGENT_SELFTEST = "1";
+
 const EP_POINTS = "/points";
 
 const handlers = {};
@@ -49,6 +52,8 @@ const mockApi = {
     autoRecall: true,
     autoCapture: true,
     accessLevel: "private",
+    // Writes go through the Nexus write gate since 10.11.2026.
+    writeGate: { url: "http://127.0.0.1:9122", key: "test-key" },
     embedding: { provider: "openai", apiKey: "test" },
   },
 };
@@ -77,6 +82,21 @@ globalThis.fetch = async (url, opts) => {
       text: async () => JSON.stringify(EMBED_RESPONSE),
       json: async () => EMBED_RESPONSE,
     };
+  }
+  // The write path is POST /write on the Nexus service (10.11.2026). Recorded
+  // as the "upsert" this privacy gate is about; Qdrant no longer sees writes.
+  if (u.includes("127.0.0.1:9122")) {
+    if (u.endsWith("/write") && opts && opts.method === "POST") {
+      let body;
+      try {
+        body = JSON.parse(opts.body ?? "{}");
+      } catch (e) {
+        throw new Error("Write-Gate-Body ist kein gueltiges JSON: " + e.message);
+      }
+      capturedUpserts.push({ body });
+      return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
   }
   if (u.includes(QDRANT_BASE)) {
     // Fund W36 (medium): Routing nach laengstem/praezisestem Pfad ZUERST —

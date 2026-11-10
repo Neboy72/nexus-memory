@@ -48,14 +48,18 @@ function makeTool(ruleTexts = [`niemals löschen: ${PROTECTED}`]) {
     id: `rule-${i}`,
     payload: { content, category: "rule" },
   }))
+  const backend = {
+    scrollFiltered: async () => rules,
+    upsert: async (_id, _vec, payload) => { captured.push(payload) },
+  }
   registerGuardrailOverrideTool(
     api,
-    {
-      scrollFiltered: async () => rules,
-      upsert: async (_id, _vec, payload) => { captured.push(payload) },
-    },
+    backend,
     { collection: "nexus" },
     { embed: async () => [0.1, 0.2] },
+    // The audit write goes through the shared gate; the mock carries the same
+    // upsert contract the production WriteGateClient implements.
+    backend,
   )
   return { tool, captured }
 }

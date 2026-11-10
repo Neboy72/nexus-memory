@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { Embedder } from "../lib/embedder.ts"
-import type { QdrantClient } from "../lib/qdrant-client.ts"
+import type { MemoryWriter } from "../lib/write-gate.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { limitText } from "../lib/text-preview.ts"
@@ -20,7 +20,7 @@ const SCOPE_PATTERN_TEXT = "[a-z0-9][a-z0-9-]{0,39}"
 export function registerStoreTool(
   api: OpenClawPluginApi,
   embedder: Embedder,
-  qdrantClient: QdrantClient,
+  writer: MemoryWriter,
   cfg: NexusConfig,
   toolName = NEXUS_STORE_TOOL,
   centroidCache?: ScopeCentroidCache,
@@ -47,10 +47,25 @@ export function registerStoreTool(
               "infer the area automatically (self-organizing).",
           }),
         ),
+        source: Type.Optional(
+          Type.String({
+            description:
+              "Where the text came from: 'paperless', 'wiki', 'document', " +
+              "'web', 'mail' ... for imported material; omit for a statement " +
+              "made in this conversation. The write gate uses this to keep " +
+              "document text out of category 'rule' and to set the access level.",
+          }),
+        ),
       }),
       async execute(
         _toolCallId: string,
-        params: { text: string; category?: string; access_level?: string; scope?: string },
+        params: {
+          text: string
+          category?: string
+          access_level?: string
+          scope?: string
+          source?: string
+        },
       ) {
         const category = params.category ?? "fact"
         const requestedLevel = (params.access_level ?? cfg.accessLevel) as string
@@ -85,6 +100,22 @@ export function registerStoreTool(
                 text:
                   `Memory store failed: invalid access_level "${params.access_level}". ` +
                   `Allowed: ${ACCESS_LEVELS.join(", ")}`,
+              },
+            ],
+          }
+        }
+
+        // Fail-closed on a non-string source too: the write gate derives the
+        // access level and the rule-origin verdict from it, so a smuggled
+        // object/array must not reach the payload.
+        const rawSource: unknown = params.source
+        if (rawSource !== undefined && typeof rawSource !== "string") {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: 'Memory store failed: source must be a string (e.g. "paperless", "wiki", "chat").',
               },
             ],
           }
@@ -167,34 +198,51 @@ export function registerStoreTool(
           }
           if (!scope) scope = "default"
 
+          // Provenance is mandatory at the gate: a declared source wins, the
+          // default names the tool itself (a statement from this conversation).
+          const declaredSource =
+            typeof rawSource === "string" ? rawSource.trim() : ""
           const payload = {
             text: params.text,
             access_level: accessLevel,
             category,
-            source: "openclaw_tool",
+            source: declaredSource || "openclaw_tool",
             source_url: "",
             confidence: 0.9,
             created_at: new Date().toISOString(),
             scope,
           }
 
-          await qdrantClient.upsert(id, vector, payload)
+          // Every write goes through the shared gate (lib/write-gate.ts):
+          // empty text, labels, provenance and the rule-origin check are
+          // enforced by the service before anything reaches the collection.
+          const written = await writer.upsert(id, vector, payload)
 
           const preview = limitText(params.text, 80)
 
           // H139: echo the effective values so the caller always sees where
-          // the memory actually landed (no more silent default fallback).
+          // the memory actually landed. The gate may have TIGHTENED the level
+          // (a paperless source forces private), so the service's answer wins
+          // over the locally computed one when it carries a value.
+          const effectiveScope = written?.scope ?? scope
+          const effectiveCategory = written?.category ?? category
+          const effectiveLevel = written?.access_level ?? accessLevel
           return {
             content: [
               {
                 type: "text" as const,
                 text:
                   `Stored: "${preview}" ` +
-                  `(scope: ${scope}, category: ${category}, access_level: ${accessLevel})`,
+                  `(scope: ${effectiveScope}, category: ${effectiveCategory}, ` +
+                  `access_level: ${effectiveLevel})`,
               },
             ],
           }
         } catch (err) {
+          // The gate's reason ("leerer Inhalt", "Regel aus einer Dokument-
+          // oder Webquelle") must not be echoed to the model: the Nr-369
+          // contract keeps tool error responses generic and the detail in the
+          // log. `isError: true` is what makes the failure loud.
           log.error("store tool failed", err)
           return {
             isError: true,

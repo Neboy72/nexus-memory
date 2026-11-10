@@ -27,6 +27,9 @@ if (!existsSync(DIST_ENTRY)) {
 // Die PRODUKTIONS-Queue (~/.openclaw/workspace/data/capture-retry-queue.jsonl)
 // wird nie mehr angefasst: unlinkSync auf dem echten Pfad konnte bei einem
 // Lauf ohne Sandbox echte, noch nicht restaurierte Captures löschen.
+// A test write must not count in the live agent registry.
+process.env.NEXUS_AGENT_SELFTEST = "1"
+
 const QDRANT_BASE = "localhost:6333" // Single-Source für Mock + pluginConfig (W39/F4)
 const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "nexus-queue-test-"))
 process.env.NEXUS_CAPTURE_QUEUE_FILE = join(SANDBOX_DIR, "capture-retry-queue.jsonl")
@@ -47,6 +50,13 @@ globalThis.fetch = async (url, opts) => {
     if (!qdrantUp) return { ok: false, status: 503, text: async () => "simulated outage", json: async () => ({}) }
     return { ok: true, status: 200, json: async () => ({ result: {} }) }
   }
+  // Writes go through the Nexus write gate (10.11.2026). Same outage model:
+  // down = gate unreachable, up = gate accepts. The retry queue must behave
+  // exactly as before, just against the new write path.
+  if (u.includes("127.0.0.1:9122")) {
+    if (!qdrantUp) return { ok: false, status: 503, text: async () => "simulated outage", json: async () => ({}) }
+    return { ok: true, status: 200, json: async () => ({ status: "ok" }), text: async () => '{"status":"ok"}' }
+  }
   if (u.includes("api.github.com")) {
     // W39/F1: checkForUpdate() fire-and-forget — deterministisch beantworten
     return { ok: true, status: 200, json: async () => ({ tag_name: "v0.0.0-noop", html_url: "http://localhost/noop" }), text: async () => "{}" }
@@ -66,6 +76,7 @@ const mockApi = {
     autoRecall: false,
     autoCapture: true,
     accessLevel: "private",
+    writeGate: { url: "http://127.0.0.1:9122", key: "test-key" },
     embedding: { provider: "openai", apiKey: "test" },
   },
 }

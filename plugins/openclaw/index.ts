@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import { Embedder } from "./lib/embedder.ts"
 import { QdrantClient } from "./lib/qdrant-client.ts"
+import { WriteGateClient } from "./lib/write-gate.ts"
 import { nexusConfigSchema, parseConfig } from "./lib/config.ts"
 import { ScopeCentroidCache } from "./lib/scope-auto.ts"
 import { buildCaptureHandler } from "./hooks/capture.ts"
@@ -229,12 +230,18 @@ export default {
     // centroid cache feeds auto-recall gating + auto-capture tagging.
     const centroidCache = new ScopeCentroidCache(cfg.qdrantUrl, cfg.collection)
 
+    // One writer per origin kind. All of them POST to the Nexus service's
+    // /write gate; none falls back to a direct Qdrant write.
+    const chatWriter = new WriteGateClient(cfg, "chat")
+    const sessionWriter = new WriteGateClient(cfg, "session")
+    const manualWriter = new WriteGateClient(cfg, "manual")
+
     // Register tools
     registerSearchTool(api, embedder, qdrantClient, cfg)
-    registerStoreTool(api, embedder, qdrantClient, cfg, NEXUS_STORE_TOOL, centroidCache)
+    registerStoreTool(api, embedder, chatWriter, cfg, NEXUS_STORE_TOOL, centroidCache)
     registerForgetTool(api, embedder, qdrantClient, cfg)
     registerGuardrailCheckTool(api, qdrantClient, cfg)
-    registerGuardrailOverrideTool(api, qdrantClient, cfg, embedder)
+    registerGuardrailOverrideTool(api, qdrantClient, cfg, embedder, manualWriter)
 
     // Register Knowledge Graph tools (v0.7.0)
     registerGraphTraverseTool(api, qdrantClient, cfg)
@@ -312,7 +319,7 @@ export default {
     log.info("self-check-warning: message_sending hook aktiv (max 1 Warnung pro Session)")
 
     if (cfg.autoCapture) {
-      api.on("agent_end", buildCaptureHandler(embedder, qdrantClient, cfg, centroidCache))
+      api.on("agent_end", buildCaptureHandler(embedder, sessionWriter, cfg, centroidCache))
     }
 
     // Register service

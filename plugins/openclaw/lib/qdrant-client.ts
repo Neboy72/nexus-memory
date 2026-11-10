@@ -56,7 +56,7 @@ function registryAgentId(): string {
   return (process.env.NEXUS_AGENT_ID || "").trim() || "openclaw"
 }
 
-function recordAgentAccess(read: boolean, write: boolean): void {
+export function recordAgentAccess(read: boolean, write: boolean): void {
   if (!read && !write) return
   // Self-tests are not agents: a probe must not register or count.
   const selftest = (process.env.NEXUS_AGENT_SELFTEST || "").trim().toLowerCase()
