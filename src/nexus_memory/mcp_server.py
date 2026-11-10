@@ -649,6 +649,60 @@ def _normalize_scope(scope) -> str:
     return "default"
 
 
+def _write_origin(source: str) -> str:
+    """Herkunftsart fuer das Schreibtor: ``chat``, wenn keine Quelle genannt ist.
+
+    Ein Aufruf ohne Quelle kommt aus einem Gespraech — der Agent gibt wieder,
+    was er gehoert hat. Jede andere Quelle traegt ihren eigenen Namen, damit
+    Text aus Dokument, Webseite oder Cron nicht als Regel durchgeht.
+    """
+    return str(source or "").strip().lower() or "chat"
+
+
+_KEYWORD_INDEX_MODULE: object = False  # False = noch nicht geladen
+
+
+def _keyword_index_module():
+    """Das Stichwortindex-Modul aus dem Plugin-Verzeichnis, sonst ``None``.
+
+    Gebaut und gelesen wird der Index im Hermes-Plugin; der Server zieht nach
+    einem Schreiben nur nach. In einer reinen Paketinstallation fehlt der
+    Pfad — dann bleibt das Schreiben davon unberuehrt.
+    """
+    global _KEYWORD_INDEX_MODULE
+    if _KEYWORD_INDEX_MODULE is not False:
+        return _KEYWORD_INDEX_MODULE
+    module = None
+    path = Path(NEXUS_REPO_PATH) / "plugins" / "memory" / "nexus" / "keyword_index.py"
+    if path.is_file():
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("nexus_keyword_index", path)
+            if spec is not None and spec.loader is not None:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+        except Exception as exc:
+            logging.debug(f"Stichwortindex-Modul nicht ladbar: {exc}")
+    _KEYWORD_INDEX_MODULE = module
+    return module
+
+
+def _index_written_point(payload: dict) -> None:
+    """Zieht einen erfolgreich geschriebenen Punkt im Stichwortindex nach.
+
+    Fehler duerfen das Schreiben nicht verhindern: der Index ist eine Zugabe,
+    fehlt der Eintrag, faellt die Einspielung auf die Aehnlichkeitssuche
+    zurueck.
+    """
+    module = _keyword_index_module()
+    if module is None:
+        return
+    try:
+        module.upsert_point(payload, collection=COLLECTION_NAME)
+    except Exception as exc:
+        logging.debug(f"Stichwortindex nicht nachgezogen: {exc}")
+
+
 def _access_levels_compatible(new_level: str, old_level) -> bool:
     """May a new fact at ``new_level`` supersede an old one at ``old_level``?
 
@@ -1139,6 +1193,41 @@ class MemoryStore:
 
         entry_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
+
+        # Build provenance (v2.8.0 feature) — before the gate, which fills in
+        # a missing origin and returns it cleaned up.
+        provenance = {
+            "source_type": "mcp",
+            "created_by": "nexus-memory-server",
+            "timestamp": created_at,
+            "confidence": confidence if confidence is not None else 0.7,
+        }
+        if source_url:
+            provenance["source_url"] = source_url
+        if source:
+            provenance["source"] = source
+
+        # ── Gemeinsames Schreibtor (10.11.2026): leerer Inhalt und Etiketten
+        # werden abgewiesen, die Herkunft bleibt nie leer, und die
+        # Zugriffsstufe ist die strengste aus Quelle und Angabe. Eine
+        # Abweisung ist eine Antwort mit Grund, kein Schreibvorgang.
+        from nexus.write_gate import prepare as _prepare_write, last_reason as _write_refusal
+        prepared = _prepare_write(
+            content=text,
+            category=category,
+            access_level=access_level,
+            source=source,
+            provenance=provenance,
+            source_type=_write_origin(source),
+        )
+        if prepared is None:
+            return {"status": "rejected", "reason": _write_refusal()}
+        text = prepared["content"]
+        category = prepared["category"]
+        access_level = prepared["access_level"]
+        source = prepared["source"]
+        provenance = prepared["provenance"]
+
         vector = await self._embed(text, is_query=False)  # stored doc, not a query
 
         # ── Auto-scoping (self-organizing memory, project rule 07.09: full
@@ -1249,18 +1338,6 @@ class MemoryStore:
         else:  # normal
             valid_until = (datetime.now(timezone.utc) + timedelta(days=90)).isoformat()
 
-        # Build provenance (v2.8.0 feature)
-        provenance = {
-            "source_type": "mcp",
-            "created_by": "nexus-memory-server",
-            "timestamp": created_at,
-            "confidence": confidence if confidence is not None else 0.7,
-        }
-        if source_url:
-            provenance["source_url"] = source_url
-        if source:
-            provenance["source"] = source
-
         # Temporal validity (Unreleased): valid_from defaults to created_at,
         # override via effective_from for retro-dated imports. valid_to=None
         # means "still valid / open interval".
@@ -1320,6 +1397,12 @@ class MemoryStore:
             self.vector_name,
         )
         logging.info(f"Stored memory {entry_id[:8]} [{access_level}] cat={category}")
+
+        # ── Stichwortindex: den Punkt nach erfolgreichem Schreiben nachziehen.
+        # Der BM25-Index weiter unten deckt nur den In-Memory-Retriever; der
+        # FTS5-Index der Einspielung braucht denselben Eintrag. Fehler duerfen
+        # das Schreiben nicht verhindern.
+        _index_written_point(payload)
 
         # ── Supersession marking (post-persist, review fix): the new point
         # was stored successfully, so it is now safe to deprecate the old

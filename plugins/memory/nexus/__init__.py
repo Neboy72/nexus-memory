@@ -1091,6 +1091,49 @@ def _load_keyword_index_module() -> Any:
 
 _keyword_index_mod = _load_keyword_index_module()
 
+
+def _gate_prepare(**fields: Any) -> Optional[Dict[str, Any]]:
+    """Bereinigter Schreibvorgang aus dem gemeinsamen Schreibtor.
+
+    Das Tor wird beim ersten Schreiben geladen, nicht beim Laden des Plugins:
+    der Wirt importiert dieses Modul, bevor ``nexus``/``nexus_memory``
+    importierbar sind. Fehlt das Tor, wird ungeprueft geschrieben — ein
+    fehlendes Pruefmodul darf das Gedaechtnis nicht stilllegen; der Fall wird
+    aber protokolliert, nicht verschwiegen.
+    """
+    try:
+        from nexus.write_gate import prepare
+    except Exception as exc:
+        logger.warning("Schreibtor nicht verfuegbar (%s) — schreibe ungeprueft", exc)
+        return dict(fields)
+    return prepare(**fields)
+
+
+def _gate_rejection() -> Dict[str, Any]:
+    """Antwort auf einen abgewiesenen Schreibvorgang — mit Grund, wenn bekannt."""
+    reason = "abgewiesen"
+    try:
+        from nexus.write_gate import last_reason
+        reason = last_reason() or reason
+    except Exception:
+        pass
+    return {"status": "rejected", "reason": reason}
+
+
+def _index_written_point(payload: Dict[str, Any], collection: str) -> None:
+    """Zieht einen erfolgreich geschriebenen Punkt im Stichwortindex nach.
+
+    Fehler duerfen das Schreiben nicht verhindern: der Index ist eine Zugabe,
+    fehlt der Eintrag, faellt die Einspielung auf die Aehnlichkeitssuche
+    zurueck.
+    """
+    if _keyword_index_mod is None:
+        return
+    try:
+        _keyword_index_mod.upsert_point(payload, collection=collection)
+    except Exception as exc:
+        logger.debug("Stichwortindex nicht nachgezogen: %s", exc)
+
 # Stichwortliste je Einspielung und RRF-Daempfung. Ueber die Umgebung
 # einstellbar, damit Messlaeufe die Werte variieren koennen.
 _FTS_CANDIDATE_LIMIT = _env_int_bounded("NEXUS_FTS_CANDIDATES", 32, 1, 500)
@@ -2799,6 +2842,25 @@ class NexusMemoryProvider:
                 source_url: str = "", scope: str = "default", **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
         eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Gemeinsames Schreibtor (10.11.2026): leerer Inhalt und Etiketten
+        # werden abgewiesen, die Herkunft bleibt nie leer, und die
+        # Zugriffsstufe ist die strengste aus Quelle und Angabe. Eine
+        # Abweisung ist eine Antwort mit Grund, kein Schreibvorgang.
+        # ``chat`` ist die Herkunftsart dieses Weges — das Plugin sieht
+        # Gespraeche, keine Dokumente; die feinere Quelle steht in ``source``.
+        prepared = _gate_prepare(
+            content=text, category=category, access_level=access_level,
+            source=source,
+            provenance={"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
+                        "timestamp": ts, "confidence": confidence},
+            source_type="chat",
+        )
+        if prepared is None:
+            return _gate_rejection()
+        text = prepared["content"]
+        category = prepared["category"]
+        access_level = prepared["access_level"]
+        source = prepared["source"]
         vector = self._embedder.embed(text, is_query=False)  # stored doc, not a query
         # v0.15 Memory Dynamics: salience via helper (clamps to [0,1] and
         # applies category defaults; review fix: values outside 0-1 were stored
@@ -2839,8 +2901,7 @@ class NexusMemoryProvider:
                     "lifecycle_status": "canonical", "salience": eff_salience, "use_count": 0,
                     "scope": scope,
                     "memory_injection_flag": bool(injection_hits),
-                    "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
-                                   "timestamp": ts, "confidence": confidence}}
+                    "provenance": prepared["provenance"]}
         # Writes carry the vector NAME inside each point (``using`` is read-only).
         from nexus_memory.collection_vectors import upsert_named as _upsert_named
         _upsert_named(
@@ -2848,6 +2909,8 @@ class NexusMemoryProvider:
             [qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
             getattr(self, "vector_name", None),
         )
+        # Erst nach erfolgreichem Schreiben: der Punkt ist jetzt auffindbar.
+        _index_written_point(payload, self._collection)
         try: self._bump_agent_stats(write=True)
         except Exception: pass
         return {"status": "ok", "id": eid, "category": category}
@@ -3497,6 +3560,11 @@ class NexusMemoryProvider:
                 break
             try:
                 store_result = self._upsert_entity(entity, access_level=access_level, source=source)
+                # Das Schreibtor kann eine Entity abweisen (leerer Inhalt); dann
+                # gibt es keine Kennung, und eine Kante darauf waere falsch.
+                if store_result.get("status") != "ok":
+                    logger.info("Entity abgewiesen: %s", store_result.get("reason", ""))
+                    continue
                 entity_ids[entity.name] = store_result["id"]
             except Exception as exc:
                 logger.warning("Entity store failed: %s", exc)
@@ -3572,7 +3640,7 @@ class NexusMemoryProvider:
                     if self._write_stop.is_set() or not self._qdrant:
                         break
                     try:
-                        self._upsert(
+                        written = self._upsert(
                             text=fact["text"],
                             category=fact["category"],
                             # Facts extracted from a conversation inherit that
@@ -3588,7 +3656,10 @@ class NexusMemoryProvider:
                             # 0.5) decay instead of sticking forever.
                             salience=fact["confidence"],
                         )
-                        stored += 1
+                        # Ein abgewiesener Eintrag (Schreibtor) ist nicht
+                        # gespeichert und darf nicht mitgezaehlt werden.
+                        if written.get("status") == "ok":
+                            stored += 1
                     except Exception as exc:
                         logger.warning("Session fact store failed: %s", exc)
                 if stored:
@@ -3647,6 +3718,24 @@ class NexusMemoryProvider:
         evidence = str(getattr(entity, "evidence", "") or "").strip()
         if evidence:
             text += f" — {evidence}"
+        # Gemeinsames Schreibtor (10.11.2026): dieselbe Pruefung wie in
+        # ``_upsert`` — Herkunft und Zugriffsstufe kommen bereinigt zurueck.
+        prepared = _gate_prepare(
+            content=text, category="entity", access_level=access_level,
+            source=source,
+            provenance={
+                "source_type": "hermes-plugin",
+                "created_by": "nexus-memory-entity-extractor",
+                "timestamp": ts,
+                "confidence": entity.confidence,
+            },
+            source_type="chat",
+        )
+        if prepared is None:
+            return _gate_rejection()
+        text = prepared["content"]
+        access_level = prepared["access_level"]
+        source = prepared["source"]
         # Suchvarianten (10.11.2026): Der sichtbare Text bleibt, wie er ist; die
         # Wortteile zusammengeschriebener Woerter und Umlautschreibweisen kommen
         # in ``search_terms`` und zusaetzlich in den Einbettungstext. Grund
@@ -3685,12 +3774,7 @@ class NexusMemoryProvider:
             # beats implicit (documented in the data, not only in the code).
             "salience": 0.5,
             "use_count": 0,
-            "provenance": {
-                "source_type": "hermes-plugin",
-                "created_by": "nexus-memory-entity-extractor",
-                "timestamp": ts,
-                "confidence": entity.confidence,
-            },
+            "provenance": prepared["provenance"],
         }
         # Writes carry the vector NAME inside each point (``using`` is read-only).
         from nexus_memory.collection_vectors import upsert_named as _upsert_named
@@ -3699,6 +3783,8 @@ class NexusMemoryProvider:
             [qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
             getattr(self, "vector_name", None),
         )
+        # Erst nach erfolgreichem Schreiben: der Punkt ist jetzt auffindbar.
+        _index_written_point(payload, self._collection)
         return {"status": "ok", "id": eid, "entity_type": entity.entity_type}
 
     def on_memory_write(self, action: str, target: str, content: str,
