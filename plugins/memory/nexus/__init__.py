@@ -1050,7 +1050,7 @@ def _keyword_boost_order(points: List[Any], query: str) -> List[Any]:
     return sorted(points, key=_key, reverse=True)
 
 
-_KEYWORD_CANDIDATE_LIMIT = 12
+_KEYWORD_CANDIDATE_LIMIT = 6  # 12 lange Volltexttreffer frassen den Zeichenvorrat
 _KEYWORD_CANDIDATE_TOKENS = 3
 
 
@@ -2530,7 +2530,7 @@ class NexusMemoryProvider:
                 elif my_scope and p_scope != "default" and p_scope != my_scope:
                     continue
                 if text:
-                    item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:500]}"
+                    item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: {text[:400]}"
                     # Review fix R2: whole-item slicing (konsistent mit recall-Slice)
                     if total + len(item) > budget:
                         if budget - total < 80:
