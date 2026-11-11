@@ -142,8 +142,10 @@ def _block(plug, punkte, frage):
         if gesamt >= BUDGET:
             break
         payload = punkt.payload or {}
-        text = payload.get("content", "")
-        if len(str(text).strip()) < MIN_CHARS:
+        # Inhalt und Grenze kommen aus dem Plugin, nicht aus einer Abschrift:
+        # sonst misst die Sonde eine aeltere Regel als die, die laeuft.
+        text = plug._point_text(payload)
+        if len(text.strip()) < plug._point_min_chars(payload):
             continue
         if (payload.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
             continue

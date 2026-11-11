@@ -61,6 +61,16 @@ Diese Nexus-Features hat Tencent (Stand 20.09.2026) nicht — das bleibt unser V
 - **Status:** Auf Wunsch (24.10.) NICHT heute — hier geparkt.
 - **Nächster Schritt:** Rückweg zuerst belegen (Alt-Passwort-Übernahme), dann Erststart + Ändern + Reset in einem Zug mit Tests.
 
+## 7. Plugin für DSH (DeepSeek Harness) — automatische Injection statt MCP-Abfrage (gesetzt 03.11., Ausführung offen)
+
+- **Quelle:** `plastic-labs/dsh-honcho` (Honcho bringt ein fertiges Memory-Plugin für DSH mit, Doku `honcho.dev/docs/v3/guides/integrations/deepseek-harness`); daneben `kingcharleslzy-ai/dsh-honcho-memory`. Beide Repos am 04.11. abgefragt und vorhanden; eine GitHub-Suche nach DSH-Memory-Plugins liefert rund zwei Dutzend weitere. Es gibt damit bereits einen kleinen Markt an DSH-Memory-Plugins.
+- **Was:** Ein Paket für DSH, das Nexus' Gedächtnis **automatisch** in den Lauf injiziert und Turns zurückschreibt, statt dass der Agent per MCP selbst abfragen muss. DSH ist ausdrücklich „alles ist ein Plugin" (Cordis): Paket mit `name`, `inject`, `Config`, `apply(ctx, config)`; Werkzeuge und Hooks werden dort registriert.
+- **Warum für Nexus:** Damit hätte Nexus vier Anbindungen (Hermes-Plugin, OpenClaw-Plugin, Claude-Code-Plugin, DSH-Plugin) und deckt damit die zweite große Terminal-Hülle neben Claude Code ab. Der Unterschied ist qualitativ: MCP verlangt, dass der Agent von sich aus abfragt; ein Plugin injiziert immer. Genau das war Nebos Punkt am 03.11.
+- **Aufwand (Schätzung, ungeprüft):** 1 bis 2 konzentrierte Tage inklusive Tests, sofern die Cordis-Schnittstelle hält, was die Doku verspricht. Vor jeder Zahl: Plugin-Doku (`deepseek-harness.github.io/deepseek-harness/en/develop/`) und `dsh-honcho` lesen.
+- **Ehrlichkeit:** Ein DSH-Plugin ist eine Veröffentlichung für Fremde. Es gilt die GitHub-Pflicht: nur was durch Code und Tests gedeckt ist, kommt auf die Seite.
+- **Status:** Auf Nebos Wunsch (03.11.2026) geparkt, nicht begonnen.
+- **Nächster Schritt:** Schnittstelle und Honcho-Plugin lesen, belastbare Aufwandsschätzung vorlegen, dann GO oder Ablehnung durch Nebo.
+
 ## Prüfregeln für Adaptions-Kandidaten
 
 - Updates an Nexus NUR nach Tests auf `~/nexus-memory-test/` (HART-Regel, siehe Memory).

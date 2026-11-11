@@ -39,6 +39,11 @@ Die Regeln:
    Nachweis wird der Eintrag als ``fact`` gespeichert, nicht verworfen: kein
    Inhalt geht verloren, aber eine Regel entsteht so nicht. Regeln werden bei
    jedem Turn eingespielt und wirken damit dauerhaft.
+6. Ein Zustandswert (Eigenschaftswort mit Zahl dahinter, etwa ``Fassung``,
+   ``Port``, ``Preis``) wird gekennzeichnet, nicht umgeschrieben: das Ergebnis
+   traegt ``state_value: True``, bei langen Texten zusaetzlich einen ``hint``
+   auf einen eigenen Kurzfakt. Kein Fehler, kein Blockieren, kein zweiter
+   Schreibvorgang.
 """
 
 from __future__ import annotations
@@ -93,6 +98,27 @@ _DIGIT = re.compile(r"\d")
 _SHORT_CODE = re.compile(r"^[A-ZÄÖÜ][A-ZÄÖÜ0-9+\-/.]{0,7}$")
 #: Finite Verbform im Wert — dann ist der Wert ein Satz, kein Etikett.
 _FINITE_VERB = re.compile(r"\b\w{3,}(?:t|en|iert)\b")
+
+#: Laenge, ab der ein Text als lang gilt. Der eingespielte Block fasst 2400
+#: Zeichen und zeigt je Punkt ein Fenster von 400 — ein Zustandswert in einem
+#: langen Text steht dort auf Rang 17 bis 26 statt auf 1 bis 3.
+_LONG_TEXT_CHARS = 400
+
+#: Eigenschaftswoerter, hinter denen ein Zustandswert stehen kann.
+_STATE_WORDS = ("fassung", "version", "stand", "anzahl", "betrag", "preis",
+                "kostet", "port", "adresse")
+#: Eigenschaftswort und Wert duerfen hoechstens so viele Zeichen auseinander
+#: stehen; ein Wert am Satzende gehoert nicht mehr zu einem Wort am Anfang.
+_STATE_PAIR_RE = re.compile(
+    r"\b(?:" + "|".join(_STATE_WORDS) + r")\b[^\n]{0,24}?(\d[\d.,]*)",
+    re.IGNORECASE,
+)
+
+#: Satz fuer den Aufrufer, wenn der Zustandswert in einem langen Text steht.
+_STATE_VALUE_HINT = (
+    "Bitte zusätzlich einen eigenen Kurzfakt anlegen: Ding, Wert, Herkunft "
+    "und Datum — in einem langen Text geht der Wert im eingespielten Block unter."
+)
 
 #: Namen mit Kategorie-Praefix sind Etiketten, keine Fakten.
 _CATEGORY_PREFIXES = frozenset({
@@ -164,6 +190,33 @@ def _is_label(text: str) -> bool:
     if len(words) > 3:
         return False
     return not _FINITE_VERB.search(value)
+
+
+def _value_counts(value: str) -> bool:
+    """Zahl, Ziffernfolge mit Punkt oder Versionsnummer — keine bloße Ziffer.
+
+    ``Port 8`` ist keine Angabe, ``Port 8080`` und ``Fassung 0.23.1`` sind es.
+    """
+    return len(re.sub(r"\D", "", value)) >= 2 or "." in value
+
+
+def has_state_value(text: str) -> bool:
+    """Steckt ein Zustandswert im Text — ein Eigenschaftswort mit Wert dahinter?
+
+    Ein Zustandswert ist eine Angabe, die sich aendert, ohne dass der Text
+    sich aendert: Fassung, Version, Stand, Anzahl, Betrag, Preis, Port,
+    Adresse. Solche Werte gehoeren als eigener Kurzfakt in den Speicher; in
+    einem Gespraechsprotokoll stehen sie auf Rang 17 bis 26 und fallen aus dem
+    eingespielten Block (2400 Zeichen, Fenster 400 je Punkt).
+
+    Eng gehalten: nur diese Woerter, hoechstens 24 Zeichen bis zum Wert, und
+    der Wert muss mehr als eine Ziffer sein. Ein Datum oder eine Uhrzeit
+    allein ist kein Zustandswert.
+    """
+    for match in _STATE_PAIR_RE.finditer(text or ""):
+        if _value_counts(match.group(1)):
+            return True
+    return False
 
 
 def _sentence_count(text: str) -> int:
@@ -340,10 +393,19 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
         return _refuse("Etikett statt Aussage (kein Satz)", cat, source)
 
     src = str(source or "").strip()
-    return {
+    prepared = {
         "content": text,
         "category": cat,
         "access_level": _resolve_level(access_level, origin_text),
         "source": src,
         "provenance": _build_provenance(prov_input, src, str(source_type or "")),
     }
+    if has_state_value(text):
+        # Nur ein Kennzeichen, kein neuer Inhalt: der Aufrufer schreibt es in
+        # den Payload, damit die Einspielung den Punkt am Laengenfilter
+        # vorbeilaesst (12 statt 40 Zeichen). Lange Texte bekommen zusaetzlich
+        # einen Hinweis auf den eigenen Kurzfakt — kein Fehler, keine Abweisung.
+        prepared["state_value"] = True
+        if len(text) >= _LONG_TEXT_CHARS:
+            prepared["hint"] = _STATE_VALUE_HINT
+    return prepared
