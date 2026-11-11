@@ -1,0 +1,23 @@
+Wie lange wird beim Protokoll-Merge gewartet, bis geflusht wird|1.2s|fact
+Was kostet die Tierhalterhaftpflicht im Jahr|36,89|fact
+Welcher Port gehört zur Kette 5077-5078|9220|fact
+Welche Fassung hat die Kette 5077-5078|v0.21.2|fact
+Wie viele Dateien hat der Vor-Update-Ordner|3.204|fact
+Auf wie viele Token soll der Kontext-Schnitt gesenkt werden|280.000|fact
+Wie viele Token sind die Obergrenze für echte Arbeit|400.000|fact
+Welches Skript liefert die Ollama-Usage|ollama|fact  # guard-ok: Testfrage, Wert stammt aus dem Bestand
+Wann war der Brave-Neustart, nach dem alle Tabs zurückkamen|2026-10-20|fact
+Welche Anwendung erfordert eigenen Betrieb statt kleiner Baustein|DeepTutor|fact
+Welcher Wochentag ist der Termin für den Research Digest|Mo 09:00|fact
+Welche Ports hat die Kette 5077-5078 außer 9220|8642|fact
+Wie viele Token hatte die Session vom 16.10. um 08:21|1.190.653|session
+Welche Katalogantrags-Nummer stand bei der ClawHub-Freischaltung|150841|session
+Für welche Fassung fehlte die ClawHub-Freischaltung|1.22.1|session
+Um welche Uhrzeit startete die Session mit dem sauberen Anfang|20:36:40|session
+Auf welches Modell wurde Claude Code am 15.10. umgestellt|V4.1 Flash|session  # guard-ok: Testfrage, Wert stammt aus dem Bestand
+Welcher Ordner sichert die Einstellungen vor dem Kimi-Ausbau|pre-kimi2.7-removal|session  # guard-ok: Testfrage, Wert stammt aus dem Bestand
+Welche Testdatei brauchte das POSIX-Merkmal fcntl|conftest.py|session
+Welches Testmerkmal wird auf fcntl geprüft|FCNTL_AVAILABLE|session
+Welcher Fehler trat durch doppeltes encoding beim Lesen auf|TypeError|session
+Wie viele Teile wurden in der Aufgabe 0196b853 umgesetzt|fünf|session
+Welcher Katalogantrag lief technisch ins Leere|tekni1|session

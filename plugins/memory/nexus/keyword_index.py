@@ -149,11 +149,22 @@ def rrf_fuse(ranked_id_lists: Sequence[Sequence[Any]], k: int = 60) -> List[str]
     return sorted(first_seen, key=lambda key: (-scores[key], first_seen[key]))
 
 
+def payload_text(payload: Optional[Dict[str, Any]]) -> str:
+    """Inhalt eines Punktes: ``content``, sonst ``text``.
+
+    Dieselbe Regel wie in der Einspielung. Ohne den Rueckfall indizierte der
+    Stichwortindex 631 Punkte mit leerem Text — sie waren ueber BM25 nicht
+    auffindbar, obwohl ihr Inhalt im Payload steht.
+    """
+    src = payload or {}
+    return str(src.get("content") or src.get("text") or "")
+
+
 def _slim_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Nur die Felder, die die Einspielung zum Filtern und Anzeigen braucht."""
     src = payload or {}
-    keep = ("content", "category", "lifecycle_status", "access_level", "scope",
-            "search_terms")
+    keep = ("content", "text", "category", "lifecycle_status", "access_level",
+            "scope", "search_terms", "state_value")
     return {key: src[key] for key in keep if key in src}
 
 
@@ -200,7 +211,7 @@ def build_index(points: Iterable[Any], path: Optional[os.PathLike] = None,
         fts_batch: List[Tuple[str, str]] = []
         for point in points:
             pid, payload = _point_parts(point)
-            body = index_body(payload.get("content"), payload.get("search_terms"))
+            body = index_body(payload_text(payload), payload.get("search_terms"))
             docs_batch.append((pid, json.dumps(payload, ensure_ascii=False)))
             fts_batch.append((pid, body))
             count += 1
@@ -365,7 +376,7 @@ def upsert_point(point: Any, path: Optional[os.PathLike] = None,
                 # Eine andere Sammlung teilt sich die Datei nicht.
                 return False
             pid, payload = _point_parts(point)
-            body = index_body(payload.get("content"), payload.get("search_terms"))
+            body = index_body(payload_text(payload), payload.get("search_terms"))
             with con:
                 # Alte Zeile zuerst entfernen: ein FTS5-Eintrag wird nicht
                 # durch INSERT OR REPLACE ersetzt, sondern ein zweites Mal

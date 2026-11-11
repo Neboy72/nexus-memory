@@ -356,6 +356,9 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
                 # NEXUS_SCOPE wins; else infer from scoped centroids on a
                 # CLEAR match; else 'default'. Fail-open, zero config.
                 "scope": _resolve_capture_scope(embedding),
+                # Kennzeichen aus dem Schreibtor: die Einspielung laesst
+                # Zustandswerte am Laengenfilter vorbei (12 statt 40 Zeichen).
+                **({"state_value": True} if prepared.get("state_value") else {}),
             }
         }]
     }).encode()

@@ -571,3 +571,236 @@ class TestBibliotheksweg:
 
         payload = qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
         assert payload["category"] == "fact"
+
+
+# ── 10. Zustandswert (11.11.2026) ────────────────────────────────────
+
+#: Kurzer Fakt mit Zustandswert — 21 Zeichen, faellt durch die 40er-Grenze.
+KURZER_ZUSTAND = "Hermes Fassung: 0.23.1"
+
+
+def _langer_zustand() -> str:
+    return ("Aus dem Protokoll: " + "Der Abend verlief ruhig und ohne Befund. " * 10
+            + "Die neue Fassung ist 0.23.1.")
+
+
+class TestZustandswertErkennen:
+    """Ein Zustandswert — Eigenschaftswort mit Zahl dahinter — wird
+    gekennzeichnet, nicht umgeschrieben: ``state_value`` im Ergebnis, bei
+    langem Text zusaetzlich ein Hinweis auf einen eigenen Kurzfakt."""
+
+    @pytest.mark.parametrize("text", [
+        KURZER_ZUSTAND,
+        "Der Einbetter hoert auf Port 9122",
+        "Die Qdrant-Version ist 1.20",
+        "Der Energieausweis kostet 99 Euro",
+        "Stand: 4711",
+        "Die Adresse lautet 192.168.31.206",
+    ])
+    def test_kurzer_text_bekommt_das_kennzeichen(self, text):
+        ergebnis = prepare(text)
+
+        assert ergebnis is not None
+        assert ergebnis["state_value"] is True
+        assert "hint" not in ergebnis, "kurzer Text braucht keinen Hinweis"
+        assert ergebnis["content"] == text.strip(), "das Tor schreibt nichts um"
+
+    def test_langer_text_bekommt_zusaetzlich_den_hinweis(self):
+        text = _langer_zustand()
+        assert len(text) >= 400, "Vorbedingung: dieser Text gilt als lang"
+
+        ergebnis = prepare(text)
+
+        assert ergebnis["state_value"] is True
+        assert "Kurzfakt" in ergebnis["hint"]
+        assert ergebnis["content"] == text, "der Hinweis ersetzt keinen Inhalt"
+
+    @pytest.mark.parametrize("text", [
+        FAKT,
+        "Was kostet der Energieausweis",
+        "Der Port steht noch nicht fest",
+        "Port 8",  # eine bloße Ziffer ist kein Zustandswert
+    ])
+    def test_ohne_zustandswert_bleibt_das_ergebnis_unveraendert(self, text):
+        ergebnis = prepare(text)
+
+        assert ergebnis is not None
+        assert "state_value" not in ergebnis
+        assert "hint" not in ergebnis
+
+    def test_ohne_zustandswert_gibt_es_auch_bei_langem_text_keinen_hinweis(self):
+        ergebnis = prepare("Der Abend verlief ruhig und ohne Befund. " * 20)
+
+        assert "state_value" not in ergebnis
+        assert "hint" not in ergebnis
+
+
+class TestZustandswertImPayload:
+    """Das Kennzeichen ist nur wirksam, wenn es im Payload landet."""
+
+    def test_kennzeichen_landet_im_payload(self, monkeypatch):
+        provider, gespeichert = _provider(monkeypatch)
+        monkeypatch.setattr(plugin, "_index_written_point", lambda *a, **k: None)
+
+        ergebnis = provider._upsert(text=KURZER_ZUSTAND, category="fact")
+
+        assert ergebnis["status"] == "ok"
+        assert gespeichert[0].payload["state_value"] is True
+
+    def test_ohne_zustandswert_kein_feld_im_payload(self, monkeypatch):
+        provider, gespeichert = _provider(monkeypatch)
+        monkeypatch.setattr(plugin, "_index_written_point", lambda *a, **k: None)
+
+        ergebnis = provider._upsert(text=FAKT, category="fact")
+
+        assert ergebnis["status"] == "ok"
+        assert "state_value" not in gespeichert[0].payload
+
+    def test_langer_text_reicht_den_hinweis_an_den_aufrufer_durch(self, monkeypatch):
+        provider, gespeichert = _provider(monkeypatch)
+        monkeypatch.setattr(plugin, "_index_written_point", lambda *a, **k: None)
+
+        ergebnis = provider._upsert(text=_langer_zustand(), category="session")
+
+        assert ergebnis["status"] == "ok"
+        assert "Kurzfakt" in ergebnis["hint"]
+        assert "hint" not in gespeichert[0].payload, "der Hinweis ist kein Inhalt"
+
+    def test_bibliotheksweg_schreibt_das_kennzeichen_mit(self, monkeypatch):
+        import nexus
+
+        from unittest.mock import MagicMock
+
+        antwort = MagicMock(status_code=200)
+        antwort.json.return_value = {"result": {"status": "ok"}}
+        antwort.text = '{"result": {"status": "ok"}}'
+        put = MagicMock(return_value=antwort)
+        monkeypatch.setattr("requests.put", put)
+
+        nexus.nexus_remember(KURZER_ZUSTAND, collection_name="test-collection")
+
+        payload = put.call_args.kwargs["json"]["points"][0]["payload"]
+        assert payload["state_value"] is True
+
+
+# ── 11. Inhalt mit Rueckfall und die Untergrenze fuer Zustandswerte ───
+
+
+class _Punkt:
+    """Minimaler Aehnlichkeitspunkt: Kennung, Anzeigewert, voller Payload."""
+
+    def __init__(self, pid, payload, score=0.9):
+        self.id, self.score, self.payload = pid, score, payload
+
+
+def _block_mit(punkte, frage, tmp_path, monkeypatch):
+    """Baut den Einspielblock ueber den echten Weg des Plugins (ohne Netz)."""
+    import threading
+
+    monkeypatch.setenv("NEXUS_FTS_DB", str(tmp_path / "fts.db"))
+    monkeypatch.setattr(plugin, "_keyword_index_mod", None)
+
+    class FakeQdrant:
+        def query_points(self, collection_name, query, limit, **kw):
+            return type("R", (), {"points": [_Punkt(p["id"], p["payload"])
+                                             for p in punkte]})()
+
+    prov = object.__new__(plugin.NexusMemoryProvider)
+    prov._prefetch_result = ""
+    prov._prefetch_lock = threading.Lock()
+    prov._collection = "testcoll"
+    prov._agent_context = "primary"
+    prov._chat_shared_cache = False
+    prov._scope_centroids = None
+    prov._skill_graph = None
+    prov._skill_graph_lock = threading.Lock()
+    prov._embedder = _Embedder()
+    prov._qdrant = FakeQdrant()
+    prov._graph_boost = lambda pts, **kw: []
+
+    prov._do_prefetch_inner(frage)
+    return prov._prefetch_result
+
+
+class TestInhaltMitRueckfall:
+    """631 Punkte tragen ihren Inhalt nur im Feld ``text``. Der Block las
+    ausschliesslich ``content`` und liess sie unsichtbar."""
+
+    @pytest.mark.parametrize("payload,erwartet", [
+        ({"content": "Der Verteiler steht im Flur"}, "Der Verteiler steht im Flur"),
+        ({"text": KURZER_ZUSTAND}, KURZER_ZUSTAND),
+        ({"content": "", "text": "Nur im Text"}, "Nur im Text"),
+        ({"content": "Gewinnt", "text": "Verliert"}, "Gewinnt"),
+        ({}, ""),
+        (None, ""),
+    ])
+    def test_content_sonst_text(self, payload, erwartet):
+        assert plugin._point_text(payload) == erwartet
+
+    def test_zustandswert_senkt_die_untergrenze_auf_zwoelf(self):
+        assert plugin._point_min_chars({}) == plugin._MIN_CONTENT_CHARS
+        assert plugin._point_min_chars({"state_value": True}) == 12
+
+    def test_kurzer_zustandswert_kommt_in_den_block(self, tmp_path, monkeypatch):
+        """23 Zeichen fallen durch die 40er-Grenze — mit Kennzeichen nicht.
+
+        Die Suite schaltet die Grenze ueber ``NEXUS_PREFETCH_MIN_CHARS=0`` ab
+        (conftest); hier gilt der Standardwert, sonst prueft der Test nichts.
+        """
+        monkeypatch.setattr(plugin, "_MIN_CONTENT_CHARS", 40)
+        block = _block_mit([{"id": "kurz", "payload": {
+            "content": KURZER_ZUSTAND, "category": "fact", "state_value": True}}],
+            "Welche Fassung hat Hermes", tmp_path, monkeypatch)
+
+        assert "0.23.1" in block
+
+    def test_kurzer_text_ohne_kennzeichen_bleibt_draussen(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(plugin, "_MIN_CONTENT_CHARS", 40)
+        block = _block_mit([{"id": "kurz", "payload": {
+            "content": KURZER_ZUSTAND, "category": "fact"}}],
+            "Welche Fassung hat Hermes", tmp_path, monkeypatch)
+
+        assert "0.23.1" not in block
+
+    def test_inhalt_nur_im_text_kommt_in_den_block(self, tmp_path, monkeypatch):
+        block = _block_mit([{"id": "nurtext", "payload": {
+            "text": "Der Heizöl-Lieferant ist Marsolek Brennstoffe",
+            "category": "fact"}}],
+            "Wer liefert unser Heizöl", tmp_path, monkeypatch)
+
+        assert "marsolek" in block.lower()
+
+
+class TestStichwortindexRueckfall:
+    """Der Stichwortindex muss denselben Rueckfall nutzen, sonst findet BM25
+    die Punkte ohne ``content`` weiterhin nicht."""
+
+    def test_payload_text_nutzt_denselben_rueckfall(self):
+        ki = _keyword_index_module()
+
+        assert ki.payload_text({"text": KURZER_ZUSTAND}) == KURZER_ZUSTAND
+        assert ki.payload_text({"content": "A", "text": "B"}) == "A"
+
+    def test_punkt_ohne_content_wird_indiziert_und_gefunden(self, tmp_path):
+        ki = _keyword_index_module()
+        db = tmp_path / "index.db"
+
+        ki.build_index([{"id": "nurtext", "payload": {"text": KURZER_ZUSTAND}}],
+                       path=db, collection="nexus")
+
+        treffer = ki.KeywordIndex(db, "nexus").search("Fassung 0.23.1")
+        assert [pid for pid, _ in treffer] == ["nurtext"]
+
+    def test_schlanker_payload_behaelt_text_und_kennzeichen(self, tmp_path):
+        ki = _keyword_index_module()
+        db = tmp_path / "index.db"
+
+        ki.build_index([{"id": "a", "payload": {
+            "text": KURZER_ZUSTAND, "state_value": True, "salience": 0.5}}],
+            path=db, collection="nexus")
+
+        treffer = ki.KeywordIndex(db, "nexus").search("Fassung")
+        payload = treffer[0][1]
+        assert payload["text"] == KURZER_ZUSTAND
+        assert payload["state_value"] is True
+        assert "salience" not in payload

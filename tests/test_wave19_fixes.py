@@ -3,6 +3,7 @@
 One test class per finding, source-inspection plus behavior tests.
 Written in-house (the external coding agent was not allowed to touch this file).
 """
+import ast
 import importlib.util
 import json
 import math
@@ -19,6 +20,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
+
+
+def _doc_embed_calls(src: str, attr: str) -> int:
+    """Count ``<something>.attr(..., is_query=False)`` calls in ``src``.
+
+    Parsed, not matched: line breaks, argument order and indentation are
+    formatting; the keyword argument is the behaviour under test.
+    """
+    count = 0
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == attr):
+            continue
+        for kw in node.keywords:
+            if (kw.arg == "is_query" and isinstance(kw.value, ast.Constant)
+                    and kw.value.value is False):
+                count += 1
+                break
+    return count
 
 
 def _assert_secret_file_is_private(path: Path) -> None:
@@ -331,15 +352,63 @@ class TestNr304QueryDocMode:
         src = _read("src/nexus_memory/embeddings.py")
         assert "is_query and \"qwen3-embedding\"" in src
 
-    def test_doc_sites_pass_is_query_false(self):
-        plugin = _read("plugins/memory/nexus/__init__.py")
-        assert "self._embedder.embed(text, is_query=False)" in plugin
-        assert "self._embed_cached(text, is_query=False)" in plugin
+    def test_doc_sites_pass_is_query_false(self, monkeypatch):
+        # Behavioural proof for the entity path: an entity is a DOCUMENT, so
+        # the vector handed to Qdrant must come from an embed call with
+        # is_query=False. The embedder is replaced by a recorder and the real
+        # ``_upsert_entity`` path runs — the assertion follows the call chain,
+        # not the source formatting.
+        import plugins.memory.nexus as plugin
+
+        recorded = {}
+
+        class _RecordingEmbedder:
+            def embed(self, text, is_query=True):
+                recorded["text"] = text
+                recorded["is_query"] = is_query
+                return [0.0] * 4
+
+        class _NullCache:
+            def get(self, text, is_query):
+                return None
+
+            def put(self, text, vec, is_query):
+                pass
+
+        provider = plugin.NexusMemoryProvider.__new__(plugin.NexusMemoryProvider)
+        provider._embedder = _RecordingEmbedder()
+        provider._qdrant = object()
+        provider._collection = "nexus"
+        provider.vector_name = None
+        monkeypatch.setattr(provider, "_get_embed_cache", lambda: _NullCache())
+        # Write gate and Qdrant are not under test here; keep them out of the
+        # way so the embed call is actually reached.
+        monkeypatch.setattr(plugin, "_gate_prepare", lambda **kw: {
+            "content": kw["content"],
+            "access_level": kw["access_level"],
+            "source": kw["source"],
+            "provenance": kw["provenance"],
+        })
+        monkeypatch.setattr(plugin, "_agent_stamp", lambda: {})
+        monkeypatch.setattr(plugin, "_index_written_point", lambda *a, **kw: None)
+        monkeypatch.setattr("nexus_memory.collection_vectors.upsert_named",
+                            lambda *a, **kw: None)
+
+        entity = SimpleNamespace(entity_type="organization", name="Marsolek",
+                                 attributes={}, confidence=0.9, evidence="")
+        assert provider._upsert_entity(entity)["status"] == "ok"
+        assert recorded["is_query"] is False
+        assert recorded["text"].startswith("organization: Marsolek")
+
+        # The remaining document write paths carry the same flag. Parsed, so
+        # reformatting those call sites does not break the test.
+        plugin_src = _read("plugins/memory/nexus/__init__.py")
+        assert _doc_embed_calls(plugin_src, "embed") >= 1
+        assert _doc_embed_calls(plugin_src, "_embed_cached") >= 1
         mcp = _read("src/nexus_memory/mcp_server.py")
-        assert "await self._embed(text, is_query=False)" in mcp
-        assert "await store._embed(text, is_query=False)" in mcp
+        assert _doc_embed_calls(mcp, "_embed") >= 2
         cons = _read("src/nexus_memory/consolidation.py")
-        assert "is_query=False" in cons
+        assert _doc_embed_calls(cons, "embed") >= 1
 
     def test_qwen3_doc_embedding_is_plain(self, monkeypatch):
         from nexus_memory import embeddings as emb
@@ -598,8 +667,24 @@ class TestNr315NumericGuard:
 
     def test_mixed_query_is_rewritten(self, monkeypatch):
         from nexus_memory import query_rewrite as qr
+        # Pin the switch: the machine's ~/.hermes/.env may set NEXUS_REWRITE=0
+        # as an emergency brake, which must not decide this test.
+        monkeypatch.setenv("NEXUS_REWRITE", "1")
         assert qr.rewrite_query("fehler 404 beim login", lambda q: "login fehler 404") \
             == "login fehler 404"
+
+    def test_rewrite_off_returns_original(self, monkeypatch):
+        from nexus_memory import query_rewrite as qr
+        monkeypatch.setenv("NEXUS_REWRITE", "0")
+        prompts = []
+
+        def _generate(prompt):
+            prompts.append(prompt)
+            return "login fehler 404"
+
+        assert qr.rewrite_query("fehler 404 beim login", _generate) \
+            == "fehler 404 beim login"
+        assert prompts == [], "rewrite station must not be called when off"
 
 
 # ── Nr 316: meta-discard anchored to start ──────────────────────────────────

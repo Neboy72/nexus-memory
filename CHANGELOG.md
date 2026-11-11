@@ -1,3 +1,23 @@
+## [0.22.48] - 2026-11-11
+
+### Fixed / Added
+
+- **Block baut Inhalt mit Rückfall.** 632 Punkte tragen ihren Inhalt im Feld `text` statt
+  `content`; der eingespielte Block las nur `content` und ließ sie unsichtbar. Jetzt greift
+  ein Rückfall (`content` → `text`), auch beim Stichwortindex.
+- **Zustandswerte am Längenfilter vorbei.** Der Mindestlängen-Filter (40 Zeichen) sperrte
+  kurze Fakten aus. Ein vom Schreibtor gekennzeichneter Zustandswert (`state_value`) braucht
+  nur 12 Zeichen.
+- **Schreibtor erkennt Zustandswerte.** Kurzer Text bekommt das Kennzeichen, langer Text einen
+  Hinweis, den Wert als eigenen Kurzfakt mit Herkunft und Datum abzulegen. Kein zusätzlicher
+  Schreibvorgang, keine automatische Ableitung.
+- **Sonde misst den laufenden Weg.** `scripts/prefetch-trichter.py` liest Inhalt und Grenze aus
+  dem Plugin statt aus einer Abschrift eigener Regeln.
+- **Neue Messbasis.** `scripts/prueffragen-23.txt`: 23 echte Fragen mit Muss-Stichwort, aus einer
+  Zufallsstichprobe des Bestands gezogen.
+- **Zwei veraltete Tests** prüfen jetzt Verhalten statt Schreibweise und sind unabhängig von der
+  Notbremse `NEXUS_REWRITE`.
+
 ## [0.22.47] - 2026-11-08
 
 ### Fix - a shared room caps writes too, not only reads

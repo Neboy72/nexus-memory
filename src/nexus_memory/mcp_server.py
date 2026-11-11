@@ -1178,6 +1178,7 @@ class MemoryStore:
         memory_id: Optional[str] = None,
         source_type: str = "",
         explicit: bool = True,
+        rule_proof: str = "",
     ) -> dict:
         """Store a memory with full v2.8.0 metadata support + auto TTL + auto supersession.
 
@@ -1204,9 +1205,10 @@ class MemoryStore:
         derived from ``source``.
 
         ``explicit`` marks a deliberate write (a tool call, a hand-entered
-        memory). Only such a write may store a ``rule``; automatic extraction
-        of a turn passes ``False`` (the ``/write`` endpoint does for the
-        OpenClaw capture hook).
+        memory). Automatic extraction of a turn passes ``False``. It no longer
+        authorizes a ``rule`` on its own: ``rule_proof`` must carry the token
+        a human generated with ``rule-confirm`` at a terminal. Without it the
+        entry is stored as ``fact`` (see ``nexus.write_gate``).
         """
         # Universal access counting: one write per remember() — every client
         # path lands here (fail-open, see _count_memory_access).
@@ -1251,6 +1253,7 @@ class MemoryStore:
             provenance=provenance,
             source_type=source_type or _write_origin(source),
             explicit=explicit,
+            rule_proof=rule_proof,
         )
         if prepared is None:
             return {"status": "rejected", "reason": _write_refusal()}
@@ -1420,6 +1423,10 @@ class MemoryStore:
         )
         if superseded_ids:
             payload["supersedes"] = superseded_ids
+        # Kennzeichen aus dem Schreibtor: die Einspielung laesst Zustandswerte
+        # am Laengenfilter vorbei (12 statt 40 Zeichen).
+        if prepared.get("state_value"):
+            payload["state_value"] = True
 
         # Writes carry the vector NAME inside each point (``using`` is read-only).
         from nexus_memory.collection_vectors import upsert_named
@@ -1518,7 +1525,7 @@ class MemoryStore:
         except Exception:
             pass  # Events are nice-to-have, not critical
 
-        return {
+        result = {
             "status": "ok",
             "id": entry_id,
             "access_level": access_level,
@@ -1526,6 +1533,11 @@ class MemoryStore:
             "scope": scope,
             "superseded": superseded_ids if superseded_ids else None,
         }
+        # Hinweis aus dem Schreibtor (langer Text mit Zustandswert): der Wert
+        # gehoert in einen eigenen Kurzfakt. Kein Fehler, kein Blockieren.
+        if prepared.get("hint"):
+            result["hint"] = prepared["hint"]
+        return result
 
     async def recall(
         self,
@@ -2414,6 +2426,17 @@ async def handle_list_tools() -> list[types.Tool]:
                         ),
                         "default": "default",
                     },
+                    "rule_proof": {
+                        "type": "string",
+                        "description": (
+                            "Only for category 'rule': the token a HUMAN generated "
+                            "with `rule-confirm \"<text>\"` at a terminal (valid 10 "
+                            "minutes, single use, bound to that text). Without it a "
+                            "rule write is stored as 'fact'. A model cannot produce "
+                            "this token in a conversation."
+                        ),
+                        "default": "",
+                    },
                 },
                 "required": ["text", "category"],
             },
@@ -2907,6 +2930,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 text, access_level, category, source, source_url, confidence,
                 effective_from=effective_from,
                 scope=arguments.get("scope", "default"),
+                rule_proof=arguments.get("rule_proof", ""),
             )
 
             # Fire-and-forget: dispatch "memory.remember" to any subscribers.
@@ -3897,10 +3921,12 @@ def build_serve_app():
         Request:  {"content": "...", "category": "fact", "access_level": "...",
                    "source": "...", "source_type": "chat", "source_url": "",
                    "confidence": 0.9, "scope": "default", "id": "<uuid>",
-                   "explicit": false}
+                   "explicit": false, "rule_proof": ""}
                   ``explicit`` is only true for a deliberate write (the store
-                  tool); auto-capture leaves it out and can therefore never
-                  store a ``rule``.
+                  tool); auto-capture leaves it out. A ``rule`` needs
+                  ``rule_proof`` in addition — the token a human generated with
+                  ``rule-confirm`` at a terminal; without it the entry is
+                  stored as ``fact``.
         Response: 200 with the stored memory, or 422 with
                   {"status": "rejected", "reason": "..."} — nothing written.
         """
@@ -3946,10 +3972,11 @@ def build_serve_app():
                 scope=_text_field("scope") or "default",
                 memory_id=memory_id,
                 source_type=_text_field("source_type"),
-                # Ein bewusster Werkzeugaufruf setzt ``explicit``; die
-                # automatische Erfassung eines Turns laesst es weg und darf
-                # damit nie eine Regel schreiben.
+                # Ein bewusster Werkzeugaufruf setzt ``explicit``. Eine Regel
+                # entsteht trotzdem nur mit ``rule_proof`` — dem Token, das ein
+                # Mensch am Terminal mit ``rule-confirm`` erzeugt hat.
                 explicit=payload.get("explicit") is True,
+                rule_proof=_text_field("rule_proof"),
             )
         except Exception as exc:
             logging.exception("write endpoint failed")
