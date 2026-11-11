@@ -89,7 +89,7 @@ try:
     from importlib.metadata import version as _pkg_version
     __version__ = _pkg_version("nexus-memory")
 except Exception:  # Paket nicht installiert (z.B. nur git clone) — Legacy-Fallback
-    __version__ = "0.22.47"
+    __version__ = "0.22.48"
 
 _logger = logging.getLogger(__name__)
 
@@ -410,6 +410,10 @@ def nexus_remember(
     payload["provenance"] = _prepared["provenance"]
     if _prepared["source"]:
         payload["source"] = _prepared["source"]
+    # Kennzeichen aus dem Schreibtor: die Einspielung laesst Zustandswerte am
+    # Laengenfilter vorbei (12 statt 40 Zeichen).
+    if _prepared.get("state_value"):
+        payload["state_value"] = True
 
     # ── Tiered Enrichment ──────────────────────────────────────────────
     from nexus.enrich import decide_tier, enrich, EnrichmentTier

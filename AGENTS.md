@@ -230,6 +230,28 @@ curl -s -X POST http://127.0.0.1:9122/embed -H 'Content-Type: application/json' 
      -d '{"text":"hello"}' | head -c 120
 ```
 
+The service also answers `POST /write` (same service key, same loopback
+rules). It runs the text through `nexus/write_gate.py` and only stores it if
+the five rules hold: non-empty content; a `fact` that is a statement and not
+just a label (`wort: wert` without punctuation or verb — short facts with a
+number or code such as `Tür-Code: 4711` pass); a non-empty origin; the
+strictest access level implied by the source (mail, calendar, health, finance
+and document sources are always `private`); and `rule` only from a manual
+origin or a deliberate call — automatic turn extraction never writes rules,
+and quoted document text never does. A rejection is HTTP 422 with
+`{"status":"rejected","reason":"..."}` and nothing reaches the collection.
+
+TypeScript plugins (OpenClaw today, any future plugin) send their write
+intents here instead of `PUT /collections/{c}/points`. `writeGate.url` and
+`writeGate.key` in the plugin config are required; without them the plugin
+fails loudly rather than writing unchecked.
+
+```bash
+curl -s -X POST http://127.0.0.1:9122/write \
+     -H 'Content-Type: application/json' -H "x-nexus-service-key: $(cat ~/.nexus-memory/service_auth.key)" \
+     -d '{"content":"Der Verteiler steht im Flur","category":"fact","source":"chat","source_type":"chat"}'
+```
+
 ## Shared Store: One Qdrant, Two Access Paths
 
 Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. The Hermes native plugin, the OpenClaw native plugin, and the MCP server all read/write the **same store** — same vectors, same metadata, same access levels.

@@ -1009,6 +1009,29 @@ unser unsere unserem unseren euer eure
 # 15/20 Treffer); NEXUS_PREFETCH_MIN_CHARS=0 laesst Testlaeufe mit kurzen Texten zu.
 _MIN_CONTENT_CHARS = int(os.environ.get("NEXUS_PREFETCH_MIN_CHARS", "40") or 40)
 
+# Zustandswerte am Laengenfilter vorbei (11.11.2026): Ein Fakt der Form
+# "Hermes Fassung: 0.23.1" hat 21 Zeichen und fiel deshalb nie in den Block.
+# Ein Punkt, den das Schreibtor als Zustandswert kennzeichnet, braucht nur 12
+# Zeichen. Darunter bleibt die Grenze stehen: leere und kaputte Eintraege
+# kommen weiterhin nicht in den Block.
+_MIN_STATE_VALUE_CHARS = 12
+
+
+def _point_text(payload: Optional[Dict[str, Any]]) -> str:
+    """Inhalt eines Punktes: ``content``, sonst ``text``.
+
+    631 Punkte der Sammlung tragen ihren Inhalt nur im Feld ``text``. Der
+    Block las ausschliesslich ``content`` und liess sie unsichtbar, obwohl die
+    Aehnlichkeitssuche sie fand.
+    """
+    pl = payload or {}
+    return str(pl.get("content") or pl.get("text") or "")
+
+
+def _point_min_chars(payload: Optional[Dict[str, Any]]) -> int:
+    """Untergrenze fuer diesen Punkt: ein Zustandswert braucht nur 12 Zeichen."""
+    return _MIN_STATE_VALUE_CHARS if (payload or {}).get("state_value") else _MIN_CONTENT_CHARS
+
 
 def _query_tokens(query: str, min_len: int = 4) -> List[str]:
     """Wortmarken der Frage, Umlaute eingeschlossen.
@@ -2703,7 +2726,7 @@ class NexusMemoryProvider:
             for p in pts:
                 if total >= budget:
                     break
-                pl = p.payload or {}; text = pl.get("content", "")
+                pl = p.payload or {}; text = _point_text(pl)
                 # Stub-Filter (10.11.2026): entity/concept-Etiketten wie
                 # "device: INAS LAPTOP" tragen hohe Aehnlichkeitswerte, aber
                 # keinen Inhalt. Sie belegten die wenigen Kandidatenplaetze und
@@ -2711,7 +2734,9 @@ class NexusMemoryProvider:
                 # Treffer ohne Filter, 15/20 mit, bei 32 Kandidaten).
                 # Die Grenze ist einstellbar, damit Tests mit kurzen
                 # Beispieltexten weiter pruefen koennen, was sie meinen.
-                if len(str(text).strip()) < _MIN_CONTENT_CHARS:
+                # Zustandswerte (Payload ``state_value``) brauchen nur 12
+                # Zeichen — "Hermes Fassung: 0.23.1" ist ein Fakt, kein Etikett.
+                if len(text.strip()) < _point_min_chars(pl):
                     continue
                 # Roadmap 4.6: superseded facts never surface in prefetch.
                 if (pl.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
@@ -2918,6 +2943,10 @@ class NexusMemoryProvider:
                     "scope": scope,
                     "memory_injection_flag": bool(injection_hits),
                     "provenance": prepared["provenance"]}
+        # Kennzeichen aus dem Schreibtor: die Einspielung laesst den Punkt
+        # damit am Laengenfilter vorbei (12 statt 40 Zeichen).
+        if prepared.get("state_value"):
+            payload["state_value"] = True
         # Writes carry the vector NAME inside each point (``using`` is read-only).
         from nexus_memory.collection_vectors import upsert_named as _upsert_named
         _upsert_named(
@@ -2929,7 +2958,13 @@ class NexusMemoryProvider:
         _index_written_point(payload, self._collection)
         try: self._bump_agent_stats(write=True)
         except Exception: pass
-        return {"status": "ok", "id": eid, "category": category}
+        result = {"status": "ok", "id": eid, "category": category}
+        # Hinweis aus dem Schreibtor an den Aufrufer weiterreichen (kein
+        # Fehler, kein zweiter Schreibvorgang): bei langem Text mit
+        # Zustandswert gehoert der Wert in einen eigenen Kurzfakt.
+        if prepared.get("hint"):
+            result["hint"] = prepared["hint"]
+        return result
 
     def _bump_agent_stats(self, read: bool = False, write: bool = False) -> None:
         """Registry hygiene (dashboard last_seen/reads/writes): the plugin path

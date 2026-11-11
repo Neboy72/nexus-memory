@@ -1,6 +1,6 @@
 [project]
 name = "nexus-memory"
-version = "0.22.47"
+version = "0.22.48"
 description = "Universal Memory Layer for AI Agents — MCP-powered, self-hosted, secure."
 authors = [{ name = "Nebo" }]
 readme = "README.md"
@@ -26,6 +26,9 @@ test = ["pytest>=9.0.3,<10.0.0", "pytest-asyncio>=0.23.0,<2.0.0"]
 [project.scripts]
 nexus-memory = "nexus_memory.mcp_server:cli"
 nexus-memory-init = "nexus_memory.wizard:main"
+# Human proof for category `rule`: run at a TERMINAL, the token goes into the
+# write as `rule_proof`. A model in a conversation cannot produce one.
+rule-confirm = "nexus.rule_confirm:main"
 
 [build-system]
 requires = ["setuptools>=75"]

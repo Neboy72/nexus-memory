@@ -248,3 +248,24 @@ class TestNexusRememberSmoke:
         )
         sent_payload = mocked_qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
         assert sent_payload["valid_from"] == date.today().isoformat()
+
+    def test_zustandswert_landet_als_kennzeichen_im_payload(self, mocked_qdrant_put):
+        """Das Kennzeichen aus dem Schreibtor muss den Payload erreichen —
+        sonst laesst die Einspielung den kurzen Fakt weiter draussen."""
+        nexus_remember(
+            content="Hermes Fassung: 0.23.1",
+            category="fact",
+            collection_name="test-collection",
+        )
+        sent_payload = mocked_qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
+        assert sent_payload["content"] == "Hermes Fassung: 0.23.1"
+        assert sent_payload["state_value"] is True
+
+    def test_ohne_zustandswert_kein_kennzeichen(self, mocked_qdrant_put):
+        nexus_remember(
+            content="Der Verteiler liegt im Flur neben der Kellertuer",
+            category="fact",
+            collection_name="test-collection",
+        )
+        sent_payload = mocked_qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
+        assert "state_value" not in sent_payload
