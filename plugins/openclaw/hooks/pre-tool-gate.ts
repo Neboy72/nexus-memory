@@ -22,6 +22,12 @@ import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { bindToolSession, resolveReadLevel } from "../lib/turn-context.ts"
+import {
+  PATH_CARRYING_TOOLS,
+  classifyAction,
+  evaluateGuardrail,
+  guardrailResponse,
+} from "../tools/guardrail_check.ts"
 import { hasKnownOwner, resolveOwnerStateDir } from "../lib/owner.ts"
 import { isRoomApproved, isRoomShared, roomKeyOf } from "../lib/room-state.ts"
 import { log } from "../logger.ts"
@@ -374,13 +380,12 @@ export function buildPreToolGateHandler(
       }
     }
 
-    // ── 2. PRE-ACTION RECALL (Nexus mit Tool-Parametern fragen) ──
-    const recallQuery = extractRecallQuery(toolName, params)
-    let recallContext: string | null = null
-    if (recallQuery) {
-      // Room-capped read level, resolved exactly like hooks/recall.ts: a
-      // pre-action recall from a shared room must not pull private memories
-      // into `blockReason`. Same helpers, same rule — no second derivation.
+    // ── Level of THIS turn: one derivation for the rule check and the recall ──
+    // Same helpers as hooks/recall.ts — a second derivation would be a second
+    // way to be wrong.
+    let cachedLevel: string | null = null
+    const turnLevel = (): string => {
+      if (cachedLevel !== null) return cachedLevel
       const rawGroupId = ctx?.groupId
       const isGroupTurn = rawGroupId !== null && rawGroupId !== undefined
       const roomKey = roomKeyOf({
@@ -388,15 +393,58 @@ export function buildPreToolGateHandler(
         chatId: ctx?.chatId,
         groupId: rawGroupId,
       })
-      const roomShared = isRoomShared(roomKey)
-      const roomApproved = isRoomApproved(cfg.privateRooms, roomKey)
-      const effectiveAccessLevel = resolveReadLevel(
+      cachedLevel = resolveReadLevel(
         isGroupTurn,
-        roomShared,
+        isRoomShared(roomKey),
         cfg.accessLevel,
-        roomApproved,
+        isRoomApproved(cfg.privateRooms, roomKey),
         hasKnownOwner(cfg, resolveOwnerStateDir()),
       )
+      return cachedLevel
+    }
+
+    // ── 1b. PROTECTION RULES AT THE EXECUTION BOUNDARY ──
+    // ClawHub audit 14.11.2026 (finding 2 #7): `nexus_guardrail_check` is
+    // ADVICE — the model may simply not call it. The block that protects the
+    // store therefore also lives here, where every tool call passes. Only
+    // destructive text (or a path-carrying tool) pays for a store round-trip;
+    // an unavailable or incomplete rule set BLOCKS (fail-closed), and a caller
+    // below a rule's level gets the generic reason without rule content.
+    const command = firstCommand(params)
+    // Writing the plan lock stays exempt (otherwise the plan gate deadlocks —
+    // see step 3), everything else destructive is checked against the rules.
+    const isPlanLockWrite =
+      toolName === "write" && String(params.path ?? "") === resolvePlanLockPath(cfg.planGate)
+    if (!isPlanLockWrite && (command || PATH_CARRYING_TOOLS[toolName] !== undefined)) {
+      const evaluation = await evaluateGuardrail(
+        qdrantClient,
+        cfg,
+        toolName,
+        command,
+        params,
+        params.cwd,
+      )
+      if (evaluation.verdict !== "allow") {
+        const answer = guardrailResponse(evaluation, turnLevel())
+        const withheld = Number(answer.withheld_rules ?? 0)
+        const paths = ((answer.matched_rules as Array<Record<string, unknown>> | undefined) ?? [])
+          .map((m) => String(m.protected_path ?? ""))
+          .filter(Boolean)
+        let reason = `BLOCKED: ${String(answer.reason)}`
+        if (withheld === 0 && paths.length > 0) reason += ` — protected: ${paths.join(", ")}`
+        log.warn(`nexus-gate: BLOCKED (protection rule) — tool=${toolName}`)
+        return { block: true, blockReason: reason }
+      }
+    }
+
+    // ── 2. PRE-ACTION RECALL (Nexus mit Tool-Parametern fragen) ──
+    const recallQuery = extractRecallQuery(toolName, params)
+    let recallContext: string | null = null
+    if (recallQuery) {
+      // Room-capped read level, resolved exactly like hooks/recall.ts: a
+      // pre-action recall from a shared room must not pull private memories
+      // into `blockReason`. Same helpers, same rule — no second derivation.
+      const effectiveAccessLevel = turnLevel()
 
       log.info(`nexus-gate: pre-action recall — query="${recallQuery}" accessLevel=${effectiveAccessLevel}`)
       recallContext = await preActionRecall(embedder, qdrantClient, effectiveAccessLevel, recallQuery)
