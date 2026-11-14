@@ -17,13 +17,13 @@ try {
   process.exitCode = 1
   process.exit(process.exitCode)
 }
-let normalizeEdge, isActiveEdge, registerGraphTraverseTool, registerGetRelatedTool, setTurnContext, resetTurnContext
+let normalizeEdge, isActiveEdge, registerGraphTraverseTool, registerGetRelatedTool, setTurnContext, resetTurnContext, bindToolSession
 try {
   ;({ normalizeEdge, isActiveEdge } = await import("./lib/edge.ts"))
   ;({ registerGraphTraverseTool, registerGetRelatedTool } = await import("./tools/graph_traverse.ts"))
   // ClawHub-Audit 1.22.0: die Werkzeuge lesen ihre Stufe aus dem Turn-Kontext
   // (ohne Merkmal fail-closed "public").
-  ;({ setTurnContext, resetTurnContext } = await import("./lib/turn-context.ts"))
+  ;({ setTurnContext, resetTurnContext, bindToolSession } = await import("./lib/turn-context.ts"))
 } catch (e) {
   console.log("FAIL ", "Modul-Import", "— edge.ts/graph_traverse.ts unresolvable (node TS-Flag aktiv?):", e?.message, "\n", e?.stack)
   process.exitCode = 1
@@ -117,7 +117,10 @@ function registerToolFor(fn, client) {
   // ClawHub-Audit 1.22.0: die Stufe kommt jetzt aus dem Turn-Kontext — ein
   // Direktchat-Turn macht cfg.accessLevel wirksam.
   resetTurnContext()
-  setTurnContext(false)
+  // ClawHub-Audit 1.22.4: das Merkmal ist sitzungsgebunden; die Aufruf-ID
+  // dieses Tests gehoert zu genau dieser Sitzung.
+  setTurnContext(false, "edge-validation")
+  bindToolSession("id", "edge-validation")
   fn(api, client, { accessLevel: "private" })
   if (registered === 0 || !tool) {
     throw new Error(`Registrierung fehlgeschlagen: registerTool wurde ${registered}× gerufen (Export umbenannt? Signatur geändert?)`)

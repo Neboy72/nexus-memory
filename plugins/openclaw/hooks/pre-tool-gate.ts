@@ -21,8 +21,9 @@ import os from "node:os"
 import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
-import { resolveReadLevel } from "../lib/turn-context.ts"
-import { isRoomShared, roomKeyOf } from "../lib/room-state.ts"
+import { bindToolSession, resolveReadLevel } from "../lib/turn-context.ts"
+import { hasKnownOwner, resolveOwnerStateDir } from "../lib/owner.ts"
+import { isRoomApproved, isRoomShared, roomKeyOf } from "../lib/room-state.ts"
 import { log } from "../logger.ts"
 
 // ── Configuration ────────────────────────────────────────────────
@@ -354,6 +355,15 @@ export function buildPreToolGateHandler(
 
     log.info(`nexus-gate: before_tool_call — tool=${toolName}`)
 
+    // ── 0. SESSION BINDING (ClawHub audit 1.22.4, MCP07-3) ──
+    // This hook is the only place that sees BOTH the call id and the session
+    // key. Recording the pair here lets the tool resolve its own session in
+    // `execute()` (which the host gives no context at all): the tool presents
+    // its call id, `lib/turn-context.ts` returns that session's marker. Without
+    // a call id or a session key nothing is recorded, and the tool reads
+    // "public" — never the turn that happened to run last in another session.
+    bindToolSession(event.toolCallId, ctx?.sessionKey)
+
     // ── 1. GUARDRAILS (erst blocken, dann informieren) ──
     const guardrail = checkGuardrails(toolName, params)
     if (guardrail.block) {
@@ -373,14 +383,20 @@ export function buildPreToolGateHandler(
       // into `blockReason`. Same helpers, same rule — no second derivation.
       const rawGroupId = ctx?.groupId
       const isGroupTurn = rawGroupId !== null && rawGroupId !== undefined
-      const roomShared = isRoomShared(
-        roomKeyOf({
-          sessionKey: ctx?.sessionKey,
-          chatId: ctx?.chatId,
-          groupId: rawGroupId,
-        }),
+      const roomKey = roomKeyOf({
+        sessionKey: ctx?.sessionKey,
+        chatId: ctx?.chatId,
+        groupId: rawGroupId,
+      })
+      const roomShared = isRoomShared(roomKey)
+      const roomApproved = isRoomApproved(cfg.privateRooms, roomKey)
+      const effectiveAccessLevel = resolveReadLevel(
+        isGroupTurn,
+        roomShared,
+        cfg.accessLevel,
+        roomApproved,
+        hasKnownOwner(cfg, resolveOwnerStateDir()),
       )
-      const effectiveAccessLevel = resolveReadLevel(isGroupTurn, roomShared, cfg.accessLevel)
 
       log.info(`nexus-gate: pre-action recall — query="${recallQuery}" accessLevel=${effectiveAccessLevel}`)
       recallContext = await preActionRecall(embedder, qdrantClient, effectiveAccessLevel, recallQuery)

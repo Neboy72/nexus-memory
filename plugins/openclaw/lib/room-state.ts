@@ -12,6 +12,14 @@
  * written in it, and stays shared for the rest of the process. Bots and the
  * owner's own messages never mark a room. Nothing is configured per channel.
  *
+ * Since 14.11.2026 (ClawHub audit MCP07-2) this observation NO LONGER grants
+ * private access on its own. "No stranger has written here yet" was never
+ * evidence of a private audience: silent readers, members who joined later,
+ * foreign bots and threads are all invisible to it. A group turn therefore
+ * reads "public" unless its room is explicitly released in `privateRooms`
+ * (`isRoomApproved` below); the state recorded here still supplies the
+ * stranger verdict (a shared room is public regardless) and the diagnostics.
+ *
  * Where the observations come from (OpenClaw SDK, dist/plugin-sdk/hook-types):
  *   - `message_received` carries the sender — `event.senderId`, plus a bot
  *     flag only when the channel supplies one.
@@ -133,6 +141,41 @@ export function roomKeyOf(fields: RoomKeyFields): string | null {
   if (sessionKey) return `session:${sessionKey}`
 
   return null
+}
+
+/**
+ * A configured room entry, normalized to the key `roomKeyOf` produces.
+ *
+ * `roomKeyOf` prefers the chat/conversation id, so a bare id (`"-100123"`, the
+ * form an operator copies out of Telegram/Discord) means `chat:<id>`. An entry
+ * that already names its identifier space (`chat:…`, `session:…`) is kept — the
+ * session form exists because `roomKeyOf` falls back to it when a turn carries
+ * no chat id at all. Blank and container entries yield "" (dropped by the
+ * caller), never a wildcard.
+ */
+export function normalizeRoomKey(raw: unknown): string {
+  const value = normalizeId(raw).trim()
+  if (!value) return ""
+  if (value.startsWith("chat:") || value.startsWith("session:")) return value
+  return `chat:${value}`
+}
+
+/**
+ * Is this room explicitly released for private delivery?
+ *
+ * The ONLY door to a private read in a group turn since 14.11.2026 (ClawHub
+ * audit MCP07-2). Default is "not released": a room that nobody named is
+ * public, however quiet it has been so far. A missing room key is never
+ * approved.
+ */
+export function isRoomApproved(approved: unknown, roomKey: string | null | undefined): boolean {
+  const key = normalizeId(roomKey)
+  if (!key) return false
+  const values = Array.isArray(approved) ? approved : []
+  for (const entry of values) {
+    if (normalizeRoomKey(entry) === key) return true
+  }
+  return false
 }
 
 function remember(

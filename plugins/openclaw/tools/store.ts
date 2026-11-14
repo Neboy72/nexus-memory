@@ -6,7 +6,7 @@ import type { MemoryWriter } from "../lib/write-gate.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
 import { limitText } from "../lib/text-preview.ts"
-import { writeAccessLevel } from "../lib/turn-context.ts"
+import { toolCallWriteAccessLevel } from "../lib/turn-context.ts"
 import { log } from "../logger.ts"
 import { NEXUS_STORE_TOOL } from "../runtime.ts"
 
@@ -67,7 +67,7 @@ export function registerStoreTool(
         ),
       }),
       async execute(
-        _toolCallId: string,
+        toolCallId: string,
         params: {
           text: string
           category?: string
@@ -135,12 +135,12 @@ export function registerStoreTool(
         // capped by the turn's room — in a shared room "public" is the ceiling,
         // even when the call asks for "private". A registered tool gets no
         // inbound context from the host, so the room verdict comes from the
-        // SAME turn marker the reading tools use (`writeAccessLevel`, see
-        // lib/turn-context.ts). Never a rejection: only the level is lowered.
-        // The requested level itself is the baseline, NOT cfg.accessLevel: only
-        // a provably shared room caps, so an absent or stale marker leaves the
-        // caller's level untouched.
-        const roomLevel = writeAccessLevel(requestedLevel)
+        // session this very call was bound to by `before_tool_call`
+        // (`toolCallWriteAccessLevel`, see lib/turn-context.ts). Never a
+        // rejection: only the level is lowered. The requested level itself is
+        // the baseline, NOT cfg.accessLevel: only a provably shared room caps,
+        // so an unbound call or a stale marker leaves the level untouched.
+        const roomLevel = toolCallWriteAccessLevel(requestedLevel, toolCallId)
         const levelOrder = ACCESS_LEVELS as readonly string[]
         const accessLevel =
           levelOrder.indexOf(requestedLevel) > levelOrder.indexOf(roomLevel)

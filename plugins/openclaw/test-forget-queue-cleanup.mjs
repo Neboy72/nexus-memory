@@ -55,7 +55,7 @@ initLogger(
 const { registerForgetTool } = await import("./tools/forget.ts")
 // ClawHub-Audit 1.22.0: forget liest seine Stufe aus dem Turn-Kontext —
 // ohne Merkmal gilt fail-closed "public" (dann schlüge die Löschung fehl).
-const { setTurnContext, resetTurnContext } = await import("./lib/turn-context.ts")
+const { setTurnContext, resetTurnContext, bindToolSession } = await import("./lib/turn-context.ts")
 
 let failed = 0
 const t = (name, fn) =>
@@ -112,7 +112,11 @@ function forgetTool({ level = "private" } = {}) {
 
 const dmTurn = () => {
   resetTurnContext()
-  setTurnContext(false) // Direktchat: cfg.accessLevel = private ist wirksam
+  // ClawHub-Audit 1.22.4: das Merkmal ist sitzungsgebunden; die Aufruf-ID
+  // dieses Tests gehoert zu genau dieser Sitzung.
+  const SESSION = "forget-queue"
+  setTurnContext(false, SESSION) // Direktchat: cfg.accessLevel = private ist wirksam
+  bindToolSession("t", SESSION)
 }
 
 const textOf = (res) => (res.content ?? []).map((c) => c.text).join("\n")

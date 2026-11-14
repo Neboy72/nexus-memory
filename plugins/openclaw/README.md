@@ -182,7 +182,8 @@ Add to `~/.openclaw/openclaw.json`:
 | `autoCapture` | `boolean` | `true` | Store conversation turns to Qdrant after each AI turn |
 | `maxRecallResults` | `number` | `10` | Max memories injected per turn (1–20) |
 | `accessLevel` | `string` | `private` | Agent access level: `public`, `trusted`, or `private` |
-| `ownerUserIds` | `string[]` | `[]` | Owner identities (the human), one per platform. The room rule uses them to tell the owner apart from a stranger; a non-empty list wins, empty = learn the owner per platform (see "Room rule") |
+| `ownerUserIds` | `string[]` | `[]` | Owner identities (the human), one per platform. The only owner source besides an already existing `owner.json`; the plugin never claims an owner itself. Empty and no file = owner unknown, all reads `public` (see "Owner") |
+| `privateRooms` | `string[]` | `[]` | Rooms explicitly released for memories above `public`. Empty = every group/channel turn reads `public` (see "Released rooms") |
 | `debug` | `boolean` | `false` | Verbose debug logs |
 | `cronFormGate.enabled` | `boolean` | `false` | Master switch for the unattended-send gate (cron/heartbeat sessions) |
 | `cronFormGate.titles` | `string[]` | `[]` | Exact allowed first-line titles; `enabled` with an empty list keeps the gate off |
@@ -275,43 +276,80 @@ A stored point without an `access_level` counts as `private` (fail-closed), so
 legacy or foreign writers can never accidentally publish data. Auto-Capture
 writes every new memory at the configured `accessLevel` (default `private`).
 
-### Room rule (`ownerUserIds`)
+### Owner (`ownerUserIds`)
 
-Group turns are capped to `public` so nothing private leaks into a shared chat,
-unless the plugin has seen only the owner and agents in that room; then recall
-keeps the configured `accessLevel`. Every bot counts as an agent here, never as a
-reader, whatever runs it. Tell it who "you" are — one ID per platform, because
-the same person has a different ID on Telegram and on Discord:
+The plugin never decides on its own who its owner is. There are exactly two
+sources — configuration, or an owner file that already exists:
 
 ```json
 "ownerUserIds": ["123456789", "987654321"]
 ```
 
-A non-empty `ownerUserIds` always wins: the room rule then compares every author
-against exactly those ids, nothing is learned, and `owner.json` is not read. Without
-it, the plugin **learns** the owner — per platform, because one human has a
-different id on each. This assumes OpenClaw's own admission rules keep strangers
-away; where they do not, set `ownerUserIds`. The first human who writes on a
-platform becomes that platform's owner, stored as `<OPENCLAW_STATE_DIR>/nexus/owner.json`
-(default `~/.openclaw`, mode `0600`, one line in the log with a truncated
-hash instead of the id):
+One ID per platform, because the same person has a different ID on Telegram and
+on Discord. A non-empty list always wins and the file is then not read.
+
+Without a list, the plugin reads `<OPENCLAW_STATE_DIR>/nexus/owner.json`
+(default `~/.openclaw`), if that file exists:
 
 ```json
 {"version":2,"owners":{"telegram":"5763330319","discord":"373816693522432001"}}
 ```
 
-The key is the `channelId` of the hook context (`telegram`, `discord`, …). A
-platform that already has an owner is never overwritten by a later message, and a
-message without a platform learns nothing. Room reads compare the author against the
-owners of **all** platforms, so the owner stays the owner on every one of them.
+The key is the `channelId` of the hook context (`telegram`, `discord`, …). Room
+reads compare the author against the owners of **all** platforms, so the owner
+stays the owner on every one of them.
 
-An owner counts as known when either `ownerUserIds` is non-empty or `owner.json`
-yields at least one entry; in both cases a human message from that set leaves the
-room private, and every other human marks it shared. A `version: 1` file holds a
-single id without a platform, so it cannot be attributed to one; it is ignored, not
-deleted, with one log line. A corrupt `owner.json` is reported once and treated as
-absent. In both cases the next message from a platform writes a fresh file. With no
-known owner at all, every human message marks its room shared (fail-closed).
+**The plugin never writes this file.** Up to 1.22.3 it did: the first human who
+wrote on a platform became that platform's owner, which meant that a stranger
+who wrote first owned the private memories — ClawHub's audit raised this as
+MCP07-1, and since 1.22.4 the automatic claim is gone. A file left over from
+those versions keeps working, so an existing installation does not lose its
+state after the update; it is simply never extended or rewritten.
+
+To set an owner, do one of these and restart the gateway:
+
+- put the IDs in `ownerUserIds` (preferred — no file to protect), or
+- place the file above yourself (mode `0600`).
+
+To reset the owner, delete the file — reads fall back to `public` at once,
+because nothing is cached:
+
+```bash
+rm ~/.openclaw/nexus/owner.json    # or $OPENCLAW_STATE_DIR/nexus/owner.json
+```
+
+A `version: 1` file holds a single id without a platform, so it cannot be
+attributed to one; it is ignored (not deleted) with one log line, and reads stay
+`public` until you set an owner the current way. A corrupt file is reported once
+and treated as absent.
+
+An owner counts as known when either `ownerUserIds` is non-empty or the file
+yields at least one entry. **With no known owner every read is `public`** —
+direct chats included, not only groups: the plugin cannot tell its owner's chat
+from a stranger's, so it delivers nothing above `public` anywhere. That is the
+fail-closed direction on purpose. Auto-Capture stays blocked in every group
+regardless.
+
+### Released rooms (`privateRooms`)
+
+Group and channel turns are `public` unless the room is explicitly released:
+
+```json
+"privateRooms": ["-1001234567890", "session:agent:main:discord:channel:42"]
+```
+
+Default: empty — every group turn reads `public`. A bare chat ID means
+`chat:<id>`; use the `session:` form for a turn that carries no chat id at all.
+Only these rooms may see memories above `public`.
+
+This list exists because the plugin used to infer privacy from silence: a room
+counted as private as long as no stranger had written in it. Silent readers,
+members who joined later, foreign bots and threads are all invisible to that
+observation, so "nobody foreign has spoken" was never evidence of a private
+audience — ClawHub's audit raised this as MCP07-2. The plugin still *observes*
+who writes where, but that observation can now only tighten the verdict: a room
+a stranger has written in is `public` even when it is released.
+
 Auto-Capture stays blocked in every group regardless.
 
 A turn counts as a group turn when the hook payload carries a `groupId`, including an
@@ -328,6 +366,18 @@ level, the same as in a room marked shared.
 
 Auto-Capture is skipped whenever the payload carries a `groupId`, including an empty
 one; only a payload without a `groupId` can be captured.
+
+### Tool level is bound per session
+
+The AI tools (`nexus_search`, `nexus_forget`, the graph tools, `nexus_store`) get
+no turn context from the host, so the plugin records the turn's decision when it
+builds the prompt and hands it to the call: `before_tool_call` ties each tool call
+to the session it runs in, and the tool reads the level of *that* session only.
+A call that cannot be tied to a session — no session key in the hook context, an
+expired entry (older than 120 s), or a call that never went through
+`before_tool_call` — reads `public`. It never inherits "the level that was seen
+last", which is what made two parallel conversations able to mix up their
+permissions (ClawHub audit MCP07-3).
 
 ## How it works
 

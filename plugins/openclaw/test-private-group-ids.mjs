@@ -127,10 +127,12 @@ await t("a) Gruppen-Turn ohne Beobachtung → Recall fragt 'public'", async () =
 await t("b) Gruppen-Turn → Werkzeug-Merkmal isGroup=true", async () => {
   resetTurnContext()
   await recallLevels(cfgFor(), { trigger: "user", groupId: GROUP, sessionKey: "grp-1" })
-  const marker = getTurnContext()
+  // Seit 1.22.4 ist das Merkmal sitzungsgebunden (ClawHub-Audit MCP07-3).
+  const marker = getTurnContext("grp-1")
   assert.ok(marker, "Merkmal muss gesetzt sein")
   assert.strictEqual(marker.isGroup, true, "Gruppen-Turn bleibt eine Gruppe")
-  assert.strictEqual(toolAccessLevel("private"), "public", "Werkzeug sieht nur 'public'")
+  assert.strictEqual(toolAccessLevel("private", "grp-1"), "public", "Werkzeug sieht nur 'public'")
+  assert.strictEqual(getTurnContext("andere-sitzung"), null, "fremde Sitzung sieht kein Merkmal")
 })
 
 await t("b2) Gruppen-Turn → nexus_search fragt wirklich 'public'", async () => {
@@ -179,19 +181,38 @@ await t("c) kein Merkmal → 'public'", async () => {
 
 // ── d) Einzelchat ──────────────────────────────────────────────────────────
 
-await t("d4) Einzelchat ohne ownerUserIds → cfg-Stufe wie bisher", async () => {
+await t("d4) Einzelchat MIT bekanntem Eigentuemer → cfg-Stufe", async () => {
   resetTurnContext()
-  // Alte Konfiguration ohne den Key darf nicht werfen (Bestandstests bauen cfg so).
-  const levels = await recallLevels(cfgFor(), { trigger: "user", groupId: null })
+  const levels = await recallLevels(cfgFor({ ownerUserIds: [GROUP] }), {
+    trigger: "user",
+    groupId: null,
+    sessionKey: "dm-4",
+  })
   assert.deepStrictEqual(levels, ["private"])
-  assert.strictEqual(getTurnContext()?.isGroup, false)
+  assert.strictEqual(getTurnContext("dm-4")?.isGroup, false)
+})
+
+await t("d4b) Einzelchat OHNE bekannten Eigentuemer → 'public' (Audit MCP07-1)", async () => {
+  // Ohne ownerUserIds und ohne owner.json kann das Plugin seinen Besitzer nicht
+  // von einem Fremden unterscheiden — dann wird nirgends etwas Privates geliefert.
+  resetTurnContext()
+  const levels = await recallLevels(cfgFor(), {
+    trigger: "user",
+    groupId: null,
+    sessionKey: "dm-4b",
+  })
+  assert.deepStrictEqual(levels, ["public"], "ohne Eigentuemer bleibt alles public")
 })
 
 await t("d5) leere Gruppen-ID → Gruppe (fail-closed)", async () => {
   resetTurnContext()
-  const levels = await recallLevels(cfgFor(), { trigger: "user", groupId: "" })
+  const levels = await recallLevels(cfgFor(), {
+    trigger: "user",
+    groupId: "",
+    sessionKey: "leer-5",
+  })
   assert.deepStrictEqual(levels, ["public"])
-  assert.strictEqual(getTurnContext()?.isGroup, true)
+  assert.strictEqual(getTurnContext("leer-5")?.isGroup, true)
 })
 
 // ── e) Capture bleibt gesperrt ─────────────────────────────────────────────

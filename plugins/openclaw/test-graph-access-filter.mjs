@@ -34,7 +34,7 @@ const {
 // (lib/turn-context.ts), nicht mehr direkt aus cfg. Ohne frisches Merkmal
 // gilt fail-closed "public". Dieser Test prüft die Stufen-FILTER, nicht das
 // Gruppengate — er setzt deshalb pro Werkzeug einen Direktchat-Turn.
-const { setTurnContext, resetTurnContext } = await import("./lib/turn-context.ts")
+const { setTurnContext, resetTurnContext, bindToolSession } = await import("./lib/turn-context.ts")
 
 let failed = 0
 const t = (name, fn) =>
@@ -165,7 +165,15 @@ function graphTool(registerFn, cfg, client = makeClient()) {
   // Direktchat-Turn: cfg.accessLevel ist damit die wirksame Stufe (ohne
   // Merkmal wären alle vier Werkzeuge fail-closed auf "public").
   resetTurnContext()
-  setTurnContext(false)
+  // ClawHub-Audit 1.22.4: das Turn-Merkmal ist sitzungsgebunden, ein Werkzeug
+  // findet seine Sitzung nur ueber die von `before_tool_call` gebundene
+  // Aufruf-ID. Dieser Test prueft die Zugriffsstufe, nicht die Bindung — alle
+  // hier verwendeten Aufruf-IDs gehoeren zu derselben Sitzung.
+  const SESSION = "graph-filter"
+  setTurnContext(false, SESSION)
+  for (const id of ["t", ...Array.from({ length: 20 }, (_, i) => `t${i + 1}`)]) {
+    bindToolSession(id, SESSION)
+  }
   let tool = null
   registerFn(
     { registerTool: (tt) => { tool = tt } },

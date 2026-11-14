@@ -1,4 +1,5 @@
 import { localEmbeddingProvider, providerApiKeyFromEnv, type EmbeddingProvider } from "./embedding-env.ts"
+import { normalizeRoomKey } from "./room-state.ts"
 import { validateConfigScope } from "./scope-auto.ts"
 
 export type AccessLevel = "public" | "trusted" | "private"
@@ -74,14 +75,21 @@ export type NexusConfig = {
    *  person has a different id on every platform. Used only by the room rule
    *  (lib/room-state.ts) to tell the owner apart from a stranger.
    *
-   *  Since 12.11.2026 an empty list is no longer "owner unknown forever":
-   *  lib/owner.ts learns the owner from the first human message. Since
-   *  15.11.2026 that happens PER PLATFORM (`<stateDir>/nexus/owner.json`,
-   *  `{"version":2,"owners":{"telegram":"…","discord":"…"}}`), because one
-   *  person has a different id on each. A non-empty list always WINS and
-   *  suppresses that learning. Only when neither exists is the owner unknown
-   *  and every human message marks the room shared (fail-closed). */
+   *  Since 14.11.2026 (ClawHub audit MCP07-1) this list and an already
+   *  existing `<stateDir>/nexus/owner.json` are the ONLY sources of an owner.
+   *  The plugin no longer claims the first human who writes as its owner — a
+   *  stranger who wrote first got private memories that way. With neither a
+   *  list nor a file the owner is unknown, every human message marks its room
+   *  shared, and reads stay "public" (fail-closed). */
   ownerUserIds: string[]
+  /** Rooms explicitly released for PRIVATE delivery (14.11.2026, ClawHub
+   *  audit MCP07-2). Default empty: every group turn reads "public".
+   *
+   *  Entries are room keys or bare chat ids — a bare id means `chat:<id>`
+   *  (the form `lib/room-state.ts` builds first); `session:<key>` addresses a
+   *  turn that carries no chat id. Nothing is inferred from silence any more,
+   *  so this list is the only way a group channel gets private memories. */
+  privateRooms: string[]
   debug: boolean
 }
 
@@ -100,6 +108,7 @@ const ALLOWED_KEYS = [
   "cronFormGate",
   "planGate",
   "ownerUserIds",
+  "privateRooms",
   "debug",
 ]
 
@@ -255,6 +264,30 @@ function parseOwnerUserIds(value: unknown): string[] {
     if (id !== "" && !ids.includes(id)) ids.push(id)
   }
   return ids
+}
+
+/**
+ * Parse `privateRooms` — the rooms explicitly released for private delivery.
+ *
+ * Default is the empty list, and that is the whole point of the ClawHub audit
+ * MCP07-2 fix: a room nobody named stays "public". Entries are normalized with
+ * `normalizeRoomKey` — the same function that builds the room key — so a bare
+ * chat id and its `chat:`-prefixed form mean the same room. Blanks, containers
+ * and duplicates drop out; a non-array (config typo) yields [] — never a
+ * wildcard.
+ */
+function parsePrivateRooms(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : []
+  const rooms: string[] = []
+  for (const entry of values) {
+    // Only scalars: `normalizeRoomKey` would turn `true` into "chat:true"
+    // (normalizeId stringifies booleans), and a typo must not become a room.
+    const id = normalizeGroupId(entry)
+    if (id === "") continue
+    const key = normalizeRoomKey(id)
+    if (key !== "" && !rooms.includes(key)) rooms.push(key)
+  }
+  return rooms
 }
 
 function assertAllowedKeys(
@@ -440,6 +473,7 @@ export function parseConfig(raw: unknown): NexusConfig {
     cronFormGate: parseCronFormGate(cfg.cronFormGate),
     planGate: parsePlanGate(cfg.planGate),
     ownerUserIds: parseOwnerUserIds(cfg.ownerUserIds),
+    privateRooms: parsePrivateRooms(cfg.privateRooms),
     debug: toBool(cfg.debug, false),
   }
 }
@@ -497,6 +531,10 @@ export const nexusConfigSchema = {
         },
       },
       ownerUserIds: {
+        type: "array",
+        items: { type: ["string", "number"] },
+      },
+      privateRooms: {
         type: "array",
         items: { type: ["string", "number"] },
       },

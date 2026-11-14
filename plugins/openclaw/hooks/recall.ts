@@ -4,7 +4,8 @@ import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, prefetchFilterScopes } from "../lib/scope-auto.ts"
 import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
 import { resolveReadLevel, setTurnContext } from "../lib/turn-context.ts"
-import { isRoomShared, roomKeyOf } from "../lib/room-state.ts"
+import { hasKnownOwner, resolveOwnerStateDir } from "../lib/owner.ts"
+import { isRoomApproved, isRoomShared, roomKeyOf } from "../lib/room-state.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
 
@@ -229,10 +230,11 @@ export function buildRecallHandler(
     const groupCapActive = isGroupTurn
 
     // Room observation (09.11.2026, mirrors the Hermes plugin's room rule):
-    // a group turn is not automatically a SHARED room. `message_received`
-    // (hooks/room-observer.ts) records who writes where; if only the owner and
-    // bots have been seen there, nothing foreign reads along and the configured
-    // level applies — exactly like a direct chat. Unknown stays capped.
+    // `message_received` (hooks/room-observer.ts) records who writes where. A
+    // room a stranger has written in stays capped. Since 14.11.2026 (ClawHub
+    // audit MCP07-2) that observation can no longer *loosen* anything: a group
+    // turn reaches above "public" only when its room is explicitly released in
+    // `privateRooms`. Silence in a channel never proves a private audience.
     //
     // The key is derived from the SAME fields on both sides (the
     // conversation/chat id first, the session key only as a fallback) — see
@@ -244,29 +246,41 @@ export function buildRecallHandler(
       groupId: rawGroupId,
     })
     const roomShared = isRoomShared(roomKey)
+    const roomApproved = isRoomApproved(cfg.privateRooms, roomKey)
+    // Owner unknown (no `ownerUserIds`, no owner file) → nothing above "public"
+    // is delivered anywhere (ClawHub audit MCP07-1). This has to be a rule of
+    // its own: a room nobody has written in yet carries no observation to
+    // derive it from.
+    const ownerKnown = hasKnownOwner(cfg, resolveOwnerStateDir())
 
-    // One rule for recall and tools (lib/turn-context.ts): shared room → public,
-    // group turn that is not known-private → public, otherwise the cfg level.
+    // One rule for recall and tools (lib/turn-context.ts): owner unknown →
+    // public, shared room → public, group turn whose room is not released →
+    // public, otherwise the cfg level.
     const effectiveAccessLevel = resolveReadLevel(
       groupCapActive,
       roomShared,
       cfg.accessLevel,
+      roomApproved,
+      ownerKnown,
     )
 
     // Turn marker for the TOOLS (ClawHub audit 1.22.0): a registered tool gets
-    // no inbound context from the host, so the group decision is recorded here
-    // once per turn and read back by nexus_search / nexus_forget / the graph
-    // tools (lib/turn-context.ts). Recorded BEFORE the trigger check on
-    // purpose — a turn that is not auto-recalled must still refresh the marker,
-    // otherwise a stale decision from the previous turn would govern its tools.
-    // The room verdict travels alongside the marker, because it can loosen a
-    // group turn the same way the raw group id tightens it (a stranger always
-    // wins: shared → public).
+    // no inbound context from the host, so the turn decision is recorded here
+    // and read back by nexus_search / nexus_forget / the graph tools
+    // (lib/turn-context.ts). Recorded BEFORE the trigger check on purpose — a
+    // turn that is not auto-recalled must still refresh the marker, otherwise a
+    // stale decision from the previous turn would govern its tools.
+    //
+    // Since 1.22.4 the marker is stored PER SESSION (ClawHub audit MCP07-3): a
+    // turn without a session key records nothing, and its tools then read
+    // "public" instead of inheriting whatever turn happened to run last.
     setTurnContext(
       groupCapActive,
       typeof ctx?.sessionKey === "string" ? ctx.sessionKey : undefined,
       Date.now(),
       roomShared,
+      roomApproved,
+      ownerKnown,
     )
 
     const trigger = ctx?.trigger as string | undefined
@@ -280,7 +294,7 @@ export function buildRecallHandler(
     const query = stripNexusContextBlock(rawPrompt)
     if (query.length < 5) return
 
-    log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${effectiveAccessLevel}${groupCapActive ? ", GROUP-CAP active" : ""})`)
+    log.info(`nexus: before_prompt_build fired — recalling for query (${query.length} chars, accessLevel=${effectiveAccessLevel}${groupCapActive ? `, GROUP-CAP active${roomApproved ? " (room released)" : " (room not released)"}` : ""})`)
 
     try {
       // Embed the query

@@ -120,7 +120,13 @@
     },
     "ownerUserIds": {
       "label": "Owner User IDs",
-      "help": "Identities of the owner (the human), one entry per platform. Used by the room rule to tell the owner apart from a stranger. A non-empty list wins. Empty = learn the owner per platform from the first human message on that platform (<stateDir>/nexus/owner.json, {\"version\":2,\"owners\":{\"telegram\":\"…\",\"discord\":\"…\"}}); only if that never happened is the owner unknown and every human message marks its room shared.",
+      "help": "Identities of the owner (the human), one entry per platform. Used by the room rule to tell the owner apart from a stranger. The plugin never claims an owner itself: this list, or an owner file that already exists (<stateDir>/nexus/owner.json, {\"version\":2,\"owners\":{\"telegram\":\"…\",\"discord\":\"…\"}}), is the only source. Empty and no file = owner unknown, every human message marks its room shared, reads stay public.",
+      "advanced": true
+    },
+    "privateRooms": {
+      "label": "Released Rooms (private delivery)",
+      "placeholder": "",
+      "help": "Rooms explicitly released for private memories, e.g. [\"-1001234567890\"]. Default empty: every group/channel turn reads public, because silence in a channel never proves a private audience. A bare chat id means chat:<id>; use session:<key> for a turn that carries no chat id.",
       "advanced": true
     }
   },
@@ -267,6 +273,16 @@
         },
         "default": []
       },
+      "privateRooms": {
+        "type": "array",
+        "items": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "default": []
+      },
       "debug": {
         "type": "boolean",
         "default": false
@@ -279,5 +295,5 @@
     },
     "required": []
   },
-  "version": "1.22.2"
+  "version": "1.22.4"
 }

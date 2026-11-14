@@ -27,7 +27,7 @@ const { registerForgetTool } = forget
 // ClawHub-Audit 1.22.0: forget liest seine Stufe aus dem Turn-Kontext — ohne
 // frisches Merkmal gilt fail-closed "public". Dieser Test prüft den
 // Score-Threshold, also setzt er pro Werkzeug einen Direktchat-Turn.
-const { setTurnContext, resetTurnContext } = await import("./lib/turn-context.ts")
+const { setTurnContext, resetTurnContext, bindToolSession } = await import("./lib/turn-context.ts")
 
 // Fund 6: Threshold aus der Produktion ableiten, statt hartcodiert —
 // ohne Export den Quelltext parsen (test-only, keine API-Änderung nötig).
@@ -60,7 +60,11 @@ function text(res) {
 
 function makeTool(results, overrides = {}) {
   resetTurnContext()
-  setTurnContext(false) // Direktchat-Turn → cfg.accessLevel gilt
+  // ClawHub-Audit 1.22.4: das Merkmal ist sitzungsgebunden; die Aufruf-ID
+  // dieses Tests gehoert zu genau dieser Sitzung.
+  const SESSION = "forget-score"
+  setTurnContext(false, SESSION) // Direktchat-Turn → cfg.accessLevel gilt
+  bindToolSession("id", SESSION)
   let tool
   const deleted = []
   const calls = { embed: [], searchByVector: [], scrollPointStrict: [], delete: [] }
