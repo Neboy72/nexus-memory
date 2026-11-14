@@ -5,7 +5,7 @@ import type { QdrantClient } from "../lib/qdrant-client.ts"
 import { visibleAccessLevels } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { limitText, PREVIEW_MAX } from "../lib/text-preview.ts"
-import { toolAccessLevel } from "../lib/turn-context.ts"
+import { toolCallAccessLevel } from "../lib/turn-context.ts"
 import { removeQueuedCaptures } from "../hooks/capture-retry-queue.ts"
 import { log } from "../logger.ts"
 
@@ -58,7 +58,7 @@ export function registerForgetTool(
         ),
       }),
       async execute(
-        _toolCallId: string,
+        toolCallId: string,
         params: { memoryId?: string; query?: string },
       ) {
         const memoryId = params.memoryId
@@ -77,12 +77,14 @@ export function registerForgetTool(
         const hasMemoryId = typeof normMemoryId === "string" && normMemoryId.length > 0
         const hasQuery = typeof normQuery === "string" && normQuery.length > 0
 
-        // Read level from the TURN, not from the config (ClawHub audit 1.22.0):
-        // a group turn — and every turn without a fresh marker — is "public",
-        // so a tool call can neither find (delete-by-query) nor remove (by id)
-        // a private memory while the agent sits in a shared context. Same rule
-        // as nexus_search and the graph tools (lib/turn-context.ts).
-        const accessLevel = toolAccessLevel(cfg.accessLevel)
+        // Read level from THIS call's session, not from the config (ClawHub
+        // audit 1.22.0, session-bound since 1.22.4): a group turn — and every
+        // call that is not bound to a session with a fresh marker — is
+        // "public", so a tool call can neither find (delete-by-query) nor
+        // remove (by id) a private memory while the agent sits in a shared
+        // context, nor inherit another session's turn verdict. Same rule as
+        // nexus_search and the graph tools (lib/turn-context.ts).
+        const accessLevel = toolCallAccessLevel(cfg.accessLevel, toolCallId)
 
         // Ambiguous input must never silently pick one of the two paths:
         // `memoryId` takes precedence today, so a stray query would be ignored.

@@ -4,7 +4,7 @@ import type { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { clampInt } from "../lib/num.ts"
-import { toolAccessLevel } from "../lib/turn-context.ts"
+import { toolCallAccessLevel } from "../lib/turn-context.ts"
 import { log } from "../logger.ts"
 import { NEXUS_SEARCH_TOOL } from "../runtime.ts"
 
@@ -35,7 +35,7 @@ export function registerSearchTool(
         ),
       }),
       async execute(
-        _toolCallId: string,
+        toolCallId: string,
         params: { query: string; limit?: number },
       ) {
         // H123: never hand a raw host value to Qdrant — clamp to [1, 50].
@@ -59,11 +59,13 @@ export function registerSearchTool(
         }
         const query = params.query
 
-        // Read level from the TURN, not from the config (ClawHub audit 1.22.0):
-        // in a group turn — and whenever no fresh turn marker exists — this is
-        // "public", so a tool call cannot surface private memories into a
-        // shared context (see lib/turn-context.ts).
-        const accessLevel = toolAccessLevel(cfg.accessLevel)
+        // Read level from THIS call's session, not from the config (ClawHub
+        // audit 1.22.0, session-bound since 1.22.4): in a group turn — and
+        // whenever this call is not bound to a session with a fresh marker —
+        // this is "public", so a tool call can neither surface private memories
+        // into a shared context nor inherit another session's turn
+        // (see lib/turn-context.ts).
+        const accessLevel = toolCallAccessLevel(cfg.accessLevel, toolCallId)
 
         // Never log the query text itself — it is user content and can hold
         // secrets. Length is enough for diagnostics.

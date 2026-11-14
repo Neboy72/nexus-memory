@@ -1,43 +1,49 @@
 /**
- * Regressionstest: Eigentuemer pro PLATTFORM lernen (Auftrag 13/14/15)
+ * Regressionstest: Eigentuemer-Quellen (ClawHub-Audit 14.11.2026, MCP07-1)
  *
- * Regel seit Auftrag 13: Der erste Mensch, der dem Agenten schreibt, wird
- * Eigentuemer — in JEDEM Chat, nicht nur im Einzelchat. Grund: OpenClaw nennt
- * einen Telegram-Direktchat `agent:main:main`, das traegt kein `direct:`/`dm:`
- * Segment, die alte Einzelchat-Regel feuerte nie. Die Chat-Art ist deshalb
- * KEIN Teil der Entscheidung mehr; `isDirectSessionKey` bleibt nur als
- * Diagnose-Helfer. Ein Bot wird nie gelernt.
+ * Befund: Die erste angenommene menschliche Nachricht auf einer Plattform wurde
+ * dauerhaft als Eigentuemer gespeichert (`<stateDir>/nexus/owner.json`,
+ * `reason: "first-human"`). Ein Fremder, der zuerst schreibt, wurde damit
+ * Eigentuemer und bekam private Erinnerungen.
  *
- * Regel seit Auftrag 15: derselbe Mensch hat pro Plattform eine ANDERE ID.
- * Gelernt wird deshalb pro Plattform (`channelId` des Hook-Kontexts) in
- * `<stateDir>/nexus/owner.json`:
- *   {"version":2,"owners":{"telegram":"…","discord":"…"}}
- * Eine bekannte Plattform wird nie ueberschrieben. Ein alter version:1-Eintrag
- * (ohne Plattform) wird verworfen und einmal vermerkt — ihn global anzuwenden
- * war genau der Fehler (Discord-Kanaele des Besitzers galten als geteilt).
+ * Regel seit 1.22.4: Der Plugin vergibt den Eigentuemer NICHT mehr selbst. Es
+ * gibt genau zwei Quellen:
+ *   1. Konfiguration `ownerUserIds` (eine ID je Plattform),
+ *   2. eine bereits vorhandene `owner.json` — sie bleibt LESBAR, damit laufende
+ *      Installationen ihren Zustand nicht verlieren, wird aber nie erweitert.
+ * Ohne beides ist der Eigentuemer unbekannt: jede menschliche Nachricht markiert
+ * ihren Raum als geteilt, und Lesezugriffe bleiben `public` (fail-closed).
+ * Der Reset ist das Loeschen der Datei (README) — danach gilt wieder Quelle 1
+ * bzw. "unbekannt".
  *
- * Geprueft wird die aktuelle Regel:
- *   a) isDirectSessionKey — Diagnose-Helfer, steuert das Lernen NICHT
- *   b) erste menschliche Nachricht im Einzelchat → gelernt, Datei 0600
- *   c) erste menschliche Nachricht in einer Gruppe → ebenfalls gelernt
- *   d) dieselbe Person nochmal → kein zweites Schreiben
- *   e) Bot als erster Absender → nicht gelernt
- *   f) ownerUserIds gesetzt → kein Lernen (Config hat Vorrang)
- *   g) gelernte Datei beim Start → Eigentuemer gilt (Config schlaegt Datei)
- *   h) Datei kaputt → genau eine Warnung, kein Absturz, wie ohne Eigentuemer
+ * Der Dateiname ist historisch; geprueft wird die AKTUELLE Regel.
+ *
+ * Geprueft wird:
+ *   a) isDirectSessionKey — Diagnose-Helfer, steuert nichts
+ *   b) ERSTER FREMDER in einem neuen Raum → kein Eigentuemer, Raum geteilt
+ *   c) Bot und Mensch ohne Konfiguration → niemand wird Eigentuemer
+ *   d) NEUSTART mit vorhandener owner.json → Datei wird gelesen, nicht erweitert
+ *   e) ownerUserIds gesetzt → Config gewinnt, Datei wird ignoriert
+ *   f) Reset (Datei geloescht) → Eigentuemer wieder unbekannt
+ *   g) kaputte Datei → genau eine Warnung, kein Absturz, wie ohne Eigentuemer
+ *   h) version:1-Datei → verworfen (keine Plattform), einmal vermerkt
  *   i) Raum-Schluessel: `chat:<conversationId>` hat Vorrang vor `session:…`
- *   j) genau EINE Log-Zeile beim Lernen, ohne volle ID
- *   k) Telegram + Discord desselben Menschen → beide IDs bleiben stehen
- *   l) version:1-Datei → verworfen, einmal vermerkt, danach neu gelernt
- *   m) Fremder auf einer gelernten Plattform → nichts gelernt, Raum geteilt
- *   n) Nachricht ohne Plattform → nichts gelernt (fail-closed)
+ *   j) kein Schreibvorgang mehr aus einer Nachricht (Datei entsteht nie)
+ *   k) Nachricht ohne Plattform → keine Wirkung auf die Eigentuemer-Frage
  *
  * Kein Netz, kein Qdrant, kein echtes Home: jeder Test bekommt ein frisches
  * Temp-Verzeichnis als OPENCLAW_STATE_DIR, HOME zeigt auf die Sandbox.
  */
 import assert from "node:assert"
 import { register } from "node:module"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -51,7 +57,6 @@ process.env.HOME = SANDBOX
 const { initLogger } = await import("./logger.ts")
 const {
   isDirectSessionKey,
-  learnOwnerFromMessage,
   ownerFilePath,
   readLearnedOwner,
   resetOwnerWarnings,
@@ -107,30 +112,19 @@ const handlerFor = (cfg = { ownerUserIds: [] }) => buildMessageReceivedHandler(c
  * `conversationId` den Vorrang gibt (Fall i) — im echten Telegram-Direktchat
  * ist der sessionKey `agent:main:main` und traegt gar keine Chat-ID.
  * `platform` landet als `channelId` im Hook-Kontext (das ist die Plattform,
- * nicht die Chat-ID) — ohne sie wird nichts gelernt.
+ * nicht die Chat-ID).
  */
 const message = (senderId, sessionKey, chatId, { platform = "discord", event = {} } = {}) => [
   { senderId, ...event },
   { sessionKey, chatId, channelId: platform },
 ]
 
-/** Inhalt der gelernten Datei, oder null. */
-const ownerFile = () => {
-  try {
-    return JSON.parse(readFileSync(ownerFilePath(), "utf8"))
-  } catch {
-    return null
-  }
-}
-
-/** Existiert die gelernte Datei? */
-const ownerFileExists = () => {
-  try {
-    readFileSync(ownerFilePath())
-    return true
-  } catch {
-    return false
-  }
+/** Schreibt eine owner.json, wie sie eine bestehende Installation hat. */
+function writeOwnerFile(dir, record) {
+  const file = join(dir, "nexus", "owner.json")
+  mkdirSync(join(dir, "nexus"), { recursive: true })
+  writeFileSync(file, JSON.stringify(record))
+  return file
 }
 
 // ── a) Einzelchat-Erkennung (nur Diagnose) ─────────────────────────────────
@@ -163,329 +157,182 @@ await t("a) isDirectSessionKey: direct/dm erkannt — reine Diagnose, kein Gate"
   }
 })
 
-// ── b) erste menschliche Nachricht im Einzelchat ───────────────────────────
+// ── b) der erste Fremde wird NICHT Eigentuemer ────────────────────────────
 
-await t("b) erste Nachricht eines Menschen im Einzelchat → gelernt, Datei 0600", () => {
+await t("b) erster Fremder in einem neuen Raum → kein Eigentuemer, Raum geteilt", () => {
   const dir = freshState()
   const handler = handlerFor()
-  handler(...message("4711", "discord:direct:123", "123"))
+  handler(...message("6666", "discord:direct:999", "999"))
 
-  const file = ownerFilePath()
-  assert.strictEqual(file, join(dir, "nexus", "owner.json"), "Pfad muss <stateDir>/nexus/owner.json sein")
-  const record = ownerFile()
-  assert.strictEqual(record.version, 2)
-  assert.deepStrictEqual(record.owners, { discord: "4711" }, "genau die Plattform der Nachricht")
-  assert.strictEqual(record.reason, "first-human")
-  assert.ok(Number.isFinite(record.learnedAt) && record.learnedAt > 0, "learnedAt fehlt")
-  assert.strictEqual(statSync(file).mode & 0o777, 0o600, "Datei muss 0600 sein")
-
-  // Dieselbe Nachricht zaehlt sofort als Eigentuemer: der Raum bleibt privat.
-  const room = roomKeyOf({ conversationId: "123" })
-  assert.strictEqual(room, "chat:123")
-  assert.strictEqual(isRoomShared(room), false)
-  assert.strictEqual(getRoomState(room)?.reason, "owner")
-})
-
-// ── c) erste menschliche Nachricht in einer Gruppe ─────────────────────────
-
-await t("c) erste Nachricht eines Menschen in einer Gruppe → ebenfalls gelernt", () => {
-  freshState()
-  const handler = handlerFor()
-  handler(...message("4711", "discord:group:456", "456"))
-
-  assert.strictEqual(ownerFileExists(), true, "der erste Mensch wird auch in der Gruppe gelernt")
-  assert.deepStrictEqual(readLearnedOwner()?.owners, { discord: "4711" })
-  assert.strictEqual(resolveOwnerId({ ownerUserIds: [] }), "4711")
-
-  // Die Chat-Art entscheidet nicht mehr: der Raum des Eigentuemers bleibt privat.
-  const room = roomKeyOf({ conversationId: "456" })
-  assert.strictEqual(isRoomShared(room), false, "Eigentuemer in der Gruppe → Raum nicht geteilt")
-  assert.strictEqual(getRoomState(room)?.reason, "owner")
-
-  // Ein Fremder im selben Raum markiert ihn weiterhin als geteilt.
-  handler(...message("888", "discord:group:456", "456"))
-  assert.strictEqual(isRoomShared(room), true)
-  assert.strictEqual(getRoomState(room)?.reason, "foreign-author")
-})
-
-// ── d) kein zweites Schreiben ──────────────────────────────────────────────
-
-await t("d) dieselbe Person nochmal → kein zweites Schreiben", () => {
-  freshState()
-  const first = learnOwnerFromMessage({ senderId: "4711", isBot: false, channelId: "discord" })
-  assert.strictEqual(first.learned, true)
-  assert.strictEqual(first.reason, "first-human")
-  assert.strictEqual(first.ownerUserId, "4711")
-  assert.strictEqual(first.platform, "discord")
-  const before = readFileSync(ownerFilePath(), "utf8")
-
-  const second = learnOwnerFromMessage({ senderId: "4711", isBot: false, channelId: "discord" })
-  assert.strictEqual(second.learned, false)
-  assert.strictEqual(second.reason, "already-known")
-  assert.strictEqual(readFileSync(ownerFilePath(), "utf8"), before, "Datei darf unveraendert bleiben")
-
-  // Auch ein ANDERER Mensch nimmt den Platz nicht ein.
-  const third = learnOwnerFromMessage({ senderId: "9999", isBot: false, channelId: "discord" })
-  assert.strictEqual(third.learned, false, "ein bereits gelernter Eigentuemer bleibt")
-  assert.deepStrictEqual(readLearnedOwner()?.owners, { discord: "4711" })
-})
-
-// ── e) Bots lernen nicht ───────────────────────────────────────────────────
-
-await t("e) Absender ist Bot → nicht gelernt", () => {
-  freshState()
-  for (const event of [{ isBot: true }, { senderIsBot: true }, { sender: { isBot: true } }]) {
-    const handler = handlerFor()
-    handler(...message("4711", "discord:direct:123", "123", { event }))
-    assert.strictEqual(warns.length, 0, `kein Fehler erwartet (${JSON.stringify(event)})`)
-  }
-  assert.strictEqual(ownerFileExists(), false, "ein Bot darf keine owner.json anlegen")
-  assert.strictEqual(resolveOwnerId({ ownerUserIds: [] }), null, "ein Bot wird nie Eigentuemer")
-
-  const direct = learnOwnerFromMessage({ senderId: "4711", isBot: true, channelId: "discord" })
-  assert.strictEqual(direct.learned, false)
-  assert.strictEqual(direct.reason, "bot")
-
-  // Der naechste Mensch — nicht der Bot — wird gelernt.
-  const human = learnOwnerFromMessage({ senderId: "4712", isBot: false, channelId: "discord" })
-  assert.strictEqual(human.learned, true)
-  assert.deepStrictEqual(readLearnedOwner()?.owners, { discord: "4712" })
-})
-
-// ── f) Config hat Vorrang ──────────────────────────────────────────────────
-
-await t("f) ownerUserIds gesetzt → kein Lernen", () => {
-  freshState()
-  const handler = handlerFor({ ownerUserIds: ["999"] })
-  handler(...message("4711", "discord:direct:123", "123"))
-
-  assert.strictEqual(ownerFileExists(), false, "die Config darf nicht von einer Beobachtung ueberschrieben werden")
-  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: ["999"] }), ["999"])
   assert.deepStrictEqual(
-    resolveOwnerIds({ ownerUserIds: ["999"] }, "telegram"),
-    ["999"],
-    "die Config gilt global, nicht pro Plattform",
+    resolveOwnerIds({ ownerUserIds: [] }),
+    [],
+    "eine eingehende Nachricht darf keinen Eigentuemer erzeugen",
   )
-
-  // Der konfigurierte Eigentuemer bleibt fremd fuer diesen Raum.
-  const room = roomKeyOf({ conversationId: "123" })
-  assert.strictEqual(isRoomShared(room), true)
-  assert.strictEqual(getRoomState(room)?.reason, "foreign-author")
-})
-
-// ── g) gelernte Datei gilt beim Start ──────────────────────────────────────
-
-await t("g) gelernte Datei beim Start gelesen → Eigentuemer gilt", () => {
-  const dir = freshState()
-  mkdirSync(join(dir, "nexus"), { recursive: true })
-  writeFileSync(
-    ownerFilePath(),
-    JSON.stringify({ version: 2, owners: { discord: "777" }, learnedAt: Date.now(), reason: "first-human" }),
-  )
-
-  assert.deepStrictEqual(readLearnedOwner()?.owners, { discord: "777" })
-  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), ["777"])
-  assert.strictEqual(resolveOwnerId({ ownerUserIds: [] }), "777")
-
-  // Der Eigentuemer schreibt in seiner eigenen Gruppe → Raum bleibt privat.
-  const handler = handlerFor()
-  handler(...message("777", "discord:group:456", "456"))
-  const room = roomKeyOf({ conversationId: "456" })
-  assert.strictEqual(isRoomShared(room), false)
-  assert.strictEqual(getRoomState(room)?.reason, "owner")
-
-  // Ein Fremder im selben Raum → geteilt (die Raum-Regel selbst bleibt scharf).
-  handler(...message("888", "discord:group:456", "456"))
-  assert.strictEqual(isRoomShared(room), true)
-  assert.strictEqual(getRoomState(room)?.reason, "foreign-author")
-
-  // Config schlaegt die gelernte Datei.
-  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: ["999"] }), ["999"])
-})
-
-// ── h) kaputte Datei ───────────────────────────────────────────────────────
-
-await t("h) Datei kaputt → eine Warnung, kein Absturz, wie ohne Eigentuemer", () => {
-  const dir = freshState()
-  mkdirSync(join(dir, "nexus"), { recursive: true })
-  writeFileSync(ownerFilePath(), "{ das ist kein json")
-
-  assert.strictEqual(readLearnedOwner(), null)
-  assert.strictEqual(warns.length, 1, "genau eine Warnung")
-  assert.match(warns[0], /owner: could not read/)
-  assert.ok(!warns[0].includes("kein json"), "die Warnung darf den Inhalt nicht wiedergeben")
-
-  // Zweiter Leseversuch warnt nicht erneut.
-  assert.strictEqual(readLearnedOwner(), null)
-  assert.strictEqual(warns.length, 1)
-
-  // Verhalten wie ohne Eigentuemer: die Eigentuemer-Menge ist leer.
-  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), [], "kein Eigentuemer bekannt")
   assert.strictEqual(resolveOwnerId({ ownerUserIds: [] }), null)
-
-  // Mit gesetzter Config bleibt ein Fremder fremd → Raum geteilt (kein Lernen,
-  // die Config hat Vorrang). Das zeigt die Raum-Regel ohne gelernten Besitzer.
-  const configured = handlerFor({ ownerUserIds: ["999"] })
-  configured(...message("888", "discord:group:456", "456"))
-  const room = roomKeyOf({ conversationId: "456" })
-  assert.strictEqual(isRoomShared(room), true)
-  assert.strictEqual(getRoomState(room)?.reason, "foreign-author")
-
-  // ... und die naechste menschliche Nachricht repariert die Datei (wie beim Erststart).
-  const handler = handlerFor()
-  handler(...message("4711", "discord:direct:123", "123"))
-  assert.deepStrictEqual(readLearnedOwner()?.owners, { discord: "4711" })
-  assert.strictEqual(warns.length, 1, "das Reparieren ist keine neue Warnung")
-})
-
-// ── i) Raum-Schluessel: chat: vor session: ─────────────────────────────────
-
-await t("i) chat:<conversationId> hat Vorrang vor session:<sessionKey>", () => {
-  freshState()
-  const handler = handlerFor()
-
-  // OpenClaws Telegram-Direktchat: der sessionKey ist agent-weit und traegt
-  // keine Chat-ID — nur die conversationId benennt den Raum.
-  handler(...message("4711", "agent:main:main", "555"))
-
   assert.strictEqual(
-    roomKeyOf({ sessionKey: "agent:main:main", conversationId: "555" }),
-    "chat:555",
-    "die conversationId muss den Raum benennen",
-  )
-  assert.strictEqual(isRoomShared("chat:555"), false, "der Raum wurde unter chat:555 beobachtet")
-  assert.strictEqual(
-    getRoomState(roomKeyOf({ sessionKey: "agent:main:main" })),
-    null,
-    "der sessionKey darf NICHT als Raum dienen, wenn eine conversationId da ist",
+    existsSync(ownerFilePath()),
+    false,
+    `der Hook darf keine owner.json schreiben (${join(dir, "nexus")})`,
   )
 
-  // Ein anderer Chat derselben Session ist ein anderer Raum.
-  handler(...message("888", "agent:main:main", "556"))
-  assert.strictEqual(isRoomShared("chat:556"), true, "fremder Mensch → eigener Raum geteilt")
-  assert.strictEqual(isRoomShared("chat:555"), false, "der erste Raum bleibt unberuehrt")
+  // Ohne Eigentuemer gilt der Schreiber als fremd → Raum geteilt → public.
+  const room = roomKeyOf({ conversationId: "999" })
+  assert.strictEqual(room, "chat:999")
+  assert.strictEqual(isRoomShared(room), true, "ohne Eigentuemer ist jeder Mensch fremd")
+  assert.strictEqual(getRoomState(room)?.reason, "unknown-owner")
 })
 
-// ── j) genau eine Log-Zeile, ohne volle ID ─────────────────────────────────
+// ── c) Bot und Mensch ohne Konfiguration ──────────────────────────────────
 
-await t("j) Lernen loggt genau eine Zeile ohne die volle ID", () => {
-  freshState()
-  learnOwnerFromMessage({ senderId: "4711", isBot: false, channelId: "discord" })
-
-  // Der Logger stellt "nexus: " voran — danach beginnt die Modulzeile.
-  const lines = infos.filter((msg) => msg.startsWith("nexus: owner:"))
-  assert.strictEqual(lines.length, 1, `genau eine Zeile, waren: ${lines.length}`)
-  assert.match(lines[0], /learned the owner for discord/)
-  assert.ok(!lines[0].includes("4711"), `die volle ID darf nicht im Log stehen: ${lines[0]}`)
-})
-
-// ── k) Telegram + Discord desselben Menschen ───────────────────────────────
-
-await t("k) Telegram dann Discord (andere ID) → beide bleiben stehen, kein drittes Schreiben", () => {
+await t("c) Bot zuerst, dann Mensch — niemand wird Eigentuemer", () => {
   freshState()
   const handler = handlerFor()
+  handler(...message("9001", "discord:direct:1", "1", { event: { isBot: true } }))
+  handler(...message("9002", "discord:direct:1", "1"))
 
-  // Der Besitzer auf Telegram.
-  handler(...message("5763330319", "agent:main:main", "tg-1", { platform: "telegram" }))
-  assert.deepStrictEqual(ownerFile().owners, { telegram: "5763330319" })
-  assert.strictEqual(ownerFile().owners.discord, undefined, "Discord ist noch leer")
+  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), [])
+  assert.strictEqual(existsSync(ownerFilePath()), false)
+  assert.strictEqual(isRoomShared("chat:1"), true, "der Mensch bleibt fremd")
+})
 
-  // Derselbe Mensch auf Discord — andere ID, andere Plattform.
-  handler(...message("373816693522432001", "discord:group:456", "456", { platform: "discord" }))
-  const afterBoth = ownerFile().owners
-  assert.deepStrictEqual(afterBoth, {
-    telegram: "5763330319",
-    discord: "373816693522432001",
+// ── d) NEUSTART mit vorhandener Datei ─────────────────────────────────────
+
+await t("d) Neustart mit vorhandener owner.json → gelesen, aber nie erweitert", () => {
+  const dir = freshState()
+  writeOwnerFile(dir, {
+    version: 2,
+    owners: { discord: "4711" },
+    learnedAt: 1_700_000_000_000,
+    reason: "first-human",
   })
-  console.log("       owner.json nach zwei Plattformen:", JSON.stringify({ version: 2, owners: afterBoth }))
 
-  // Die Eigentuemer-Menge enthaelt BEIDE — ein Raum unterscheidet nicht nach
-  // Plattform. Mit channelId steht die eigene Plattform vorn.
-  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), ["5763330319", "373816693522432001"])
-  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }, "discord"), [
-    "373816693522432001",
-    "5763330319",
-  ])
+  // "Neustart": frischer Prozesszustand, gleiche Datei.
+  resetRoomState()
+  resetOwnerWarnings()
 
-  // Der Besitzer in einem weiteren Discord-Kanal → Raum bleibt privat.
-  handler(...message("373816693522432001", "discord:channel:1497566179114352730", "1497566179114352730", { platform: "discord" }))
-  assert.strictEqual(isRoomShared("chat:1497566179114352730"), false)
-  assert.strictEqual(getRoomState("chat:1497566179114352730")?.reason, "owner")
+  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), ["4711"], "Bestand bleibt lesbar")
+  assert.strictEqual(resolveOwnerId({ ownerUserIds: [] }, "discord"), "4711")
 
-  // Zweite Discord-Nachricht → kein drittes Schreiben.
-  const before = readFileSync(ownerFilePath(), "utf8")
-  handler(...message("373816693522432001", "discord:group:456", "456", { platform: "discord" }))
-  assert.strictEqual(readFileSync(ownerFilePath(), "utf8"), before, "kein erneutes Schreiben")
+  const handler = handlerFor()
+  // Der Eigentuemer schreibt: sein Raum bleibt nicht geteilt.
+  handler(...message("4711", "discord:direct:123", "123"))
+  assert.strictEqual(isRoomShared("chat:123"), false)
+  assert.strictEqual(getRoomState("chat:123")?.reason, "owner")
+
+  // Ein Fremder auf einer NEUEN Plattform wird nicht eingetragen.
+  handler(...message("8888", "telegram:group:-100", "-100", { platform: "telegram" }))
+  const record = JSON.parse(readFileSync(ownerFilePath(), "utf8"))
+  assert.deepStrictEqual(record.owners, { discord: "4711" }, "die Datei wird nicht erweitert")
+  assert.strictEqual(isRoomShared("chat:-100"), true, "der Fremde markiert seinen Raum geteilt")
 })
 
-// ── l) version:1 wird verworfen, nicht global angewendet ────────────────────
+// ── e) Konfiguration gewinnt ──────────────────────────────────────────────
 
-await t("l) version:1-Datei → verworfen, einmal vermerkt, danach neu gelernt", () => {
+await t("e) ownerUserIds gesetzt → Config gewinnt, Datei wird ignoriert", () => {
+  const dir = freshState()
+  writeOwnerFile(dir, { version: 2, owners: { discord: "4711" }, learnedAt: 1, reason: "first-human" })
+
+  const cfg = { ownerUserIds: ["999"] }
+  assert.deepStrictEqual(resolveOwnerIds(cfg), ["999"])
+  assert.strictEqual(resolveOwnerId(cfg, "discord"), "999")
+
+  const handler = handlerFor(cfg)
+  handler(...message("999", "discord:direct:5", "5"))
+  assert.strictEqual(isRoomShared("chat:5"), false, "die konfigurierte ID ist der Eigentuemer")
+  assert.strictEqual(getRoomState("chat:5")?.reason, "owner")
+
+  handler(...message("4711", "discord:direct:6", "6"))
+  assert.strictEqual(isRoomShared("chat:6"), true, "die ID aus der Datei gilt nicht mehr")
+})
+
+// ── f) Reset ──────────────────────────────────────────────────────────────
+
+await t("f) Reset: Datei geloescht → Eigentuemer wieder unbekannt", () => {
+  const dir = freshState()
+  const file = writeOwnerFile(dir, {
+    version: 2,
+    owners: { telegram: "5763330319" },
+    learnedAt: 1,
+    reason: "first-human",
+  })
+  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), ["5763330319"])
+
+  rmSync(file)
+
+  resetOwnerWarnings()
+  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), [], "nach dem Reset ist niemand Eigentuemer")
+  assert.strictEqual(readLearnedOwner(), null)
+  assert.strictEqual(existsSync(file), false)
+})
+
+// ── g) kaputte Datei ──────────────────────────────────────────────────────
+
+await t("g) kaputte Datei → genau eine Warnung, kein Absturz", () => {
   const dir = freshState()
   mkdirSync(join(dir, "nexus"), { recursive: true })
-  writeFileSync(
-    ownerFilePath(),
-    JSON.stringify({ version: 1, ownerUserId: "777", learnedAt: Date.now(), reason: "first-human" }),
-  )
+  writeFileSync(join(dir, "nexus", "owner.json"), "{ das ist kein json")
 
-  // Nicht angewendet: die alte ID gilt auf KEINER Plattform.
   assert.strictEqual(readLearnedOwner(), null)
+  assert.strictEqual(warns.length, 1, `genau eine Warnung erwartet, waren ${warns.length}`)
+  assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), [], "kein Eigentuemer bekannt")
+
+  // Ein zweiter Aufruf warnt nicht erneut (einmal pro Prozess und Datei).
+  readLearnedOwner()
+  assert.strictEqual(warns.length, 1)
+})
+
+// ── h) version:1 ──────────────────────────────────────────────────────────
+
+await t("h) version:1-Datei (keine Plattform) → verworfen, einmal vermerkt", () => {
+  const dir = freshState()
+  writeOwnerFile(dir, { version: 1, ownerUserId: "4711" })
+
+  assert.strictEqual(readLearnedOwner(), null, "ohne Plattform nicht zuordenbar")
   assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), [], "v1 darf nicht global gelten")
   assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }, "telegram"), [])
-  assert.strictEqual(warns.length, 0, "eine v1-Datei ist kein Lesefehler")
+  assert.strictEqual(warns.length, 1, "einmal vermerkt")
 
-  const notes = () => infos.filter((msg) => msg.includes("version-1 owner"))
-  assert.strictEqual(notes().length, 1, "genau ein Vermerk")
-  assert.ok(!notes()[0].includes("777"), "der Vermerk darf die alte ID nicht wiedergeben")
-
-  // Zweiter Leseversuch vermerkt nicht erneut.
-  readLearnedOwner()
-  assert.strictEqual(notes().length, 1)
-
-  // Kein Absturz — die naechste Nachricht lernt die Plattform neu.
-  const handler = handlerFor()
-  handler(...message("4711", "discord:group:456", "456"))
-  assert.deepStrictEqual(ownerFile().owners, { discord: "4711" })
-  assert.strictEqual(ownerFile().version, 2)
-  assert.strictEqual(isRoomShared("chat:456"), false, "der neu gelernte Besitzer bleibt privat")
+  // Der Hinweis nennt den Ausweg, nicht die ID.
+  assert.ok(
+    /ownerUserIds|version/.test(warns[0]),
+    `Warnung muss den Ausweg nennen, war: ${warns[0]}`,
+  )
 })
 
-// ── m) Fremder auf einer bereits gelernten Plattform ───────────────────────
+// ── i) Raum-Schluessel ────────────────────────────────────────────────────
 
-await t("m) Fremder auf gelernter Plattform → nichts gelernt, Raum geteilt", () => {
+await t("i) Raum-Schluessel: chat:<conversationId> hat Vorrang vor session:…", () => {
+  freshState()
+  assert.strictEqual(roomKeyOf({ conversationId: "123", sessionKey: "agent:main:main" }), "chat:123")
+  assert.strictEqual(roomKeyOf({ sessionKey: "agent:main:main" }), "session:agent:main:main")
+  assert.strictEqual(roomKeyOf({}), null)
+})
+
+// ── j) kein Schreibvorgang mehr ───────────────────────────────────────────
+
+await t("j) viele Nachrichten auf vielen Plattformen → nie eine Datei", () => {
   freshState()
   const handler = handlerFor()
-  handler(...message("5763330319", "agent:main:main", "tg-1", { platform: "telegram" }))
-  const before = readFileSync(ownerFilePath(), "utf8")
-
-  // Ein anderer Mensch auf derselben Plattform ist ein Fremder.
-  handler(...message("1111", "telegram:group:-100999", "-100999", { platform: "telegram" }))
-  assert.strictEqual(readFileSync(ownerFilePath(), "utf8"), before, "keine zweite ID auf derselben Plattform")
-  assert.strictEqual(isRoomShared("chat:-100999"), true, "fremder Mensch → Raum geteilt")
-  assert.strictEqual(getRoomState("chat:-100999")?.reason, "foreign-author")
-
-  // Der Besitzer selbst markiert seinen Raum weiterhin nicht.
-  handler(...message("5763330319", "telegram:group:-100888", "-100888", { platform: "telegram" }))
-  assert.strictEqual(isRoomShared("chat:-100888"), false)
-  assert.strictEqual(getRoomState("chat:-100888")?.reason, "owner")
+  for (const platform of ["telegram", "discord", "slack"]) {
+    for (let i = 0; i < 5; i++) {
+      handler(...message(`user-${i}`, `${platform}:group:${i}`, `${platform}-${i}`, { platform }))
+    }
+  }
+  assert.strictEqual(existsSync(ownerFilePath()), false, "der Hook schreibt grundsaetzlich nichts")
+  assert.strictEqual(infos.filter((m) => /owner: learned/.test(m)).length, 0, "keine Lern-Zeile mehr")
 })
 
-// ── n) ohne Plattform wird nichts gelernt ──────────────────────────────────
+// ── k) ohne Plattform ─────────────────────────────────────────────────────
 
-await t("n) Nachricht ohne Plattform → nichts gelernt (fail-closed)", () => {
-  const dir = freshState()
+await t("k) Nachricht ohne Plattform → keine Wirkung auf die Eigentuemer-Frage", () => {
+  freshState()
   const handler = handlerFor()
-  // Kein channelId im Kontext: die ID laesst sich keiner Plattform zuordnen.
   handler({ senderId: "4711" }, { sessionKey: "agent:main:main", chatId: "555" })
 
-  assert.strictEqual(ownerFileExists(), false, "ohne Plattform darf keine Datei entstehen")
+  assert.strictEqual(existsSync(ownerFilePath()), false)
   assert.deepStrictEqual(resolveOwnerIds({ ownerUserIds: [] }), [], "kein Eigentuemer bekannt")
   assert.strictEqual(isRoomShared("chat:555"), true, "ohne Besitzer gilt jeder Mensch als fremd")
-
-  const direct = learnOwnerFromMessage({ senderId: "4711", isBot: false })
-  assert.strictEqual(direct.learned, false)
-  assert.strictEqual(direct.reason, "no-platform")
-  assert.strictEqual(ownerFileExists(), false, `keine Datei in ${dir}`)
 })
 
 process.env.HOME = REAL_HOME

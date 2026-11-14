@@ -52,6 +52,9 @@ const mockApi = {
     autoRecall: true,
     autoCapture: true,
     accessLevel: "private",
+    // Seit 1.22.4 (ClawHub-Audit MCP07-1) liefert das Plugin ohne bekannten
+    // Eigentuemer nur noch "public"; dieser Test prueft den DM-Pfad mit cfg-Stufe.
+    ownerUserIds: ["test-owner"],
     // Writes go through the Nexus write gate since 10.11.2026.
     writeGate: { url: "http://127.0.0.1:9122", key: "test-key" },
     embedding: { provider: "openai", apiKey: "test" },
