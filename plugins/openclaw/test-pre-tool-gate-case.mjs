@@ -28,9 +28,11 @@ const t = (name, fn) =>
 // Guardrail blocks before any embedder/Qdrant use, so stubs suffice.
 // 27.09.2026: planGate bewusst AUS — dieser Test beweist, dass die Guardrails
 // (Ebene 1) auch ohne Ebene 3 blocken.
+// The rule layer at the execution boundary (ClawHub audit 14.11.2026,
+// finding 2 #7) needs a rule store; no rules = nothing beyond level 1 blocks.
 const handler = buildPreToolGateHandler(
   { embed: async () => [] },
-  { search: async () => [] },
+  { search: async () => [], scrollFilteredStrict: async () => ({ points: [], complete: true }) },
   { accessLevel: "private", planGate: { enabled: false, maxAgeSeconds: 300 } },
 )
 

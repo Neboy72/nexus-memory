@@ -41,6 +41,9 @@ function makeHandler(planGate = PLAN_GATE_ON) {
       search: async () => [
         { id: "m1", text: "relevantes Memory", score: 0.9, category: "fact" },
       ],
+      // The hook now checks the protection rules at the execution boundary
+      // (ClawHub audit 14.11.2026, finding 2 #7). No rules = nothing blocks.
+      scrollFilteredStrict: async () => ({ points: [], complete: true }),
     },
     { accessLevel: "private", planGate },
   )

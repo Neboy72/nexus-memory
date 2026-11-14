@@ -23,8 +23,36 @@ export type SearchResult = {
  */
 const MAX_SCROLL_PAGES = 5
 
+/**
+ * Page cap for `scrollFilteredStrict` — the SECURITY-CRITICAL read path
+ * (protection rules). Much higher than the best-effort cap, because a rule set
+ * that does not fit in the walk counts as "rules unavailable" and blocks every
+ * destructive action. 20 pages × the rules' page size is far beyond any real
+ * protection-rule count, so the cap is a runaway guard, not a data limit.
+ */
+const MAX_STRICT_SCROLL_PAGES = 20
+
+/**
+ * Failure of a security-critical scroll.
+ *
+ * `scrollFilteredStrict` throws on ANY failing page (never a silent partial
+ * set). It carries the points read BEFORE the failure so a caller can still
+ * REPORT which known rule matched — the verdict itself is fail-closed either
+ * way. Without this, a block whose rule sat on an already-read page would
+ * lose its justification and become a generic "unavailable".
+ */
+export class StrictScrollError extends Error {
+  readonly points: Array<{ id: string; payload?: Record<string, unknown> }>
+
+  constructor(message: string, points: Array<{ id: string; payload?: Record<string, unknown> }>) {
+    super(message)
+    this.name = "StrictScrollError"
+    this.points = points
+  }
+}
+
 /** Access-level hierarchy: public=0, trusted=1, private=2. */
-const ACCESS_LEVEL_ORDER: Record<string, number> = {
+export const ACCESS_LEVEL_ORDER: Record<string, number> = {
   public: 0,
   trusted: 1,
   private: 2,
@@ -809,15 +837,60 @@ export class QdrantClient {
   }
 
   /**
-   * Scroll points with a Qdrant filter — returns points with payload.
+   * Fetch ONE scroll page. Throws on any failure — it never returns a partial
+   * page — so each caller decides what a failure means for it.
+   */
+  private async scrollPage(
+    filter: Record<string, unknown>,
+    limit: number,
+    offset: unknown,
+  ): Promise<{
+    points: Array<{ id: string; payload?: Record<string, unknown> }>
+    next: unknown
+  }> {
+    const body: Record<string, unknown> = {
+      filter,
+      limit,
+      with_payload: true,
+      with_vector: false,
+    }
+    if (offset !== undefined && offset !== null) body.offset = offset
+
+    const resp = await fetchWithTimeout(
+      `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    )
+    if (!resp.ok) {
+      throw new Error(
+        `scroll: Qdrant returned ${resp.status} for collection="${this.collection}"`,
+      )
+    }
+    const data = (await resp.json()) as {
+      result?: {
+        points?: Array<{ id: string | number; payload?: Record<string, unknown> }>
+        next_page_offset?: unknown
+      }
+    }
+    const points = (data.result?.points ?? []).map((p) => ({
+      id: String(p.id),
+      payload: p.payload,
+    }))
+    return { points, next: data.result?.next_page_offset }
+  }
+
+  /**
+   * BEST-EFFORT scroll: points with payload, capped at MAX_SCROLL_PAGES pages.
    *
-   * PAGINATED: `limit` is the PER-PAGE limit. The call follows
-   * `next_page_offset` for up to MAX_SCROLL_PAGES pages, so the returned
-   * array can hold up to `limit * MAX_SCROLL_PAGES` points. This makes
-   * "top N / all matching" queries (protection rules, entity edges) complete
-   * over large collections instead of only ever seeing the first page.
-   * Returns whatever was collected so far if a later page fails (fail-open
-   * to partial data, same spirit as the previous empty-array fallback).
+   * PAGINATED: `limit` is the PER-PAGE limit. This is the read path for
+   * consumers that merely want "as much as is cheaply available" (graph
+   * edges). A failure on the FIRST page throws; a failure on a LATER page
+   * returns the partial result, and reaching the page cap also returns what
+   * was collected. Callers must therefore not read its return value as "the
+   * complete set" — security-critical reads use `scrollFilteredStrict`.
    */
   async scrollFiltered(
     filter: Record<string, unknown>,
@@ -828,61 +901,21 @@ export class QdrantClient {
     let offset: unknown = undefined
     try {
       for (let page = 0; page < MAX_SCROLL_PAGES; page++) {
-        const body: Record<string, unknown> = {
-          filter,
-          limit,
-          with_payload: true,
-          with_vector: false,
-        }
-        if (offset !== undefined && offset !== null) body.offset = offset
-
-        const resp = await fetchWithTimeout(
-          `${this.qdrantUrl}/collections/${this.collection}/points/scroll`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          },
-        )
-        if (!resp.ok) {
-          // OCR-5 (security medium): a first-page failure must not resolve to
-          // an empty array — security consumers (guardrail_check) treat [] as
-          // "no protection rules" and ALLOW destructive actions (fail-open).
-          // OCR-6 (security high): the old "mid-walk failure returns the
-          // partial result" had the SAME fail-open hole on page 2+ —
-          // loadProtectionRules() treats ANY non-throwing return as the
-          // complete rule set, so an outage mid-walk (or MAX_SCROLL_PAGES
-          // truncation) yielded an incomplete rule list. ALL scroll failures
-          // now throw: security consumers fail closed, best-effort consumers
-          // (findIncomingEdges) get the error loud instead of silently
-          // missing edges.
-          throw new Error(
-            `scrollFiltered: Qdrant returned ${resp.status} for collection="${this.collection}" (fail-closed — a partial walk is indistinguishable from a complete one for security consumers)`,
-          )
-        }
-        const data = await resp.json() as {
-          result?: {
-            points?: Array<{ id: string | number; payload?: Record<string, unknown> }>
-            next_page_offset?: unknown
-          }
-        }
-        for (const p of data.result?.points ?? []) {
-          collected.push({ id: String(p.id), payload: p.payload })
-        }
+        const { points, next } = await this.scrollPage(filter, limit, offset)
+        collected.push(...points)
         // W31-18(b): honor a TOTAL cap — `limit` is per-page, so without this
         // the 5-page walk returned up to limit*MAX_SCROLL_PAGES points and a
         // caller's `limit` was silently exceeded.
         if (maxTotal !== undefined && collected.length >= maxTotal) break
-        const next = data.result?.next_page_offset
         if (next === null || next === undefined) break
         offset = next
       }
       return maxTotal !== undefined ? collected.slice(0, maxTotal) : collected
     } catch (err) {
-      // OCR-5 (security medium): a first-page failure re-throws — the outer
-      // contract must let fail-closed consumers (guardrail_check) see the
-      // outage instead of receiving [] ("no rules" → allow). Mid-walk
-      // failures (points already collected) keep the partial-result return.
+      // OCR-5 (security medium): a first-page failure re-throws instead of
+      // resolving to [] ("no rules" → allow). Mid-walk failures keep the
+      // partial-result return — this path is best-effort only; every
+      // security-critical reader uses scrollFilteredStrict below.
       if (collected.length === 0) {
         log.error(
           `scrollFiltered: first page failed for collection="${this.collection}" — no partial result, throwing (fail-closed)`,
@@ -896,6 +929,61 @@ export class QdrantClient {
       )
       return collected
     }
+  }
+
+  /**
+   * SECURITY-CRITICAL scroll: either the COMPLETE matching set or an error.
+   *
+   * ClawHub audit 14.11.2026 (finding 2): the paginated best-effort read above
+   * returned a partial array for a later-page failure and for a walk cut off
+   * by the page cap — and `loadProtectionRules` read every non-throwing return
+   * as "the complete rule set", so a destructive action could be ALLOWED
+   * because the protection rule that should block it lived on a page that was
+   * never fetched. This method never hides that:
+   *
+   *   - ANY page failure throws — a `StrictScrollError` that carries the
+   *     points already collected, so a caller may still cite them while
+   *     treating the set as incomplete;
+   *   - reaching the page cap with a `next_page_offset` left over returns
+   *     `complete: false` with the points so far, so the caller treats the
+   *     rule set as unavailable and blocks (fail-closed) instead of assuming
+   *     it saw everything.
+   *
+   * There is no `maxTotal` here on purpose: a total limit is exactly the
+   * "silently cut short" behaviour this method exists to rule out.
+   */
+  async scrollFilteredStrict(
+    filter: Record<string, unknown>,
+    limit: number,
+  ): Promise<{
+    points: Array<{ id: string; payload?: Record<string, unknown> }>
+    complete: boolean
+  }> {
+    const collected: Array<{ id: string; payload?: Record<string, unknown> }> = []
+    let offset: unknown = undefined
+    for (let page = 0; page < MAX_STRICT_SCROLL_PAGES; page++) {
+      let points: Array<{ id: string; payload?: Record<string, unknown> }>
+      let next: unknown
+      try {
+        ;({ points, next } = await this.scrollPage(filter, limit, offset))
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        throw new StrictScrollError(
+          `scrollFilteredStrict: page ${page + 1} failed for collection="${this.collection}" ` +
+            `after ${collected.length} points — no complete result (fail-closed): ${detail}`,
+          collected,
+        )
+      }
+      collected.push(...points)
+      if (next === null || next === undefined) {
+        return { points: collected, complete: true }
+      }
+      offset = next
+    }
+    log.warn(
+      `scrollFilteredStrict: page cap (${MAX_STRICT_SCROLL_PAGES}) reached with a continuation offset left for collection="${this.collection}" — result is INCOMPLETE`,
+    )
+    return { points: collected, complete: false }
   }
 
   /**

@@ -84,6 +84,67 @@ await t("scrollFiltered: Cap greift bei Endlos-offset (max 5 Seiten)", async () 
   assert.strictEqual(points.length, MAX_SCROLL_PAGES)
 })
 
+// ── scrollFilteredStrict (ClawHub audit 14.11.2026, Befund 2) ────────────────
+// Die sicherheitskritische Lektuere: vollstaendig ODER Fehler — nie ein
+// Teilergebnis, das wie ein vollstaendiger Regelsatz aussieht.
+function parseStrictCap(srcText) {
+  const m = srcText.match(/MAX_STRICT_SCROLL_PAGES\s*=\s*(\d+)/)
+  if (!m) throw new Error("MAX_STRICT_SCROLL_PAGES nicht gefunden — Test-Anker ziehen.")
+  return Number(m[1])
+}
+const STRICT_CAP = parseStrictCap(qcSrc)
+
+/** fetch-Stub, der pro Aufruf antwortet (ok oder Fehler); zaehlt Aufrufe. */
+function mockStrict(respond) {
+  let calls = 0
+  globalThis.fetch = async (_url, _opts = {}) => {
+    calls++
+    return respond(calls)
+  }
+  return () => calls
+}
+const okPage = (points, next) => ({
+  ok: true,
+  status: 200,
+  json: async () => ({ result: { points, next_page_offset: next } }),
+  text: async () => "",
+})
+
+await t("scrollFilteredStrict: sammelt alle Seiten und meldet complete=true", async () => {
+  const calls = mockStrict((n) =>
+    n === 1
+      ? okPage([{ id: 1, payload: { a: 1 } }], "n1")
+      : okPage([{ id: 2, payload: { a: 2 } }], null),
+  )
+  const client = new QdrantClient("http://localhost:6333", "nexus", 8)
+  const res = await client.scrollFilteredStrict({ must: [] }, 1000)
+  assert.deepStrictEqual(res.points.map((p) => p.id), ["1", "2"])
+  assert.strictEqual(res.complete, true)
+  assert.strictEqual(calls(), 2)
+})
+
+await t("scrollFilteredStrict: Fehler auf Seite 2 wirft (kein Teilergebnis)", async () => {
+  mockStrict((n) =>
+    n === 1
+      ? okPage([{ id: "a", payload: {} }], "n1")
+      : { ok: false, status: 503, json: async () => ({}), text: async () => "down" },
+  )
+  const client = new QdrantClient("http://localhost:6333", "nexus", 8)
+  await assert.rejects(
+    () => client.scrollFilteredStrict({ must: [] }, 1000),
+    /503/,
+    "ein Fehler nach gesammelten Punkten muss weiterhin werfen",
+  )
+})
+
+await t("scrollFilteredStrict: Seiten-Cap mit Rest-Offset → complete=false", async () => {
+  const calls = mockStrict(() => okPage([{ id: "x", payload: {} }], "always"))
+  const client = new QdrantClient("http://localhost:6333", "nexus", 8)
+  const res = await client.scrollFilteredStrict({ must: [] }, 10)
+  assert.strictEqual(res.complete, false, "abgeschnittener Lauf darf nicht als vollstaendig gelten")
+  assert.strictEqual(calls(), STRICT_CAP, "der strikte Cap muss die Schleife beenden")
+})
+
 await t("fetchCentroids summiert beide Seiten", async () => {
   mockPages([
     {

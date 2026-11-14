@@ -18,6 +18,13 @@ process.env.HOME = "/home/tester"
 
 register("./_typebox-test-loader.mjs", import.meta.url)
 const { registerGuardrailOverrideTool } = await import("./tools/guardrail_check.ts")
+const { setTurnContext, bindToolSession } = await import("./lib/turn-context.ts")
+
+// The owner's own session: only a caller that may SEE the rule may override it
+// (ClawHub audit 14.11.2026, MCP07). Tool call id "id" is bound to it.
+const OWNER_SESSION = "guardrail-override-owner"
+setTurnContext(false, OWNER_SESSION, Date.now(), false, false, true)
+bindToolSession("id", OWNER_SESSION)
 
 let failed = 0
 const t = (name, fn) =>
@@ -49,13 +56,13 @@ function makeTool(ruleTexts = [`niemals löschen: ${PROTECTED}`]) {
     payload: { content, category: "rule" },
   }))
   const backend = {
-    scrollFiltered: async () => rules,
+    scrollFilteredStrict: async () => ({ points: rules, complete: true }),
     upsert: async (_id, _vec, payload) => { captured.push(payload) },
   }
   registerGuardrailOverrideTool(
     api,
     backend,
-    { collection: "nexus" },
+    { collection: "nexus", accessLevel: "private" },
     { embed: async () => [0.1, 0.2] },
     // The audit write goes through the shared gate; the mock carries the same
     // upsert contract the production WriteGateClient implements.
@@ -262,6 +269,26 @@ await t("echter Block-Fall mit target/action-Kontext (extra Felder werden ignori
   const out = parse(res)
   assert.strictEqual(out.status, "override_recorded", `extra Payload-Felder dürfen nicht ablehnen: ${JSON.stringify(out)}`)
   assert.strictEqual(captured[0].matched_rules[0].source_memory_id, "rule-0")
+})
+
+// ── Befund 1 (ClawHub 14.11.2026, MCP07): Override folgt der Sichtbarkeit ──
+
+await t("ungebundene Sitzung (public) darf eine private Regel nicht bestaetigen — ohne Regelinhalt", async () => {
+  const { tool, captured } = makeTool()
+  // Call id "ungebunden" wurde nie an eine Sitzung gebunden → public.
+  const res = await tool.execute("ungebunden", {
+    command: `rm -rf ${PROTECTED}`,
+    reasoning: REASONING,
+    matched_rules: [GOOD_RULE],
+    agent_id: "agent-7",
+  })
+  assert.strictEqual(res.isError, true, "ohne Berechtigung kein Audit-Record")
+  const err = parse(res).error
+  assert.match(err, /above this session's access level/)
+  assert.ok(!err.includes(PROTECTED), `protected_path darf nicht zurueckkommen: ${err}`)
+  assert.ok(!err.includes("niemals"), `rule_text darf nicht zurueckkommen: ${err}`)
+  assert.ok(!err.includes("rule-0"), `source_memory_id darf nicht zurueckkommen: ${err}`)
+  assert.strictEqual(captured.length, 0)
 })
 
 process.env.HOME = REAL_HOME
