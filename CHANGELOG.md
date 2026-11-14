@@ -1,6 +1,63 @@
 ## [0.22.48] - 2026-11-11
 
-### Fixed / Added
+### Schreibtor - eine Prüfung für alle Schreibwege
+
+Bisher entschied jeder Weg selbst, was geschrieben werden darf: `nexus_remember` konnte eine leere
+Erinnerung ablegen, ein Dokument konnte zu einer dauerhaften `rule` werden, und das OpenClaw-Plugin
+umging jede Prüfung, indem es direkt per HTTP nach Qdrant schrieb. Jetzt gibt es ein Tor in der
+Bibliothek, und jeder Schreibweg ruft es auf: Hermes-Plugin, MCP-Server, Claude-Code-Autocapture und
+OpenClaw über den neuen Endpunkt `/write`.
+
+- Es arbeitet fail-closed: lässt es sich nicht laden, wird das Schreiben abgewiesen statt ungeprüft
+  durchzugehen. Reine Lesezugriffe laufen weiter.
+- `rule` wird nur noch aus ausdrücklichem Aufruf oder Handeingabe angenommen, nie aus der
+  automatischen Extraktion nach einem Turn; Zitatmerkmale im Inhalt werden zusätzlich abgewiesen.
+- Die Zugriffsstufe erbt die strengste Stufe der Quelle: paperless und wiki werden `private`, eine
+  Sitzung bleibt `trusted`, `public` vergibt das Tor nie selbst. Mail, Kalender, Gesundheit, Konto,
+  Versicherung, Steuer und Rechnung sind immer private.
+- `öffentlich` zählt nur als ganzes Wort; Pfade und `nicht-öffentlich` qualifizieren nicht mehr.
+- Statt Zeichenlänge erkennt das Tor Etiketten: kurze Fakten mit Zahl gehen durch, reine Etiketten
+  nicht.
+- Herkunft ist Pflicht und wird notfalls aus dem Aufrufer gebaut; der Stichwortindex wird nach dem
+  Schreiben nachgezogen, ein Indexfehler verhindert das Schreiben nicht.
+
+### Regeln nur mit menschlicher Bestätigung
+
+Eine Regel entsteht nur noch mit einem Nachweis, den ein Modell im Gespräch nicht erzeugen kann: ein
+Zeitfenster-Token vom Terminal (`rule-confirm`, 10 Minuten, einmalig verwendbar). Ohne Nachweis wird
+der Eintrag zu `fact` herabgestuft, nicht verworfen. `scripts/regeln-pruefen.py` prüft den Bestand
+lesend.
+
+Erster Lauf: 2.475 Regeln in der Sammlung, davon 0 von Hand bestätigt, 540 mit Zitatmerkmalen. Ein
+Wiederholungslauf am 14.11. über 2.476 Regeln fand erneut keine bestätigte Regel.
+
+### Aufsicht - täglicher Bericht über den Bestand
+
+Ein Lesevorgang über die Sammlung, dann Zahlen statt Eindrücke: Punkte je Kategorie, Zugriffsstufe und
+Schreiber, leere und sehr kurze Inhalte, Punkte ohne Herkunft, Etiketten ohne Satz, Zuwachs gegenüber
+dem letzten Lauf und Abgleich gegen den Stichwortindex. Alarm nur bei Sprüngen. Berichte landen unter
+`~/.hermes/state/nexus-aufsicht/`.
+
+Erster Lauf: 51.847 Punkte, 632 ohne Inhalt, 5.146 ohne Herkunft (9,9 Prozent), 1.890 Etiketten ohne
+Satz.
+
+### Einspielweg - gewichtete Stichwortsuche, Fenster um die Fundstelle
+
+- **Stichwortsuche mit Seltenheitsgewicht.** Ein eigener BM25-Index (SQLite FTS5) führt die
+  Stichwortsuche mit Gewichtung seltener Wörter; Ähnlichkeit und Stichwortliste werden per RRF (k=60)
+  verschmolzen. Der Index baut im Hintergrund, zieht bei Zählabweichung nach und fällt bei Ausfall auf
+  reine Ähnlichkeit zurück.
+- **Fenster statt harter Schnitt.** In den längsten Punkten steht die Antwort ganz hinten; der Schnitt
+  bei 400 Zeichen warf sie weg. Jetzt wird ein Fenster um die erste Fundstelle geschnitten.
+- **Volltextkandidaten nach Ähnlichkeit geordnet.** Die Volltextsuche liefert ihre Treffer in
+  Kennungsreihenfolge; jetzt werden 64 Treffer geholt, gegen den Fragevektor gerechnet und die zehn
+  ähnlichsten genommen. Der Zähler ging von zwölf auf sechs und steht jetzt bei zehn
+  (`_KEYWORD_CANDIDATE_LIMIT`), je Eintrag ein Fenster von 400 Zeichen.
+- **Messung** (20 Fragen, `scripts/prefetch-trichter.py`): 16 von 20 im fertigen Block, vorher 13. Der
+  lokale Cross-Encoder macht es messbar schlechter (14) und bleibt draußen. Auf der 23er-Basis 19 von
+  23 vor und nach dem Einbau; bei 4.000 Zeichen Budget meldet dieselbe Messung 21 von 23.
+
+### Behoben
 
 - **Block baut Inhalt mit Rückfall.** 632 Punkte tragen ihren Inhalt im Feld `text` statt
   `content`; der eingespielte Block las nur `content` und ließ sie unsichtbar. Jetzt greift
@@ -11,6 +68,8 @@
 - **Schreibtor erkennt Zustandswerte.** Kurzer Text bekommt das Kennzeichen, langer Text einen
   Hinweis, den Wert als eigenen Kurzfakt mit Herkunft und Datum abzulegen. Kein zusätzlicher
   Schreibvorgang, keine automatische Ableitung.
+- **Der Entity-Extraktor behält den Satz.** Ein extrahierter Begriff trägt jetzt den Satz, aus dem er
+  stammt, damit ein Treffer ohne den ganzen Punkt beurteilbar ist.
 - **Sonde misst den laufenden Weg.** `scripts/prefetch-trichter.py` liest Inhalt und Grenze aus
   dem Plugin statt aus einer Abschrift eigener Regeln.
 - **Neue Messbasis.** `scripts/prueffragen-23.txt`: 23 echte Fragen mit Muss-Stichwort, aus einer
