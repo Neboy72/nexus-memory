@@ -11,6 +11,10 @@
  * trägt keine groupId), deshalb setzt `before_prompt_build` ein Turn-Merkmal
  * (lib/turn-context.ts), das die Werkzeuge lesen.
  *
+ * Seit 1.22.4 (ClawHub-Audit MCP07-3) liegt das Merkmal PRO SITZUNG, und ein
+ * Werkzeug findet seine Sitzung nur über die Aufruf-ID, die `before_tool_call`
+ * bindet. Die Tests bilden das mit `turn()` + `bindToolSession()` nach.
+ *
  * Gepinnt wird hier:
  *  a) Gruppen-Merkmal  → nexus_search fragt nur `public` ab (echter Qdrant-Body)
  *  b) kein Merkmal     → `public` (fail-closed)
@@ -36,8 +40,14 @@ const SANDBOX = mkdtempSync(join(tmpdir(), "nexus-turn-context-"))
 process.env.NEXUS_CAPTURE_QUEUE_FILE = join(SANDBOX, "capture-retry-queue.jsonl")
 process.env.NEXUS_AGENT_SELFTEST = "1"
 
-const { setTurnContext, resetTurnContext, getTurnContext, toolAccessLevel, TURN_MARKER_TTL_MS } =
-  await import("./lib/turn-context.ts")
+const {
+  setTurnContext,
+  resetTurnContext,
+  getTurnContext,
+  bindToolSession,
+  toolAccessLevel,
+  TURN_MARKER_TTL_MS,
+} = await import("./lib/turn-context.ts")
 const { registerSearchTool } = await import("./tools/search.ts")
 const { registerForgetTool } = await import("./tools/forget.ts")
 const { registerFindEntitiesTool, registerGraphTraverseTool } = await import(
@@ -99,12 +109,26 @@ function searchTool(cfg = { accessLevel: "private" }) {
   return tool
 }
 
+// Seit 1.22.4 (ClawHub-Audit MCP07-3) ist das Turn-Merkmal SITZUNGSGEBUNDEN:
+// ein Werkzeug liest nur das Merkmal der Sitzung, an die sein Aufruf gebunden
+// ist (`before_tool_call` → bindToolSession). Diese beiden Konstanten halten
+// Sitzung und Aufruf-ID der Tests zusammen.
+const SESSION = "s1"
+const CALL = "t"
+
+/** Merkmal fuer SESSION setzen UND den Werkzeugaufruf daran binden. */
+function turn(isGroup, opts = {}) {
+  const { at, shared = null, approved = false, session = SESSION } = opts
+  setTurnContext(isGroup, session, at, shared, approved)
+  bindToolSession(CALL, session)
+}
+
 /** Eine Suche ausführen und den access_level-Filter zurückgeben. */
 async function searchLevel(prepare) {
   searches.length = 0
   resetTurnContext()
   prepare()
-  const res = await searchTool().execute("t", { query: "irgendetwas" })
+  const res = await searchTool().execute(CALL, { query: "irgendetwas" })
   assert.ok(!res.isError, `Suche fehlgeschlagen: ${JSON.stringify(res?.content)}`)
   assert.strictEqual(searches.length, 1, `genau eine Suche erwartet, waren ${searches.length}`)
   return searches[0]
@@ -115,7 +139,7 @@ const textOf = (res) => (res.content ?? []).map((c) => c.text).join("\n")
 // ── a-d) nexus_search ──────────────────────────────────────────────────────
 
 await t("a) Gruppen-Merkmal → nexus_search fragt nur 'public' ab", async () => {
-  const levels = await searchLevel(() => setTurnContext(true, "group-session-1"))
+  const levels = await searchLevel(() => turn(true))
   assert.strictEqual(levels, "public", `Gruppen-Suche muss auf public gekappt sein, war: ${levels}`)
 })
 
@@ -127,21 +151,21 @@ await t("b) kein Merkmal → 'public' (fail-closed)", async () => {
 await t("c) Merkmal älter als 120 s → 'public' (fail-closed)", async () => {
   const levels = await searchLevel(() =>
     // DM-Merkmal, aber abgelaufen: ohne TTL würde hier cfg (=private) greifen.
-    setTurnContext(false, "dm-session", Date.now() - TURN_MARKER_TTL_MS),
+    turn(false, { at: Date.now() - TURN_MARKER_TTL_MS }),
   )
   assert.strictEqual(levels, "public", `abgelaufenes Merkmal muss public ergeben, war: ${levels}`)
 })
 
 await t("d) Direktchat-Merkmal → cfg.accessLevel wie bisher (private = kein Filter)", async () => {
-  const levels = await searchLevel(() => setTurnContext(false, "dm-session-2"))
+  const levels = await searchLevel(() => turn(false))
   assert.strictEqual(levels, "no-filter", `DM mit cfg=private sieht alles, war: ${levels}`)
 })
 
 await t("d2) Direktchat-Merkmal + cfg=trusted → public|trusted", async () => {
   searches.length = 0
   resetTurnContext()
-  setTurnContext(false)
-  await searchTool({ accessLevel: "trusted" }).execute("t", { query: "irgendetwas" })
+  turn(false)
+  await searchTool({ accessLevel: "trusted" }).execute(CALL, { query: "irgendetwas" })
   assert.strictEqual(searches[0], "public|trusted", "trusted muss public+trusted sehen")
 })
 
@@ -177,17 +201,17 @@ const forgettingClient = () => {
 
 await t("e) Gruppen-Merkmal → forget-by-query sucht nur 'public'", async () => {
   resetTurnContext()
-  setTurnContext(true)
+  turn(true)
   const client = forgettingClient()
-  await forgetTool({ client }).execute("t", { query: "privater Inhalt" })
+  await forgetTool({ client }).execute(CALL, { query: "privater Inhalt" })
   assert.deepStrictEqual(client.seen.searchByVector, ["public"], "Gruppen-Suche muss public sein")
 })
 
 await t("e2) Gruppen-Merkmal → Direkt-Löschung einer privaten Erinnerung wird verweigert", async () => {
   resetTurnContext()
-  setTurnContext(true)
+  turn(true)
   const client = forgettingClient()
-  const res = await forgetTool({ client }).execute("t", { memoryId: "mem-private" })
+  const res = await forgetTool({ client }).execute(CALL, { memoryId: "mem-private" })
   assert.strictEqual(res.isError, true, "Verweigerung muss isError tragen")
   assert.match(textOf(res), /refused/i)
   assert.deepStrictEqual(client.seen.deleted, [], "in der Gruppe darf nichts gelöscht werden")
@@ -195,9 +219,9 @@ await t("e2) Gruppen-Merkmal → Direkt-Löschung einer privaten Erinnerung wird
 
 await t("e3) Direktchat-Merkmal → dieselbe Löschung ist erlaubt", async () => {
   resetTurnContext()
-  setTurnContext(false)
+  turn(false)
   const client = forgettingClient()
-  const res = await forgetTool({ client }).execute("t", { memoryId: "mem-private" })
+  const res = await forgetTool({ client }).execute(CALL, { memoryId: "mem-private" })
   assert.strictEqual(res.isError, undefined)
   assert.deepStrictEqual(client.seen.deleted, ["mem-private"], "im DM muss gelöscht werden")
 })
@@ -205,7 +229,7 @@ await t("e3) Direktchat-Merkmal → dieselbe Löschung ist erlaubt", async () =>
 await t("e4) kein Merkmal → Direkt-Löschung fail-closed verweigert", async () => {
   resetTurnContext()
   const client = forgettingClient()
-  const res = await forgetTool({ client }).execute("t", { memoryId: "mem-private" })
+  const res = await forgetTool({ client }).execute(CALL, { memoryId: "mem-private" })
   assert.strictEqual(res.isError, true)
   assert.deepStrictEqual(client.seen.deleted, [], "ohne Merkmal darf nichts gelöscht werden")
 })
@@ -236,9 +260,9 @@ function entityTool(cfg = { accessLevel: "private" }) {
 
 await t("f) Gruppen-Merkmal → find_entities filtert auf 'public'", async () => {
   resetTurnContext()
-  setTurnContext(true)
+  turn(true)
   const { tool, filters } = entityTool()
-  const res = await tool.execute("t", {})
+  const res = await tool.execute(CALL, {})
   const clause = filters[0].must.find((c) => c.key === "access_level")
   assert.ok(clause, "access_level-Klausel muss im Qdrant-Filter stehen")
   assert.deepStrictEqual(clause.match.any, ["public"], "Gruppe sieht nur public")
@@ -249,14 +273,14 @@ await t("f) Gruppen-Merkmal → find_entities filtert auf 'public'", async () =>
 await t("f2) kein Merkmal → find_entities filtert fail-closed auf 'public'", async () => {
   resetTurnContext()
   const { tool, filters } = entityTool()
-  await tool.execute("t", {})
+  await tool.execute(CALL, {})
   const clause = filters[0].must.find((c) => c.key === "access_level")
   assert.deepStrictEqual(clause?.match?.any, ["public"], "ohne Merkmal nur public")
 })
 
 await t("f3) Gruppen-Merkmal → graph_traverse auf privaten Startpunkt: 'not found'", async () => {
   resetTurnContext()
-  setTurnContext(true)
+  turn(true)
   let tool = null
   registerGraphTraverseTool(
     { registerTool: (tt) => { tool = tt } },
@@ -268,13 +292,13 @@ await t("f3) Gruppen-Merkmal → graph_traverse auf privaten Startpunkt: 'not fo
     },
     { accessLevel: "private" },
   )
-  const res = await tool.execute("t", { fact_id: "fact-secret" })
+  const res = await tool.execute(CALL, { fact_id: "fact-secret" })
   assert.strictEqual(textOf(res), "Fact fact-secret not found")
 })
 
 await t("f4) Direktchat-Merkmal → derselbe Startpunkt ist erreichbar", async () => {
   resetTurnContext()
-  setTurnContext(false)
+  turn(false)
   let tool = null
   registerGraphTraverseTool(
     { registerTool: (tt) => { tool = tt } },
@@ -286,13 +310,20 @@ await t("f4) Direktchat-Merkmal → derselbe Startpunkt ist erreichbar", async (
     },
     { accessLevel: "private" },
   )
-  const res = await tool.execute("t", { fact_id: "fact-secret" })
+  const res = await tool.execute(CALL, { fact_id: "fact-secret" })
   assert.notStrictEqual(textOf(res), "Fact fact-secret not found")
 })
 
 // ── g) der Hook setzt das Merkmal ──────────────────────────────────────────
 
-const recallCfg = { accessLevel: "private", maxRecallResults: 5, scope: "" }
+// `ownerUserIds` ist seit 1.22.4 Pflicht fuer alles ueber "public": ohne
+// bekannten Eigentuemer kappt der Recall auf public (ClawHub-Audit MCP07-1).
+const recallCfg = {
+  accessLevel: "private",
+  maxRecallResults: 5,
+  scope: "",
+  ownerUserIds: ["owner-1"],
+}
 
 await t("g) before_prompt_build (Gruppe) setzt isGroup=true", async () => {
   resetTurnContext()
@@ -305,10 +336,9 @@ await t("g) before_prompt_build (Gruppe) setzt isGroup=true", async () => {
     { prompt: "was weiss ich ueber das projekt" },
     { trigger: "user", groupId: "-1001234", sessionKey: "grp-1" },
   )
-  const marker = getTurnContext()
+  const marker = getTurnContext("grp-1")
   assert.ok(marker, "Merkmal muss gesetzt sein")
   assert.strictEqual(marker.isGroup, true)
-  assert.strictEqual(marker.sessionKey, "grp-1")
 })
 
 await t("g2) before_prompt_build (DM, leerer groupId) → isGroup=true (fail-closed)", async () => {
@@ -318,8 +348,15 @@ await t("g2) before_prompt_build (DM, leerer groupId) → isGroup=true (fail-clo
     { search: async () => [] },
     recallCfg,
   )
-  await handler({ prompt: "was weiss ich ueber das projekt" }, { trigger: "user", groupId: "" })
-  assert.strictEqual(getTurnContext()?.isGroup, true, "leerer groupId ist eine Gruppe, kein DM")
+  await handler(
+    { prompt: "was weiss ich ueber das projekt" },
+    { trigger: "user", groupId: "", sessionKey: "leer-gruppe" },
+  )
+  assert.strictEqual(
+    getTurnContext("leer-gruppe")?.isGroup,
+    true,
+    "leerer groupId ist eine Gruppe, kein DM",
+  )
 })
 
 await t("g3) before_prompt_build (DM) → isGroup=false, cfg gilt", async () => {
@@ -331,13 +368,30 @@ await t("g3) before_prompt_build (DM) → isGroup=false, cfg gilt", async () => 
   )
   await handler(
     { prompt: "was weiss ich ueber das projekt" },
-    { trigger: "user", groupId: null },
+    { trigger: "user", groupId: null, sessionKey: "dm-3" },
   )
-  assert.strictEqual(getTurnContext()?.isGroup, false)
-  assert.strictEqual(toolAccessLevel("private"), "private")
+  assert.strictEqual(getTurnContext("dm-3")?.isGroup, false)
+  assert.strictEqual(toolAccessLevel("private", "dm-3"), "private")
 })
 
-await t("g4) nicht-interaktiver Turn frischt das Merkmal ebenfalls auf", async () => {
+await t("g3b) ohne Sitzungsschluessel → kein Merkmal, Werkzeug bleibt 'public'", async () => {
+  // ClawHub-Audit MCP07-3: ein Turn ohne Sitzungsschluessel darf kein Merkmal
+  // hinterlassen, an das sich ein spaeterer Werkzeugaufruf haengen koennte.
+  resetTurnContext()
+  const handler = buildRecallHandler(
+    { embed: async () => [0.1] },
+    { search: async () => [] },
+    recallCfg,
+  )
+  await handler(
+    { prompt: "was weiss ich ueber das projekt" },
+    { trigger: "user", groupId: null },
+  )
+  assert.strictEqual(getTurnContext(undefined), null, "ohne Sitzungsschluessel kein Merkmal")
+  assert.strictEqual(toolAccessLevel("private"), "public")
+})
+
+await t("g4) nicht-interaktiver Turn frischt NUR seine eigene Sitzung auf", async () => {
   // Ein Cron-/Heartbeat-Turn hat KEINE Gruppe: bliebe das alte Gruppen-Merkmal
   // stehen, wären dessen Werkzeuge unnötig auf public gekappt — und umgekehrt
   // könnte ein altes DM-Merkmal in einen Gruppenturn hineinragen.
@@ -348,8 +402,17 @@ await t("g4) nicht-interaktiver Turn frischt das Merkmal ebenfalls auf", async (
     { search: async () => [] },
     recallCfg,
   )
-  await handler({ prompt: "cron tick" }, { trigger: "heartbeat", groupId: null })
-  assert.strictEqual(getTurnContext()?.isGroup, false, "der Turn muss das Merkmal auffrischen")
+  await handler(
+    { prompt: "cron tick" },
+    { trigger: "heartbeat", groupId: null, sessionKey: "cron-1" },
+  )
+  assert.strictEqual(
+    getTurnContext("cron-1")?.isGroup,
+    false,
+    "der Turn muss das Merkmal Auffrischen",
+  )
+  // Und die andere Sitzung bleibt unberuehrt — genau das war vor 1.22.4 falsch.
+  assert.strictEqual(getTurnContext("alte-gruppe")?.isGroup, true, "fremde Sitzung bleibt unberuehrt")
 })
 
 globalThis.fetch = realFetch

@@ -29,7 +29,7 @@ const { registerGraphTraverseTool, registerGetRelatedTool } = await import(
 // ClawHub-Audit 1.22.0: Werkzeuge lesen ihre Stufe aus dem Turn-Kontext.
 // Dieser Test prüft die Fehler-Semantik der BFS/Lookups (cfg = private),
 // also braucht er einen Direktchat-Turn — ohne Merkmal gilt "public".
-const { setTurnContext, resetTurnContext } = await import("./lib/turn-context.ts")
+const { setTurnContext, resetTurnContext, bindToolSession } = await import("./lib/turn-context.ts")
 
 let failed = 0
 const t = (name, fn) =>
@@ -97,7 +97,13 @@ function makeClient({ graph = GRAPH, strictFails = [], lenientNulls = [], incomi
 
 function toolFor(registerFn, client) {
   resetTurnContext()
-  setTurnContext(false) // Direktchat-Turn → cfg.accessLevel gilt
+  // ClawHub-Audit 1.22.4: das Merkmal ist sitzungsgebunden; die Aufruf-IDs
+  // dieses Tests gehoeren alle zu derselben Sitzung.
+  const SESSION = "lookup-failure"
+  setTurnContext(false, SESSION) // Direktchat-Turn → cfg.accessLevel gilt
+  for (const id of ["t", ...Array.from({ length: 6 }, (_, i) => `t${i + 1}`)]) {
+    bindToolSession(id, SESSION)
+  }
   let tool = null
   registerFn(
     { registerTool: (tt) => { tool = tt } },

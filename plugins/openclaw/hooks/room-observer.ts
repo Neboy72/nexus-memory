@@ -1,12 +1,7 @@
 import type { NexusConfig } from "../lib/config.ts"
 import { log } from "../logger.ts"
 import { isRoomShared, observeAuthor, roomKeyOf } from "../lib/room-state.ts"
-import {
-  hasConfiguredOwner,
-  learnOwnerFromMessage,
-  resolveOwnerIds,
-  resolveOwnerStateDir,
-} from "../lib/owner.ts"
+import { resolveOwnerIds, resolveOwnerStateDir } from "../lib/owner.ts"
 
 /**
  * `message_received` — remember who writes in which room.
@@ -23,16 +18,14 @@ import {
  * present the author counts as human, which is the fail-closed direction: an
  * unrecognised author can only make a room MORE private, never less.
  *
- * Owner learning (lib/owner.ts): the first HUMAN who writes — in any chat —
- * becomes the owner OF THAT PLATFORM, persisted as
- * `<stateDir>/nexus/owner.json`. The platform is the context's `channelId`
- * (`telegram`, `discord`, …) — one human has a different id per platform, so a
- * single global id made the owner a stranger everywhere else (Auftrag 15). The
- * chat type is not consulted (see the module header of lib/owner.ts for why
- * the old "direct chat only" rule never fired). It happens BEFORE the
- * observation on purpose, so that same message already counts as the owner and
- * its room is not marked shared. A configured `ownerUserIds` always wins and
- * suppresses learning.
+ * Owner (lib/owner.ts): this hook no longer claims one. Until 1.22.4 the first
+ * human who wrote was persisted as the owner of that platform — ClawHub's
+ * audit (14.11.2026, MCP07-1) showed that whoever writes first becomes the
+ * owner, including a stranger. The owner now comes from configuration
+ * (`ownerUserIds`) or from an owner file that already exists; this handler
+ * only READS that answer. No configuration and no file means no owner, so
+ * every human author counts as a stranger and the room is marked shared —
+ * the fail-closed direction.
  *
  * The handler never throws and never blocks: it returns void, and the host is
  * free to ignore it.
@@ -104,19 +97,11 @@ export function buildMessageReceivedHandler(cfg: NexusConfig) {
       // ("telegram", "discord"), NOT a chat id (see lib/room-state.ts).
       const channelId = readString(ctx, "channelId") || readString(event, "channelId")
 
-      // Learn the owner BEFORE observing this author (see the module header):
-      // only while the config names no owner — `ownerUserIds` must never be
-      // overwritten by an observation. Within the learned state the platform
-      // decides: a platform that already has an owner is never re-learned.
-      const stateDir = resolveOwnerStateDir()
-      if (!hasConfiguredOwner(cfg)) {
-        learnOwnerFromMessage({ senderId: authorId, isBot, channelId, stateDir })
-      }
-
-      // The owner set the room rule compares against: config, else the learned
-      // ids of every platform, else empty (owner unknown → any human marks the
-      // room shared).
-      const ownerIds = resolveOwnerIds(cfg, channelId, stateDir)
+      // The owner set the room rule compares against: config, else the ids of
+      // an owner file that already exists, else empty (owner unknown → any
+      // human marks the room shared). Nothing is written here any more — see
+      // the module header and the ClawHub audit MCP07-1.
+      const ownerIds = resolveOwnerIds(cfg, channelId, resolveOwnerStateDir())
 
       const before = isRoomShared(roomKey)
       const state = observeAuthor(roomKey, authorId, isBot, ownerIds)
