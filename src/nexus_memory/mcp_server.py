@@ -3707,6 +3707,35 @@ def _qdrant_reachable(host: Optional[str] = None, port: Optional[int] = None,
 # (a book chapter, not a book). The plugins embed per turn, not in bulk.
 MAX_EMBED_CHARS = 32000
 
+# DNS-rebinding protection for the HTTP service. The defaults are exactly the
+# loopback-only behaviour of every release before these knobs existed; the env
+# vars only WIDEN the Host/Origin check (never the service-key check) so a
+# reverse proxy such as Tailscale Serve can reach /write and /mcp.
+DEFAULT_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*"]
+DEFAULT_ALLOWED_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*"]
+
+
+def _env_pattern_list(name: str, default: list[str]) -> list[str]:
+    """Read a comma-separated pattern list from the environment.
+
+    Empty or whitespace-only entries are dropped; a value with no usable
+    entry (unset, "", " , ,") falls back to ``default``.
+    """
+    raw = os.environ.get(name, "")
+    entries = [part.strip() for part in raw.split(",")]
+    entries = [entry for entry in entries if entry]
+    return entries or list(default)
+
+
+def allowed_hosts_from_env() -> list[str]:
+    """NEXUS_ALLOWED_HOSTS, defaulting to loopback only."""
+    return _env_pattern_list("NEXUS_ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS)
+
+
+def allowed_origins_from_env() -> list[str]:
+    """NEXUS_ALLOWED_ORIGINS, defaulting to loopback only."""
+    return _env_pattern_list("NEXUS_ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
+
 
 def build_serve_app():
     """Build the Starlette ASGI app served by `serve`.
@@ -3738,12 +3767,17 @@ def build_serve_app():
     # without knowing the secret.
     service_key = service_auth.ensure_service_key()
 
+    # Resolved once per app build so both guards (MCP session manager and the
+    # service-key middleware) agree on the same allow-lists.
+    allowed_hosts = allowed_hosts_from_env()
+    allowed_origins = allowed_origins_from_env()
+
     manager = StreamableHTTPSessionManager(
         app=server,
         security_settings=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=["127.0.0.1:*", "localhost:*"],
-            allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
         ),
     )
     # The manager itself is not callable; StreamableHTTPASGIApp is the ASGI
@@ -4004,8 +4038,8 @@ def build_serve_app():
                 ServiceKeyMiddleware,
                 service_key=service_key,
                 header=service_auth.AUTH_HEADER,
-                allowed_hosts=["127.0.0.1:*", "localhost:*"],
-                allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
+                allowed_hosts=allowed_hosts,
+                allowed_origins=allowed_origins,
             ),
         ],
     )
