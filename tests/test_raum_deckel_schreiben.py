@@ -35,6 +35,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 PRE_TOOL_GATE = "plugins/openclaw/hooks/pre-tool-gate.ts"
+RECALL = "plugins/openclaw/hooks/recall.ts"
 STORE = "plugins/openclaw/tools/store.ts"
 CAPTURE = "plugins/openclaw/hooks/capture.ts"
 HERMES = "plugins/memory/nexus/__init__.py"
@@ -77,7 +78,7 @@ class TestReadPathUsesTheRoomLevel:
 
     def test_the_level_is_resolved_with_the_same_rule_as_recall(self):
         src = _read(PRE_TOOL_GATE)
-        block = _slice(src, "// Room-capped read level", "// ── 3. PLAN-ZWANG",
+        block = _slice(src, "// ── Level of THIS turn", "// ── 3. PLAN-ZWANG",
                        rel=PRE_TOOL_GATE)
 
         # Dieselben Helfer und dieselbe Regel wie hooks/recall.ts — kein
@@ -89,12 +90,64 @@ class TestReadPathUsesTheRoomLevel:
         assert "isRoomShared(" in block, (
             "das Raumurteil muss isRoomShared(...) aus lib/room-state.ts sein."
         )
-        assert "resolveReadLevel(isGroupTurn, roomShared, cfg.accessLevel)" in block, (
-            "die Stufe muss ueber resolveReadLevel(isGroupTurn, roomShared, "
-            "cfg.accessLevel) aus lib/turn-context.ts aufgeloest werden."
-        )
+        # Die eine Leseregel aus lib/turn-context.ts mit ALLEN fuenf Argumenten:
+        # Gruppen-Turn, Raumurteil, Konfiguration, Raum-Freigabe, Besitzer.
+        # Faellt eines davon weg, faellt still eine Schutzbedingung aus.
+        level_call = _slice(block, "cachedLevel = resolveReadLevel(", "return cachedLevel",
+                            rel=PRE_TOOL_GATE)
+        for arg in ("isGroupTurn,",
+                    "isRoomShared(roomKey),",
+                    "cfg.accessLevel,",
+                    "isRoomApproved(cfg.privateRooms, roomKey),",
+                    "hasKnownOwner(cfg, resolveOwnerStateDir()),"):
+            assert arg in level_call, (
+                f"die Stufe muss ueber resolveReadLevel(...) aus "
+                f"lib/turn-context.ts aufgeloest werden — Argument fehlt: {arg!r}"
+            )
         assert "preActionRecall(embedder, qdrantClient, effectiveAccessLevel, recallQuery)" in block, (
             "die aufgeloeste Stufe muss an preActionRecall durchgereicht werden."
+        )
+
+    def test_recall_resolves_the_level_with_all_five_arguments(self):
+        """Das Gegenstueck in ``hooks/recall.ts``.
+
+        ``pre-tool-gate.ts`` beruft sich ausdruecklich auf dieselbe Regel wie
+        ``recall.ts`` — dann muss auch ``recall.ts`` sie mit allen fuenf
+        Argumenten aufrufen. Fehlt ``roomApproved`` oder ``ownerKnown``,
+        greifen die Defaults der Regel (``false`` bzw. ``true``) und damit
+        still eine Schutzbedingung weniger: ein Gruppenraum ohne Freigabe und
+        ein unbekannter Besitzer deckeln dann nicht mehr zuverlaessig auf
+        ``public``.
+        """
+        src = _read(RECALL)
+        block = _slice(src, "const effectiveAccessLevel = resolveReadLevel(",
+                       "// Turn marker for the TOOLS", rel=RECALL)
+
+        # Die eine Leseregel aus lib/turn-context.ts mit ALLEN fuenf Argumenten:
+        # Gruppen-Turn, Raumurteil, Konfiguration, Raum-Freigabe, Besitzer.
+        # Die Argumentliste wird an den Kommas gelesen — ein fehlendes oder
+        # verrutschtes Argument faellt damit auf, und die Meldung nennt das
+        # wirklich fehlende, nicht das letzte ohne Komma.
+        call = _slice(block, "resolveReadLevel(", ")", rel=RECALL)
+        args = [a.strip() for a in call[len("resolveReadLevel("):].split(",") if a.strip()]
+        expected = ["groupCapActive",
+                    "roomShared",
+                    "cfg.accessLevel",
+                    "roomApproved",
+                    "ownerKnown"]
+        missing = [name for name in expected if name not in args]
+        assert args == expected, (
+            f"recall.ts muss die Stufe ueber resolveReadLevel(...) aus "
+            f"lib/turn-context.ts mit allen fuenf Argumenten in dieser "
+            f"Reihenfolge aufloesen — gefunden: {args}. "
+            + (f"Es fehlt: {', '.join(missing)}. " if missing else "")
+            + "Beide letzten Argumente sind Schutzbedingungen: ohne "
+              "'roomApproved' greift die Freigabe eines Gruppenraums nicht "
+              "(Default false), ohne 'ownerKnown' gilt ein unbekannter "
+              "Besitzer als bekannt (Default true). Dann gelten ein "
+              "Gruppenraum ohne Freigabe und ein unbekannter Besitzer nicht "
+              "mehr als 'public', und private Auszuege werden in einem "
+              "geteilten Raum lesbar."
         )
 
 
@@ -110,10 +163,10 @@ class TestWritePathsAreCapped:
         )
 
         cap = _slice(src, "// Write-side room cap", "// Scope normalization", rel=STORE)
-        assert "writeAccessLevel(requestedLevel)" in cap, (
+        assert "toolCallWriteAccessLevel(requestedLevel, toolCallId)" in cap, (
             "store.ts hat keinen ctx: die Raumstufe kommt aus der Markierung in "
-            "lib/turn-context.ts — aber ueber writeAccessLevel, nicht ueber die "
-            "Leseregel."
+            "lib/turn-context.ts — aber ueber toolCallWriteAccessLevel, gebunden "
+            "an die call-id dieses Aufrufs, nicht ueber die Leseregel."
         )
         assert "toolAccessLevel(" not in cap, (
             "store.ts darf fuer Schreibvorgaenge nicht toolAccessLevel nutzen: das "
@@ -127,7 +180,7 @@ class TestWritePathsAreCapped:
             "der Deckel muss min(angefordert, Raumstufe) sein — hoechstens die "
             "Raumstufe, nie mehr."
         )
-        assert cap.index("writeAccessLevel(requestedLevel)") < cap.index("const accessLevel ="), (
+        assert cap.index("toolCallWriteAccessLevel(requestedLevel, toolCallId)") < cap.index("const accessLevel ="), (
             "die Raumstufe muss VOR dem Schreiben berechnet werden."
         )
 
@@ -160,14 +213,14 @@ class TestWritePathsAreCapped:
 
     def test_only_a_shared_room_caps(self):
         """Der Deckel haengt an ``roomShared === true`` — nicht am Zweifel."""
-        for rel, marker in ((STORE, "writeAccessLevel"),
+        for rel, marker in ((STORE, "toolCallWriteAccessLevel(requestedLevel, toolCallId)"),
                             (CAPTURE, "roomShared === true")):
             src = _read(rel)
             assert marker in src, f"{rel}: Deckel nicht gefunden"
 
         # capture.ts: ausdruecklich nur bei beobachtetem Fremden.
         assert 'access_level: roomShared === true ? "public" : cfg.accessLevel,' in _read(CAPTURE)
-        # store.ts: writeAccessLevel ist die eine Schreibregel aus
+        # store.ts: toolCallWriteAccessLevel ist die eine Schreibregel aus
         # lib/turn-context.ts (nur ein nachweislich geteilter Raum -> public).
         turn = _read("plugins/openclaw/lib/turn-context.ts")
         assert "if (turn.shared !== true) return requested" in turn
@@ -187,7 +240,7 @@ class TestWritePathsAreCapped:
 
         # (a) kein Marker bzw. alter Marker -> getTurnContext liefert null
         #     -> die angeforderte Stufe kommt unveraendert zurueck.
-        assert "const turn = getTurnContext(now)" in body, (
+        assert "const turn = getTurnContext(sessionKey, now)" in body, (
             "writeAccessLevel muss denselben Marker lesen wie die Leseregel."
         )
         assert "if (turn === null) return requested" in body, (
@@ -195,8 +248,13 @@ class TestWritePathsAreCapped:
         )
         # (b) getTurnContext verwirft alte Marker — damit greift (a) auch fuer
         #     einen Turn, der laenger als die TTL zurueckliegt.
-        assert "if (!(now - marker.at < TURN_MARKER_TTL_MS)) return null" in turn, (
+        getter = _slice(turn, "const marker = markers.get(key)", "return marker",
+                        rel="lib/turn-context.ts")
+        assert "if (!(now - marker.at < TURN_MARKER_TTL_MS)) {" in getter, (
             "ein Marker aelter als TURN_MARKER_TTL_MS muss als fehlend gelten."
+        )
+        assert "markers.delete(key)" in getter and "return null" in getter, (
+            "der abgelaufene Marker muss verworfen werden und als fehlend gelten."
         )
         # (c) unbekanntes Raumurteil (null) deckelt ebenfalls nicht.
         assert "if (turn.shared !== true) return requested" in body, (
