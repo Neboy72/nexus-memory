@@ -114,7 +114,15 @@ class TestPrefetchFilterScopes:
 
 class TestMcpServerIntegration:
     @pytest.mark.asyncio
-    async def test_remember_auto_scope_inherits(self, monkeypatch):
+    async def test_remember_fakt_bleibt_gemeinsam(self, monkeypatch):
+        """Ersetzt ``test_remember_auto_scope_inherits`` (15.11.2026).
+
+        Vorher legte die Aehnlichkeits-Zuordnung (``scope_auto``) einen Fakt
+        allein wegen seines Themas in einen Verbund ("voice"). Seit der
+        Entscheidung vom 15.11.2026 gehoeren Fakten in den gemeinsamen Bereich —
+        sonst waeren sie fuer jeden fremden Agenten unsichtbar. Die Zentren
+        liegen hier absichtlich bereit: sie duerfen NICHT mehr entscheiden.
+        """
         from nexus_memory import mcp_server as mcp
 
         class FakeClient:
@@ -132,7 +140,7 @@ class TestMcpServerIntegration:
         store = object.__new__(mcp.MemoryStore)
         store.client = FakeClient()  # type: ignore[assignment]
         store._skill_graph = None
-        # Pre-seed centroids so the auto-inference has an area to find:
+        # Pre-seed centroids so a still-active auto-inference WOULD find "voice":
         store._scope_centroids = scope_auto.ScopeCentroids(None, "nexus")
         store._scope_centroids._cache = {"voice": _unit(0)}
         store._scope_centroids._cache_at = float("inf")  # never refresh
@@ -142,7 +150,7 @@ class TestMcpServerIntegration:
         monkeypatch.setattr(mcp.MemoryStore, "_embed", fake_embed)
 
         result = await store.remember("Voice server tuning fact", category="fact")
-        assert result["scope"] == "voice"  # auto-tagged, caller never passed scope
+        assert result["scope"] == "default"  # gemeinsam, nicht "voice"
 
     @pytest.mark.asyncio
     async def test_explicit_scope_not_overridden(self, monkeypatch):

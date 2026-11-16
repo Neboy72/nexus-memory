@@ -1,8 +1,12 @@
-"""Tests for scope (project/agent areas, unreleased feature).
+"""Tests for scope (Geltungsbereich).
 
-Core principle (07.09.): scope labels steer AUTOMATIC prefetch only —
-explicit recall() is NEVER scope-filtered. Fail-open everywhere: invalid
-values degrade to 'default'; missing NEXUS_SCOPE means old behavior.
+Seit 15.11.2026 gilt: 'default' ist der gemeinsame Bereich (Fakten, Regeln,
+Lehren, Prozeduren, Entities, Praeferenzen, Beliefs, Entscheidungen — jeder
+Agent liest sie), jeder andere Wert ist ein Verbund (die Agenten-Kennung), in
+dem die Sitzungsprotokolle bleiben. Der Verbund des Lesers ist seine Kennung
+(``NEXUS_AGENT_ID``), nicht mehr ein freier ``NEXUS_SCOPE``-Text. Punkte ohne
+``scope``-Feld (Altbestand) bleiben sichtbar. Invalid values degrade to
+'default'.
 """
 import os
 import sys
@@ -138,14 +142,19 @@ class _FakeQdrant:
     def __init__(self, points):
         self._points = points
 
-    def query_points(self, collection_name, query, limit):
+    def query_points(self, collection_name, query, limit, **kw):
         class R:
             points = self._points
         return R()
 
 
 def _make_plugin(monkeypatch, points, my_scope):
-    """Build a bare NexusMemoryProvider-like object for _do_prefetch."""
+    """Rumpf-Provider fuer _do_prefetch; ``my_scope`` ist die EIGENE Kennung.
+
+    Der Verbund des Lesers ist seit 15.11.2026 die Agenten-Kennung
+    (``NEXUS_AGENT_ID``), nicht ein freier ``NEXUS_SCOPE``-Text. Der Parameter
+    heisst weiter ``my_scope``, damit die Aufrufer unveraendert bleiben.
+    """
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "nexus_plugin_scope_test",
@@ -155,7 +164,10 @@ def _make_plugin(monkeypatch, points, my_scope):
     sys.modules.setdefault("nexus_plugin_scope_test", plug)
     spec.loader.exec_module(plug)
 
-    monkeypatch.setenv("NEXUS_SCOPE", my_scope)
+    monkeypatch.setenv("NEXUS_AGENT_ID", my_scope or "hermes")
+    # NEXUS_SCOPE wuerde alte Erwartungen wieder hereinholen: der Verbund
+    # kommt jetzt allein aus der Kennung.
+    monkeypatch.delenv("NEXUS_SCOPE", raising=False)
     monkeypatch.setenv("NEXUS_PREFETCH_CHARS", "2400")
 
     prov = object.__new__(plug.NexusMemoryProvider)
@@ -203,18 +215,29 @@ class TestPrefetchScopeGating:
             result = prov._prefetch_result
         assert "own area fact" in result
 
-    def test_no_scope_env_sees_everything_fail_open(self, monkeypatch):
+    def test_ohne_eigene_kennung_gilt_der_rueckfall_verbund(self, monkeypatch):
+        """Ersetzt ``test_no_scope_env_sees_everything_fail_open`` (15.11.2026).
+
+        Vorher: ohne ``NEXUS_SCOPE`` sah der Agent ALLES, auch fremde Bereiche
+        — so landete ein fremdes Sitzungsprotokoll im Kontext. Entschieden ist
+        das Gegenteil: fremde Verbunde bleiben draussen, gemeinsam ('default')
+        und Altbestand (kein ``scope``-Feld) bleiben sichtbar. Ohne eigene
+        Kennung faellt das Plugin auf ``hermes`` zurueck (``_agent_stamp``).
+        """
         pts = [
-            _FakePoint({"content": "scoped fact", "category": "fact",
+            _FakePoint({"content": "fremdes Protokoll", "category": "session",
                         "scope": "voice"}),
             _FakePoint({"content": "general fact", "category": "fact",
                         "scope": "default"}),
+            _FakePoint({"content": "alter Fakt ohne Bereich", "category": "fact"}),
         ]
-        prov = _make_plugin(monkeypatch, pts, my_scope="")  # no NEXUS_SCOPE
+        prov = _make_plugin(monkeypatch, pts, my_scope="")  # keine Kennung
         prov._do_prefetch("any query")
         with prov._prefetch_lock:
             result = prov._prefetch_result
-        assert "scoped fact" in result and "general fact" in result
+        assert "fremdes Protokoll" not in result
+        assert "general fact" in result
+        assert "alter Fakt ohne Bereich" in result
 
     def test_unscoped_old_memory_treated_as_default(self, monkeypatch):
         # Pre-scope memories have NO scope field — must behave as 'default'.

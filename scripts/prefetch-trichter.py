@@ -61,7 +61,6 @@ FRAGEN = [
 
 QDRANT = os.environ.get("NEXUS_QDRANT_URL", "http://127.0.0.1:6333")
 COLLECTION = os.environ.get("NEXUS_COLLECTION", "nexus_hf")
-EMBED = os.environ.get("NEXUS_EMBED_URL", "http://127.0.0.1:9122/embed")
 VECTOR_NAME = os.environ.get(
     "NEXUS_VECTOR_NAME", "sentence-transformers__qwen_qwen3-embedding-0_6b__1024")  # guard-ok: Name der Sammlung, per NEXUS_VECTOR_NAME ueberschreibbar
 BUDGET = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
@@ -87,10 +86,12 @@ def _http(url, payload, headers=None):
 
 
 def _embed(text):
-    from nexus_memory import service_auth
-    head = {getattr(service_auth, "AUTH_HEADER", "x-nexus-service-key"):
-            service_auth.load_service_key()}
-    return _http(EMBED, {"text": text}, head)["embedding"]
+    # 15.11.2026: der Installationsschluessel liest keine Daten mehr. Der Weg
+    # geht ueber das Hermes-Plugin, das sich beim Dienst selbst anmeldet.
+    result = _plugin()._embed_via_service(text)
+    if not result:
+        raise RuntimeError("no embedding from the local service — see the plugin log")
+    return result["embedding"]
 
 
 class HttpQdrant:

@@ -50,8 +50,10 @@ def _service_key(monkeypatch):
 
 
 def _auth_headers():
+    # 15.11.2026: der Installationsschluessel liest keine Daten mehr — der Test
+    # meldet sich wie ein Plugin mit einem eigenen Agentenschluessel an.
     from nexus_memory import service_auth
-    return {service_auth.AUTH_HEADER: "test-service-key"}
+    return {service_auth.AUTH_HEADER: service_auth.issue_key("hermes", "Hermes")}
 
 
 def _client(monkeypatch, embedder):

@@ -1,5 +1,6 @@
 import { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient, SearchResult } from "../lib/qdrant-client.ts"
+import { pointText, scopeBundle, scopeVisible } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache, prefetchFilterScopes } from "../lib/scope-auto.ts"
 import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
@@ -129,6 +130,7 @@ async function graphBoost(
   topResults: SearchResult[],
   maxBoost: number = 3,
   accessLevel: string = "public",
+  bundle: string = "openclaw",
 ): Promise<string[]> {
   const boosted: string[] = []
   const seenIds = new Set<string>()
@@ -193,8 +195,12 @@ async function graphBoost(
       const tpAccess = tpPayload.access_level as string
       const memIdx = levelOrder.indexOf(tpAccess)
       if (memIdx === -1 || memIdx > agentIdx) continue
+      // Geltungsbereich (15.11.2026): derselbe Verbund-Filter wie auf dem
+      // Vektorweg. Ein Nachbar aus einem fremden Verbund wird nie eingespielt;
+      // der Payload liegt hier schon vor, es braucht keinen zweiten Aufruf.
+      if (!scopeVisible(tpPayload, bundle)) continue
 
-      const text = String(tpPayload.content ?? "")
+      const text = pointText(tpPayload)
       if (text) {
         boosted.push(`[graph:${edges[i].relation}] ${text.slice(0, 400)}`)
       }
@@ -331,7 +337,13 @@ export function buildRecallHandler(
         : results
 
       // Graph-boost: add 1-hop neighbors from top 3 vector hits
-      const graphItems = (await graphBoost(qdrantClient, gated, 3, effectiveAccessLevel)).slice(0, 5)  // cap to prevent context bloat
+      const graphItems = (await graphBoost(
+        qdrantClient,
+        gated,
+        3,
+        effectiveAccessLevel,
+        scopeBundle(cfg),
+      )).slice(0, 5)  // cap to prevent context bloat
 
       // Merge gated vector results with graph-boosted items
       const allItems: SearchResult[] = [...gated]

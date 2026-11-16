@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
-import { ACCESS_LEVEL_ORDER, type QdrantClient } from "../lib/qdrant-client.ts"
+import { ACCESS_LEVEL_ORDER, pointText, type QdrantClient } from "../lib/qdrant-client.ts"
 import type { MemoryWriter } from "../lib/write-gate.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { toolCallAccessLevel } from "../lib/turn-context.ts"
@@ -364,7 +364,7 @@ async function loadProtectionRules(
     const rules: ProtectionRule[] = []
     for (const point of points) {
       const payload = (point.payload || {}) as Record<string, unknown>
-      const text = (payload.content as string) || ""
+      const text = pointText(payload)
       const textLower = text.toLowerCase()
       if (!PROTECTION_KEYWORDS.some((kw) => textLower.includes(kw))) continue
       const accessLevel =

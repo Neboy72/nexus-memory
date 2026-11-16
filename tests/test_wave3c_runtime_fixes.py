@@ -226,21 +226,17 @@ class TestP1ScopeCentroids:
         assert hasattr(p, "_scope_centroids")
         assert p._scope_centroids is None
 
-    def test_prefetch_reaches_scope_path_without_attribute_error(self, monkeypatch):
+    def test_prefetch_filters_by_verbund_without_centroid_probe(self, monkeypatch):
+        """Ersetzt ``test_prefetch_reaches_scope_path_without_attribute_error``.
+
+        Die Vorauswahl holte ihren Bereichs-Filter frueher aus
+        Aehnlichkeits-Zentren (``scope_auto``); ein fehlendes
+        ``_scope_centroids``-Attribut riss damals die Einspielung ab. Seit
+        15.11.2026 filtert sie nach Geltungsbereich (gemeinsam / eigener
+        Verbund / Altbestand) und braucht keine Zentren mehr — die fruehere
+        Fehlerquelle ist damit weg, nicht nur abgefangen.
+        """
         p = NexusMemoryProvider()
-        created = {}
-
-        class _FakeCentroids:
-            def __init__(self, client, collection):
-                created["args"] = (client, collection)
-
-            def get(self):
-                return {}
-
-        import nexus_memory.scope_auto as sa
-        monkeypatch.setattr(sa, "ScopeCentroids", _FakeCentroids)
-        monkeypatch.setattr(sa, "prefetch_filter_scopes", lambda vec, cents, scope: None)
-
         p._embedder = MagicMock()
         p._embed_cached = lambda q: [0.0] * 4
         p._rewrite_if_enabled = lambda q: q
@@ -250,10 +246,10 @@ class TestP1ScopeCentroids:
 
         p._do_prefetch("irgendeine frage")
 
-        # Reaching the ScopeCentroids branch proves no AttributeError was
-        # swallowed by the fail-open except-clause.
-        assert created["args"] == (p._qdrant, p._collection)
-        assert isinstance(p._scope_centroids, _FakeCentroids)
+        assert p._scope_centroids is None, "kein Zentren-Probe mehr im Einspielweg"
+        flt = p._qdrant.query_points.call_args.kwargs.get("query_filter")
+        assert flt is not None, "der Verbundfilter muss an Qdrant gehen"
+        assert len(flt.should) == 3
 
 
 class TestP2EdgeStoreUrl:

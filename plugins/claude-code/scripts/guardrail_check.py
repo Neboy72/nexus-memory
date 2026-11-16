@@ -27,6 +27,22 @@ from pathlib import Path
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
 
+# Geltungsbereich (15.11.2026): shared scope-auto lib, same guarded import as
+# the other two hooks. A missing/broken scope_auto must NOT kill this hook —
+# without it the rules are read WITHOUT the verbund filter, which can only
+# block MORE, never less (fail-safe direction).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _point_text import point_text  # noqa: E402 (same dir)
+try:
+    import scope_auto as _scope_auto  # noqa: E402 (same dir)
+except Exception as _scope_import_exc:  # pragma: no cover - defensive
+    _scope_auto = None
+    print(
+        f"[nexus guardrail] scope_auto unavailable ({_scope_import_exc}) — "
+        "reading rules without scope filter",
+        file=sys.stderr,
+    )
+
 
 def _central_env() -> dict:
     """Read the shared ``~/.hermes/.env`` so the hook follows the host.
@@ -220,10 +236,21 @@ def load_protection_rules() -> list[dict] | None:
     """
     try:
         url = f"{QDRANT_URL}/collections/{COLLECTION}/points/scroll"
+        must = [{"key": "category", "match": {"value": "rule"}}]
+        # Geltungsbereich (15.11.2026): Regeln sind gemeinsames Wissen und
+        # liegen im Bereich "default" (Altbestand ohne Feld bleibt sichtbar).
+        # Die Verbund-Gruppe steht als eigener ``must``-Eintrag daneben — nie
+        # in derselben ``should``-Liste wie eine andere Achse.
+        if _scope_auto is not None:
+            try:
+                must.append({"should": _scope_auto.scope_should(_scope_auto.own_bundle())})
+            except Exception as exc:  # pragma: no cover - defensive
+                print(
+                    f"[nexus guardrail] scope filter skipped ({exc}) — fail-open",
+                    file=sys.stderr,
+                )
         payload = json.dumps({
-            "filter": {
-                "must": [{"key": "category", "match": {"value": "rule"}}]
-            },
+            "filter": {"must": must},
             "limit": 200,
             "with_payload": True,
             "with_vector": False,
@@ -236,7 +263,7 @@ def load_protection_rules() -> list[dict] | None:
         rules = []
         for point in data.get("result", {}).get("points", []):
             payload = point.get("payload", {})
-            text = payload.get("content", "")
+            text = point_text(payload)
             # Check if this rule contains protection keywords
             text_lower = text.lower()
             if not any(kw in text_lower for kw in PROTECTION_KEYWORDS):

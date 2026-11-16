@@ -116,10 +116,12 @@ cp -r ~/nexus-memory/plugins/openclaw ~/.openclaw/plugins/nexus-memory
 3. **The Nexus service for writes** — since 10.11.2026 every write goes to
    `POST /write` on `writeGate.url`, where the shared write gate checks it
    before anything reaches Qdrant. Run it from a repository checkout with
-   `nexus-memory serve` (http://127.0.0.1:9122) and put its per-installation
-   key (`~/.nexus-memory/service_auth.key`) in `writeGate.key`. Reads still talk
-   to Qdrant directly; without this service the plugin **refuses to write**
-   rather than bypassing the gate.
+   `nexus-memory serve` (http://127.0.0.1:9122) and put the installation key
+   (`~/.nexus-memory/service_auth.key`) in `writeGate.key`. That key does one
+   thing only: it enrolls the agent (`POST /enroll`), and the plugin then keeps
+   its own key in `<data-dir>/agent_keys/openclaw.key` and writes with it. Reads
+   still talk to Qdrant directly; without this service the plugin **refuses to
+   write** rather than bypassing the gate.
 
 ## Configuration
 
@@ -172,7 +174,7 @@ Add to `~/.openclaw/openclaw.json`:
 | `qdrantUrl` | `string` | `http://localhost:6333` | Qdrant REST API endpoint (reads) |
 | `collection` | `string` | `nexus` | Qdrant collection name |
 | `writeGate.url` | `string` | — (required) | Nexus service base URL; writes go to `POST /write` there, never straight to Qdrant |
-| `writeGate.key` | `string` | — (required) | Per-installation service key (`<data-dir>/service_auth.key`, same header as `/embed`); supports `${ENV_VAR}` |
+| `writeGate.key` | `string` | — (required) | Installation key (`<data-dir>/service_auth.key`): enrolls once, data calls then use `<data-dir>/agent_keys/openclaw.key`; supports `${ENV_VAR}` |
 | `embedding.provider` | `string` | auto-detected | `openai`, `ollama`, `google`, or `jina` |
 | `embedding.model` | `string` | provider default | Embedding model name |
 | `embedding.apiKey` | `string` | env var | API key (supports `${ENV_VAR}` interpolation) |

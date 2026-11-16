@@ -25,6 +25,7 @@ from pathlib import Path
 # explicit = the provider you name. See _embedding.py for the rule.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _embedding  # noqa: E402
+from _point_text import point_text  # noqa: E402 (same dir)
 
 # Config
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
@@ -202,6 +203,19 @@ def _record_access(read: bool = False, write: bool = False) -> None:
                 (a for a in agents if isinstance(a, dict) and a.get("id") == AGENT_ID),
                 None,
             )
+            # Punkt 4c: ein umbenannter Agent traegt seinen alten Namen als
+            # ``formerly``. Diesen Namen hier aufzuloesen verhindert, dass der
+            # Hook neben dem umbenannten Eintrag einen zweiten anlegt.
+            if entry is None:
+                for candidate in agents:
+                    if not isinstance(candidate, dict):
+                        continue
+                    former = candidate.get("formerly")
+                    if not isinstance(former, list):
+                        continue
+                    if AGENT_ID in [n.strip() for n in former if isinstance(n, str)]:
+                        entry = candidate
+                        break
             if entry is None:
                 entry = {
                     "id": AGENT_ID,
@@ -275,23 +289,57 @@ def _resolve_trust_level() -> str:
         )
         return "public"
 
+def _scope_filter_group() -> dict | None:
+    """Die Verbund-Bedingung als eigener ``must``-Block — oder None.
+
+    Die Sichtbarkeitsregel (15.11.2026) wird mit dem Zugriffsstufen-Filter
+    ueber ``must`` kombiniert, nie ersetzt: Stufe und Verbund sind zwei
+    getrennte Achsen. Zwei ``should``-Listen nebeneinander waeren dagegen ein
+    ODER und liessen fremde Protokolle mit niedriger Stufe durch.
+
+    Fail-open wie heute: ohne ``scope_auto`` (Teilinstallation, Syntaxfehler)
+    laedt der Hook ohne Verbund-Filter weiter, statt zu sterben — die Warnung
+    schreibt bereits der Import oben.
+    """
+    if _scope_auto is None:
+        return None
+    try:
+        return {"should": _scope_auto.scope_should(_scope_auto.own_bundle())}
+    except Exception as exc:  # pragma: no cover - defensive
+        print(
+            f"[nexus auto-recall] scope filter skipped ({exc}) — fail-open",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _get_trust_filter() -> dict:
     """Return Qdrant filter for the resolved trust level.
 
     Hierarchy: public (0) < trusted (1) < private (2).
     An agent at level N can see memories at levels 0..N.
+
+    Since 15.11.2026 the level group is a ``must`` entry of its own and the
+    verbund group sits NEXT TO it — same axis-separation as in the MCP server,
+    the OpenClaw plugin and the Hermes provider.
     """
     trust_level = _resolve_trust_level()
     level_order = ["public", "trusted", "private"]
     idx = level_order.index(trust_level) if trust_level in level_order else 0
     allowed = level_order[:idx + 1]
 
-    return {
-        "should": [
-            {"key": "access_level", "match": {"value": lvl}}
-            for lvl in allowed
-        ]
-    }
+    must = [
+        {
+            "should": [
+                {"key": "access_level", "match": {"value": lvl}}
+                for lvl in allowed
+            ]
+        }
+    ]
+    scope_group = _scope_filter_group()
+    if scope_group:
+        must.append(scope_group)
+    return {"must": must}
 
 def get_embedding(text: str, input_type: str = "query") -> list:
     """Get embedding from configured provider.
@@ -383,8 +431,10 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     # Fail-open: no centroids / ambiguous query → no filtering (old behavior).
     my_scope = os.getenv("NEXUS_SCOPE", "").strip().lower()
     allowed_scopes = None
+    bundle = None
     if _scope_auto is not None:
         try:
+            bundle = _scope_auto.own_bundle()
             cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
             allowed_scopes = _scope_auto.prefetch_allowed_scopes(query_embedding, cents, my_scope)
         except Exception as exc:
@@ -395,6 +445,10 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
         mem_level = payload.get("access_level", "private")
         mem_idx = level_order.index(mem_level) if mem_level in level_order else 2
         if mem_idx > agent_idx:
+            continue
+        # Geltungsbereich (15.11.2026): fremde Protokolle bleiben draussen —
+        # zweite, unabhaengige Pruefung hinter dem Qdrant-Filter.
+        if bundle is not None and not _scope_auto.scope_visible(payload, bundle):
             continue
         if allowed_scopes is not None:
             p_scope = (payload.get("scope") or "default").strip().lower() or "default"
@@ -438,6 +492,14 @@ def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "publ
     # only the explicit NEXUS_SCOPE fallback below applies (fail-open).
     my_scope = os.getenv("NEXUS_SCOPE", "").strip().lower()
     allowed_scopes = None
+    # Der Verbund haengt NICHT an der Aehnlichkeits-Drossel: er gilt auch,
+    # wenn kein Fragevektor vorliegt (dann entfaellt nur die Bereichs-Drossel).
+    bundle = None
+    if _scope_auto is not None:
+        try:
+            bundle = _scope_auto.own_bundle()
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[nexus auto_recall] scope filter skipped ({exc}) — fail-open", file=sys.stderr)
     if _scope_auto is not None and query_embedding:
         try:
             cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
@@ -522,7 +584,14 @@ def graph_boost(top_results: list, max_boost: int = 3, access_level: str = "publ
                                 continue
                         elif my_scope and p_scope != "default" and p_scope != my_scope:
                             continue
-                        text = tp_payload.get("content", "")
+                        # Geltungsbereich (15.11.2026): derselbe Verbund-Filter
+                        # wie auf dem Vektorweg. Ein Nachbar aus einem fremden
+                        # Verbund wird nie eingespielt — der Payload liegt hier
+                        # schon vor, kein zusaetzlicher Qdrant-Aufruf.
+                        if bundle is not None and not _scope_auto.scope_visible(
+                                tp_payload, bundle):
+                            continue
+                        text = point_text(tp_payload)
                         if text:
                             rel = edge.get("relation", "related")
                             boosted.append(f"[graph:{rel}] {text[:400]}")
@@ -559,7 +628,7 @@ def main():
     memories = []
     for hit in results:
         payload = hit.get("payload") or {}
-        text = payload.get("text") or payload.get("content", "")
+        text = point_text(payload)
         category = payload.get("category", "fact")
         score = hit.get("score", 0)
         if text and score > 0.3:

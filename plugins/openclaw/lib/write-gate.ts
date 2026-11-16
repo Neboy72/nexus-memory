@@ -1,4 +1,5 @@
-import { fetchWithTimeout } from "./embedder.ts"
+import { NEXUS_HARNESS, ensureNexusAgentKey, fetchWithTimeout } from "./embedder.ts"
+import { clearNexusAgentKey } from "./embedding-env.ts"
 import { recordAgentAccess } from "./qdrant-client.ts"
 import type { NexusConfig } from "./config.ts"
 import { log } from "../logger.ts"
@@ -97,11 +98,13 @@ export class WriteGateClient implements MemoryWriter {
     _vector: number[],
     payload: Record<string, unknown>,
   ): Promise<WriteResult> {
-    const { url, key } = this.endpoint()
+    const { url, key: configuredKey } = this.endpoint()
 
     // The service embeds and stores the text itself; the vector computed by
     // the plugin is only needed for local scope inference.
-    const content = payload.content ?? payload.text
+    // `||`, nicht `??`: ein leerer `content` faellt auf `text` zurueck —
+    // dieselbe Reihenfolge wie `pointText()` und `point_text()`.
+    const content = payload.content || payload.text
     if (typeof content !== "string") {
       throw new Error(
         "nexus: write rejected before the gate — payload carries no text content",
@@ -126,6 +129,10 @@ export class WriteGateClient implements MemoryWriter {
       // `rule-confirm` at a terminal. Without it the gate stores the entry as
       // `fact` — a model cannot produce this token in a conversation.
       rule_proof: typeof payload.rule_proof === "string" ? payload.rule_proof : "",
+      // The movement log names the writer. Without this the service would
+      // label this plugin's lines "http" — the line exists either way, only
+      // its origin would be wrong. The service accepts nothing but "plugin".
+      via: "plugin",
     }
 
     log.debugRequest("write-gate", {
@@ -135,19 +142,39 @@ export class WriteGateClient implements MemoryWriter {
       textLen: content.length,
     })
 
-    const resp = await fetchWithTimeout(
-      `${url}/write`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // Same per-installation header the service requires on /embed and /mcp.
-          "x-nexus-service-key": key,
+    // The write is made with this plugin's OWN key (15.11.2026). The configured
+    // `writeGate.key` is the installation key and is only used to enrol; no
+    // `x-nexus-agent-id` header is sent — the key names the writer.
+    const send = (credential: string) =>
+      fetchWithTimeout(
+        `${url}/write`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-nexus-service-key": credential,
+          },
+          body: JSON.stringify(body),
         },
-        body: JSON.stringify(body),
-      },
-      WRITE_GATE_TIMEOUT_MS,
-    )
+        WRITE_GATE_TIMEOUT_MS,
+      )
+
+    let credential = await ensureNexusAgentKey(url, configuredKey)
+    if (!credential) {
+      // Never fall back to the installation key here: it does not write any
+      // more, and a silent attempt would look like a transport problem.
+      throw new Error(
+        "nexus: could not obtain an agent key for the write gate — " +
+          "POST /enroll failed. Check writeGate.key (installation key) and " +
+          "that the service is reachable.",
+      )
+    }
+    let resp = await send(credential)
+    if (resp.status === 401) {
+      clearNexusAgentKey(NEXUS_HARNESS)
+      credential = await ensureNexusAgentKey(url, configuredKey)
+      if (credential) resp = await send(credential)
+    }
 
     if (!resp.ok) {
       // The gate's reason is the useful part ("leerer Inhalt", "Regel aus

@@ -17,6 +17,11 @@ import pytest
 
 import nexus_memory.mcp_server as mcp
 
+# Rollen (15.11.2026): ``tools/list`` liefert nur die Werkzeuge der Stufe des
+# Aufrufers. Diese Datei prueft den HTTP-Transport, nicht die Berechtigung —
+# sie laeuft deshalb als bekannter Admin-Agent (Rollen: tests/test_roles.py).
+pytestmark = pytest.mark.usefixtures("admin_caller")
+
 
 @pytest.fixture(autouse=True)
 def _service_key(monkeypatch):
@@ -25,8 +30,10 @@ def _service_key(monkeypatch):
 
 
 def _auth_headers():
+    # 15.11.2026: der Installationsschluessel liest keine Daten mehr. Der Test
+    # meldet sich wie ein Plugin mit einem eigenen Agentenschluessel an.
     from nexus_memory import service_auth
-    return {service_auth.AUTH_HEADER: "test-service-key"}
+    return {service_auth.AUTH_HEADER: service_auth.issue_key("hermes", "Hermes")}
 
 
 def _client():

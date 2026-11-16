@@ -60,29 +60,46 @@ from pathlib import Path
 from typing import Optional
 
 
+def _instance_id(agent_type: str, location: str) -> str:
+    """Stable six-character id for ONE installation.
+
+    Same type, same host and same location always yield the same id, so a
+    re-detected installation is recognised as the one already in the registry.
+    A different location (other profile, other config dir, other machine) yields
+    a different id — two installations of the same type never collapse into one.
+    """
+    host = ""
+    try:
+        host = socket.gethostname()
+    except Exception:
+        host = ""
+    raw = f"{agent_type}|{host}|{location}".encode("utf-8", "replace")
+    return hashlib.sha256(raw).hexdigest()[:6]
+
+
 def _check_hermes() -> dict:
-    """Detect Hermes Agent."""
-    info = {"id": "hermes", "name": "Hermes Agent", "icon": "🦊", "plugin_available": True, "mcp_available": True}
-    
-    # Check config dir
-    config_dir = Path.home() / ".hermes"
-    info["config_dir"] = str(config_dir) if config_dir.exists() else None
-    
-    # Check CLI
+    """Detect Hermes Agent — ONE installation (profiles are roles, not agents)."""
+    main_dir = Path.home() / ".hermes"
     cli = shutil.which("hermes")
-    info["cli_path"] = cli
-    
-    # Check if nexus plugin already linked
-    plugin_path = config_dir / "hermes-agent" / "plugins" / "memory" / "nexus"
-    info["nexus_installed"] = plugin_path.exists()
-    
-    info["detected"] = bool(config_dir.exists() or cli)
-    return info
+
+    return {
+        "id": _instance_id("hermes", str(main_dir)),
+        "type": "hermes",
+        "name": "Hermes Agent",
+        "icon": "",
+        "plugin_available": True,
+        "mcp_available": True,
+        "config_dir": str(main_dir) if main_dir.exists() else None,
+        "profile": None,
+        "cli_path": cli,
+        "nexus_installed": (main_dir / "hermes-agent" / "plugins" / "memory" / "nexus").exists(),
+        "detected": bool(main_dir.exists() or cli),
+    }
 
 
 def _check_openclaw() -> dict:
     """Detect OpenClaw."""
-    info = {"id": "openclaw", "name": "OpenClaw", "icon": "🦉", "plugin_available": True, "mcp_available": True}
+    info = {"id": "openclaw", "name": "OpenClaw", "icon": "", "plugin_available": True, "mcp_available": True}
     
     config_dir = Path.home() / ".openclaw"
     info["config_dir"] = str(config_dir) if config_dir.exists() else None
@@ -108,7 +125,7 @@ def _check_openclaw() -> dict:
 
 def _check_claude_code() -> dict:
     """Detect Claude Code."""
-    info = {"id": "claude-code", "name": "Claude Code", "icon": "💻", "plugin_available": True, "mcp_available": True}
+    info = {"id": "claude-code", "name": "Claude Code", "icon": "", "plugin_available": True, "mcp_available": True}
     
     config_dir = Path.home() / ".claude"
     info["config_dir"] = str(config_dir) if config_dir.exists() else None
@@ -122,6 +139,30 @@ def _check_claude_code() -> dict:
     
     info["detected"] = bool(config_dir.exists() or cli)
     return info
+
+
+def _check_deepseek_harness() -> dict:
+    """Detect DeepSeek Harness (CLI ``dsh``) — ONE installation.
+
+    ``~/.dsh/profiles`` holds modes of the same installation (headless, web),
+    not separate agents: the program and the config root are shared.
+    """
+    config_dir = Path.home() / ".dsh"
+    cli = shutil.which("dsh")
+
+    return {
+        "id": _instance_id("deepseek-harness", str(config_dir)),
+        "type": "deepseek-harness",
+        "name": "DSH",
+        "icon": "",
+        "plugin_available": True,
+        "mcp_available": True,
+        "config_dir": str(config_dir) if config_dir.exists() else None,
+        "profile": None,
+        "cli_path": cli,
+        "nexus_installed": False,
+        "detected": bool(config_dir.exists() or cli),
+    }
 
 
 def _check_codex() -> dict:
@@ -381,6 +422,7 @@ def detect_all_agents() -> dict:
         _check_kilo_code,
         _check_openclaw,
         _check_claude_code,
+        _check_deepseek_harness,
         _check_pi,
         _check_cline,
         _check_codex,
@@ -398,7 +440,12 @@ def detect_all_agents() -> dict:
     for detector in detectors:
         try:
             info = detector()
-            results.append(info)
+            # A detector may return ONE agent or a LIST of installations
+            # (profiles of the same program are separate instances).
+            if isinstance(info, list):
+                results.extend(info)
+            else:
+                results.append(info)
         except Exception as e:
             results.append({
                 "id": "unknown",
@@ -538,6 +585,51 @@ def _unlock_file(fd: int) -> None:
     _warn_lock_unavailable()
 
 
+#: Frueherer Name eines Agenten (Punkt 4a). Eine Kennung ist gleichzeitig
+#: Bereich und Eigentuemer-Feld; wer umbenannt wird, verliert ohne Uebergang
+#: seine bisherigen Protokolle. ``formerly`` haelt den alten Namen beim neuen
+#: Eintrag: ein Aufrufer, der sich noch als ``hermes`` ausweist, wird als
+#: ``hermes-mac-mini`` behandelt. Die Kennung im Eintrag und im Protokoll ist
+#: immer die neue — der Alias wirkt nur beim LESEN des Absenders.
+FORMERLY_FIELD = "formerly"
+
+
+def _former_names(entry: dict) -> list[str]:
+    """Die ``formerly``-Namen eines Eintrags — nie ``None``, nie kaputte Werte."""
+    names = entry.get(FORMERLY_FIELD)
+    if not isinstance(names, list):
+        return []
+    return [name.strip() for name in names
+            if isinstance(name, str) and name.strip()]
+
+
+def _validate_formerly(registry: dict) -> None:
+    """Ein Name darf nur EINEM Agenten als ``formerly`` gehoeren.
+
+    Doppelte Zuordnung ist mehrdeutig: derselbe Aufrufer waere zwei Agenten
+    zuzuordnen, und welche Protokolle er dann sieht, waere geraten. Fail
+    closed: laut scheitern, statt zu raten — wie beim kaputten JSON.
+    """
+    owners: dict[str, str] = {}
+    for entry in registry.get("agents", []):
+        if not isinstance(entry, dict):
+            continue
+        agent_id = str(entry.get("id") or "").strip()
+        names = entry.get(FORMERLY_FIELD)
+        if names is None:
+            continue
+        if not isinstance(names, list):
+            raise ValueError(
+                f"agents registry: {FORMERLY_FIELD!r} of {agent_id!r} must be a list")
+        for name in _former_names(entry):
+            owner = owners.get(name)
+            if owner is not None and owner != agent_id:
+                raise ValueError(
+                    f"agents registry: {name!r} is listed as {FORMERLY_FIELD!r} "
+                    f"by both {owner!r} and {agent_id!r} — ambiguous, refusing to load")
+            owners[name] = agent_id
+
+
 def _load_registry_unlocked() -> dict:
     """Read the registry file without taking the lock.
 
@@ -545,6 +637,10 @@ def _load_registry_unlocked() -> dict:
     read. A parse error is NOT treated as an empty registry: swallowing it
     made the next save overwrite every existing entry with an empty list.
     Fail closed instead — raise so the caller aborts without writing.
+
+    The same holds for an ambiguous ``formerly`` mapping (one name claimed by
+    two agents): an identity that cannot be resolved must not be resolved by
+    guessing.
     """
     path = _get_agents_registry_path()
     if not path.exists():
@@ -552,6 +648,7 @@ def _load_registry_unlocked() -> dict:
     data = json.loads(path.read_text())
     if not isinstance(data, dict):
         raise ValueError("agents registry must be a JSON object")
+    _validate_formerly(data)
     return data
 
 
@@ -628,6 +725,11 @@ def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
     - MEDIUM :660: local detector registration refuses ids that belong to
       an explicitly registered REMOTE host (host_type="remote") so a
       coincidental local match cannot clobber a remote seat.
+    - Punkt 4c: a name that appears in some entry's ``formerly`` is resolved
+      to that entry's CURRENT id BEFORE the lookup. A renamed agent must
+      never reappear as a second entry under its old name. Such a call only
+      refreshes ``last_seen`` — the alias must not overwrite the label, trust
+      level or install type the user set on the renamed entry.
     """
     valid_trust = ("public", "trusted", "private")
     if trust_level not in valid_trust:
@@ -636,6 +738,11 @@ def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
     with _registry_lock():
         registry = _load_registry_unlocked()
         agents = registry.setdefault("agents", [])
+
+        # Punkt 4c: alter Name → heutige Kennung, BEVOR ein Eintrag entsteht.
+        resolved_id = _resolve_former_name_in(registry, agent_id)
+        aliased = resolved_id != (agent_id or "").strip()
+        agent_id = resolved_id
 
         # Find existing or create new
         agent = None
@@ -667,6 +774,8 @@ def register_agent(agent_id: str, name: str, icon: str, trust_level: str,
                 "writes": 0,
             }
             agents.append(agent)
+        elif aliased:
+            agent["last_seen"] = now
         else:
             agent.update({
                 "name": name,
@@ -743,10 +852,79 @@ _DEFAULT_AGENT_ICON = "🔌"
 # (or "true") this process registers nothing and increments no counter.
 SELFTEST_ENV = "NEXUS_AGENT_SELFTEST"
 
+# Rollen (15.11.2026): bis hierher durfte jeder Aufrufer jedes Werkzeug. Drei
+# Stufen ersetzen das „darf alles": ``know`` liest und schreibt, ``work``
+# zusaetzlich Graph und fremde Eintraege, ``admin`` verwaltet (Backups,
+# Webhooks, Guardrail-Override, Kosten). Welche Werkzeuge das im Einzelnen
+# sind, steht in ``nexus_memory/roles.py`` — hier steht nur, WER welche Stufe
+# hat.
+ROLE_FIELD = "role"
+ROLE_ADMIN = "admin"
+ROLE_WORK = "work"
+ROLE_KNOW = "know"
+AGENT_ROLES = (ROLE_ADMIN, ROLE_WORK, ROLE_KNOW)
+#: Fehlt die Rolle (Altbestand, neuer Agent), gilt die schwaechste Stufe.
+#: Fail-closed: ein Eintrag ohne Aussage darf nicht verwalten.
+DEFAULT_AGENT_ROLE = ROLE_KNOW
+
 
 def is_selftest() -> bool:
     """True when this process is a self-test, not a real agent access."""
     return os.environ.get(SELFTEST_ENV, "").strip().lower() in ("1", "true")
+
+
+def _resolve_former_name_in(registry: dict, name: str) -> str:
+    """``formerly``-Alias gegen ein BEREITS geladenes Verzeichnis.
+
+    Der Lock-freie Kern von ``resolve_former_name``. Jede Stelle, die einen
+    Eintrag ANLEGT, haelt den Verzeichnis-Lock schon — ein zweiter
+    ``load_agents_registry()`` aus dem kritischen Abschnitt heraus wuerde auf
+    denselben Lock warten und sich selbst blockieren. Deshalb wird hier
+    gegen das geladene Verzeichnis aufgeloest.
+
+    Reihenfolge: eine Kennung, die es gibt, bleibt sie selbst; erst danach
+    greift der Uebergangs-Alias. Ein unbekannter Name bleibt unveraendert.
+    """
+    wanted = (name or "").strip()
+    if not wanted:
+        return wanted
+    agents = [entry for entry in registry.get("agents", [])
+              if isinstance(entry, dict)]
+    for entry in agents:
+        if entry.get("id") == wanted:
+            return wanted
+    for entry in agents:
+        if wanted in _former_names(entry):
+            owner = entry.get("id")
+            if isinstance(owner, str) and owner.strip():
+                return owner.strip()
+    return wanted
+
+
+def resolve_former_name(name: str) -> str:
+    """Der heutige Name eines Aufrufers: ``formerly`` → die neue Kennung.
+
+    Reihenfolge (Punkt 4a): eine Kennung, die es gibt, bleibt sie selbst
+    (ein alter Name, den inzwischen ein anderer Agent traegt, gewinnt NICHT
+    gegen den Eintrag); erst danach greift der Uebergangs-Alias. Ein Name,
+    der weder existiert noch als ``formerly`` eingetragen ist, bleibt
+    unveraendert — er ist dann einfach ein neuer Aufrufer.
+
+    Ist das Verzeichnis unlesbar (kaputt oder mehrdeutig), bleibt der
+    deklarierte Name stehen und es wird gewarnt: eine Zuordnung ist
+    Telemetrie, sie darf keinen Schreibvorgang verhindern. ``--list``, Rollen
+    und eigene Schluessel scheitern in diesem Fall laut (``load_agents_registry``).
+    """
+    wanted = (name or "").strip()
+    if not wanted:
+        return wanted
+    try:
+        registry = load_agents_registry()
+    except Exception as exc:  # noqa: BLE001 — siehe Docstring
+        logging.getLogger(__name__).warning(
+            "agents registry unreadable — %r stays as declared: %s", wanted, exc)
+        return wanted
+    return _resolve_former_name_in(registry, wanted)
 
 
 def resolve_agent_id(explicit: Optional[str] = None) -> str:
@@ -757,10 +935,14 @@ def resolve_agent_id(explicit: Optional[str] = None) -> str:
     Nothing is guessed from hostnames, install paths or which agents happen
     to be installed on this machine: an id is only ever what the caller or
     the environment declares.
+
+    A declared name that is a former name of a renamed agent is reported
+    under that agent's CURRENT id (``resolve_former_name``): the caller keeps
+    working, the entry and the log carry the new name.
     """
     for candidate in (explicit, os.environ.get("NEXUS_AGENT_ID")):
         if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
+            return resolve_former_name(candidate.strip())
     return UNIDENTIFIED_AGENT_ID
 
 
@@ -940,11 +1122,16 @@ def update_agent_stats(agent_id: Optional[str] = None, read: bool = False,
                 _write_registry_unlocked_nofsync(registry)
                 return
         # First contact: register the caller, then count this access.
+        # The FIRST agent in an empty registry is the owner: it gets private
+        # visibility and the admin role, otherwise nobody could ever manage
+        # this installation. Every later caller starts with no visibility.
+        is_first = not agents
         agent = {
             "id": agent_id,
             "name": agent_id,
             "icon": _DEFAULT_AGENT_ICON,
-            "trust_level": "public",
+            "trust_level": "private" if is_first else "public",
+            "role": "admin" if is_first else "know",
             "install_type": "unknown",
             "config_dir": None,
             "connected_at": now,
@@ -1136,6 +1323,14 @@ def cleanup_removed_agents(grace_days: int = AGENT_REMOVAL_GRACE_DAYS) -> dict:
                     kept.append(aid)
                 continue
             undetected = not detection_map.get(aid, False)
+            # Ein umbenannter Agent (Punkt 4a) wird unter seinem ALTEN Namen
+            # erkannt: ``hermes-mac-mini`` hat keinen Detektor, aber das
+            # ``formerly`` ``hermes`` schon. Ohne diese Zeile wuerde der
+            # Aufraeumlauf den umbenannten Eintrag nach der Gnadenfrist
+            # loeschen, sobald sein Konfigordner einmal fehlt.
+            if undetected and any(detection_map.get(name, False)
+                                  for name in _former_names(agent)):
+                undetected = False
             config_dir = agent.get("config_dir")
             dir_gone = (not config_dir) or (not Path(config_dir).exists())
 
@@ -1196,6 +1391,104 @@ def set_agent_trust_level(agent_id: str, trust_level: str) -> dict:
     return {"error": f"Agent not found: {agent_id}"}
 
 
+def agent_role(agent_id: Optional[str]) -> str:
+    """Die Rolle von ``agent_id`` — ``DEFAULT_AGENT_ROLE``, wenn unbekannt.
+
+    Fail-closed in beide Richtungen: ein fehlendes Feld, ein unbekannter Wert
+    und ein gar nicht registrierter Aufrufer ergeben alle ``know``. Damit kann
+    weder ein alter Eintrag noch ein Tippfehler in der Datei Verwaltungsrechte
+    verleihen; ``admin`` muss ausdruecklich dastehen.
+    """
+    wanted = (agent_id or "").strip()
+    if not wanted:
+        return DEFAULT_AGENT_ROLE
+    try:
+        registry = load_agents_registry()
+    except Exception as exc:  # noqa: BLE001 — unlesbar heisst: keine Rechte
+        logging.getLogger(__name__).error(
+            "agents registry unreadable; falling back to role %r: %s",
+            DEFAULT_AGENT_ROLE, exc)
+        return DEFAULT_AGENT_ROLE
+    for entry in registry.get("agents", []):
+        if not isinstance(entry, dict) or entry.get("id") != wanted:
+            continue
+        role = entry.get(ROLE_FIELD)
+        return role if role in AGENT_ROLES else DEFAULT_AGENT_ROLE
+    return DEFAULT_AGENT_ROLE
+
+
+def agent_trust_level(agent_id: Optional[str]) -> str:
+    """Die gespeicherte Sicht-Stufe von ``agent_id`` — ``public``, wenn unbekannt.
+
+    Das ist die OBERGRENZE beim Lesen. Fail-closed in beide Richtungen: ein
+    fehlendes Feld, ein unbekannter Wert und ein nicht registrierter Aufrufer
+    ergeben alle ``public``. Ein Tippfehler in der Datei darf keine Sicht
+    verleihen; ``private`` muss ausdruecklich dastehen.
+    """
+    wanted = (agent_id or "").strip()
+    if not wanted:
+        return "public"
+    try:
+        registry = load_agents_registry()
+    except Exception as exc:  # noqa: BLE001 — unlesbar heisst: keine Sicht
+        logging.getLogger(__name__).error(
+            "agents registry unreadable; falling back to level 'public': %s", exc)
+        return "public"
+    for entry in registry.get("agents", []):
+        if not isinstance(entry, dict) or entry.get("id") != wanted:
+            continue
+        level = entry.get("trust_level")
+        return level if level in ("public", "trusted", "private") else "public"
+    return "public"
+
+
+def set_agent_role(agent_id: str, role: str) -> dict:
+    """Setze die Rolle eines Agenten; lege den Eintrag an, wenn er fehlt.
+
+    Anlegen wie bei ``issue_key``: die Rolle ist eine Aussage ueber einen
+    Aufrufer, den es schon gibt (er hat gerade geschrieben oder sich gemeldet).
+    Ein fehlender Eintrag wird deshalb mit den neutralen Vorgaben erzeugt,
+    statt die Zuweisung zu verweigern. Eine unbekannte Rolle wird abgewiesen.
+
+    Punkt 4c: ein ``formerly``-Name wird auf die heutige Kennung aufgeloest,
+    bevor nachgeschlagen oder angelegt wird — sonst entstuende neben dem
+    umbenannten Agenten ein zweiter Eintrag unter dem alten Namen.
+    """
+    if role not in AGENT_ROLES:
+        return {"error": f"Invalid role: {role}"}
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        return {"error": "Agent id required"}
+    agent_id = agent_id.strip()
+
+    with _registry_lock():
+        registry = _load_registry_unlocked()
+        agents = registry.setdefault("agents", [])
+        agent_id = _resolve_former_name_in(registry, agent_id)
+        for entry in agents:
+            if not isinstance(entry, dict) or entry.get("id") != agent_id:
+                continue
+            entry[ROLE_FIELD] = role
+            _save_registry_unlocked(registry)
+            return {"agent_id": agent_id, "role": role, "status": "updated"}
+        entry = {
+            "id": agent_id,
+            "name": agent_id,
+            "icon": _DEFAULT_AGENT_ICON,
+            "trust_level": "public",
+            "install_type": "unknown",
+            "config_dir": None,
+            "connected_at": _now_iso(),
+            "last_seen": _now_iso(),
+            "reads": 0,
+            "writes": 0,
+            ROLE_FIELD: role,
+        }
+        annotate_host(entry, host_type="local")
+        agents.append(entry)
+        _save_registry_unlocked(registry)
+    return {"agent_id": agent_id, "role": role, "status": "created"}
+
+
 def register_remote_agent(agent_id: str, name: str, trust_level: str = "trusted",
                           host_label: str = "", host_provider: str = "",
                           icon: str = "🌐", install_type: str = "mcp",
@@ -1236,6 +1529,13 @@ def register_remote_agent(agent_id: str, name: str, trust_level: str = "trusted"
     # concurrent registrations of the same id must not both pass the check.
     with _registry_lock():
         registry = _load_registry_unlocked()
+        # Punkt 4c: ein ``formerly``-Name gehoert bereits einem Eintrag.
+        # Ihn als REMOTE anzulegen wuerde den umbenannten Agenten verdoppeln.
+        current = _resolve_former_name_in(registry, agent_id)
+        if current != agent_id:
+            return {"error": (
+                f"Agent id '{agent_id}' is a former name of '{current}' — "
+                f"register the current id instead")}
         if any(a.get("id") == agent_id for a in registry.get("agents", [])):
             return {"error": f"Agent id already registered: {agent_id}"}
         registry.setdefault("agents", []).append(entry)

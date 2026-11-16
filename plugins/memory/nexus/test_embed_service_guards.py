@@ -120,7 +120,10 @@ def test_old_host_is_loud_not_empty(data_dir, monkeypatch):
 class _FakeEmbedService(BaseHTTPRequestHandler):
     vector = [0.5, 0.25, 0.125, 0.0625]
     model = "fake-service-model"
+    # ``expected_key`` is the INSTALLATION key: it only enrols (POST /enroll)
+    # since 15.11.2026. Every data call must carry the agent key below.
     expected_key = "plugin-test-key"
+    agent_key = "plugin-agent-key"
 
     def log_message(self, *a):  # silence the test output
         pass
@@ -138,29 +141,35 @@ class _FakeEmbedService(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        provided = self.headers.get("x-nexus-service-key", "")
+        if self.path == "/enroll":
+            # The installation key's only remaining door (15.11.2026).
+            if provided != self.expected_key:
+                self._json(401, {"error": "invalid service key"})
+                return
+            self._json(200, {"agent_id": "probe123", "key": self.agent_key,
+                             "is_owner": False, "created": True})
+            return
         if self.path != "/embed":
             self.send_response(404)
             self.end_headers()
             return
-        # The service requires the per-installation secret on /embed.
-        provided = self.headers.get("x-nexus-service-key", "")
-        if provided != self.expected_key:
-            body = json.dumps({"error": "unauthorized"}).encode()
-            self.send_response(401)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        # /embed takes the agent's OWN key — the installation key is refused.
+        if provided != self.agent_key:
+            self._json(401, {"error": "plugin update required"})
             return
         length = int(self.headers.get("Content-Length", 0))
         payload = json.loads(self.rfile.read(length) or b"{}")
         assert payload.get("text"), "the plugin must send a non-empty text"
-        body = json.dumps({
+        self._json(200, {
             "embedding": list(self.vector),
             "model": self.model,
             "dim": len(self.vector),
-        }).encode()
-        self.send_response(200)
+        })
+
+    def _json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

@@ -30,6 +30,68 @@ _SCOPE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 ACCESS_LEVELS = ("public", "trusted", "private")
 
+# ── Geltungsbereich (scope, entschieden 15.11.2026) ──────────────────
+# "default" ist der GEMEINSAME Bereich: Fakten, Regeln, Lehren, Prozeduren,
+# Entities, Praeferenzen, Beliefs und Entscheidungen liegen dort, und jeder
+# Agent liest sie, gleich wer sie geschrieben hat. Eine Zugriffsstufe heisst
+# "nicht nach aussen", nicht "nur fuer den Schreiber".
+# Jeder andere Wert ist ein VERBUND — die Agenten-Kennung. Dort bleiben die
+# Sitzungsprotokolle (category "session"). Die Zugriffsstufe bleibt eine
+# eigene, unabhaengige Schranke: sie wird neben den Verbund gelegt, nie
+# ersetzt.
+SHARED_SCOPE = "default"
+
+
+def own_bundle() -> str:
+    """Der Verbund dieses Aufrufers — wo seine eigenen Protokolle liegen.
+
+    Ein gesetzter ``NEXUS_SCOPE`` ist der eigene Bereich dieses Aufrufers
+    (so haben es die Hooks immer benutzt: der Capture-Weg legt seine
+    Protokolle dort ab). Ohne Override ist der Verbund die Agenten-Kennung
+    ``NEXUS_AGENT_ID``, Vorgabe ``claude-code``. Punkt und Unterstrich
+    werden auf ``-`` abgebildet, weil ein Punkt nur ``[a-z0-9-]`` traegt —
+    sonst landete eine plausible Kennung stillschweigend im gemeinsamen
+    Bereich.
+    """
+    manual = (os.getenv("NEXUS_SCOPE") or "").strip().lower()
+    if manual and _SCOPE_RE.match(manual):
+        return manual
+    raw = re.sub(r"[._]", "-",
+                 (os.getenv("NEXUS_AGENT_ID") or "claude-code").strip().lower())
+    return raw if _SCOPE_RE.match(raw) else "claude-code"
+
+
+def scope_should(bundle: str) -> list:
+    """Die drei Sichtbarkeits-Bedingungen als Qdrant-``should``.
+
+    ``default`` (gemeinsam), der eigene Verbund, und Punkte OHNE ``scope``-
+    Feld — der Altbestand verhaelt sich wie ``default`` und darf nicht
+    verschwinden. Die Liste wird mit dem Zugriffsstufen-Filter ueber ``must``
+    kombiniert, nie in dieselbe ``should``-Liste gelegt (das waere ein ODER).
+    """
+    return [
+        {"key": "scope", "match": {"value": SHARED_SCOPE}},
+        {"key": "scope", "match": {"value": bundle}},
+        {"is_empty": {"key": "scope"}},
+    ]
+
+
+def scope_visible(payload, bundle: str) -> bool:
+    """Dieselben drei Bedingungen in Python — fuer Pfade ohne Qdrant-Filter.
+
+    Ein fehlender Payload bleibt sichtbar: das ist der Altbestand-Fall, keine
+    Freigabe fremder Verbunde.
+    """
+    if not isinstance(payload, dict):
+        return True
+    scope = payload.get("scope")
+    if scope is None:
+        return True                      # Altbestand: kein Feld = gemeinsam
+    text = scope.strip().lower() if isinstance(scope, str) else ""
+    if not text:
+        return True                      # leeres Feld ebenso
+    return text in (SHARED_SCOPE, bundle)
+
 
 def resolve_trust_level(agent_id: str = "") -> str:
     """Trust level of this agent, read from ``~/.nexus-memory/agents.json``.

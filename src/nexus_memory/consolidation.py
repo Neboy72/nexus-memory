@@ -689,6 +689,19 @@ class Consolidator:
             self._store.client, upsert_kwargs["collection_name"],
             upsert_kwargs["points"], vector_name,
         )
+        # Bewegungsprotokoll (Nachtrag 15.11.2026): die Konsolidierung legte
+        # distilled facts an, ohne dass eine Zeile sie nannte — bei einem
+        # falschen Fakt war nicht zu sehen, wer ihn geschrieben hat. Genau eine
+        # Zeile je Fakt, nach dem Schreiben; ein Protokollfehler haelt den
+        # Vorgang nicht auf (``record`` ist fail-open).
+        from nexus_memory import service_log
+        service_log.record(
+            "write", "ok", text=fact, access_level=access_level,
+            target_id=new_id, category="fact", scope=fact_scope,
+            reason="consolidated", after_hash=service_log.content_hash(fact),
+            via="consolidation",
+            actor=service_log.SYSTEM_ACTORS["consolidation"],
+        )
         return new_id, fact_scope
 
     def _mark_consolidated(self, point_id: str, facts_created: int) -> None:

@@ -13,6 +13,7 @@ Integrates all nexus v2.8.0 features:
 
 import asyncio
 import contextlib
+import contextvars
 
 # W32-14(a): fcntl is POSIX-only. A module-scope ``import fcntl`` made the
 # whole MCP server unimportable on Windows; guard it and degrade to
@@ -37,7 +38,6 @@ import os
 import re
 import socket
 import stat as stat_module
-import hmac
 import sys
 import threading
 import time
@@ -61,6 +61,13 @@ from nexus import MemoryCategory, __version__ as nexus_version
 # Who stored a memory (explicit → NEXUS_AGENT_ID → UNIDENTIFIED_AGENT_ID).
 # Distinct from ``source``, which says where the INFORMATION came from.
 from nexus_memory.agent_detect import resolve_agent_id, resolve_instance_id
+
+# Bewegungsprotokoll (wer hat wann was getan) — eine Zeile je Vorgang, ohne
+# Inhalt. Fail-open: ein Protokollfehler verhindert keinen Vorgang.
+from nexus_memory import service_log
+
+# Rollen und Eigentum (15.11.2026): welche Stufe welches Werkzeug darf.
+from nexus_memory import roles
 
 # Repo-Root dynamisch ableiten (nexus/ liegt im Repo-Root)
 _NEXUS_REPO = os.path.dirname(os.path.dirname(nexus.__file__))
@@ -516,7 +523,7 @@ async def _post_webhook(url: str, payload: dict) -> None:
 # ── Embedding Provider ────────────────────────────────────────────
 
 from nexus_memory.embeddings import EmbeddingProvider
-from nexus_memory.collection_vectors import CollectionBinding
+from nexus_memory.collection_vectors import CollectionBinding, point_text
 from nexus_memory.env_secret_store import _restrict_windows_acl
 
 # ── Access Levels ──────────────────────────────────────────────────
@@ -647,6 +654,124 @@ def _normalize_scope(scope) -> str:
         if s and _SCOPE_RE.match(s):
             return s
     return "default"
+
+
+# ── Geltungsbereich (scope, entschieden 15.11.2026) ──────────────────
+# "default" ist der GEMEINSAME Bereich: Fakten, Regeln, Lehren, Prozeduren,
+# Entities, Praeferenzen, Beliefs und Entscheidungen liegen dort, und jeder
+# Agent liest sie, gleich wer sie geschrieben hat. Eine Zugriffsstufe heisst
+# "nicht nach aussen", nicht "nur fuer den Schreiber".
+# Jeder andere Wert ist ein VERBUND — die Agenten-Kennung. Dort bleiben die
+# Sitzungsprotokolle (category "session"): was ein Aufbau mit seinem Modell
+# bespricht, ist fuer einen fremden Aufbau Ballast (gemessen: ein fremder
+# Trip-Wire-Eintrag landete im Kontext eines anderen Harness).
+SHARED_SCOPE = "default"
+
+
+def _caller_bundle() -> str:
+    """Der Verbund des Aufrufers — seine Agenten-Kennung.
+
+    Ein Punkt traegt ``[a-z0-9-]``; Punkt und Unterstrich einer Kennung
+    (``dsh.harness``) werden auf denselben Namen abgebildet, damit eine
+    plausible Kennung nicht stillschweigend im gemeinsamen Bereich landet.
+    """
+    return _normalize_scope(
+        re.sub(r"[._]", "-", resolve_agent_id(_request_agent_id())))
+
+
+def _scope_should(bundle: str) -> list:
+    """Die drei Sichtbarkeits-Bedingungen als Qdrant-``should``.
+
+    ``default`` (gemeinsam), der eigene Verbund, und Punkte OHNE ``scope``-
+    Feld. Der Altbestand (27.948 Punkte am 15.11.2026) darf nicht
+    verschwinden — er verhaelt sich wie ``default``.
+    """
+    return [
+        qmodels.FieldCondition(key="scope",
+                               match=qmodels.MatchValue(value=SHARED_SCOPE)),
+        qmodels.FieldCondition(key="scope",
+                               match=qmodels.MatchValue(value=bundle)),
+        qmodels.IsEmptyCondition(is_empty=qmodels.PayloadField(key="scope")),
+    ]
+
+
+def _scope_filter(bundle: str) -> Any:
+    """Dieselben drei Bedingungen als Qdrant-Filter (ohne ``must``)."""
+    return qmodels.Filter(should=_scope_should(bundle))
+
+
+def _scope_visible(payload: Any, bundle: str) -> bool:
+    """Dieselben drei Bedingungen in Python — fuer Pfade ohne Qdrant-Filter.
+
+    Der Volltextpfad (BM25/FTS5) laesst sich nicht in Qdrant filtern; ein
+    zweiter Qdrant-Volltextfilter kostet Sekunden (gemessen). Ein fehlender
+    Payload bleibt sichtbar: das ist der Altbestand-Fall, keine Freigabe
+    fremder Verbunde.
+    """
+    if not isinstance(payload, dict):
+        return True
+    scope = payload.get("scope")
+    if scope is None:
+        return True                      # Altbestand: kein Feld = gemeinsam
+    text = scope.strip().lower() if isinstance(scope, str) else ""
+    if not text:
+        return True                      # leeres Feld ebenso
+    return text in (SHARED_SCOPE, bundle)
+
+
+# ── Melden statt Ueberschreiben (15.11.2026) ────────────────────────────────
+# Eine Meldung haengt am Eintrag (Payload-Feld ``reports``), nicht in einer
+# Oberflaeche. Der Inhalt des Punktes bleibt unberuehrt; Leser sehen den
+# Zweifel als Warnzeile, entschieden wird beim Verwalter.
+REPORT_STATUS_OPEN = "open"
+REPORT_STATUS_ACCEPTED = "accepted"
+REPORT_STATUS_REJECTED = "rejected"
+REPORT_DECISIONS = ("accept", "reject")
+REPORT_REASON_MIN_CHARS = 10
+REPORT_WARN_MAX = 3
+
+
+def _report_entries(payload: Any) -> list[dict]:
+    """Die Meldungen eines Punktes — leere Liste, wenn es keine gibt."""
+    if not isinstance(payload, dict):
+        return []
+    reports = payload.get("reports")
+    if not isinstance(reports, list):
+        return []
+    return [r for r in reports if isinstance(r, dict)]
+
+
+def _open_reports(payload: Any) -> list[dict]:
+    return [r for r in _report_entries(payload)
+            if r.get("status") == REPORT_STATUS_OPEN]
+
+
+def _dispute_lines(payload: Any) -> list[str]:
+    """Warnzeilen fuer offene Meldungen: je Meldung eine, hoechstens drei."""
+    open_reports = _open_reports(payload)
+    lines = [
+        f"⚠ disputed by {r.get('by')}: {r.get('reason')}"
+        for r in open_reports[:REPORT_WARN_MAX]
+    ]
+    if len(open_reports) > REPORT_WARN_MAX:
+        lines.append(f"… and {len(open_reports) - REPORT_WARN_MAX} more")
+    return lines
+
+
+def _with_dispute_note(text: str, payload: Any) -> str:
+    """Der Inhalt bleibt lesbar — die Warnzeilen kommen ZUSATZLICH darunter."""
+    lines = _dispute_lines(payload)
+    if not lines:
+        return text
+    return text + "\n" + "\n".join(lines)
+
+
+def _reports_error(message: str) -> list[types.TextContent]:
+    return [types.TextContent(
+        type="text",
+        text=json.dumps({"status": "error", "error": message}),
+    )]
+
 
 
 def _write_origin(source: str) -> str:
@@ -840,13 +965,17 @@ def _count_memory_access(read: bool = False, write: bool = False) -> None:
     not pass through that edge.
 
     The agent id is resolved by ``agent_detect`` (explicit → NEXUS_AGENT_ID →
-    "unidentified"). Telemetry must never break a memory operation, so every
+    "unidentified"). The explicit value is the caller id a client declared for
+    this request over HTTP (``x-nexus-agent-id``); it is None everywhere else.
+    Telemetry must never break a memory operation, so every
     error is swallowed and logged at DEBUG level only.
     """
     try:
-        from nexus_memory.agent_detect import record_agent_access
+        from nexus_memory.agent_detect import record_agent_access, resolve_agent_id
 
-        record_agent_access(read=read, write=write)
+        # Resolve through the registry first: a name that only exists as "formerly" must count
+        # against the agent's CURRENT id, never create a second registry entry.
+        record_agent_access(agent_id=resolve_agent_id(_request_agent_id()), read=read, write=write)
     except Exception as exc:
         logging.debug("Agent access count skipped: %s", exc)
 
@@ -1179,6 +1308,8 @@ class MemoryStore:
         source_type: str = "",
         explicit: bool = True,
         rule_proof: str = "",
+        via: str = "library",
+        actor: Optional[str] = None,
     ) -> dict:
         """Store a memory with full v2.8.0 metadata support + auto TTL + auto supersession.
 
@@ -1192,10 +1323,15 @@ class MemoryStore:
         and 'valid_to' (None = still valid). The superseded old fact gets 'valid_to'
         stamped at the supersession time.
 
-        Scope (project/agent areas): optional area label. Auto-prefetch only surfaces
-        memories whose scope is 'default' or matches the agent's own NEXUS_SCOPE;
-        explicit recall() is NEVER scope-filtered. Empty/invalid values fall back to
-        'default' (behaves exactly like pre-scope memories).
+        Scope (Geltungsbereich): 'default' is the SHARED area — facts, rules,
+        lessons, procedures, entities, preferences, beliefs and decisions are
+        read by every agent, whoever wrote them. Any other value is a VERBUND
+        (an agent id): session logs stay there and never reach another
+        installation. A write without an explicit scope lands in the shared
+        area, except ``category='session'``, which lands in the writer's own
+        verbund. Empty/invalid values fall back to 'default'. Readers see
+        'default', their own verbund, and points with no scope field at all
+        (the pre-scope legacy stock).
 
         ``memory_id`` lets a caller (the OpenClaw write-gate endpoint) keep its
         own id, so a retried write replaces instead of duplicating. It is only
@@ -1209,6 +1345,11 @@ class MemoryStore:
         authorizes a ``rule`` on its own: ``rule_proof`` must carry the token
         a human generated with ``rule-confirm`` at a terminal. Without it the
         entry is stored as ``fact`` (see ``nexus.write_gate``).
+
+        ``via`` (``library``, ``http``, ``mcp``) und ``actor`` landen im
+        Bewegungsprotokoll (``nexus_memory.service_log``) — eine Zeile je
+        Vorgang, ohne Inhalt. Beide sind Zusaetze: der Vorgabewert beschreibt
+        den Bibliotheksaufruf, die beiden Dienstwege nennen sich selbst.
         """
         # Universal access counting: one write per remember() — every client
         # path lands here (fail-open, see _count_memory_access).
@@ -1222,7 +1363,9 @@ class MemoryStore:
         # Validate scope (project/agent area label): [a-z0-9-], max 40 chars.
         # Anything invalid (incl. empty string) degrades to 'default' — fail-open
         # to the pre-scope behavior, never a hard error for callers.
+        # A non-default value is the caller's own explicit area and wins.
         scope = _normalize_scope(scope)
+        explicit_scope = scope != SHARED_SCOPE
 
         entry_id = _valid_memory_id(memory_id) or str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
@@ -1256,6 +1399,15 @@ class MemoryStore:
             rule_proof=rule_proof,
         )
         if prepared is None:
+            # Fehlversuche gehoeren ins Protokoll: sie zeigen, wo etwas
+            # systematisch gegen die Wand laeuft. Die Stufe hat das Tor hier
+            # noch nicht aufgeloest — nur eine ausdrueckliche Angabe entscheidet,
+            # ob ein Thema protokolliert werden darf (leer/private: nein).
+            service_log.record(
+                "denied", "refused", text=text, access_level=access_level,
+                category=category, scope=scope, reason=_write_refusal(),
+                via=via, actor=actor,
+            )
             return {"status": "rejected", "reason": _write_refusal()}
         text = prepared["content"]
         category = prepared["category"]
@@ -1265,29 +1417,17 @@ class MemoryStore:
 
         vector = await self._embed(text, is_query=False)  # stored doc, not a query
 
-        # ── Auto-scoping (self-organizing memory, project rule 07.09: full
-        # automation or useless): when the caller leaves scope at 'default',
-        # infer the area from existing scope centroids and inherit it
-        # automatically. Conservative margins (scope_auto) — under-tagging is
-        # harmless, over-tagging is what we must avoid. Callers with an
-        # EXPLICIT non-default scope are never overridden. Zero cost: pure
-        # vector math, no LLM call. Fail-open: any error → keep 'default'.
-        if scope == "default" and vector:
-            try:
-                if self._scope_centroids is None:
-                    from nexus_memory.scope_auto import ScopeCentroids
-                    self._scope_centroids = ScopeCentroids(self.client, COLLECTION_NAME)
-                from nexus_memory.scope_auto import infer_scope as _infer_scope
-                auto = _infer_scope(vector, self._scope_centroids.get())
-                if auto != "default":
-                    scope = auto
-                    logging.info(
-                        f"scope_auto: memory auto-scoped to '{auto}' "
-                        f"(caller left default)"
-                    )
-            except Exception as exc:
-                logging.info("scope_auto: inference skipped (%s) — fail-open", exc)
-                scope = "default"
+        # Geltungsbereich (15.11.2026): ein Sitzungsprotokoll bleibt im Verbund
+        # des Schreibers, alles andere ist gemeinsam. Ein ausdruecklich
+        # uebergebenes ``scope`` gewinnt (``explicit_scope``).
+        # Die frueher hier stehende Aehnlichkeits-Zuordnung (``scope_auto``,
+        # Projektregel 07.09) ist damit entfallen: sie haette einen Fakt allein
+        # wegen seines Themas in einen Verbund gelegt — und ihn damit fuer
+        # jeden fremden Agenten unsichtbar gemacht. Das ist genau die
+        # Verwässerung, die der gemeinsame Bereich verhindern soll.
+        if not explicit_scope:
+            scope = (_caller_bundle() if category == MemoryCategory.SESSION.value
+                     else SHARED_SCOPE)
 
         # ── Auto-Supersession: check for existing similar canonical facts ──
         # Review hardening:
@@ -1340,7 +1480,7 @@ class MemoryStore:
                             f"is not compatible with new fact level {access_level!r}"
                         )
                         continue
-                    cand_text = str(cand_payload.get("content") or "")
+                    cand_text = point_text(cand_payload)
                     if _token_jaccard(text, cand_text) < 0.5:
                         logging.info(
                             f"Auto-supersession skipped {str(point.id)[:8]}: "
@@ -1392,7 +1532,10 @@ class MemoryStore:
             # information came from (mail, web, consolidation) — this says
             # which agent put it here. Never derived from the caller's
             # ``source`` argument; old points simply lack the field (None).
-            "agent": resolve_agent_id(),
+            # A client that declared itself over HTTP (``x-nexus-agent-id``)
+            # wins over this process's own NEXUS_AGENT_ID; without the header
+            # the call is exactly what it always was.
+            "agent": resolve_agent_id(_request_agent_id()),
             # Which INSTALLATION of that agent — two Hermes seats on two
             # machines share the agent id but never the instance id.
             "instance": resolve_instance_id(),
@@ -1537,6 +1680,15 @@ class MemoryStore:
         # gehoert in einen eigenen Kurzfakt. Kein Fehler, kein Blockieren.
         if prepared.get("hint"):
             result["hint"] = prepared["hint"]
+        # Bewegungsprotokoll: eine Zeile je Vorgang — mit Thema nur, wenn der
+        # Eintrag nicht privat ist (die Stufe hat das Tor bereits aufgeloest).
+        # ``write`` traegt nur ``after_hash``: einen Stand davor gibt es nicht.
+        service_log.record(
+            "write", "ok", text=text, access_level=access_level,
+            target_id=entry_id, category=category, scope=scope,
+            after_hash=service_log.content_hash(text),
+            via=via, actor=actor,
+        )
         return result
 
     async def recall(
@@ -1556,10 +1708,20 @@ class MemoryStore:
         (valid_from or created_at) <= as_of AND (valid_to or superseded_at
         or None=∞) > as_of. The valid_until TTL is also compared against the
         cutoff instead of 'now'.
+
+        Geltungsbereich (15.11.2026): a result is visible when its ``scope``
+        is 'default' (shared), the caller's own verbund, or missing entirely
+        (legacy stock). Foreign verbunde — i.e. other installations' session
+        logs — stay out, also from an explicit recall. The access level is a
+        separate gate and keeps working unchanged on top of it.
         """
         # Universal access counting: one read per recall() — every client path
         # lands here (fail-open, see _count_memory_access).
         _count_memory_access(read=True)
+
+        # The verbund of THIS call: the agent id the caller declared (HTTP
+        # header) or this process's own NEXUS_AGENT_ID.
+        bundle = _caller_bundle()
 
         # Parse as_of once (aware UTC). Unparseable → treated as None
         # (default behavior) so a bad client value can never crash recall.
@@ -1664,6 +1826,10 @@ class MemoryStore:
                                         r["valid_to"] = pl.get("valid_to")
                                     if not r.get("superseded_at"):
                                         r["superseded_at"] = pl.get("superseded_at")
+                                    # Meldungen (15.11.2026): der Treffer traegt
+                                    # den Zweifel mit, auch im Hybrid-Pfad.
+                                    if not r.get("reports"):
+                                        r["reports"] = pl.get("reports")
                                     # Memory Dynamics (v0.15): payload + echte point-id
                                     # für Access-Tracking und effective_score mitnehmen
                                     if r_point_id is not None:
@@ -1680,6 +1846,11 @@ class MemoryStore:
                 "collection_name": COLLECTION_NAME,
                 "query": query_vector,
                 "limit": limit * 2,
+                # Geltungsbereich: gemeinsam, eigener Verbund, Altbestand.
+                # Der Qdrant-Filter haelt fremde Protokolle schon aus dem
+                # Kandidatenkreis; die Pruefung unten gilt zusaetzlich fuer
+                # den Hybrid-/BM25-Pfad, der sich nicht filtern laesst.
+                "query_filter": _scope_filter(bundle),
             }
             if self.vector_name:
                 fb_kwargs["using"] = self.vector_name
@@ -1689,7 +1860,7 @@ class MemoryStore:
                 payload = point.payload or {}
                 raw_results.append({
                     "id": payload.get("id"),
-                    "content": payload.get("content"),
+                    "content": point_text(payload) or None,
                     "access_level": payload.get("access_level"),
                     # State-prefixing: legacy entries may not have a category —
                     # fall back to "fact" so the response is always well-typed.
@@ -1712,6 +1883,7 @@ class MemoryStore:
                     # valid_until ebenfalls mappen — sonst greift der
                     # TTL-Filter im Fallback-Pfad nie (vu=None → Pass).
                     "valid_until": payload.get("valid_until"),
+                    "reports": payload.get("reports"),
                     "score": point.score,
                     # v0.15 (Review-Fix): Fallback liefert dieselben Dynamics-
                     # Felder wie der Hybrid-Pfad — sonst greifen dort weder
@@ -1817,7 +1989,15 @@ class MemoryStore:
                 mem_level = ACCESS_PRIVATE
             if ACCESS_HIERARCHY.get(mem_level, 2) > ACCESS_HIERARCHY.get(agent_level, 0):
                 continue
-            
+
+            # Geltungsbereich (15.11.2026): dieselben drei Bedingungen wie im
+            # Qdrant-Filter oben. Hier noetig, weil der Hybrid-/BM25-Pfad (und
+            # der Aehnlichkeits-Rueckfall bei fehlgeschlagener Anreicherung)
+            # keinen Filter mitbringt — fremde Protokolle sind auch fuer einen
+            # ausdruecklichen recall() Ballast.
+            if not _scope_visible(r.get("_payload"), bundle):
+                continue
+
             doc_id = r.get("doc_id") or r.get("id")
             text = (r.get("content") or r.get("text") or "").strip()
             score = r.get("rrf_score") or r.get("score", 0)
@@ -1888,7 +2068,9 @@ class MemoryStore:
             
             entry = {
                 "id": r.get("id"),
-                "text": text[:2000],  # Cap for readability
+                # Meldungen kommen ZUSATZLICH als Warnzeile; der Inhalt selbst
+                # wird nicht umgeschrieben.
+                "text": _with_dispute_note(text[:2000], r),  # Cap for readability
                 "score": round(normalized_score, 3),
                 "dynamic_score": dynamic_score,  # v0.15: base × reinforcement × decay
                 "match": match_type,
@@ -2096,12 +2278,15 @@ class MemoryStore:
     @staticmethod
     def _fact_history_entry(pid: str, pl: dict) -> dict:
         """Build one entry for fact_history() from a point payload."""
-        text = str(pl.get("content", ""))
+        text = point_text(pl)
         vf = pl.get("valid_from") or pl.get("created_at")
         vt = pl.get("valid_to") or pl.get("superseded_at")
+        excerpt = text[:120] + ("…" if len(text) > 120 else "")
         return {
             "memory_id": pid,
-            "text": text[:120] + ("…" if len(text) > 120 else ""),
+            # Auch hier gilt: der Zweifel steht am Eintrag, nicht in einer
+            # Oberflaeche — die Warnzeile kommt zum Auszug dazu.
+            "text": _with_dispute_note(excerpt, pl),
             "valid_from": vf,
             "valid_to": vt,
             "supersede_reason": pl.get("supersede_reason"),
@@ -2348,8 +2533,15 @@ async def _do_update(confirm: bool = False) -> dict:
 server = Server("nexus-memory", version=nexus_version)
 
 
-async def handle_list_tools() -> list[types.Tool]:
-    return [
+async def handle_list_tools(role: Optional[str] = None) -> list[types.Tool]:
+    """Die Werkzeuge, die der AUFRUFER sehen darf.
+
+    ``role`` kommt im Betrieb aus ``_caller_role()``; ``None`` loest die Rolle
+    des aktuellen Aufrufers auf. Eine Stufe sieht nur, was sie darf — sonst
+    waere die Tabelle in ``roles.py`` nur eine Empfehlung (die Ablehnung beim
+    Aufruf bleibt trotzdem scharf, siehe ``handle_call_tool``).
+    """
+    tools = [
         types.Tool(
             name="remember",
             description="Store a memory for AI agents. Persists information across sessions.",
@@ -2418,11 +2610,12 @@ async def handle_list_tools() -> list[types.Tool]:
                     "scope": {
                         "type": "string",
                         "description": (
-                            "Optional project/agent area label ([a-z0-9-], max 40 chars). "
-                            "Scoped memories are excluded from OTHER agents' auto-prefetch "
-                            "(only the agent whose NEXUS_SCOPE matches sees them "
-                            "automatically); explicit recall() always finds them. "
-                            "Omit or 'default' = visible to every agent's auto-prefetch."
+                            "Optional Geltungsbereich ([a-z0-9-], max 40 chars). "
+                            "'default' (or omitted) = SHARED: every agent reads it, "
+                            "whoever wrote it. Any other value is a verbund (an agent "
+                            "id) and is readable only inside it — that is where session "
+                            "logs belong. A session write without an explicit scope "
+                            "uses the writer's own verbund."
                         ),
                         "default": "default",
                     },
@@ -2488,6 +2681,15 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "ID of the memory to delete",
                     },
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "Optional short reason for the deletion. It is "
+                            "written to the movement log (service_log), never "
+                            "the memory content."
+                        ),
+                        "default": "",
+                    },
                 },
                 "required": ["memory_id"],
             },
@@ -2541,6 +2743,73 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                 },
                 "required": ["memory_id"],
+            },
+        ),
+        types.Tool(
+            name="report",
+            description=(
+                "Report a memory as disputed instead of overwriting it. "
+                "The entry is NOT changed: a report {by, at, reason, status} "
+                "is attached to it and every reader sees a warning line. "
+                "Reporting twice replaces your own open report."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to report",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "One sentence saying why this entry looks wrong "
+                            "(at least 10 characters after trimming)."
+                        ),
+                    },
+                },
+                "required": ["memory_id", "reason"],
+            },
+        ),
+        types.Tool(
+            name="list_reports",
+            description=(
+                "List all open reports (memory id, reporter, time, reason and "
+                "a 120-character excerpt of the entry)."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="resolve_report",
+            description=(
+                "Decide an open report. reject: the report is marked rejected "
+                "and the entry stays as it is. accept: the entry is marked "
+                "disputed_accepted — it is NOT deleted or rewritten; that "
+                "remains a separate update/forget by the maintainer."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the reported memory",
+                    },
+                    "by": {
+                        "type": "string",
+                        "description": "Agent id of the reporter to decide on",
+                    },
+                    "decision": {
+                        "type": "string",
+                        "enum": list(REPORT_DECISIONS),
+                        "description": "accept or reject",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional note stored with the decision",
+                        "default": "",
+                    },
+                },
+                "required": ["memory_id", "by", "decision"],
             },
         ),
         types.Tool(
@@ -2874,9 +3143,32 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
     ]
+    effective_role = _caller_role() if role is None else role
+    return [tool for tool in tools if roles.tool_allowed(effective_role, tool.name)]
 
 
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    # Rolle des Aufrufers (15.11.2026). ``tools/list`` zeigt nur die erlaubten
+    # Werkzeuge; dieser Riegel ist der zweite, entscheidende: ein Client, der
+    # den Namen kennt, kommt trotzdem nicht durch. Abgewiesen wird laut —
+    # ``denied``/``refused`` im Bewegungsprotokoll, mit Grund. Der Riegel steht
+    # VOR ``get_store()``: ein abgewiesener Aufruf soll Qdrant nicht anfassen.
+    _role = _caller_role()
+    if not roles.tool_allowed(_role, name):
+        reason = f"not permitted: {name}"
+        service_log.record(
+            "denied", "refused", reason=reason, target_id=arguments.get("memory_id"),
+            via="mcp", actor=resolve_agent_id(_request_agent_id()),
+        )
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "denied",
+                "error": reason,
+                "role": _role,
+            }),
+        )]
+
     store = get_store()
 
     # Registry stats (dashboard last_seen/reads/writes). remember / recall /
@@ -2889,7 +3181,9 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         try:
             from nexus_memory.agent_detect import record_agent_access
 
-            record_agent_access(write=True)
+            # Same per-request caller id as the central counter: a client that
+            # declared itself over HTTP is not counted as this process.
+            record_agent_access(agent_id=_request_agent_id(), write=True)
         except Exception:
             pass
 
@@ -2913,6 +3207,13 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             # Fail CLOSED on an unknown level: silently downgrading to
             # "public" would publish a private write to every agent.
             if access_level not in ALL_ACCESS_LEVELS:
+                service_log.record(
+                    "denied", "refused", text=text,
+                    access_level=access_level, category=category,
+                    scope=arguments.get("scope", "default"),
+                    reason="invalid access level", via="mcp",
+                    actor=_request_agent_id(),
+                )
                 return [types.TextContent(
                     type="text",
                     text=json.dumps({
@@ -2931,6 +3232,8 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 effective_from=effective_from,
                 scope=arguments.get("scope", "default"),
                 rule_proof=arguments.get("rule_proof", ""),
+                via="mcp",
+                actor=_request_agent_id(),
             )
 
             # Fire-and-forget: dispatch "memory.remember" to any subscribers.
@@ -2978,6 +3281,12 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 text=json.dumps(response),
             )]
         except Exception as e:
+            service_log.record_error(
+                "write", e, text=arguments.get("text") or "",
+                access_level=arguments.get("access_level") or "",
+                category=arguments.get("category") or "",
+                via="mcp", actor=_request_agent_id(),
+            )
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": "error", "error": str(e)}),
@@ -2987,7 +3296,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         try:
             query = arguments["query"]
             limit = min(arguments.get("limit", 5), 20)
-            filter_level = arguments.get("filter_level", ACCESS_PUBLIC)
+            # The dashboard sets the ceiling; a caller may ask for LESS,
+            # never for more. Without this the switch was decoration.
+            filter_level = _cap_to_caller_level(
+                arguments.get("filter_level", _caller_max_level())
+            )
             as_of = arguments.get("as_of")  # None = default behavior
 
             # Fail CLOSED on an unknown level: defaulting to "public" can
@@ -3020,7 +3333,60 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
     elif name == "forget":
         try:
             memory_id = arguments["memory_id"]
+            # ``before_hash`` braucht den Inhalt VOR dem Loeschen: danach ist
+            # er weg. Best-effort — ein fehlgeschlagener Vorab-Lesezugriff
+            # darf das Loeschen nicht verhindern, die Zeile steht dann ohne
+            # Pruefsumme da.
+            #
+            # Eigentum (15.11.2026) braucht denselben Lesezugriff: ohne
+            # gelesenen Eintrag laesst sich nicht sagen, ob er dem Aufrufer
+            # gehoert — dann wird abgewiesen, nicht geloescht.
+            _before_text = ""
+            _before_payload: dict = {}
+            _missing = False
+            try:
+                _before_points = store.client.retrieve(
+                    collection_name=COLLECTION_NAME,
+                    ids=[memory_id],
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                if _before_points:
+                    _before_payload = _before_points[0].payload or {}
+                    _before_text = point_text(_before_payload)
+                else:
+                    _missing = True
+            except Exception as look_err:
+                logging.debug(f"Forget: pre-read failed for {memory_id}: {look_err}")
+            _caller = resolve_agent_id(_request_agent_id())
+            # ``know`` nur eigene Eintraege; ``work``/``admin`` duerfen fremde
+            # aufraeumen. Ein nicht gelesener Eintrag (Vorab-Lesezugriff
+            # gescheitert) ist kein Freibrief: is_owner() sagt dann False.
+            if not roles.is_owner(_before_payload, _caller, _role) and not _missing:
+                service_log.record(
+                    "denied", "refused", target_id=memory_id, reason="not owner",
+                    via="mcp", actor=_caller,
+                )
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "denied",
+                        "error": "not owner",
+                        "role": _role,
+                    }),
+                )]
             success = await store.forget(memory_id)
+            # Bewegungsprotokoll: ein Loeschvorgang ohne Spur war bisher der
+            # teuerste Fall ("wer hat das entfernt?"). Kein Inhalt, nur Ziel
+            # und der Grund, falls der Aufrufer einen nennt. ``forget`` traegt
+            # nur ``before_hash`` — den Stand, der verschwunden ist.
+            service_log.record(
+                "forget", "ok" if success else "refused",
+                target_id=memory_id,
+                reason=arguments.get("reason") or None,
+                before_hash=service_log.content_hash(_before_text),
+                via="mcp", actor=_request_agent_id(),
+            )
             if success:
                 # Fire-and-forget: dispatch "memory.forget" to subscribers.
                 await dispatch_event("memory.forget", memory_id)
@@ -3036,6 +3402,10 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 text=json.dumps({"status": "deleted" if success else "not_found"}),
             )]
         except Exception as e:
+            service_log.record_error(
+                "forget", e, target_id=arguments.get("memory_id"),
+                via="mcp", actor=_request_agent_id(),
+            )
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": "error", "error": str(e)}),
@@ -3094,6 +3464,11 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 logging.warning(f"Update: pre-read failed for {memory_id}: {look_err}")
                 _orig_points = []
             if not _orig_points:
+                service_log.record(
+                    "update", "refused", target_id=memory_id,
+                    reason="entry not found", via="mcp",
+                    actor=_request_agent_id(),
+                )
                 return [types.TextContent(
                     type="text",
                     text=json.dumps({
@@ -3102,6 +3477,26 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                     }),
                 )]
             _orig_payload = _orig_points[0].payload or {}
+            # Eigentum (15.11.2026): ``know`` aendert nur, was es selbst
+            # geschrieben hat; ``work``/``admin`` duerfen fremde Eintraege.
+            # Geprueft wird VOR dem
+            # ersten Schreibzugriff (die Supersession-Bereinigung unten ist
+            # bereits einer), damit eine Ablehnung den Eintrag unberuehrt
+            # laesst.
+            _caller_update = resolve_agent_id(_request_agent_id())
+            if not roles.is_owner(_orig_payload, _caller_update, _role):
+                service_log.record(
+                    "denied", "refused", target_id=memory_id, reason="not owner",
+                    via="mcp", actor=_caller_update,
+                )
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "denied",
+                        "error": "not owner",
+                        "role": _role,
+                    }),
+                )]
             _orig_lifecycle = {
                 "lifecycle_status": _orig_payload.get("lifecycle_status"),
                 "superseded_at": _orig_payload.get("superseded_at"),
@@ -3213,11 +3608,39 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                         f"(non-blocking): {bm25_err}"
                     )
 
+            # Bewegungsprotokoll: Kategorie, Bereich und Stufe stammen aus dem
+            # Eintrag VOR der Aenderung — nur die richtige Stufe entscheidet,
+            # ob ein Thema protokolliert werden darf. Ein unklarer Ausgang
+            # steht als "failed" im Protokoll, nie als Erfolg.
+            # ``before_hash`` ist der Stand davor, ``after_hash`` nur dann
+            # gesetzt, wenn die Aenderung wirklich geschrieben wurde (ein
+            # fehlgeschlagener Vorgang hat keinen neuen Stand).
+            _orig_text = point_text(_orig_payload)
+            _after_text = (new_text if isinstance(new_text, str) and new_text.strip()
+                           else _orig_text)
+            service_log.record(
+                "update", "ok" if status == "updated" else "failed",
+                text=new_text if isinstance(new_text, str) else "",
+                access_level=_orig_payload.get("access_level"),
+                target_id=memory_id,
+                category=_orig_payload.get("category"),
+                scope=_orig_payload.get("scope"),
+                reason=None if status != "unknown" else "outcome unclear",
+                detail=f"status {status}" if status != "updated" else None,
+                before_hash=service_log.content_hash(_orig_text),
+                after_hash=(service_log.content_hash(_after_text)
+                            if status == "updated" else None),
+                via="mcp", actor=_request_agent_id(),
+            )
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": status, "detail": result}),
             )]
         except Exception as e:
+            service_log.record_error(
+                "update", e, target_id=arguments.get("memory_id"),
+                via="mcp", actor=_request_agent_id(),
+            )
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"status": "error", "error": str(e)}),
@@ -3237,6 +3660,243 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 type="text",
                 text=json.dumps({"status": "error", "error": str(e)}),
             )]
+
+    elif name == "report":
+        # Melden statt Ueberschreiben (15.11.2026): der Inhalt des Punktes
+        # wird nicht angefasst, nur das Payload-Feld ``reports`` ergaenzt.
+        try:
+            memory_id = str(arguments.get("memory_id") or "").strip()
+            reason = str(arguments.get("reason") or "").strip()
+            _caller = resolve_agent_id(_request_agent_id())
+
+            if not memory_id:
+                return _reports_error("memory_id is required")
+            if len(reason) < REPORT_REASON_MIN_CHARS:
+                service_log.record(
+                    "report", "refused", target_id=memory_id or None,
+                    reason=(
+                        f"reason too short ({len(reason)} chars, "
+                        f"min {REPORT_REASON_MIN_CHARS})"
+                    ),
+                    via="mcp", actor=_caller,
+                )
+                return _reports_error(
+                    f"reason is required: at least {REPORT_REASON_MIN_CHARS} "
+                    f"characters after trimming (got {len(reason)}); "
+                    f"nothing was reported"
+                )
+
+            try:
+                points = store.client.retrieve(
+                    collection_name=COLLECTION_NAME,
+                    ids=[memory_id],
+                    with_payload=True,
+                    with_vectors=False,
+                )
+            except Exception as look_err:
+                logging.debug(f"Report: pre-read failed for {memory_id}: {look_err}")
+                points = []
+            if not points:
+                service_log.record(
+                    "report", "refused", target_id=memory_id,
+                    reason="entry not found", via="mcp", actor=_caller,
+                )
+                return _reports_error(f"point not found: {memory_id}")
+
+            payload = points[0].payload or {}
+            # Eine offene Meldung desselben Agenten wird ersetzt, nicht
+            # verdoppelt: der Zweifel bleibt EIN Satz je Kopf.
+            reports = [
+                rep for rep in _report_entries(payload)
+                if not (rep.get("status") == REPORT_STATUS_OPEN
+                        and rep.get("by") == _caller)
+            ]
+            reports.append({
+                "by": _caller,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "reason": reason,
+                "status": REPORT_STATUS_OPEN,
+            })
+            store.client.set_payload(
+                collection_name=COLLECTION_NAME,
+                payload={"reports": reports},
+                points=[memory_id],
+            )
+            # Bewegungsprotokoll: nur die Kennung, nie der Meldetext.
+            service_log.record(
+                "report", "ok", target_id=memory_id, via="mcp", actor=_caller,
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "status": "reported",
+                    "memory_id": memory_id,
+                    "message": f"Report recorded for memory {memory_id}.",
+                }),
+            )]
+        except Exception as e:
+            service_log.record_error(
+                "report", e, target_id=arguments.get("memory_id"),
+                via="mcp", actor=_request_agent_id(),
+            )
+            return _reports_error(str(e))
+
+    elif name == "list_reports":
+        try:
+            # Nur Punkte, die ueberhaupt Meldungen tragen — sonst muesste die
+            # Abfrage den ganzen Bestand durchblättern.
+            report_filter = qmodels.Filter(must_not=[
+                qmodels.IsEmptyCondition(
+                    is_empty=qmodels.PayloadField(key="reports")),
+            ])
+            open_items: list[dict] = []
+            offset = None
+            while True:
+                points, offset = store.client.scroll(
+                    collection_name=COLLECTION_NAME,
+                    scroll_filter=report_filter,
+                    limit=256,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                for point in points:
+                    pl = point.payload or {}
+                    if not _open_reports(pl):
+                        continue
+                    pid = str(getattr(point, "id", "")) or str(pl.get("id") or "")
+                    excerpt = point_text(pl)
+                    excerpt = excerpt[:120] + ("…" if len(excerpt) > 120 else "")
+                    for rep in _open_reports(pl):
+                        open_items.append({
+                            "memory_id": pid,
+                            "by": rep.get("by"),
+                            "at": rep.get("at"),
+                            "reason": rep.get("reason"),
+                            "excerpt": excerpt,
+                        })
+                if offset is None:
+                    break
+
+            open_items.sort(key=lambda item: str(item.get("at") or ""),
+                            reverse=True)
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"reports": open_items,
+                                 "count": len(open_items)}),
+            )]
+        except Exception as e:
+            return _reports_error(str(e))
+
+    elif name == "resolve_report":
+        try:
+            memory_id = str(arguments.get("memory_id") or "").strip()
+            reporter = str(arguments.get("by") or "").strip()
+            decision = str(arguments.get("decision") or "").strip().lower()
+            note = str(arguments.get("note") or "").strip()
+            _caller = resolve_agent_id(_request_agent_id())
+
+            if not memory_id:
+                return _reports_error("memory_id is required")
+            if not reporter:
+                return _reports_error("by is required (which reporter)")
+            if decision not in REPORT_DECISIONS:
+                return _reports_error(
+                    f"invalid decision {decision!r}: expected one of "
+                    f"{list(REPORT_DECISIONS)}"
+                )
+
+            try:
+                points = store.client.retrieve(
+                    collection_name=COLLECTION_NAME,
+                    ids=[memory_id],
+                    with_payload=True,
+                    with_vectors=False,
+                )
+            except Exception as look_err:
+                logging.debug(
+                    f"Resolve report: pre-read failed for {memory_id}: "
+                    f"{look_err}")
+                points = []
+            if not points:
+                service_log.record(
+                    "resolve_report", "refused", target_id=memory_id,
+                    reason="entry not found", via="mcp", actor=_caller,
+                )
+                return _reports_error(f"point not found: {memory_id}")
+
+            payload = points[0].payload or {}
+            reports = _report_entries(payload)
+            target = next(
+                (rep for rep in reports
+                 if rep.get("status") == REPORT_STATUS_OPEN
+                 and rep.get("by") == reporter),
+                None,
+            )
+            if target is None:
+                service_log.record(
+                    "resolve_report", "refused", target_id=memory_id,
+                    reason="no open report by that agent", via="mcp",
+                    actor=_caller,
+                )
+                return _reports_error(
+                    f"no open report by {reporter!r} on memory {memory_id}"
+                )
+
+            decided_at = datetime.now(timezone.utc).isoformat()
+            target["status"] = (
+                REPORT_STATUS_ACCEPTED if decision == "accept"
+                else REPORT_STATUS_REJECTED
+            )
+            target["resolved_at"] = decided_at
+            target["resolved_by"] = _caller
+            if note:
+                target["note"] = note
+
+            update_payload: dict[str, Any] = {"reports": reports}
+            if decision == "accept":
+                # Der Eintrag wird NICHT geloescht und nicht umgeschrieben —
+                # nur markiert. Was mit dem Inhalt geschieht, entscheidet der
+                # Verwalter danach mit update/forget.
+                update_payload["disputed_accepted"] = True
+                update_payload["dispute_decision"] = {
+                    "by": reporter,
+                    "decision": "accept",
+                    "decided_by": _caller,
+                    "at": decided_at,
+                    "note": note,
+                }
+            store.client.set_payload(
+                collection_name=COLLECTION_NAME,
+                payload=update_payload,
+                points=[memory_id],
+            )
+            service_log.record(
+                "resolve_report", "ok", target_id=memory_id,
+                reason=decision, via="mcp", actor=_caller,
+            )
+            outcome = {
+                "accept": "accepted",
+                "reject": "rejected",
+            }[decision]
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "status": "resolved",
+                    "memory_id": memory_id,
+                    "decision": decision,
+                    "message": (
+                        f"Report by {reporter} on memory {memory_id} "
+                        f"was {outcome}."
+                    ),
+                }),
+            )]
+        except Exception as e:
+            service_log.record_error(
+                "resolve_report", e, target_id=arguments.get("memory_id"),
+                via="mcp", actor=_request_agent_id(),
+            )
+            return _reports_error(str(e))
 
     elif name == "health":
         try:
@@ -3366,7 +4026,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                     continue
 
                 if reembed or not vec:
-                    text = payload.get("content", "")
+                    text = point_text(payload)
                     if text:
                         vec = await store._embed(text, is_query=False)  # re-embed stored doc
                     else:
@@ -3381,6 +4041,19 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                 )
                 restored += 1
 
+            # Bewegungsprotokoll (Nachtrag 15.11.2026): ein Restore schreibt
+            # Punkte zurueck und war der letzte Weg ohne Zeile. Eine Zeile je
+            # Restore, nicht je Punkt — sonst ueberdeckt ein Backup mit
+            # tausenden Eintraegen alles andere im Protokoll. Kein
+            # ``after_hash``: der Stand ist nicht der Inhalt dieses Vorgangs.
+            service_log.record(
+                "restore", "ok",
+                reason=f"backup {os.path.basename(backup_path)}",
+                detail=f"{restored} points",
+                via="mcp",
+                actor=(_request_agent_id()
+                       or service_log.SYSTEM_ACTORS["restore"]),
+            )
             return [types.TextContent(
                 type="text",
                 text=json.dumps({
@@ -3737,6 +4410,80 @@ def allowed_origins_from_env() -> list[str]:
     return _env_pattern_list("NEXUS_ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
 
 
+# The old caller header (15.11.2026). It used to decide WHO the caller was;
+# since the agent keys arrived it is dead weight: the key names its agent, so
+# the header cannot widen or change an identity. The constant stays so the
+# service can say on the log that a plugin still sends it — without any effect.
+AGENT_ID_HEADER = "x-nexus-agent-id"
+
+# The one door the installation key may still use: it enrols a plugin and
+# gets it a key of its own. Loopback only, because behind a proxy every
+# request looks like loopback.
+ENROLL_PATH = "/enroll"
+_FORWARDED_HEADERS = (b"x-forwarded-for", b"x-forwarded-host", b"x-real-ip",
+                      b"forwarded")
+_LOOPBACK_ADDRESSES = ("127.0.0.1", "::1")
+
+# Per-request caller identity. A ContextVar, not a module global: one service
+# process serves several clients, so a global would attribute a request to
+# whichever header arrived last. Default None = exactly the old behaviour
+# (``resolve_agent_id`` → NEXUS_AGENT_ID → "unidentified").
+_REQUEST_AGENT_ID: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "nexus_request_agent_id", default=None)
+
+
+def _caller_max_level() -> str:
+    """Die im Dashboard gesetzte Sicht-Stufe des Aufrufers — sein Maximum.
+
+    Der Schalter im Dashboard war bisher nur eine Anzeige: ``recall`` nahm die
+    Stufe aus dem Aufruf (Default ``public``), ein Agent konnte sich also
+    selbst hochstufen. Diese Funktion liest die gespeicherte Stufe und macht
+    sie zur Obergrenze.
+    """
+    try:
+        from nexus_memory.agent_detect import agent_trust_level
+
+        level = agent_trust_level(resolve_agent_id(_request_agent_id()))
+        return level if level in ACCESS_HIERARCHY else ACCESS_PUBLIC
+    except Exception as exc:  # noqa: BLE001 — fail closed
+        logging.debug("caller level unreadable, staying public: %s", exc)
+        return ACCESS_PUBLIC
+
+
+def _cap_to_caller_level(wanted: str) -> str:
+    """Der Aufruf darf kleiner sein als die gesetzte Stufe, nie groesser.
+
+    Ein ungueltiger Wunsch geht UNVERAENDERT zurueck: die Pruefung im Aufruf
+    weist ihn dann mit einer klaren Meldung ab. Wuerde hier stillschweigend
+    ersetzt, verschwaende der Fehler und ein Tippfehler saehe wie Erfolg aus.
+    """
+    if wanted not in ACCESS_HIERARCHY:
+        return wanted
+    allowed = _caller_max_level()
+    if ACCESS_HIERARCHY[wanted] <= ACCESS_HIERARCHY[allowed]:
+        return wanted
+    return allowed
+
+
+def _request_agent_id() -> Optional[str]:
+    """The caller id declared for the CURRENT request, or None."""
+    return _REQUEST_AGENT_ID.get()
+
+
+def _caller_role() -> str:
+    """Die Rolle des aktuellen Aufrufers — ``know``, wenn er unbekannt ist.
+
+    Derselbe Absender wie im Protokoll und im ``agent``-Feld: der eigene
+    Schluessel eines Agenten, sonst der Kopf ``x-nexus-agent-id``, sonst
+    ``NEXUS_AGENT_ID``, sonst ``unidentified``. Die Rolle wird bei JEDEM Aufruf
+    frisch aus ``agents.json`` gelesen — eine Aenderung im Dashboard wirkt
+    damit beim naechsten Aufruf, ohne Neustart des Dienstes.
+    """
+    from nexus_memory.agent_detect import agent_role
+
+    return agent_role(resolve_agent_id(_request_agent_id()))
+
+
 def build_serve_app():
     """Build the Starlette ASGI app served by `serve`.
 
@@ -3745,6 +4492,8 @@ def build_serve_app():
       POST /embed   → the engine's embedder (local plugins)
       POST /write   → the shared write gate for plugins that used to write
                       Qdrant directly (rejects before anything is stored)
+      POST /enroll  → the installation key enrols a plugin and gets it a key
+                      of its own (loopback only; the key is shown once)
       /mcp          → MCP Streamable HTTP, same `server` object as stdio
 
     Kept separate from serve() so tests can drive it with an in-process
@@ -3761,11 +4510,12 @@ def build_serve_app():
     )
     from nexus_memory import service_auth
 
-    # Per-installation service key: generated once and required by both the
-    # /embed endpoint and the /mcp Streamable-HTTP mount.  /healthz stays
-    # intentionally unauthenticated so the host's probe can check liveness
-    # without knowing the secret.
-    service_key = service_auth.ensure_service_key()
+    # Per-installation service key: generated once, here, so the file exists
+    # for the plugins.  The middleware does not hold the value any more — it
+    # asks ``service_auth.verify_key`` (own key, shared key, or 401).  /healthz
+    # stays intentionally unauthenticated so the host's probe can check
+    # liveness without knowing the secret.
+    service_auth.ensure_service_key()
 
     # Resolved once per app build so both guards (MCP session manager and the
     # service-key middleware) agree on the same allow-lists.
@@ -3787,12 +4537,12 @@ def build_serve_app():
     class ServiceKeyMiddleware:
         """ASGI middleware: DNS-rebinding + service-key guard for /embed and /mcp."""
 
-        def __init__(self, app, service_key: str, header: str,
+        def __init__(self, app, header: str,
                      allowed_hosts: list[str], allowed_origins: list[str]):
             self.app = app
-            # Compare raw bytes: decoding the header as UTF-8 would raise on
-            # invalid byte sequences and turn a 401 into a 500.
-            self.service_key = service_key.encode("utf-8")
+            # The key itself is judged by ``service_auth.verify_key`` — one
+            # place, so the shared key and per-agent keys can never be checked
+            # by two different rules.
             self.header = header.lower().encode("ascii")
             self.allowed_hosts = allowed_hosts
             self.allowed_origins = allowed_origins
@@ -3809,6 +4559,13 @@ def build_serve_app():
                 elif host_s == allowed:
                     return True
             return False
+
+        @staticmethod
+        def _is_loopback(scope) -> bool:
+            """True only when the peer address IS this machine."""
+            client = scope.get("client")
+            host = client[0] if client else ""
+            return host in _LOOPBACK_ADDRESSES
 
         def _origin_allowed(self, origin: bytes) -> bool:
             # Same-origin requests may omit Origin entirely.
@@ -3854,10 +4611,30 @@ def build_serve_app():
                 })
                 await send({"type": "http.response.body", "body": body})
                 return
+            # POST /enroll: the installation key's ONLY remaining door. Own
+            # check (loopback + no proxy header), because the data rule below
+            # would reject the installation key. The route verifies the key.
+            if path == ENROLL_PATH:
+                if (any(name in headers for name in _FORWARDED_HEADERS)
+                        or not self._is_loopback(scope)):
+                    body = json.dumps({"error": "enroll is loopback only"}).encode("utf-8")
+                    await send({
+                        "type": "http.response.start",
+                        "status": 403,
+                        "headers": [(b"content-type", b"application/json")],
+                    })
+                    await send({"type": "http.response.body", "body": body})
+                    return
+                await self.app(scope, receive, send)
+                return
             provided = headers.get(self.header, b"")
-            # Stay on bytes: hmac.compare_digest works on bytes and never
-            # raises on non-UTF-8 or non-ASCII header values.
-            if not provided or not hmac.compare_digest(provided, self.service_key):
+            # One check, one place: ``verify_key`` says whether the key belongs
+            # to an agent (→ that agent, header irrelevant) or is the
+            # installation key (→ legacy, and legacy means: enrol first).
+            try:
+                agent_id, is_legacy = service_auth.verify_key(
+                    provided.decode("utf-8", "replace"))
+            except service_auth.ServiceAuthError:
                 body = json.dumps({"error": "unauthorized"}).encode("utf-8")
                 await send({
                     "type": "http.response.start",
@@ -3869,7 +4646,40 @@ def build_serve_app():
                     "body": body,
                 })
                 return
-            await self.app(scope, receive, send)
+            if is_legacy:
+                # The installation key no longer reads or writes data. It
+                # enrols (POST /enroll) and gets a key of its own; until then
+                # every data endpoint answers 401 with the reason.
+                body = json.dumps({
+                    "error": "plugin update required",
+                    "hint": "this plugin still uses the installation key; "
+                            "update it so it enrols and gets its own key",
+                }).encode("utf-8")
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({"type": "http.response.body", "body": body})
+                return
+            if headers.get(AGENT_ID_HEADER.encode("ascii")):
+                # Old plugins still send it. It has no effect: the key names
+                # its agent, and a claim cannot outrank a credential.
+                logging.debug(
+                    "service-auth: ignoring %s — identity comes from the key",
+                    AGENT_ID_HEADER)
+            # Caller identity for THIS request (see _REQUEST_AGENT_ID). The
+            # key decides; every path below (payload ``agent``, log ``actor``,
+            # telemetry) reads this one value, so a renamed agent can never
+            # leak an old name into an entry.
+            token = _REQUEST_AGENT_ID.set(agent_id) if agent_id else None
+            kind_token = service_auth.set_request_key_kind(service_auth.KEY_KIND_OWN)
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                service_auth.reset_request_key_kind(kind_token)
+                if token is not None:
+                    _REQUEST_AGENT_ID.reset(token)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -3955,7 +4765,9 @@ def build_serve_app():
         Request:  {"content": "...", "category": "fact", "access_level": "...",
                    "source": "...", "source_type": "chat", "source_url": "",
                    "confidence": 0.9, "scope": "default", "id": "<uuid>",
-                   "explicit": false, "rule_proof": ""}
+                   "explicit": false, "rule_proof": "", "via": "plugin"}
+                  ``via`` is optional and only honoured as ``"plugin"``: it
+                  labels the movement-log line of a plugin's write.
                   ``explicit`` is only true for a deliberate write (the store
                   tool); auto-capture leaves it out. A ``rule`` needs
                   ``rule_proof`` in addition — the token a human generated with
@@ -3964,27 +4776,47 @@ def build_serve_app():
         Response: 200 with the stored memory, or 422 with
                   {"status": "rejected", "reason": "..."} — nothing written.
         """
+        # Ein abgewiesener Schreibversuch steht als ``denied`` im
+        # Bewegungsprotokoll — Fehlversuche zeigen spaeter, wo etwas
+        # systematisch gegen die Wand laeuft. Die 422-Abweisung des Schreibtors
+        # protokolliert ``MemoryStore.remember`` selbst (sonst zwei Zeilen).
+        # ``via`` benennt den Aufrufer: die TypeScript-Plugins schicken
+        # ``"plugin"`` mit, damit ihre Zeilen nicht wie direkte HTTP-Aufrufe
+        # aussehen. Alles andere bleibt ``"http"``.
+        via = "http"
+
+        def _deny(reason: str, status_code: int, error: str) -> JSONResponse:
+            service_log.record(
+                "denied", "refused", reason=reason, via=via,
+                actor=_request_agent_id(),
+            )
+            return JSONResponse({"error": error}, status_code=status_code)
+
         try:
             payload = await request.json()
         except Exception:
-            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+            return _deny("no JSON body", 400, "body must be JSON")
         if not isinstance(payload, dict):
-            return JSONResponse(
-                {"error": "body must be a JSON object"}, status_code=400)
+            return _deny("body is not an object", 400,
+                         "body must be a JSON object")
+
+        # Ein Plugin darf sich als solches benennen; jeder andere Wert bleibt
+        # ``http``. So kann kein Aufrufer eine fremde Herkunft vortaeuschen.
+        if payload.get("via") == "plugin":
+            via = "plugin"
 
         content = payload.get("content")
         if not isinstance(content, str):
-            return JSONResponse(
-                {"error": "field 'content' must be a string"}, status_code=400)
+            return _deny("content is not a string", 400,
+                         "field 'content' must be a string")
         if len(content) > MAX_EMBED_CHARS:
-            return JSONResponse(
-                {"error": f"content is longer than {MAX_EMBED_CHARS} characters"},
-                status_code=413)
+            return _deny(f"content over {MAX_EMBED_CHARS} characters", 413,
+                         f"content is longer than {MAX_EMBED_CHARS} characters")
 
         memory_id = payload.get("id")
         if memory_id is not None and not isinstance(memory_id, str):
-            return JSONResponse(
-                {"error": "field 'id' must be a string"}, status_code=400)
+            return _deny("id is not a string", 400,
+                         "field 'id' must be a string")
 
         def _text_field(key: str) -> str:
             value = payload.get(key)
@@ -4011,9 +4843,16 @@ def build_serve_app():
                 # Mensch am Terminal mit ``rule-confirm`` erzeugt hat.
                 explicit=payload.get("explicit") is True,
                 rule_proof=_text_field("rule_proof"),
+                via=via,
+                actor=_request_agent_id(),
             )
         except Exception as exc:
             logging.exception("write endpoint failed")
+            service_log.record_error(
+                "write", exc, text=content,
+                access_level=_text_field("access_level"),
+                via=via, actor=_request_agent_id(),
+            )
             return JSONResponse(
                 {"error": f"write failed: {type(exc).__name__}"},
                 status_code=500)
@@ -4022,9 +4861,55 @@ def build_serve_app():
             return JSONResponse(result, status_code=422)
         return JSONResponse(result)
 
+    async def enroll_endpoint(request):
+        """POST /enroll — the installation key enrols a plugin.
+
+        Request:  {"harness": "hermes", "label": "optional"}
+        Response: {"agent_id": "...", "key": "...", "is_owner": bool,
+                   "created": bool}
+
+        Only the installation key may call this: it is the one credential that
+        is allowed to ask for an agent key. That key is shown here ONCE and is
+        never written to a log. The loopback rule lives in the middleware
+        (``ServiceKeyMiddleware``) — anything that mounts this app behind a
+        different stack has to enforce "loopback only" for ``/enroll`` itself.
+        """
+        provided = request.headers.get(service_auth.AUTH_HEADER, "")
+        try:
+            _agent, is_installation_key = service_auth.verify_key(provided)
+        except service_auth.ServiceAuthError:
+            return JSONResponse({"error": "invalid service key"}, status_code=401)
+        if not is_installation_key:
+            # An agent key enrols nothing: it already IS the identity.
+            return JSONResponse({"error": "invalid service key"}, status_code=401)
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "body must be a JSON object"},
+                                status_code=400)
+        harness = payload.get("harness")
+        if not isinstance(harness, str) or not harness.strip():
+            return JSONResponse(
+                {"error": "field 'harness' must be a non-empty string"},
+                status_code=400)
+        label = payload.get("label")
+        try:
+            result = await asyncio.to_thread(
+                service_auth.enroll, harness.strip(),
+                label if isinstance(label, str) else "")
+        except ValueError:
+            return JSONResponse(
+                {"error": "field 'harness' must be a non-empty string"},
+                status_code=400)
+        return JSONResponse(result)
+
     return Starlette(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
+            Route("/enroll", enroll_endpoint, methods=["POST"]),
             Route("/embed", embed, methods=["POST"]),
             Route("/write", write, methods=["POST"]),
             # Mount("/") not Mount("/mcp"): a mount at a subpath makes
@@ -4036,7 +4921,6 @@ def build_serve_app():
         middleware=[
             Middleware(
                 ServiceKeyMiddleware,
-                service_key=service_key,
                 header=service_auth.AUTH_HEADER,
                 allowed_hosts=allowed_hosts,
                 allowed_origins=allowed_origins,

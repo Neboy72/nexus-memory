@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import { Embedder } from "./lib/embedder.ts"
-import { QdrantClient } from "./lib/qdrant-client.ts"
+import { QdrantClient, scopeBundle } from "./lib/qdrant-client.ts"
 import { WriteGateClient } from "./lib/write-gate.ts"
 import { nexusConfigSchema, parseConfig } from "./lib/config.ts"
 import { ScopeCentroidCache } from "./lib/scope-auto.ts"
@@ -144,10 +144,13 @@ export default {
     const dimensions = embedder.getDimensions()
 
     // Initialize Qdrant client
+    // Der Verbund (Sichtbarkeitsregel 15.11.2026) wird EINMAL aus der Config
+    // gelesen und wandert in den Client: jeder Lesefilter traegt ihn mit.
     const qdrantClient = new QdrantClient(
       cfg.qdrantUrl,
       cfg.collection,
       dimensions,
+      scopeBundle(cfg),
     )
 
     // Ensure collection exists (async, non-blocking — will retry on first search/upsert)

@@ -414,6 +414,19 @@ def named_point_vector(vector_name: Optional[str], vec: Any) -> Any:
     return {vector_name: vec} if vector_name else vec
 
 
+def point_text(payload: Optional[dict]) -> str:
+    """Inhalt eines Punktes: ``content``, sonst ``text``, sonst ``""``.
+
+    ``content`` ist das fuehrende Feld. ``text`` bleibt lesbar, weil 628
+    Punkte der Sammlung ihren Inhalt am 15.11.2026 nur dort trugen und an
+    jeder Stelle durchfielen, die ausschliesslich ``content`` las. Die
+    Reihenfolge ist fest: liegen beide Felder vor, gewinnt ``content``.
+    """
+    pl = payload if isinstance(payload, dict) else {}
+    value = pl.get("content") or pl.get("text") or ""
+    return value if isinstance(value, str) else str(value)
+
+
 def _normalize_text_content(payload: dict) -> dict:
     """Keep the text/content contract intact at write time.
 

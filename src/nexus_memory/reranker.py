@@ -232,6 +232,10 @@ def rerank_points(
     """
     if not points:
         return points
+    # Inhalt eines Punktes: ``content``, sonst ``text`` (ein Punkt ohne
+    # ``content`` wurde frueher als leerer Dokumenttext gerankt).
+    from nexus_memory.collection_vectors import point_text
+
     pool = list(points)[: max(pool_k, 1)]
     reranker = _resolve_reranker(reranker)
 
@@ -241,14 +245,14 @@ def rerank_points(
             {
                 "_idx": i,
                 "text": (
-                    ((p.payload or {}).get("content") or "").replace("\n", " ")
+                    point_text(p.payload).replace("\n", " ")
                 )[:LLM_SHOW],
             }
             for i, p in enumerate(pool)
         ]
     elif reranker == "cross-encoder":
         texts = [
-            ((p.payload or {}).get("content") or "")[:MAX_DOC_CHARS] for p in pool
+            point_text(p.payload)[:MAX_DOC_CHARS] for p in pool
         ]
         # Points without text cannot be cross-encoded - keep their relative order.
         results = [

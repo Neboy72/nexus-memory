@@ -183,7 +183,7 @@ class TestRecallRerankIntegration:
         prov._embedder = SimpleNamespace(embed=lambda q, is_query=True: [0.0], dim=2)
         client = MagicMock()
         client.query_points.side_effect = (
-            lambda collection_name, query, limit: SimpleNamespace(
+            lambda collection_name, query, limit, **kwargs: SimpleNamespace(
                 points=_pool()
             )
         )
@@ -262,7 +262,7 @@ class TestRecallRerankIntegration:
             p.payload["use_count"] = int(p.id[1:]) * 10  # p4 highest, p0 lowest
 
         client.query_points.side_effect = (
-            lambda collection_name, query, limit: SimpleNamespace(points=pts)
+            lambda collection_name, query, limit, **kwargs: SimpleNamespace(points=pts)
         )
 
         out = prov._recall("q", limit=5)
@@ -298,7 +298,7 @@ class TestRecallRerankIntegration:
             p.payload["use_count"] = int(p.id[1:]) * 10  # p4 highest
 
         client.query_points.side_effect = (
-            lambda collection_name, query, limit: SimpleNamespace(points=pts)
+            lambda collection_name, query, limit, **kwargs: SimpleNamespace(points=pts)
         )
 
         out = prov._recall("q", limit=5)

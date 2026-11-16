@@ -1,7 +1,15 @@
 import { log } from "../logger.ts"
 
-import { nexusServiceKey } from "./embedding-env.ts"
+import {
+  clearNexusAgentKey,
+  nexusInstallKey,
+  readNexusAgentKey,
+  writeNexusAgentKey,
+} from "./embedding-env.ts"
 import type { EmbeddingProvider } from "./embedding-env.ts"
+
+/** This plugin's harness name — it enrols under this name and keeps its key. */
+export const NEXUS_HARNESS = "openclaw"
 
 /** Default models and dimensions per provider. */
 const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; dimensions: number; baseUrl?: string }> = {
@@ -77,6 +85,52 @@ export async function fetchWithTimeout(
       throw new Error(`${url} timed out after ${ms}ms`)
     }
     throw err
+  }
+}
+
+/**
+ * This plugin's own key for ``base``: the enrolled one, else a fresh enrol.
+ *
+ * Self-enrolment (15.11.2026): the installation key may only ask
+ * ``POST /enroll`` for an agent key; every data call is made with that key.
+ * ``installKey`` overrides the environment/file source (the write gate keeps
+ * its secret in the plugin config). Returns "" and says why when it fails —
+ * never invents a key.
+ */
+export async function ensureNexusAgentKey(
+  base: string,
+  installKey?: string,
+): Promise<string> {
+  const existing = readNexusAgentKey(NEXUS_HARNESS)
+  if (existing) return existing
+  const install = nexusInstallKey()
+  const credential = (installKey ?? "").trim() || install.key
+  if (!credential) return ""
+  try {
+    const resp = await fetchWithTimeout(
+      `${base}/enroll`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          [install.header]: credential,
+        },
+        body: JSON.stringify({ harness: NEXUS_HARNESS, label: "OpenClaw" }),
+      },
+      15_000,
+    )
+    if (!resp.ok) {
+      log.warn("enrolment against %s failed (HTTP %s)", base, resp.status)
+      return ""
+    }
+    const data = (await resp.json()) as { key?: unknown }
+    const key = typeof data.key === "string" ? data.key.trim() : ""
+    if (!key) return ""
+    writeNexusAgentKey(NEXUS_HARNESS, key)
+    return key
+  } catch (error) {
+    log.warn("enrolment against %s failed: %s", base, String(error))
+    return ""
   }
 }
 
@@ -203,23 +257,35 @@ export class Embedder {
    * The local Nexus service (POST /embed). It embeds with the engine's
    * provider — local HuggingFace by default — so one service serves every
    * agent in the house, and no per-plugin provider list has to be kept.
+   *
+   * Only this plugin's OWN key is sent (15.11.2026); the installation key is
+   * used once, to enrol. A 401 means the key was replaced — enrol again and
+   * repeat the call once.
    */
   private async embedNexus(text: string): Promise<number[]> {
     const base = this.baseUrl ?? "http://127.0.0.1:9122"
     log.debugRequest("embed.nexus", { textLen: text.length, baseUrl: base })
 
-    const auth = nexusServiceKey()
-    if (!auth.key) {
-      log.warn("no service auth key available for %s/embed (set NEXUS_SERVICE_AUTH_KEY or ensure <data-dir>/service_auth.key is readable)", base)
-    }
-    const headers: Record<string, string> = { "Content-Type": "application/json" }
-    if (auth.key) headers[auth.header] = auth.key
+    const post = (key: string) =>
+      fetchWithTimeout(`${base}/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-nexus-service-key": key },
+        body: JSON.stringify({ text, is_query: true }),
+      })
 
-    const resp = await fetchWithTimeout(`${base}/embed`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ text, is_query: true }),
-    })
+    let key = await ensureNexusAgentKey(base)
+    if (!key) {
+      log.warn(
+        "no agent key for %s/embed — enrolment needs NEXUS_SERVICE_AUTH_KEY or a readable <data-dir>/service_auth.key",
+        base,
+      )
+    }
+    let resp = await post(key)
+    if (resp.status === 401) {
+      clearNexusAgentKey(NEXUS_HARNESS)
+      key = await ensureNexusAgentKey(base)
+      if (key) resp = await post(key)
+    }
 
     const data = (await parseEmbeddingResponse(resp, "Nexus")) as {
       embedding?: number[]

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Nexus Memory",
+    "description": "Recalls relevant memories from the local Nexus store before every turn and stores the finished turn as an episodic memory."
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Nexus Memory",
+    "description": "Ruft vor jedem Turn automatisch passende Erinnerungen aus dem lokalen Nexus-Speicher ab und legt den Turn danach als episodische Erinnerung ab."
+  }
+}

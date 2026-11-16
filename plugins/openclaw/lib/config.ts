@@ -58,9 +58,11 @@ export type NexusConfig = {
    *  Default 0.8. */
   forgetMinScore: number
   accessLevel: AccessLevel
-  /** Project/agent area label (unreleased): auto-recall surfaces only
-   *  'default'-scoped memories plus this agent's own scope. Explicit
-   *  search (nexus_search) is never scope-filtered. Empty = no gating. */
+  /** Der VERBUND dieses Agenten (Sichtbarkeitsregel 15.11.2026): jeder
+   *  Leseweg liefert nur `scope: "default"`, `scope: <dieser Wert>` und
+   *  Punkte ohne `scope`-Feld. Leer = Vorgabe `openclaw` (nicht "kein
+   *  Filter"). Zusaetzlich steuert der Wert die Bereichs-Drossel der
+   *  Auto-Recall-Vorauswahl (scope_auto). */
   scope: string
   /** Shared write gate (Nexus service). Required for every write: without it
    *  the plugin refuses to write rather than bypass the checks. */

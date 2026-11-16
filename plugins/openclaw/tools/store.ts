@@ -4,7 +4,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { Embedder } from "../lib/embedder.ts"
 import type { MemoryWriter } from "../lib/write-gate.ts"
 import type { NexusConfig } from "../lib/config.ts"
-import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
+import { ScopeCentroidCache } from "../lib/scope-auto.ts"
+import { SHARED_SCOPE, scopeBundle } from "../lib/qdrant-client.ts"
 import { limitText } from "../lib/text-preview.ts"
 import { toolCallWriteAccessLevel } from "../lib/turn-context.ts"
 import { log } from "../logger.ts"
@@ -43,8 +44,9 @@ export function registerStoreTool(
             description:
               "Optional project/agent area label ([a-z0-9-], max 40 chars). " +
               "Scoped memories are excluded from OTHER agents' auto-recall; " +
-              "explicit search always finds them. Omit to let the memory " +
-              "infer the area automatically (self-organizing).",
+              "explicit search always finds them. Omit to place the memory " +
+              "automatically: a session log lands in this agent's own bundle, " +
+              "everything else in the shared area.",
           }),
         ),
         source: Type.Optional(
@@ -174,8 +176,8 @@ export function registerStoreTool(
                 text:
                   `Memory store failed: invalid scope "${params.scope}". ` +
                   `Allowed pattern: ${SCOPE_PATTERN_TEXT} (lowercase letters, ` +
-                  `digits and dashes, max 40 chars). Omit scope to let the ` +
-                  `area be inferred automatically.`,
+                  `digits and dashes, max 40 chars). Omit scope to place the ` +
+                  `memory automatically (session → own bundle, else shared).`,
               },
             ],
           }
@@ -197,22 +199,25 @@ export function registerStoreTool(
           const vector = await embedder.embed(params.text)
           const id = randomUUID()
 
-          // No explicit scope → infer the area from scoped centroids on a
-          // CLEAR match; else 'default'. Fail-open, zero cost.
-          if (!scope && centroidCache) {
-            try {
-              scope = inferScope(vector, await centroidCache.get())
-            } catch (err) {
-              log.debug("scope_auto: store inference failed — default", err)
-            }
+          // No explicit scope → exactly two targets (15.11.2026): a session
+          // log belongs to this agent's own bundle (configured `scope`, else
+          // `openclaw`), everything else to the shared area. Never inferred
+          // from the centroids — a guessed topic area is not a bundle, and
+          // the point would be invisible to everyone, the writer included.
+          if (!scope) {
+            scope = category === "session" ? scopeBundle(cfg) : SHARED_SCOPE
           }
-          if (!scope) scope = "default"
 
           // Provenance is mandatory at the gate: a declared source wins, the
           // default names the tool itself (a statement from this conversation).
           const declaredSource =
             typeof rawSource === "string" ? rawSource.trim() : ""
           const payload = {
+            // `content` ist das fuehrende Feld und wird von jedem Leser
+            // gelesen; `text` bleibt zusaetzlich stehen (Abwaertskompatibilitaet).
+            // Der Wiki-Ingest schreibt ueber dieses Werkzeug (source: "wiki") —
+            // ohne `content` entstanden 301 Punkte, die nur `text` trugen.
+            content: params.text,
             text: params.text,
             access_level: accessLevel,
             category,

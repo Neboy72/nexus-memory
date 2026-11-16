@@ -18,17 +18,31 @@
  * echten Python-Tor geprueft; hier geht es um die Verdrahtung des Plugins.
  */
 import assert from "node:assert"
+import fs from "node:fs"
 import { register } from "node:module"
+import os from "node:os"
+import path from "node:path"
 
 // Never count this probe in the live agent registry.
 process.env.NEXUS_AGENT_SELFTEST = "1"
+
+const SERVICE = "http://127.0.0.1:9122"
+const KEY = "test-service-key"
+// 15.11.2026: das Plugin schreibt mit seinem EIGENEN Schluessel. Ein frisches
+// Datenverzeichnis haelt den Test vom echten Schluessel des Entwicklers fern;
+// der eingeschriebene Schluessel liegt bereit, bevor der erste Aufruf kommt.
+const AGENT_KEY = "agent-key-test"
+const ENROLLED_KEY = "agent-key-enrolled"
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-write-gate-"))
+process.env.NEXUS_DATA_DIR = DATA_DIR
+const AGENT_KEY_FILE = path.join(DATA_DIR, "agent_keys", "openclaw.key")
+fs.mkdirSync(path.dirname(AGENT_KEY_FILE), { recursive: true })
+fs.writeFileSync(AGENT_KEY_FILE, AGENT_KEY)
 
 register("./_typebox-test-loader.mjs", import.meta.url)
 const { registerStoreTool } = await import("./tools/store.ts")
 const { WriteGateClient, WriteGateRejected } = await import("./lib/write-gate.ts")
 
-const SERVICE = "http://127.0.0.1:9122"
-const KEY = "test-service-key"
 const QDRANT_POINTS = /\/collections\/[^/]+\/points/
 
 let calls = []
@@ -49,6 +63,15 @@ globalThis.fetch = async (url, opts) => {
   const u = String(url)
   const body = typeof opts?.body === "string" ? JSON.parse(opts.body) : null
   calls.push({ url: u, body, headers: opts?.headers ?? {} })
+
+  if (u === `${SERVICE}/enroll`) {
+    return antwort(200, {
+      agent_id: "probe123",
+      key: ENROLLED_KEY,
+      is_owner: false,
+      created: true,
+    })
+  }
 
   if (u === `${SERVICE}/write`) {
     if (String(body?.content ?? "").trim() === "") {
@@ -130,7 +153,11 @@ try {
     assert.strictEqual(res.isError, true)
     assert.strictEqual(calls.length, 1, "genau ein Aufruf: an /write")
     assert.strictEqual(calls[0].url, `${SERVICE}/write`)
-    assert.strictEqual(calls[0].headers["x-nexus-service-key"], KEY)
+    assert.strictEqual(calls[0].headers["x-nexus-service-key"], AGENT_KEY, "eigener Schluessel")
+    assert.ok(
+      !("x-nexus-agent-id" in calls[0].headers),
+      "der Kopf bestimmt keine Identitaet mehr",
+    )
     keineQdrantBeruehrung()
   })
 
@@ -187,6 +214,7 @@ try {
     assert.strictEqual(body.source_type, "chat", "Gespraechsregel darf Regel werden")
     assert.strictEqual(body.access_level, "private")
     assert.strictEqual(body.explicit, true, "Werkzeugaufruf ist ausdruecklich")
+    assert.strictEqual(body.via, "plugin", "die Protokollzeile nennt den Plugin-Weg")
     keineQdrantBeruehrung()
   })
 
@@ -217,6 +245,27 @@ try {
     await writer.upsert("id", [], { text: "Ein Satz aus dem Gespraech", category: "session" })
     assert.strictEqual(calls[0].body.explicit, false)
     assert.strictEqual(calls[0].body.source_type, "session")
+  })
+
+  await t("ohne eigenen Schluessel: erst /enroll, dann /write mit dem neuen Schluessel", async () => {
+    calls = []
+    fs.rmSync(AGENT_KEY_FILE, { force: true })
+    const writer = new WriteGateClient(
+      { accessLevel: "private", writeGate: { url: SERVICE, key: KEY } },
+      "chat",
+    )
+    await writer.upsert("id", [], {
+      content: "Ein vollstaendiger Fakt fuer die Sammlung",
+      category: "fact",
+    })
+
+    assert.strictEqual(calls.length, 2, "genau /enroll und /write")
+    assert.strictEqual(calls[0].url, `${SERVICE}/enroll`)
+    assert.strictEqual(calls[0].headers["x-nexus-service-key"], KEY, "Installationsschluessel")
+    assert.strictEqual(calls[1].url, `${SERVICE}/write`)
+    assert.strictEqual(calls[1].headers["x-nexus-service-key"], ENROLLED_KEY)
+    assert.strictEqual(fs.readFileSync(AGENT_KEY_FILE, "utf8"), ENROLLED_KEY)
+    keineQdrantBeruehrung()
   })
 
   await t("kein einziger Aufruf ging an eine Qdrant-Adresse", () => {

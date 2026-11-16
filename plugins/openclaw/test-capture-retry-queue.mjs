@@ -33,6 +33,9 @@ process.env.NEXUS_AGENT_SELFTEST = "1"
 const QDRANT_BASE = "localhost:6333" // Single-Source für Mock + pluginConfig (W39/F4)
 const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "nexus-queue-test-"))
 process.env.NEXUS_CAPTURE_QUEUE_FILE = join(SANDBOX_DIR, "capture-retry-queue.jsonl")
+// 15.11.2026: der eigene Agentenschluessel des Plugins lebt im Datenverzeichnis.
+// Sandkasten, damit der Test nie den echten Schluessel des Entwicklers anfasst.
+process.env.NEXUS_DATA_DIR = join(SANDBOX_DIR, "nexus-data")
 const QUEUE = process.env.NEXUS_CAPTURE_QUEUE_FILE
 try { unlinkSync(QUEUE) } catch {}
 
@@ -55,6 +58,10 @@ globalThis.fetch = async (url, opts) => {
   // exactly as before, just against the new write path.
   if (u.includes("127.0.0.1:9122")) {
     if (!qdrantUp) return { ok: false, status: 503, text: async () => "simulated outage", json: async () => ({}) }
+    if (u.endsWith("/enroll")) {
+      // Self-enrolment (15.11.2026): erst der eigene Schluessel, dann /write.
+      return { ok: true, status: 200, json: async () => ({ agent_id: "probe123", key: "agent-key-test" }), text: async () => '{"key":"agent-key-test"}' }
+    }
     return { ok: true, status: 200, json: async () => ({ status: "ok" }), text: async () => '{"status":"ok"}' }
   }
   if (u.includes("api.github.com")) {

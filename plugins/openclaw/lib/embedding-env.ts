@@ -62,27 +62,81 @@ export function providerApiKeyFromEnv(
 // Header name MUST match ``nexus_memory.service_auth.AUTH_HEADER``.
 const SERVICE_AUTH_HEADER_NAME = "x-nexus-service-key"
 const SERVICE_AUTH_KEY_FILE = "service_auth.key"
+// Self-enrolment (15.11.2026): the installation key above only ENROLS this
+// plugin (POST /enroll). Everything else is done with the key in
+// ``<data-dir>/agent_keys/<harness>.key`` — that key names the agent.
+const AGENT_KEY_DIR = "agent_keys"
+
+/** The data directory both sides agree on: ``$NEXUS_DATA_DIR`` or ``~/.nexus-memory``. */
+export function nexusDataDir(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const envDir = env.NEXUS_DATA_DIR?.trim()
+  return envDir ? path.resolve(envDir) : path.join(os.homedir(), ".nexus-memory")
+}
 
 /**
- * Read the per-installation secret the local Nexus service requires on
- * /embed and /mcp. Mirrors ``nexus_memory.service_auth.load_service_key()``:
- * ``NEXUS_SERVICE_AUTH_KEY`` wins, otherwise the key file in the data
- * directory is read. Kept in this environment module so lib/embedder.ts never
- * reads ``process.env`` beside a network call.
+ * Read the per-installation secret — the credential that asks ``/enroll`` for
+ * an agent key and is never used for anything else. Mirrors
+ * ``nexus_memory.service_auth.load_service_key()``: ``NEXUS_SERVICE_AUTH_KEY``
+ * wins, otherwise the key file in the data directory is read. Kept in this
+ * environment module so lib/embedder.ts never reads ``process.env`` beside a
+ * network call.
  */
-export function nexusServiceKey(
+export function nexusInstallKey(
   env: Record<string, string | undefined> = process.env,
 ): { header: string; key: string } {
   const key = (env.NEXUS_SERVICE_AUTH_KEY || "").trim()
   if (key) return { header: SERVICE_AUTH_HEADER_NAME, key }
-  const envDir = env.NEXUS_DATA_DIR?.trim()
-  const dataDir = envDir ? path.resolve(envDir) : path.join(os.homedir(), ".nexus-memory")
   try {
     return {
       header: SERVICE_AUTH_HEADER_NAME,
-      key: fs.readFileSync(path.join(dataDir, SERVICE_AUTH_KEY_FILE), "utf8").trim(),
+      key: fs.readFileSync(path.join(nexusDataDir(env), SERVICE_AUTH_KEY_FILE), "utf8").trim(),
     }
   } catch {
     return { header: SERVICE_AUTH_HEADER_NAME, key: "" }
+  }
+}
+
+/** Where this plugin's own key lives: ``<data-dir>/agent_keys/<harness>.key``. */
+export function nexusAgentKeyPath(
+  harness: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.join(nexusDataDir(env), AGENT_KEY_DIR, `${harness}.key`)
+}
+
+/** This plugin's own key, or "" when it has not enrolled yet. */
+export function readNexusAgentKey(
+  harness: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  try {
+    return fs.readFileSync(nexusAgentKeyPath(harness, env), "utf8").trim()
+  } catch {
+    return ""
+  }
+}
+
+/** Store the key with mode 0600 (replacing any previous one). */
+export function writeNexusAgentKey(
+  harness: string,
+  key: string,
+  env: Record<string, string | undefined> = process.env,
+): void {
+  const file = nexusAgentKeyPath(harness, env)
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(file, key, { encoding: "utf8", mode: 0o600 })
+}
+
+/** Drop a key the service no longer accepts. */
+export function clearNexusAgentKey(
+  harness: string,
+  env: Record<string, string | undefined> = process.env,
+): void {
+  try {
+    fs.unlinkSync(nexusAgentKeyPath(harness, env))
+  } catch {
+    /* already gone */
   }
 }

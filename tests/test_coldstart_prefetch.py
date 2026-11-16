@@ -198,7 +198,7 @@ class _FakeQdrant:
     def __init__(self, points_by_vector):
         self._points_by_vector = points_by_vector
 
-    def query_points(self, collection_name, query, limit):
+    def query_points(self, collection_name, query, limit, **kw):
         for vector, points in self._points_by_vector.items():
             if list(query) == list(vector):
                 return SimpleNamespace(points=points)
