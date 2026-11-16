@@ -109,3 +109,48 @@ seit diesem Lauf vorab die Payloads der Ziele und schliesst aus, was der Aufrufe
 Damit ist die Paraphrase-Leistung ehrlich beziffert: rund ein Drittel oben, zwei Drittel in den
 Top 5, ein Fuenftel gar nicht. Die Stufendiagnose sagt auch warum: Von 40 Paraphrasen hat BM25
 31 auf Platz 1, der Vektor nur 6.
+
+## Der Umsortierer: gemessen und verworfen (17.11.2026)
+
+Der naheliegende naechste Schritt war ein Cross-Encoder, der die Kandidaten nachsortiert. Das
+Modell liegt lokal (`BAAI/bge-reranker-v2-m3`, mehrsprachig), der Code existiert im Projekt
+(`src/nexus_memory/reranker.py`), es war also kein Neubau noetig — nur eine Messung.
+
+Aufbau: Kandidatenvereinigung aus BM25-Top-40 und Vektor-Top-40 (rund 78 Paare je Anfrage), dann
+der Cross-Encoder ueber alle Paare, Rang des Ziels vorher und nachher verglichen. 83 der 128
+festen Fragen sind fair (die uebrigen 45 tragen einen Eintrag, den ein public-Aufrufer nicht
+sehen darf). Geraet: Grafikeinheit, nachdem aufgefallen war, dass sentence-transformers die CPU
+waehlt, wenn man das Geraet nicht nennt.
+
+| Kennzahl | ohne Umsortierer | mit Umsortierer |
+|---|---|---|
+| Platz 1 | 61 von 83 (73 %) | 56 von 83 (67 %) |
+| Top 5 | 77 von 83 (93 %) | 74 von 83 (89 %) |
+| verbessert / verschlechtert | — | 12 / 16 |
+| Laufzeit je Anfrage | — | 1838 ms |
+
+Je Frageart: Zitat 24 → 23 erste Plaetze, Stichwort 19 → 16, Paraphrase 17 → 16, Kennung 1 → 1.
+Der Umsortierer verliert ueberall ausser bei echten Umformulierungen, wo er in einer frueheren
+Messung (35 Modell-Paraphrasen) von 12 auf 21 erste Plaetze half — dieser Gewinn wiegt die
+Verluste in den anderen drei Arten nicht auf.
+
+**Der Grund steht in derselben Messung:** Der Fusionsrang der richtigen Treffer hat den Median 1,
+und 90 Prozent liegen unter den ersten vier. Es gibt nichts zu retten, der Umsortierer kann nur
+zerstoeren. Die Rangfusion ist besser als ihr Ruf — die schwachen Zahlen der Paraphrase-Zeile
+kommen daher, dass der richtige Eintrag bei manchen Fragen gar nicht im Kandidatenvorrat liegt,
+nicht daher, dass er falsch einsortiert wird.
+
+**Die vorgeschlagene Bedingung** (nur umsortieren, wenn BM25 und Vektor sich auf Platz 1 uneinig
+sind, statt eine abgelesene Schwelle zu erfinden): Von den 83 fairen Fragen sind sich beide
+Listen in 38 Faellen einig, und davon ist der Treffer in 35 Faellen richtig. Die Bedingung spart
+also in knapp der Haelfte der Faelle die Laufzeit — aber sie rettet die Verluste in der anderen
+Haelfte nicht, wie die Gesamtzahlen zeigen.
+
+**Entscheidung: nicht gebaut.** Wer diesen Umbau spaeter nochmal erwägt, soll diese Zahlen zuerst
+lesen. Der Hebel liegt nicht in der Sortierung.
+
+Was stattdessen gemessen wurde und wo die Kandidaten wirklich fehlen: Die Recall-Kurve auf den
+35 fairen Modell-Paraphrasen zeigt, wie viele Ziele in den Top k der jeweiligen Liste liegen —
+BM25 15/17/21/25, Vektor 26/29/31/32, Vereinigung 17/21/25/33 fuer k = 10/20/50/100. Bei 100
+Kandidaten je Liste sind 33 von 35 erreichbar, bei 40 deutlich weniger. Der Vorrat, nicht die
+Reihenfolge, ist die Grenze.
