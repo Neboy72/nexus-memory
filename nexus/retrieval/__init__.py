@@ -117,6 +117,19 @@ RRF_K = 60  # Reciprocal Rank Fusion constant
 LEXICAL_WEIGHT_STRONG = 1.5
 LEXICAL_CLEAR_RATIO = 2.0
 
+# Kennungs-Abfragen (16.11.2026): Eine nackte Zahl oder Adresse hat keine
+# Bedeutung, die man suchen koennte — die Vektorsuche liefert trotzdem einen
+# Ersten, und der bekam denselben Fusionswert wie der richtige woertliche
+# Treffer. Bei "9122" stand deshalb ein Eintrag ohne die Zahl vorn.
+IDENTIFIER_MAX_WORDS = 3
+IDENTIFIER_PATTERN = re.compile(
+    r"(\d{4,}"                      # vier und mehr Ziffern
+    r"|[0-9a-f]{8,}"                # Hex-Gruppen wie 5a44b1c2
+    r"|[\w.-]*[.:][\w.:/-]*\d"      # Adresse oder Pfad mit Ziffer
+    r"|\w+(?:[.:]\w+){2,})",        # Punkt-/Doppelpunkt-Name ohne Ziffer, z.B. ai.nexus.serve
+    re.IGNORECASE,
+)
+
 
 def _timestamp_sort_key(point: dict) -> str:
     """Uniform sort key for points that may carry an ISO timestamp.
@@ -869,7 +882,13 @@ class HybridRetriever:
         bm25_hits = self.search_bm25(query, top_k=pool_k)
 
         vector_hits = []
-        if query_vector:
+        # Bei einer Kennung entscheidet der Wortlaut, nicht die Bedeutung
+        # (16.11.2026). Nur wenn woertlich nichts zu finden ist, wird die
+        # Vektorsuche als Rueckfall benutzt — sonst waere das Ergebnis leer.
+        identifier_query = self._is_identifier_query(query)
+        if query_vector and not identifier_query:
+            vector_hits = self.search_vector(query_vector, top_k=pool_k)
+        elif query_vector and identifier_query and not bm25_hits:
             vector_hits = self.search_vector(query_vector, top_k=pool_k)
 
         # Reciprocal Rank Fusion
@@ -1069,6 +1088,19 @@ class HybridRetriever:
         return ranked
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_identifier_query(query: str) -> bool:
+        """Besteht die Abfrage praktisch nur aus einer Kennung?
+
+        Eine Zahl, eine Hex-Gruppe, eine Adresse mit Punkt oder Doppelpunkt —
+        und hoechstens ein paar Woerter drumherum. Dort traegt die
+        Bedeutungssuche nichts bei, sie kann nur stoeren.
+        """
+        text = (query or "").strip()
+        if not text or len(text.split()) > IDENTIFIER_MAX_WORDS:
+            return False
+        return bool(IDENTIFIER_PATTERN.search(text))
 
     def _lexical_weight(self, bm25_hits: list[dict]) -> float:
         """Wie stark soll die woertliche Liste zaehlen?
