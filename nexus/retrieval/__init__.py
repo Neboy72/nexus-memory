@@ -801,10 +801,14 @@ class HybridRetriever:
         )
         r.raise_for_status()
         hits = []
+        # Inhalt eines Punktes: ``content``, sonst ``text``. Ein Punkt, der nur
+        # ``text`` traegt, kam hier bisher als leerer Treffer an und fiel in
+        # der Ausgabe weg.
+        from nexus_memory.collection_vectors import point_text
         for rank, point in enumerate(r.json().get("result", [])):
             payload = point.get("payload", {})
             # Memory entries have "content", turn entries have user/assistant_content
-            text = str(payload.get("content") or "")
+            text = point_text(payload)
             if not text:
                 uc = payload.get("user_content", "")
                 ac = payload.get("assistant_content", "")
