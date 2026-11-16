@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#050810">
 <title>Nexus Memory Dashboard</title>
-<link rel="stylesheet" href="/static/dashboard.css?v=0.22.29">
+<link rel="stylesheet" href="/static/dashboard.css?v=0.22.63">
 <link rel="icon" type="image/png" href="/assets/brand/nexus-icon.png">
 </head>
 <body>
@@ -100,6 +100,7 @@
     <button class="action-btn" onclick="detectAgents()">🔍 Detect Agents</button>
     <button class="action-btn" onclick="refreshAll()">🔄 Refresh</button>
     <button class="action-btn" onclick="window.open('/handbook','_blank')">📘 Docs</button>
+    <button class="action-btn" onclick="openServiceLog()">📜 Logs</button>
   </div>
 
   <!-- Memory Inspector Overlay -->
@@ -114,11 +115,24 @@
     </div>
   </div>
 
+  <!-- Service Log overlay (same look/mechanics as the Inspector) -->
+  <div class="insp-overlay" id="serviceLogOverlay" role="dialog" aria-label="Service Log" aria-hidden="true">
+    <div class="insp-overlay__panel">
+      <div class="insp-overlay__header">
+        <span class="insp-overlay__title">📜 Service Log</span>
+        <span class="insp-overlay__hint svclog-chain" id="svclogChain">&nbsp;</span>
+        <button class="insp-btn svclog-refresh" onclick="ServiceLog.load()">Refresh</button>
+        <button class="insp-close" onclick="ServiceLog.close()">&times;</button>
+      </div>
+      <div class="insp-overlay__body" id="serviceLogBody"></div>
+    </div>
+  </div>
+
   <!-- Toast notifications -->
   <div id="toast" class="toast"></div>
 </div>
 
 <script src="/static/webui-js/inspector.js?v=20260907"></script>
-<script src="/static/dashboard.js?v=0.22.29"></script>
+<script src="/static/dashboard.js?v=0.22.63"></script>
 </body>
 </html>

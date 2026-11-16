@@ -20,14 +20,68 @@ const AGENT_LOGOS = {
   'opencode': '/assets/agent-logos/opencode.png',
   'windsurf': '/assets/agent-logos/windsurf.png',
   'crush': '/assets/agent-logos/crush.png',
+  'deepseek-harness': '/assets/agent-logos/dsh.svg',
+  'dsh': '/assets/agent-logos/dsh.svg',
+  // Weitere Marken aus der Datenbank: bereit, sobald die Erkennung den Agenten kennt.
+  'aider': '/assets/agent-logos/aider.png',
+  'continue': '/assets/agent-logos/continue.png',
+  'copilot': '/assets/agent-logos/copilot.png',
+  'github-copilot': '/assets/agent-logos/github-copilot.svg',
+  'warp': '/assets/agent-logos/warp.png',
+  'zed': '/assets/agent-logos/zed.png',
+  'amazon-q': '/assets/agent-logos/amazon.svg',
+  'tabnine': '/assets/agent-logos/tabnine.png',
+  'qodo': '/assets/agent-logos/qodo.png',
+  'jetbrains': '/assets/agent-logos/jetbrains.svg',
+  'jetbrains-junie': '/assets/agent-logos/jetbrains.svg',
+  'n8n': '/assets/agent-logos/n8n.svg',
+  'vercel': '/assets/agent-logos/vercel.svg',
+  'salesforce': '/assets/agent-logos/salesforce.svg',
+  'activepieces': '/assets/agent-logos/activepieces.svg',
+  'windmill': '/assets/agent-logos/windmill.svg',
+  'microsoft': '/assets/agent-logos/microsoft.svg',
+  'lovable': '/assets/agent-logos/lovable.svg',
+  'bolt': '/assets/agent-logos/bolt.svg',
+  'crewai': '/assets/agent-logos/crewai.svg',
+  'dify': '/assets/agent-logos/dify.svg',
+  'hubspot': '/assets/agent-logos/hubspot.svg',
+  'huggingface': '/assets/agent-logos/huggingface.svg',
+  'langchain': '/assets/agent-logos/langchain.svg',
+  'replit': '/assets/agent-logos/replit.svg',
 };
 
-function getAgentLogo(agentId, fallbackIcon) {
-  const logo = AGENT_LOGOS[agentId];
+function getAgentLogo(agentOrId, fallbackIcon) {
+  // Look up under the current id, then any earlier id, then the label. An agent that was renamed
+  // keeps its logo without anyone having to update this table (see agents.json "formerly").
+  const agent = typeof agentOrId === 'string' ? { id: agentOrId } : (agentOrId || {});
+  const candidates = [
+    agent.id,
+    agent.type,
+    ...(Array.isArray(agent.formerly) ? agent.formerly : []),
+    agent.name,
+    String(agent.name || '').toLowerCase(),
+  ];
+  const key = candidates.find((k) => k && AGENT_LOGOS[k]);
+  const logo = key ? AGENT_LOGOS[key] : null;
   if (logo) {
-    return `<img src="${logo}" class="agent-logo" alt="${agentId}" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';"><span class="agent-icon" style="display:none;">${fallbackIcon}</span>`;
+    return `<img src="${logo}" class="agent-logo" alt="${agent.id || ''}" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-flex';">${agentAvatar(agent, fallbackIcon, 'none')}`;
   }
-  return `<span class="agent-icon">${fallbackIcon}</span>`;
+  // Unknown agent: ask the server once (it fetches and stores the file), else show the avatar.
+  const slug = String(agent.id || agent.name || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (slug) {
+    return `<img src="/api/agent-logo/${encodeURIComponent(slug)}" class="agent-logo" alt="${agent.id || ''}" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-flex';">${agentAvatar(agent, fallbackIcon, 'none')}`;
+  }
+  return agentAvatar(agent, fallbackIcon, 'inline-flex');
+}
+
+// Universal avatar: first letter on a colour derived from the name, so every agent has a face
+// even without artwork. The same name always gets the same colour.
+function agentAvatar(agent, fallbackIcon, display) {
+  const name = String((agent && (agent.name || agent.id)) || '?').trim();
+  const letter = (name[0] || '?').toUpperCase();
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return `<span class="agent-avatar" style="display:${display};background:hsl(${h} 55% 32%);color:#F5F0FF" title="${name}">${letter}</span>`;
 }
 
 function getInstallBadge(installType) {
@@ -102,10 +156,10 @@ async function loadStatus() {
         delete nameEl.dataset.full;
         fuelEl.title = 'Memory AI sorting is off — memories stay unsorted.';
       } else if (!f.provider) {
-        nameEl.textContent = 'keine Station';
+        nameEl.textContent = 'no station';
         nameEl.removeAttribute('title');
         delete nameEl.dataset.full;
-        fuelEl.title = 'Keine Station offen — Erinnerungen bleiben unsortiert.';
+        fuelEl.title = 'No station available — memories stay unsorted.';
       } else {
         // Nur der Modellname; die Kennung hinter dem letzten ":" bleibt im
         // Tooltip und als data-full erhalten.
@@ -115,8 +169,8 @@ async function loadStatus() {
         nameEl.dataset.full = model.full;
         // "geprüft" nur, wenn der Name wirklich erreichbar ist; ein blosser
         // Schlüssel ist eine Erwartung, keine Gewissheit.
-        const wie = f.verified ? 'geprüft' : 'Schlüssel vorhanden, ungeprüft';
-        fuelEl.title = `Station: ${f.provider} (${wie}) · Modell: ${model.full}`;
+        const state = f.verified ? 'verified' : 'key present, unverified';
+        fuelEl.title = `Station: ${f.provider} (${state}) · Model: ${model.full}`;
       }
       costEl.textContent = f.enabled ? `$${f.spent_usd.toFixed(2)} / $${f.budget_usd.toFixed(2)}` : '—';
       // Beschreibungszeile unter dem Schalter — Betrag aus derselben Quelle wie
@@ -231,10 +285,48 @@ async function loadAgents() {
     return;
   }
 
-  document.getElementById('stat-agents').textContent = registry.agents.length;
+  // Connected (15.11.2026, Nebo): a registry entry only counts once the agent
+  // has actually read or written — or when it holds a key of its own. An entry
+  // with reads == 0, writes == 0 and no own key was never connected: it stays
+  // in agents.json (nothing is deleted, the registry keeps it) but it is not
+  // listed. The first read or write makes it appear, immediately.
+  // `unidentified` is no agent at all — it is the id an access WITHOUT a
+  // sender gets, so it is never shown.
+  // A former name (`formerly` of another entry) is the same agent under its
+  // old id; listing it would show one agent twice.
+  const UNIDENTIFIED_AGENT_ID = 'unidentified';
+  const formerNames = new Set(
+    registry.agents.flatMap(a => Array.isArray(a.formerly) ? a.formerly : [])
+  );
+  const isConnectedAgent = agent => {
+    const id = String(agent.id || '').trim().toLowerCase();
+    if (!id || id === UNIDENTIFIED_AGENT_ID || formerNames.has(id)) return false;
+    // A registered agent counts as connected when it has a real target
+    // (config dir), a key, or any access at all. Without this, an agent that
+    // was just connected would stay invisible until its first read.
+    return (
+      (agent.reads || 0) > 0 ||
+      (agent.writes || 0) > 0 ||
+      Boolean(agent.has_own_key) ||
+      Boolean(String(agent.config_dir || '').trim())
+    );
+  };
+  const connectedAgents = registry.agents.filter(isConnectedAgent);
+
+  // The tile counts what the list shows — connected, not registered.
+  document.getElementById('stat-agents').textContent = connectedAgents.length;
 
   // Connected agents
-  const connectedIds = new Set(registry.agents.map(a => a.id));
+  // An agent counts as connected under its current id AND under any earlier one — otherwise a
+  // renamed agent shows up twice, once as connected and once as "available" (see "formerly").
+  const connectedIds = new Set(
+    connectedAgents.flatMap(a => [a.id, ...(Array.isArray(a.formerly) ? a.formerly : [])])
+  );
+  // Locations already connected: a second installation of the same type in
+  // another folder (profile) must still be offered.
+  const connectedDirs = new Set(
+    connectedAgents.map(a => (a.config_dir || '').trim()).filter(Boolean)
+  );
   const list = document.getElementById('agents-list');
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const hostBadge = agent => {
@@ -260,8 +352,19 @@ async function loadAgents() {
     if (!seat) return '';
     return `<span class="seat-badge" title="Machine: ${esc(seat)}">${esc(seat)}</span>`;
   };
+  // ID-Badge (15.11.2026): die Kennung neben den anderen Badges, ganz rechts.
+  // Dieselbe Klasse wie sie (keine Sonderfarbe) — sie ist eine Auskunft wie
+  // "Local" und "Mac Mini", keine Warnung. Der Titel der Karte bleibt das
+  // Label; die Kennung steht nur hier und im Tooltip.
+  const idBadge = agent => {
+    const id = String(agent.id || '').trim();
+    if (!id) return '';
+    // ``id-badge`` traegt nur die Ausrichtung (margin-left:auto): bricht die
+    // Badge-Zeile um, bleibt die Kennung rechts in ihrer Zeile stehen.
+    return `<span class="seat-badge id-badge" title="Unique ID of this agent instance">ID: ${esc(id)}</span>`;
+  };
 
-  list.innerHTML = registry.agents.map(agent => {
+  list.innerHTML = connectedAgents.map(agent => {
     const levels = ['public', 'trusted', 'private'];
     const buttons = levels.map(level => {
       const active = agent.trust_level === level ? `active ${level}` : '';
@@ -269,9 +372,33 @@ async function loadAgents() {
       return `<button class="trust-btn ${active}" onclick="setTrust('${agent.id}', '${level}')">${label}</button>`;
     }).join('');
 
+    // Rolle (15.11.2026): drei Stufen statt „darf alles". Was fehlt, ist Know —
+    // dieselbe Vorgabe, die der Dienst fail-closed anwendet.
+    const roles = ['admin', 'work', 'know'];
+    const currentRole = roles.includes(agent.role) ? agent.role : 'know';
+    const roleButtons = roles.map(level => {
+      const active = currentRole === level ? `active ${level}` : '';
+      const label = level.charAt(0).toUpperCase() + level.slice(1);
+      return `<button class="trust-btn role-btn ${active}" title="${esc(ROLE_HINTS[level])}" onclick="setRole('${agent.id}', '${level}')">${label}</button>`;
+    }).join('');
+
     const lastSeen = agent.last_seen ? timeAgo(agent.last_seen) : 'never';
     const reads = agent.reads || 0;
-    const logo = getAgentLogo(agent.id, agent.icon);
+    const writes = agent.writes || 0;
+    // Access counting started with commit 197c3a5 (24.10.2026): reads/writes are smaller
+    // than the connection age for the first agents. A fresh install counts from day one.
+    const nf = n => Number(n).toLocaleString('en-US');
+    // Connected since: the registry stores the first connection date.
+    const sinceDate = agent.connected_at
+      ? new Date(agent.connected_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : '';
+    const sincePart = sinceDate ? ` · connected ${sinceDate}` : '';
+    // Self-enrolment (15.11.2026): when the agent last enrolled and how often.
+    const enrolledDate = agent.enrolled_at
+      ? new Date(agent.enrolled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : '';
+    const enrollCount = Number(agent.enroll_count || 0);
+    const logo = getAgentLogo(agent, agent.icon);
     const badge = getInstallBadge(agent.install_type);
     // Disambiguation (Nebo, 07.09. v2): Sitzort als BADGE neben Local/Remote —
     // nicht im Titel (kein KI-Langbindestrich). Das Local/Remote-Badge zeigt
@@ -295,30 +422,55 @@ async function loadAgents() {
           <span class="agent-install-badge">${badge}</span>
           ${hostBadge(agent)}
           ${seatBadge(agent, seat)}
+          ${idBadge(agent)}
           <span class="agent-status"></span>
           ${toggle}
         </div>
-        <div class="agent-meta">Last seen: ${lastSeen} | ${reads} reads</div>
-        <div class="trust-buttons">${buttons}</div>
+        <div class="agent-meta">
+          <span>Last access: ${lastSeen}</span>
+          <span>${nf(reads)} reads</span>
+          <span>${nf(writes)} writes</span>
+          ${sinceDate ? `<span>connected since ${sinceDate}</span>` : ''}
+          ${enrolledDate ? `<span title="self-enrolment via POST /enroll">enrolled ${enrolledDate}${enrollCount ? ` · ${nf(enrollCount)}×` : ''}</span>` : ''}
+          <span>${agent.has_own_key ? 'own key' : 'no own key'}</span>
+        </div>
+        <div class="agent-controls">
+          <div class="control-group">
+            <span class="control-label">Access</span>
+            <div class="trust-buttons">${buttons}</div>
+          </div>
+          <div class="control-group">
+            <span class="control-label">Role</span>
+            <div class="trust-buttons">${roleButtons}</div>
+          </div>
+        </div>
       </div>
     `;
-  }).join('');
+  }).join('') || '<div class="loading">No agents connected</div>';
 
   // Available but not connected agents
   if (detection && detection.detected_agents) {
-    const available = detection.detected_agents.filter(a => !connectedIds.has(a.id));
+    const available = detection.detected_agents.filter(a => {
+      if (connectedIds.has(a.id)) return false;
+      // A connected agent hides only ITS OWN installation (same config dir),
+      // never every installation of the same type.
+      const dir = (a.config_dir || '').trim();
+      if (dir && connectedDirs.has(dir)) return false;
+      return true;
+    });
     const availSection = document.getElementById('available-section');
     const availList = document.getElementById('available-list');
 
     if (available.length > 0) {
       availSection.style.display = 'block';
       availList.innerHTML = available.map(agent => {
-        const logo = getAgentLogo(agent.id, agent.icon);
+        const logo = getAgentLogo(agent, agent.icon);
         const pluginLabel = agent.plugin_available ? 'Plugin+MCP' : 'MCP';
         return `
           <div class="available-card">
             ${logo}
-            <span class="agent-name">${agent.name}</span>
+            <span class="agent-name">${esc(agent.name)}</span>
+            ${agent.profile ? `<span class="agent-install-badge">${esc(agent.profile)}</span>` : ''}
             <span class="agent-install-badge mcp">${pluginLabel}</span>
             <button class="connect-btn" onclick="connectAgent('${agent.id}', event)">Connect</button>
           </div>
@@ -334,6 +486,22 @@ async function setTrust(agentId, level) {
   const result = await fetchAPI(`/api/agents/${agentId}/trust?level=${level}`, { method: 'POST' });
   if (result && !result.error) {
     showToast(`${agentId}: trust level → ${level}`, 'success');
+    loadAgents();
+  }
+}
+
+// One sentence per level — the tooltip on the Role field.
+const ROLE_HINTS = {
+  admin: 'Admin: everything Work may do, plus backups, restore, webhooks, guardrail overrides and cost reports.',
+  work: 'Work: read and write, graph queries, and forget/update on other agents\' entries — but no administration.',
+  know: 'Know: read and write, and forget/update only on entries this agent wrote itself.',
+};
+
+async function setRole(agentId, role) {
+  // fetchAPI shows the error toast itself (and returns null), same as setTrust.
+  const result = await fetchAPI(`/api/agents/${agentId}/role?role=${role}`, { method: 'POST' });
+  if (result && !result.error) {
+    showToast(`${agentId}: role → ${role}`, 'success');
     loadAgents();
   }
 }
@@ -447,6 +615,238 @@ async function refreshAll() {
   await Promise.all([loadStatus(), loadAgents(), loadMemoryStats(), loadRecallOrdering()]);
   showToast('Refreshed', 'success');
 }
+
+// ── Service-Protokoll (Bewegungsprotokoll) ───────────────────
+// Quelle ist GET /api/service-log: der Server liest dieselbe Tagesdatei wie
+// das CLI (nexus_memory.service_log). Hier wird nichts nachgeladen und nichts
+// ergaenzt — was nicht im Protokoll steht, steht auch nicht in der Liste.
+
+const SVCLOG_LIMIT_START = 200;   // default of the route
+const SVCLOG_LIMIT_MAX = 1000;    // upper bound of the route
+const SVCLOG_ACTION_LABELS = {
+  write: 'write', update: 'update', forget: 'revoke',
+  denied: 'refused', error: 'error', backup: 'backup',
+  restore: 'restore', role_change: 'role change',
+  key_change: 'key change', guardrail_override: 'guardrail override',
+};
+// Reasons written before the switch to English. They stay in old log lines, so
+// the display maps them instead of letting German words sit between English
+// ones. New entries are written in English and pass through unchanged.
+const SVCLOG_REASON_LEGACY = {
+  'leerer Inhalt': 'empty content',
+  'Etikett statt Aussage (kein Satz)': 'label instead of a statement (not a sentence)',
+  'konsolidiert': 'consolidated',
+  'SICA-Sitzung': 'SICA session',
+  'Freigabe erteilt': 'override granted',
+  'ungueltige Zugriffsstufe': 'invalid access level',
+  'Eintrag nicht gefunden': 'entry not found',
+  'Ausgang unklar': 'outcome unclear',
+  'kein JSON-Koerper': 'no JSON body',
+  'Koerper ist kein Objekt': 'body is not an object',
+  'Inhalt ist keine Zeichenkette': 'content is not a string',
+  'Kennung ist keine Zeichenkette': 'id is not a string',
+};
+// Filterliste wie im Auftrag. Weitere Aktionen stehen in der Tabelle mit
+// ihrem Namen — sie fehlen dann nur im Menue, nicht in den Zeilen.
+const SVCLOG_FILTER_ACTIONS = ['write', 'update', 'forget', 'denied', 'error', 'backup'];
+
+const ServiceLog = {
+  limit: SVCLOG_LIMIT_START,
+  action: '',
+  actor: '',
+  actors: [],
+  events: [],
+  // Wie im Inspector: nur die jeweils letzte Anfrage darf rendern, sonst
+  // ueberschreibt eine langsame aeltere Antwort die neuere Ansicht.
+  _seq: 0,
+
+  open() {
+    const overlay = document.getElementById('serviceLogOverlay');
+    if (!overlay) return;
+    this.limit = SVCLOG_LIMIT_START;
+    this.action = '';
+    this.actor = '';
+    overlay.classList.add('insp-overlay--open');
+    document.body.style.overflow = 'hidden';
+    this.load();
+  },
+
+  close() {
+    const overlay = document.getElementById('serviceLogOverlay');
+    if (overlay) overlay.classList.remove('insp-overlay--open');
+    document.body.style.overflow = '';
+  },
+
+  setFilter(kind, value) {
+    if (kind === 'action') this.action = value;
+    if (kind === 'actor') this.actor = value;
+    this.limit = SVCLOG_LIMIT_START;  // neuer Filter faengt wieder oben an
+    this.load();
+  },
+
+  older() {
+    this.limit = Math.min(this.limit * 2, SVCLOG_LIMIT_MAX);
+    this.load();
+  },
+
+  async load() {
+    const body = document.getElementById('serviceLogBody');
+    if (!body) return;
+    const token = ++this._seq;
+    const params = new URLSearchParams({ limit: String(this.limit) });
+    if (this.action) params.set('action', this.action);
+    if (this.actor) params.set('actor', this.actor);
+    try {
+      const res = await fetch(`/api/service-log?${params}`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (token !== this._seq) return;
+      this.events = data.events || [];
+      // Absender aus den geladenen Zeilen; bereits bekannte bleiben waehlbar,
+      // damit ein gesetzter Filter nicht aus dem Menue verschwindet.
+      const seen = new Set(this.actors);
+      this.events.forEach(e => { if (e.actor) seen.add(e.actor); });
+      this.actors = [...seen].sort((a, b) => a.localeCompare(b));
+      this._chainText(data.chain || {});
+      body.innerHTML = this._filtersHTML() + this._tableHTML() + this._moreHTML();
+    } catch (err) {
+      if (token !== this._seq) return;
+      body.innerHTML = `<div class="insp-error">Log not readable: ${this._esc(err.message || String(err))}</div>`;
+      const hint = document.getElementById('svclogChain');
+      if (hint) {
+        hint.textContent = 'Chain not verifiable';
+        hint.className = 'insp-overlay__hint svclog-chain svclog-chain--warn';
+      }
+    }
+  },
+
+  // Ketten-Status als Text. Kein Tag, keine Datei: "Kein Protokoll für diesen
+  // Tag" — die Kette ist dann nicht kaputt, sie ist nur nicht da.
+  _chainText(chain) {
+    const hint = document.getElementById('svclogChain');
+    if (!hint) return;
+    const base = 'insp-overlay__hint svclog-chain';
+    let text = 'Chain not verifiable';
+    let warn = true;
+    if (chain.broken_at) {
+      text = `Chain broken at line ${chain.broken_at}`;
+    } else if (chain.ok) {
+      text = `Chain verified, ${chain.lines} ${chain.lines === 1 ? 'entry' : 'entries'}`;
+      warn = false;
+    } else if (!chain.lines) {
+      text = 'No log for this day';
+      warn = false;
+    }
+    hint.textContent = text;
+    hint.className = warn ? `${base} svclog-chain--warn` : base;
+  },
+
+  _filtersHTML() {
+    const actions = SVCLOG_FILTER_ACTIONS.map(value =>
+      `<option value="${value}"${this.action === value ? ' selected' : ''}>${SVCLOG_ACTION_LABELS[value]}</option>`
+    ).join('');
+    const actors = this.actors.map(name =>
+      `<option value="${this._esc(name)}"${this.actor === name ? ' selected' : ''}>${this._esc(name)}</option>`
+    ).join('');
+    return `
+      <div class="insp-toolbar">
+        <select class="insp-select" onchange="ServiceLog.setFilter('action', this.value)">
+          <option value=""${this.action ? '' : ' selected'}>Action: all</option>${actions}
+        </select>
+        <select class="insp-select" onchange="ServiceLog.setFilter('actor', this.value)">
+          <option value=""${this.actor ? '' : ' selected'}>Actor: all</option>${actors}
+        </select>
+      </div>`;
+  },
+
+  // A reason is metadata, not content: it rides along as the topic's tooltip,
+  // so the column layout stays as it is while old German wording is still
+  // translated instead of standing between English rows.
+  _reason(raw) {
+    const text = String(raw == null ? '' : raw).trim();
+    if (!text) return '';
+    if (SVCLOG_REASON_LEGACY[text]) return SVCLOG_REASON_LEGACY[text];
+    // Prefix forms written by older callers.
+    const backup = text.match(/^Sicherung\s+(.*)$/);
+    if (backup) return `backup ${backup[1]}`;
+    const failed = text.match(/^(\w+)\s+fehlgeschlagen$/);
+    if (failed) return `${failed[1]} failed`;
+    const gate = text.match(/^Schreibtor nicht ladbar:\s*(.*)$/);
+    if (gate) return `write gate not loadable: ${gate[1]}`;
+    return text;
+  },
+
+  _tableHTML() {
+    if (!this.events.length) {
+      return '<div class="svclog-empty">No entries logged yet.</div>';
+    }
+    // Newest first — that is how the route already delivers them.
+    const rows = this.events.map(event => {
+      const action = SVCLOG_ACTION_LABELS[event.action] || event.action || '—';
+      const reason = this._reason(event.reason);
+      const topicTitle = reason ? ` title="${this._esc(reason)}"` : '';
+      const topic = event.topic
+        ? this._esc(event.topic)
+        : '<span class="svclog-private">private</span>';
+      const result = String(event.result || '');
+      const resultCls = result === 'failed' ? ' svclog-result--failed'
+        : result === 'refused' ? ' svclog-result--refused'
+        : ' svclog-result--ok';
+      // Kennung nur gekuerzt; der volle Wert steht im Tooltip.
+      const id = event.target_id
+        ? ` <code class="svclog-id" title="${this._esc(event.target_id)}">${this._esc(String(event.target_id).slice(0, 8))}</code>`
+        : '';
+      // Spalte "Actor": das Label von damals, darunter klein die Kennung.
+      // Altbestand ohne ``actor_label`` zeigt nur die Kennung — wie bisher.
+      const actor = this._esc(event.actor || 'unidentified');
+      const actorLabel = String(event.actor_label || '').trim();
+      const actorCell = actorLabel && this._esc(actorLabel) !== actor
+        ? `<div>${this._esc(actorLabel)}</div><div class="svclog-actor-id">${actor}</div>`
+        : actor;
+      return `<tr>
+        <td class="svclog-time">${this._clock(event.ts)}</td>
+        <td>${actorCell}</td>
+        <td>${this._esc(action)}</td>
+        <td class="svclog-topic"${topicTitle}>${topic}</td>
+        <td><span class="svclog-result${resultCls}">${this._esc(result || '—')}</span>${id}</td>
+      </tr>`;
+    }).join('');
+    return `
+      <div class="svclog-scroll">
+        <table class="svclog-table">
+          <thead>
+            <tr><th>Time</th><th>Actor</th><th>Action</th><th>Topic</th><th>Result</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  },
+
+  _moreHTML() {
+    // Nur anbieten, wenn die Antwort die angefragte Menge ausgeschoepft hat:
+    // sonst gibt es nichts Aelteres und der Knopf laedt dieselben Zeilen neu.
+    if (this.events.length < this.limit || this.limit >= SVCLOG_LIMIT_MAX) return '';
+    return '<div class="insp-actions"><button class="insp-btn" onclick="ServiceLog.older()">Load older</button></div>';
+  },
+
+  _clock(ts) {
+    const when = new Date(ts);
+    if (isNaN(when.getTime())) return '—';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
+  },
+
+  _esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  },
+};
+
+function openServiceLog() { ServiceLog.open(); }
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') ServiceLog.close();
+});
 
 // ── Utils ────────────────────────────────────────────────────
 

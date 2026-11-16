@@ -21,6 +21,7 @@ import shutil
 import time
 import re
 import sys
+import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 from pathlib import Path
@@ -52,11 +53,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from nexus_memory.agent_detect import (
     load_agents_registry,
+    set_agent_role,
     set_agent_trust_level,
     detect_all_agents,
     cleanup_removed_agents,
 )
 from nexus_memory.reranker import load_rerank_config
+from nexus_memory import service_log
 
 _logger = logging.getLogger(__name__)
 
@@ -64,7 +67,7 @@ HERMES_CONFIG_PATH = Path.home() / ".hermes" / "config.yaml"
 
 try:
     from fastapi import Depends, FastAPI, HTTPException, Request
-    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
     from pydantic import BaseModel
     from fastapi.staticfiles import StaticFiles
     import uvicorn
@@ -145,10 +148,15 @@ def verify_local_mutation(request: Request) -> None:
         except ValueError:
             host = None
         if host not in _ALLOWED_ORIGIN_HOSTS:
-            raise HTTPException(
-                status_code=403,
-                detail="cross-origin mutation blocked",
-            )
+            # Same-origin beats any allowlist: a browser talking to the very
+            # host it loaded the page from is not a cross-site request. Without
+            # this, access over a LAN or tunnel address 403s every mutation.
+            request_host = (request.headers.get("host") or "").split(":")[0].strip()
+            if not request_host or host != request_host:
+                raise HTTPException(
+                    status_code=403,
+                    detail="cross-origin mutation blocked",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -392,17 +400,57 @@ def _named_vector() -> str:
     return ""
 
 
+_SERVICE_AGENT_KEY: "str | None" = None
+
+
+def _service_agent_key(force: bool = False) -> str:
+    """Ein eigener Schluessel des Dashboards — wie ihn jedes Plugin holt.
+
+    Seit 15.11.2026 liest der Installationsschluessel keine Daten mehr. Das
+    Dashboard meldet sich deshalb ueber ``POST /enroll`` an (Loopback, wie
+    jeder lokale Aufruf) und haelt seinen Schluessel NUR im Speicher: er
+    landet weder auf der Platte noch in einer Antwort noch in einem Log.
+    """
+    global _SERVICE_AGENT_KEY
+    if _SERVICE_AGENT_KEY and not force:
+        return _SERVICE_AGENT_KEY
+    install = load_service_key_for_service()
+    if not install:
+        raise RuntimeError("no installation key — the dashboard cannot enrol")
+    headers = {"Content-Type": "application/json", SERVICE_AUTH_HEADER: install}
+    req = urllib.request.Request(
+        f"{SERVICE_URL}/enroll",
+        data=json.dumps({"harness": "dashboard",
+                         "label": "Nexus Dashboard"}).encode("utf-8"),
+        headers=headers)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    key = payload.get("key")
+    if not isinstance(key, str) or not key.strip():
+        raise RuntimeError("enrol returned no key")
+    _SERVICE_AGENT_KEY = key.strip()
+    return _SERVICE_AGENT_KEY
+
+
 def _service_embed(text: str) -> list:
     """Ask the running service for the vector (it holds the right provider)."""
     body = json.dumps({"text": text}).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    key = load_service_key_for_service()
-    if key:
+    # Ein 401 heisst: der Dienst kennt unseren Schluessel nicht mehr (neu
+    # eingeschrieben). Einmal neu anmelden und den Aufruf wiederholen.
+    for attempt in (0, 1):
+        headers = {"Content-Type": "application/json"}
+        key = _service_agent_key(force=(attempt == 1))
         headers[SERVICE_AUTH_HEADER] = key
-    req = urllib.request.Request(f"{SERVICE_URL}/embed", data=body,
-                                 headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+        req = urllib.request.Request(f"{SERVICE_URL}/embed", data=body,
+                                     headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401 and attempt == 0:
+                continue
+            raise
     vec = payload.get("embedding")
     if not isinstance(vec, list) or not vec:
         raise ValueError("service returned no embedding")
@@ -563,10 +611,10 @@ async def api_fuel_paid(request: FuelPaidRequest):
         p.parent.mkdir(parents=True, exist_ok=True)
         if enabled:
             p.touch()
-            msg = "KI-Sortierung aktiviert — deine Erinnerungen werden wieder automatisch sortiert."
+            msg = "Memory AI sorting enabled — your memories are sorted automatically again."
         else:
             p.unlink(missing_ok=True)
-            msg = "KI-Sortierung deaktiviert — deine Erinnerungen werden nicht mehr automatisch sortiert."
+            msg = "Memory AI sorting disabled — your memories are no longer sorted automatically."
         return JSONResponse({"ok": True, "enabled": enabled, "message": msg})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
@@ -722,6 +770,22 @@ async def get_agents():
         # cleanup must never break the agents listing — log for diagnosis.
         _logger.debug("agents list: cleanup_removed_agents failed: %s", e)
     registry = load_agents_registry()
+    # Das Dashboard meldet sich selbst an, um einbetten zu duerfen — es ist
+    # aber kein Agent und gehoert nicht in die Liste.
+    registry["agents"] = [
+        agent for agent in registry.get("agents", [])
+        if not (isinstance(agent, dict) and agent.get("harness") == "dashboard")
+    ]
+    # 15.11.2026: der Browser sieht nie den Schluessel-Hash — nur, OB ein
+    # eigener Schluessel hinterlegt ist, und wann/wie oft sich der Agent
+    # eingeschrieben hat (Selbst-Anmeldung ueber POST /enroll).
+    for agent in registry.get("agents", []):
+        if not isinstance(agent, dict):
+            continue
+        stored = agent.pop("key_hash", None)
+        agent["has_own_key"] = isinstance(stored, str) and bool(stored.strip())
+        agent.setdefault("enrolled_at", "")
+        agent.setdefault("enroll_count", 0)
     return registry
 
 
@@ -738,6 +802,69 @@ async def update_trust_level(agent_id: str, level: str):
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+@app.post("/api/agents/{agent_id}/role", dependencies=[Depends(verify_local_mutation)])
+async def update_agent_role(agent_id: str, role: str):
+    """Change the role of an agent (admin | work | know).
+
+    Wirkt beim naechsten Aufruf: der Dienst liest die Rolle bei jedem
+    Werkzeugaufruf frisch aus ``agents.json`` — kein Neustart noetig.
+    """
+    result = set_agent_role(agent_id, role)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    service_log.record(
+        "role_change", "ok", target_id=agent_id,
+        detail=f"role {result.get('role', role)}", via="http", actor=agent_id,
+    )
+    return result
+
+
+@app.get("/api/agent-logo/{slug}")
+def agent_logo(slug: str):
+    """Serve an agent's logo, fetching it ONCE from a fixed source list.
+
+    The dashboard asks for this only when the local library has no file. The
+    fetched image is stored next to the others, so the second view costs
+    nothing and the library grows by itself.
+
+    Safety: the caller supplies a slug, never a URL — the server builds the
+    address from a fixed list, so this endpoint cannot be used to make the
+    machine fetch arbitrary hosts. The slug is restricted to [a-z0-9-] and the
+    path is built below the logo directory only.
+    """
+    import re as _re
+    import urllib.request as _url
+
+    name = (slug or "").strip().lower()
+    if not _re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", name):
+        raise HTTPException(status_code=400, detail="invalid logo slug")
+
+    logo_dir = Path(__file__).parent / "assets" / "agent-logos"
+    for ext, ctype in ((".svg", "image/svg+xml"), (".png", "image/png")):
+        local = logo_dir / f"{name}{ext}"
+        if local.exists():
+            return FileResponse(str(local), media_type=ctype)
+
+    sources = (
+        f"https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{name}.svg",
+        f"https://cdn.simpleicons.org/{name}/ffffff",
+    )
+    for url in sources:
+        try:
+            req = _url.Request(url, headers={"User-Agent": "nexus-memory-dashboard"})
+            with _url.urlopen(req, timeout=6) as resp:
+                body = resp.read(200_000 + 1)
+            if len(body) > 200_000 or body.lstrip()[:4] != b"<svg":
+                continue
+            target = logo_dir / f"{name}.svg"
+            target.write_bytes(body)
+            return FileResponse(str(target), media_type="image/svg+xml")
+        except Exception as exc:  # noqa: BLE001 — a missing logo must never 500 the page
+            _logger.debug("agent logo fetch failed for %s from %s: %s", name, url, exc)
+
+    raise HTTPException(status_code=404, detail="no logo available")
 
 
 @app.get("/api/memories/stats")
@@ -1181,6 +1308,262 @@ async def trigger_backup():
         return {"status": "error", "error": str(e)}
 
 
+def _new_agent_starts_as_owner() -> bool:
+    """True while the registry is empty: the first agent is the owner.
+
+    The owner gets private visibility and the admin role — otherwise a fresh
+    installation has nobody who can manage it. Every later agent starts with
+    trusted/know and is raised by the user, never by the connect button.
+    """
+    try:
+        from nexus_memory.agent_detect import _load_registry_unlocked as _load_registry
+
+        registry = _load_registry()
+        # ``unidentified`` ist kein Agent, und das Dashboard ist nur das
+        # Fenster auf sie — beide besetzen den Eigentuemer-Platz nicht.
+        return not [
+            a for a in (registry.get("agents") or [])
+            if a.get("id") != "unidentified" and a.get("harness") != "dashboard"
+        ]
+    except Exception as exc:  # noqa: BLE001 — fail closed: assume an owner exists
+        _logger.debug("connect: registry unreadable, assuming owner exists: %s", exc)
+        return False
+
+
+PLUGIN_NAME = "@local/dsh-nexus-memory"
+
+
+def _tag_dsh_harness(agent_id: str) -> None:
+    """Vermerke ``harness: dsh`` am Registereintrag.
+
+    Damit trifft ein spaeteres ``POST /enroll`` desselben Harness DIESEN
+    Eintrag (Wiederverwendung statt Waise) und legt keinen zweiten an.
+    """
+    try:
+        from nexus_memory import agent_detect as _ad
+
+        with _ad._registry_lock():
+            registry = _ad._load_registry_unlocked()
+            for entry in registry.get("agents", []):
+                if not isinstance(entry, dict) or entry.get("id") != agent_id:
+                    continue
+                if entry.get("harness") != "dsh":
+                    entry["harness"] = "dsh"
+                    _ad._save_registry_unlocked(registry)
+                return
+    except Exception as exc:  # noqa: BLE001 — tagging is best-effort
+        _logger.debug("connect dsh: harness tag failed: %s", exc)
+
+
+def _write_dsh_profile(profile_dir: Path, plugin_dir: Path, inst_id: str,
+                       service_key: str = "") -> dict:
+    """Write the plugin into ONE DSH profile. Returns {ok, action, config}."""
+    pkg_path = profile_dir / "package.json"
+    existing: dict = {}
+    if pkg_path.exists():
+        try:
+            existing = json.loads(pkg_path.read_text())
+        except Exception as exc:
+            return {"ok": False, "error": f"{profile_dir.name}: config unreadable: {exc}"}
+        if not isinstance(existing, dict):
+            return {"ok": False, "error": f"{profile_dir.name}: expected a JSON object"}
+        backup = pkg_path.with_suffix(
+            pkg_path.suffix + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        )
+        backup.write_text(pkg_path.read_text())
+
+    deps = existing.setdefault("dependencies", {})
+    link = f"link:{plugin_dir}"
+    already = deps.get(PLUGIN_NAME) == link
+    deps[PLUGIN_NAME] = link
+
+    profile = existing.setdefault("dsh", {}).setdefault("profile", {})
+    bundles = profile.setdefault("bundles", [])
+    if PLUGIN_NAME not in bundles:
+        bundles.append(PLUGIN_NAME)
+
+    pkg_path.write_text(json.dumps(existing, indent=2) + "\n")
+    agent_note = _write_dsh_agent_id(profile_dir, plugin_dir, inst_id, service_key)
+    return {
+        "ok": True,
+        "action": "already-connected" if already else "connected",
+        "config": str(pkg_path),
+        "profile": profile_dir.name,
+        "agent_id_written": agent_note,
+    }
+
+
+def _write_dsh_agent_id(profile_dir: Path, plugin_dir: Path, inst_id: str,
+                        service_key: str = "") -> str:
+    """Make the profile say WHO it is, so its reads/writes are not anonymous.
+
+    A profile patch REPLACES the bundle config instead of merging into it, so
+    the block has to carry the full defaults. Those defaults are read from the
+    plugin's own patch file — one source of truth.
+    """
+    patch_path = profile_dir / "cordis.patch.yml"
+    defaults: dict = {}
+    try:
+        import re as _re
+
+        src = (plugin_dir / "cordis.patch.yml").read_text()
+        for key in ("transport", "baseUrl", "keyFile", "accessLevel", "captureCategory",
+                    "recall", "recallLimit", "recallBudgetChars", "recallTimeoutMs",
+                    "capture", "captureMinChars", "captureMaxChars", "captureSubagents"):
+            m = _re.search(rf"^\s*{key}:\s*(.+?)\s*$", src, _re.MULTILINE)
+            if m:
+                defaults[key] = m.group(1).strip().strip("'\"")
+    except Exception:  # noqa: BLE001 — fall back to a minimal block
+        defaults = {}
+
+    agent_id = str(inst_id).strip()
+    lines = [
+        "",
+        "# == nexus memory: who is speaking (written by the dashboard connect)",
+        "- id: nexus-memory",
+        "  config:",
+    ]
+    for key, value in defaults.items():
+        lines.append(f"    {key}: {value}")
+    lines.append(f"    agentId: {agent_id}")
+    key_line = f'    serviceKey: "{service_key}"' if service_key else ""
+    if key_line:
+        # Der eigene Schluessel des Harness (15.11.2026). Er steht in der
+        # Profil-Datei, nicht in der Antwort — angezeigt wird er nie.
+        lines.append(key_line)
+    block = "\n".join(lines) + "\n"
+
+    try:
+        current = patch_path.read_text() if patch_path.exists() else ""
+        if "agentId:" in current:
+            if not key_line or "serviceKey:" in current:
+                return "already-set"
+            # Ein Profil aus der Zeit vor den Agentenschluesseln: die
+            # Schluesselzeile in den BESTEHENDEN Block setzen (gleiche
+            # Einrueckung), statt einen zweiten Block anzulegen.
+            rows = current.splitlines()
+            for index, row in enumerate(rows):
+                if row.strip().startswith("agentId:"):
+                    rows.insert(index + 1, key_line)
+                    break
+            if patch_path.exists():
+                backup = patch_path.with_suffix(
+                    patch_path.suffix + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                )
+                backup.write_text(current)
+            patch_path.write_text("\n".join(rows) + "\n")
+            return "key-added"
+        if patch_path.exists():
+            backup = patch_path.with_suffix(
+                patch_path.suffix + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            )
+            backup.write_text(current)
+        patch_path.write_text(current.rstrip("\n") + "\n" + block)
+        return "written"
+    except Exception as exc:  # noqa: BLE001 — connect must not fail on this
+        _logger.debug("connect dsh: agent id not written: %s", exc)
+        return f"failed: {exc}"
+
+
+def _connect_dsh(inst: dict):
+    """Install the Nexus plugin into every profile of this DSH installation.
+
+    Works for any profile on any OS: the installation folder comes from
+    detection, the plugin from this repository. Each profile file is backed up
+    before the write (Regel 1). Starting DSH stays the user's step — bundle
+    lists are only read at start.
+    """
+    root = Path(inst.get("config_dir") or "")
+    if not root.is_dir():
+        return JSONResponse({"error": f"installation not found: {root}"}, status_code=400)
+
+    plugin_dir = Path(__file__).parent.parent / "plugins" / "dsh"
+    if not (plugin_dir / "package.json").exists():
+        return JSONResponse(
+            {"error": "the DSH plugin is missing from this installation"}, status_code=500
+        )
+
+    # Profiles live in <root>/profiles/<name>; a flat install has no profiles.
+    profiles_dir = root / "profiles"
+    targets = (
+        sorted(p for p in profiles_dir.iterdir() if p.is_dir())
+        if profiles_dir.is_dir()
+        else [root]
+    )
+    if not targets:
+        return JSONResponse({"error": f"no DSH profile found under {root}"}, status_code=400)
+
+    inst_id = str(inst.get("id") or "")
+    # VOR dem Ausstellen lesen: ``issue_key`` legt den Eintrag an, und danach
+    # waere das Register nicht mehr leer — der erste Agent wuerde seinen
+    # Eigentuemer-Status verlieren.
+    owner = _new_agent_starts_as_owner()
+    # 15.11.2026: der Harness bekommt einen EIGENEN Schluessel. Er wird in die
+    # Profil-Datei geschrieben (nicht angezeigt) — der Installationsschluessel
+    # in der Datei wuerde auf /mcp nur noch 401 bekommen.
+    service_key = ""
+    try:
+        from nexus_memory.service_auth import issue_key
+
+        service_key = issue_key(inst_id, inst.get("name") or "DSH")
+        _tag_dsh_harness(inst_id)
+    except Exception as exc:  # noqa: BLE001 — the plugin enrols itself as a fallback
+        _logger.debug("connect dsh: key issue failed: %s", exc)
+
+    results = [_write_dsh_profile(p, plugin_dir, inst_id, service_key)
+               for p in targets]
+
+    # Writing the entry is not enough: the bundle must be installed, otherwise
+    # DSH skips it at boot ("cannot resolve profile bundle"). Run the official
+    # installer per profile and report what happened.
+    import subprocess
+
+    for res, prof in zip(results, targets):
+        if not res.get("ok"):
+            continue
+        try:
+            run = subprocess.run(
+                ["dsh", "plugin", "--profile", prof.name, "install"],
+                capture_output=True, text=True, timeout=180,
+            )
+            res["installed"] = run.returncode == 0
+            if run.returncode != 0:
+                res["install_error"] = (run.stderr or run.stdout).strip()[-300:]
+        except Exception as exc:  # noqa: BLE001 — report, never crash the click
+            res["installed"] = False
+            res["install_error"] = str(exc)[:300]
+
+    failed = [r for r in results if not r.get("ok")]
+    if failed and len(failed) == len(results):
+        return JSONResponse({"error": failed[0]["error"]}, status_code=500)
+
+    try:
+        from nexus_memory.agent_detect import register_agent
+
+        register_agent(
+            agent_id=inst["id"],
+            name=inst.get("name") or "DSH",
+            icon="",  # never a stand-in animal: the logo comes from the database
+            trust_level="private" if owner else "trusted",
+            install_type="plugin+mcp",
+            config_dir=str(root),
+        )
+        if owner:
+            from nexus_memory.agent_detect import set_agent_role
+
+            set_agent_role(inst["id"], "admin")
+    except Exception as exc:  # noqa: BLE001 — registration is best-effort
+        _logger.debug("connect dsh: registration failed: %s", exc)
+
+    return {
+        "status": "ok",
+        "action": "already-connected" if all(r.get("action") == "already-connected" for r in results) else "connected",
+        "profiles": [r for r in results if r.get("ok")],
+        "failed": failed or None,
+        "restart_required": True,
+    }
+
+
 @app.post("/api/agents/{agent_id}/connect", dependencies=[Depends(verify_local_mutation)])
 async def connect_agent(agent_id: str):
     """One-click connect: write the nexus MCP entry into the agent's own config.
@@ -1194,6 +1577,20 @@ async def connect_agent(agent_id: str):
         "pi": (Path.home() / ".pi" / "agent" / "settings.json", "json"),
     }
     if agent_id not in config_paths:
+        # Not one of the fixed-config agents: look the INSTANCE up by its id and
+        # connect it where it actually lives (a profile, any OS, any folder).
+        try:
+            from nexus_memory.agent_detect import detect_all_agents
+
+            inst = next(
+                (a for a in detect_all_agents().get("detected_agents", []) if a.get("id") == agent_id),
+                None,
+            )
+        except Exception as exc:  # noqa: BLE001 — detection must not 500 the click
+            _logger.debug("connect: detection failed: %s", exc)
+            inst = None
+        if inst and inst.get("type") == "deepseek-harness":
+            return _connect_dsh(inst)
         return JSONResponse({"error": f"no config target known for '{agent_id}'"}, status_code=400)
 
     cfg_path, fmt = config_paths[agent_id]
@@ -1235,6 +1632,7 @@ async def connect_agent(agent_id: str):
         cfg_path.write_text(json.dumps(existing, indent=2) + "\n")
 
     # Register in the agents registry so the agent moves to Connected Agents.
+    meta: dict = {}
     try:
         from nexus_memory.agent_detect import detect_all_agents, register_agent
 
@@ -1243,18 +1641,39 @@ async def connect_agent(agent_id: str):
         register_agent(
             agent_id=agent_id,
             name=meta.get("name") or agent_id,
-            icon=meta.get("icon") or "🔌",
+            icon="",  # never a stand-in animal: the logo comes from the database
             # Rule (10.10.2026): the user connected this agent themselves on this
             # machine, so it is the owner — full read access by default. Narrowing
             # it down (trusted/public) stays a deliberate dashboard choice.
-            trust_level="private",
+            trust_level="trusted",  # a newly connected agent starts here, never private
             install_type="mcp",
             config_dir=meta.get("config_dir") or str(cfg_path.parent),
         )
     except Exception as e:
         # registration is best-effort; the config write itself succeeded.
         _logger.debug("connect: agent registration failed: %s", e)
-    return {"status": "ok", "action": "connected" if not already else "already-connected", "config": str(cfg_path)}
+
+    # 15.11.2026: der Agent bekommt einen EIGENEN Schluessel — der
+    # Installationsschluessel darf keine Daten mehr lesen. Der Klartext steht
+    # GENAU EINMAL in dieser Antwort (Feld ``key``); gespeichert ist nur sein
+    # SHA-256. Erneutes Verbinden stellt einen neuen aus, der alte verfaellt.
+    try:
+        from nexus_memory.service_auth import issue_key
+
+        key = issue_key(agent_id, meta.get("name") or agent_id)
+    except Exception as e:  # noqa: BLE001 — report, never half-connect silently
+        _logger.debug("connect: key issue failed: %s", e)
+        return JSONResponse(
+            {"error": f"config written, but no agent key could be issued: {e}"},
+            status_code=500)
+
+    return {
+        "status": "ok",
+        "action": "connected" if not already else "already-connected",
+        "config": str(cfg_path),
+        "key": key,
+        "key_notice": "shown once — this is the agent's own key; it is never shown again",
+    }
 
 
 @app.post("/api/agents/{agent_id}/disconnect", dependencies=[Depends(verify_local_mutation)])
@@ -1357,6 +1776,50 @@ async def disconnect_agent(agent_id: str):
 async def detect_agents():
     """Run agent auto-detection."""
     return detect_all_agents()
+
+
+@app.get("/api/service-log")
+async def service_log_events(limit: int = 200, action: str = "", actor: str = "",
+                             date: str = ""):
+    """Das Bewegungsprotokoll — wer hat wann was getan.
+
+    Quelle ist ausschliesslich ``nexus_memory.service_log``: dieselben
+    Funktionen, die das CLI benutzt (``read_events``, ``verify_chain``). Die
+    Datei wird hier nicht nachgebaut, und ``serve.log`` (das technische
+    Zugriffslog) wird nicht angefasst — dort stehen nur HTTP-Zeilen, keine
+    Vorgaenge.
+
+    Ein Tag ohne Datei ist ein LEERER Tag, kein Fehler: HTTP 200 mit
+    ``count: 0``. Ein 404 waere eine Aussage ueber das Protokoll, die hier
+    niemand treffen kann.
+    """
+    from nexus_memory import service_log
+
+    # FastAPI weist ein nicht-numerisches ``limit`` selbst mit 422 ab; hier
+    # bleibt nur die Spanne: 1..1000, Vorgabe 200.
+    limit = max(1, min(limit, 1000))
+    day = (date or "").strip() or datetime.now(timezone.utc).date().isoformat()
+    try:
+        datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        # Ein stillschweigend auf "heute" korrigiertes Datum zeigt einen
+        # anderen Tag als angefragt — das muss der Aufrufer sehen.
+        return JSONResponse({"error": f"date {day!r} is not YYYY-MM-DD"},
+                            status_code=400)
+
+    def _read() -> tuple[dict, list]:
+        """Datei-I/O ausserhalb des Event-Loops (W30-1)."""
+        path = (service_log.log_dir()
+                / f"{service_log.FILE_PREFIX}{day}{service_log.FILE_SUFFIX}")
+        chain = service_log.verify_chain(path)
+        events = service_log.read_events(
+            limit=limit, action=(action or "").strip() or None,
+            actor=(actor or "").strip() or None, day=day,
+        )
+        return chain, events
+
+    chain, events = await asyncio.to_thread(_read)
+    return {"chain": chain, "count": len(events), "events": events}
 
 
 @app.get("/", response_class=HTMLResponse)
