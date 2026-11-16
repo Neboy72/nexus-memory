@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.51-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.22.52-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-green-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -305,6 +305,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.52** | 2026-11-16 | Quoted text ranked right after 0.22.51, bare identifiers did not: asking for "9122" returned an entry without the number first, while "the serve daemon runs on port 9122" sat third. A naked number has no meaning to search, yet the semantic side still produced a leader that carried the same fusion value as the correct lexical hit. A query that is essentially an identifier (at most three words containing four or more digits, a hex group, an address, a date, or a dotted name like `ai.nexus.serve`) now searches lexically only; the semantic side stays out, and only steps in as a fallback when nothing is found lexically. Measured live: "9122" no longer returns an entry without the number, "healthz 9122" finds the intended entry first, addresses unchanged. Normal questions have more words and never enter the rule |
 | **v0.22.51** | 2026-11-16 | A memory that was quoted word for word came back second, behind an entry with no relation to the question. The search itself was right: the quoted entry was first in the lexical list (36.4 against 12.5) but outside the top twenty in the semantic one, while the rival was first there and far behind lexically — so both carried exactly the same fusion value and order decided, not quality. A clear lexical lead (top hit at least twice the runner-up) now weighs 1.5 instead of 1.0, and on an exact tie the stronger lexical evidence wins. Measured on four real entries: all four now rank first, the reported case was second before. Reformulated questions are untouched (weight stays 1.0) |
 | **v0.22.50** | 2026-11-16 | A memory just written could not reach the top of a recall, even when the question matched it word for word. Usage multiplied a hit by up to four, so a frequently read entry from months ago beat a fresh one that matched just as well; the cap is 1.5 now, and entries younger than 24 hours carry a 1.15 lead that resolves a tie in their favour. Measured on a real case: the fresh entry moved from 10th to 6th of 20. Decay, salience immunity and the rule that nothing is ever deleted are unchanged |
 | **v0.22.49** | 2026-11-16 | The DeepSeek-Harness plugin stored nothing for long turns: `captureText` trimmed with `rstrip()`, which is Python and not JavaScript, so every turn past the character limit threw a `TypeError` and the capture fell into its error branch. Now `trimEnd()`, pinned by a test that runs 2000 characters against a 1600 limit. A fresh Linux machine also refused to load the plugin — `ERR_MODULE_NOT_FOUND` for `@deepseek-ai/dsh-llm`, because only Mac and Windows happened to have the packages lying in that folder; `package.json` names both dependencies now and the installer runs `npm install` and reports failures loudly instead of silently |
@@ -382,4 +383,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.51 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.52 · One memory for all your agents</sub>

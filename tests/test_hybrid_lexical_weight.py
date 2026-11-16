@@ -106,3 +106,67 @@ def test_semantic_question_is_left_alone():
 
 def test_rrf_constant_is_the_documented_one():
     assert RRF_K == 60
+
+
+# ---------- Kennungs-Abfragen (16.11.2026) ----------
+
+@pytest.mark.parametrize("query", [
+    "9122",
+    "healthz 9122",
+    "127.0.0.1:9122",
+    "5a44b1c2",
+    "16.11.2026",
+    "ai.nexus.serve",
+    "launchd-label ai.nexus.serve",
+])
+def test_identifiers_are_recognised(query):
+    assert HybridRetriever._is_identifier_query(query) is True
+
+
+@pytest.mark.parametrize("query", [
+    "wann wurde die rangfolge geaendert",
+    "wie verbinde ich einen bot mit dem gedaechtnis",
+    "nexus memory auto-recall via pre_llm_call hook",
+    "port",
+    "was ist das.",
+    "Ist das richtig?",
+    "",
+])
+def test_normal_questions_are_not_identifiers(query):
+    assert HybridRetriever._is_identifier_query(query) is False
+
+
+def test_identifier_query_skips_the_semantic_search(monkeypatch):
+    """Bei einer Kennung wird die Vektorsuche nicht einmal gefragt — bei
+    "9122" lieferte sie sonst einen Ersten ohne die Zahl."""
+    calls = {"vector": 0, "bm25": 0}
+    r = _retriever()
+    r._ids, r._texts = [], []
+
+    def fake_bm25(query, top_k=10):
+        calls["bm25"] += 1
+        return [_bm25("treffer", 1, 5.0)]
+
+    def fake_vector(vector, top_k=10):
+        calls["vector"] += 1
+        return [_vec("fremd", 1)]
+
+    monkeypatch.setattr(r, "search_bm25", fake_bm25)
+    monkeypatch.setattr(r, "search_vector", fake_vector)
+
+    fused = r.search_hybrid("9122", query_vector=[0.1, 0.2, 0.3], top_k=3)
+    assert calls["bm25"] == 1
+    assert calls["vector"] == 0
+    assert fused[0]["id"] == "treffer"
+
+
+def test_identifier_query_falls_back_when_nothing_is_found(monkeypatch):
+    """Findet die woertliche Suche nichts, bleibt die Vektorsuche als Rueckfall —
+    sonst waere das Ergebnis leer."""
+    r = _retriever()
+    r._ids, r._texts = [], []
+    monkeypatch.setattr(r, "search_bm25", lambda query, top_k=10: [])
+    monkeypatch.setattr(r, "search_vector", lambda vector, top_k=10: [_vec("irgendwas", 1)])
+
+    fused = r.search_hybrid("9999999", query_vector=[0.1, 0.2], top_k=3)
+    assert [f["id"] for f in fused] == ["irgendwas"]

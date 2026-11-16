@@ -1,3 +1,31 @@
+## [0.22.52] - 2026-11-16
+
+### Eine Kennung wird woertlich gesucht, nicht der Bedeutung nach
+
+Der zweite Teil derselben Meldung: Zitate trafen nach 0.22.51 richtig, reine Kennungen nicht.
+Abfrage "9122" lieferte auf Platz 1 einen Eintrag ("concept: high"), in dem die Zahl gar nicht
+vorkam; der Eintrag "der serve-dienst laeuft auf port 9122" stand auf Platz 3.
+
+Die Ursache: Eine nackte Zahl hat keine Bedeutung, die man suchen koennte. Die Bedeutungssuche
+liefert trotzdem einen Ersten — und der bekam in der Zusammenfuehrung denselben Wert wie der
+richtige woertliche Treffer.
+
+Jetzt gilt: Besteht eine Abfrage praktisch nur aus einer Kennung (hoechstens drei Woerter, und
+darin vier oder mehr Ziffern, eine Hex-Gruppe, eine Adresse mit Punkt oder Doppelpunkt, ein
+Datum oder ein Punkt-Name wie `ai.nexus.serve`), dann sucht sie nur woertlich. Die
+Bedeutungssuche bleibt draussen — ausser die woertliche Suche findet nichts, dann springt sie
+als Rueckfall ein, damit kein leeres Ergebnis entsteht.
+
+Gemessen nach dem Umbau, am laufenden Dienst:
+
+- "9122" — alle drei Treffer enthalten die Zahl; der Eintrag ohne die Zahl ist verschwunden.
+- "healthz 9122" — der gesuchte Eintrag steht auf Platz 1 (vorher nicht unter den ersten drei).
+- "127.0.0.1:9122" — unveraendert richtig auf Platz 1.
+
+Normale Fragen bleiben unberuehrt: Sie haben mehr als drei Woerter, greifen also gar nicht in
+diese Regel. 13 Faelle sind als Test festgehalten, dazu der Nachweis, dass die Bedeutungssuche
+bei einer Kennung nicht einmal gefragt wird und dass der Rueckfall greift.
+
 ## [0.22.51] - 2026-11-16
 
 ### Ein wortgleicher Treffer gewinnt wieder
