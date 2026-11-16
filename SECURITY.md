@@ -15,7 +15,7 @@ unless you configure a cloud embedding provider (OpenAI, Google, Jina).
 **If you discover a security issue:**
 
 1. **Do not open a public GitHub issue.**
-2. Email the maintainer at **Neboy72@users.noreply.github.com**
+2. Open a private security advisory at **https://github.com/Neboy72/nexus-memory/security/advisories/new**
 3. You will receive a response within 48 hours.
 
 We will acknowledge receipt, assess the issue, and coordinate a fix and
