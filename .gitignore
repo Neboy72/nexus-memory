@@ -46,3 +46,4 @@ plugins/openclaw/reports/
 
 # Agent worktrees (local agent copies, never part of the repo)
 .claude/
+plugins/dsh/node_modules/

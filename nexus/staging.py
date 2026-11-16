@@ -426,6 +426,28 @@ def _qdrant_url(host: str, port: int, collection: str) -> str:
     return f"http://{host}:{port}/collections/{collection}"
 
 
+def _log_staging_write(version: FactVersion, target_id: str) -> None:
+    """Eine Protokollzeile je geschriebenem Punkt (Nachtrag 15.11.2026).
+
+    Staging legte Punkte in zwei Sammlungen an (Verlauf und Kanonik) und
+    hinterliess in keiner eine Spur. ``reason`` nennt den Status
+    (``pending``/``canonical`` …) und damit den Weg, der geschrieben hat;
+    Inhalt und Stufe stehen NICHT drin — das Thema bleibt leer, weil ein
+    Staging-Payload in aller Regel keine Zugriffsstufe traegt. Fail-open:
+    ``record`` schluckt jeden Fehler, der Vorgang laeuft weiter.
+    """
+    content = version.content.get("content", "") if isinstance(version.content, dict) else str(version.content)
+    category = version.content.get("category") if isinstance(version.content, dict) else None
+    from nexus_memory import service_log
+    service_log.record(
+        "write", "ok", text=content, target_id=target_id,
+        category=category if isinstance(category, str) else None,
+        reason=version.status,
+        after_hash=service_log.content_hash(content), via="staging",
+        actor=service_log.SYSTEM_ACTORS["staging"],
+    )
+
+
 def _upsert_point(
     version: FactVersion,
     host: str = "localhost",
@@ -449,6 +471,7 @@ def _upsert_point(
     }
     r = requests.put(url, json=data, timeout=10)
     r.raise_for_status()
+    _log_staging_write(version, version.version_id)
     return version.version_id
 
 
@@ -477,6 +500,7 @@ def _write_canonical(
     }
     r = requests.put(url, json=data, timeout=10)
     r.raise_for_status()
+    _log_staging_write(version, version.fact_id)
 
 
 def _remove_from_canonical(

@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from enum import IntEnum
 
+from nexus_memory.collection_vectors import point_text
+
 
 # ── Known category taxonomy ──────────────────────────────────────────────────
 # Grows over time.  Unknown categories are flagged but not rejected.
@@ -170,7 +172,7 @@ def enrich(tier: EnrichmentTier, payload: dict) -> dict:
     # H213: `or ""` — a payload whose "content" key exists but is None (callers
     # merging metadata/**kwargs over the payload can null it out) made
     # pattern.finditer(None) raise TypeError.
-    content = payload.get("content") or ""
+    content = point_text(payload)
     keywords = set()
     for pattern in KEYWORD_PATTERNS:
         for match in pattern.finditer(content):

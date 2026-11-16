@@ -369,7 +369,7 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
 
     text = "" if content is None else str(content).strip()
     if not text:
-        return _refuse("leerer Inhalt", category, source)
+        return _refuse("empty content", category, source)
 
     cat = _normalize_category(category)
     war_regel = cat == "rule"
@@ -390,7 +390,7 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
     # Eine herabgestufte Regel wird nicht zusaetzlich als Etikett abgewiesen:
     # der Inhalt soll erhalten bleiben, auch wenn seine Form schwach ist.
     if cat == "fact" and not war_regel and _is_label(text):
-        return _refuse("Etikett statt Aussage (kein Satz)", cat, source)
+        return _refuse("label instead of a statement (not a sentence)", cat, source)
 
     src = str(source or "").strip()
     prepared = {

@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from nexus.config import get_collection
+from nexus_memory.collection_vectors import point_text
 
 logger = logging.getLogger(__name__)
 
@@ -475,7 +476,7 @@ def _synthesize_insights(
                 "involved_ids": sorted(
                     {keeper_id} | {str(d) for d in dupes}
                 ),
-                "preview": str(payload.get("content") or "")[:300],
+                "preview": point_text(payload)[:300],
             })
             continue
 
@@ -501,7 +502,7 @@ def _synthesize_insights(
             "suggested_resolution": "confirm_or_supersede",
             "winner_confidence": round(_conf(winner), 3),
             "involved_ids": sorted({str(i.get("id")) for i in group}),
-            "preview": str(winner_payload.get("content") or "")[:300],
+            "preview": point_text(winner_payload)[:300],
         })
     return insights
 
@@ -861,6 +862,18 @@ def _store_sica_session(
         upsert_named(
             client, upsert_kwargs["collection_name"],
             upsert_kwargs["points"], vector_name,
+        )
+        # Bewegungsprotokoll (Nachtrag 15.11.2026): SICA legte ihren
+        # Sitzungspunkt bisher ohne Zeile an. Die Zeile ist bei ``private``
+        # ohne Thema — Pruefsumme, Kategorie und Kennung genuegen, um den
+        # Eintrag spaeter wiederzufinden.
+        from nexus_memory import service_log
+        service_log.record(
+            "write", "ok", text=summary, access_level=payload["access_level"],
+            target_id=eid, category=payload["category"],
+            reason="SICA session",
+            after_hash=service_log.content_hash(summary), via="sica",
+            actor=service_log.SYSTEM_ACTORS["sica"],
         )
         logger.info("SICA session stored: %s", eid[:8])
     except Exception as exc:
