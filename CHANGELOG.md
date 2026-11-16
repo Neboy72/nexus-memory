@@ -1,3 +1,33 @@
+## [0.22.51] - 2026-11-16
+
+### Ein wortgleicher Treffer gewinnt wieder
+
+Ein Eintrag, den ein Agent zwanzig Minuten zuvor geschrieben hatte, stand bei einer Frage, die
+ihn Wort fuer Wort zitierte, auf Platz 2 — hinter einem Eintrag ohne inhaltlichen Bezug.
+
+Die Messung zeigte, dass die Suche selbst richtig lag: In der woertlichen Liste stand der
+gesuchte Eintrag auf Platz 1, mit 36,4 gegen 12,5 fuer den Zweiten. In der inhaltlichen Liste
+kam er unter den ersten zwanzig nicht vor. Der Konkurrent war dort Platz 1 und woertlich weit
+hinten. Bei der Zusammenfuehrung bekamen beide dadurch exakt denselben Wert (0.01639) — und im
+Gleichstand entschied die Reihenfolge der Listen, nicht die Qualitaet des Treffers.
+
+Zwei Aenderungen in der Zusammenfuehrung:
+
+- **Klarer woertlicher Vorsprung zaehlt mehr.** Liegt der oberste woertliche Treffer mindestens
+  doppelt so hoch wie der zweite, bekommt diese Liste Gewicht 1,5 statt 1,0. Ein grosser Abstand
+  an der Spitze bedeutet: seltene Woerter, Kennung oder Zitat. Liegen die Treffer dicht
+  beieinander, bleibt es bei gleich stark — eine umformulierte Frage wird also nicht bevorzugt
+  oder benachteiligt.
+- **Bei Gleichstand entscheidet der woertliche Beleg.** Haben zwei Treffer denselben
+  Fusionswert, steht der mit dem hoeheren woertlichen Score vorn.
+
+Gemessen an vier echten Eintraegen (Frage jeweils wortgleich zum gespeicherten Text): alle vier
+stehen jetzt auf Platz 1; der Fall aus der Meldung vorher auf Platz 2. Semantische Gegenprobe
+mit zwei umformulierten Fragen: dort greift keine der beiden Aenderungen (Gewicht bleibt 1,0),
+die Reihenfolge bleibt wie vorher.
+
+Vektor, Verfall, Quellen-Bevorzugung und Salience sind unberuehrt.
+
 ## [0.22.50] - 2026-11-16
 
 ### Ein frischer Eintrag hat wieder eine Chance
