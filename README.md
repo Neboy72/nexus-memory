@@ -38,7 +38,7 @@ Nexus Memory offers three integration paths: **Native Plugin** (automatic memory
 
 | Path | Best for | Setup | Memory mode |
 |------|----------|-------|-------------|
-| **Native Plugin** | Hermes Agent, OpenClaw, Claude Code | `./scripts/install_hermes_plugin.sh`, `install_openclaw_plugin.sh`, or `install_claude_plugin.sh` | **Automatic**: auto-recall + auto-capture + guardrails, no manual tool calls |
+| **Native Plugin** | Hermes Agent, OpenClaw, Claude Code, DeepSeek Harness | `./scripts/install_hermes_plugin.sh`, `install_openclaw_plugin.sh`, `install_claude_plugin.sh`, or `node scripts/install_dsh_plugin.mjs` | **Automatic**: auto-recall + auto-capture + guardrails, no manual tool calls |
 | **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | **Manual**: the agent calls `recall` / `remember` explicitly |
 | **Serve Daemon** | Any agent, always-on | `nexus-memory serve` (HTTP, default since v0.21.0) | **Automatic** + stays up when no agent runs |
 
@@ -99,8 +99,11 @@ cd ~/nexus-memory
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
 ./scripts/install_hermes_plugin.sh     # or: install_openclaw_plugin.sh
+node scripts/install_dsh_plugin.mjs    # DeepSeek Harness (Node 22+, see below)
 nexus-memory                           # or: nexus-memory serve (daemon), nexus-memory webui
 ```
+
+> **DeepSeek Harness (Node, not Python).** `node scripts/install_dsh_plugin.mjs` needs Node 22+ and npm. It installs the plugin's own npm packages in the folder the DSH profile registers (`npm install --omit=dev`), enrols this harness with the installation key, and writes the agent key into the profile's `.env` — so the harness starts with `NEXUS_AGENT_KEY` set. Without that first step the tool bridge stays silent while the plugin itself looks loaded. `--dry-run` checks everything and writes nothing, `--profile` picks a profile other than `desktop`. Details: [`plugins/dsh/README.md`](plugins/dsh/README.md).
 
 > **The installer builds the plugin's own venv for you.** Hermes runs Nexus as a *memory provider*, and only Hermes' plugin manager reads `pip_dependencies` from `plugin.yaml` — the provider path does not. So the installer creates `~/.nexus-memory/plugin-venv` and installs the runtime dependencies there. The plugin adds that venv to its own import path at startup, which is why nothing is ever written into Hermes' interpreter (it may be pipx- or system-managed and read-only).
 >

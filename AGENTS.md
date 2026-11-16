@@ -199,6 +199,34 @@ Restart OpenClaw Gateway. Nexus tools appear as `nexus_search`, `nexus_store`, `
 - **Tools**: `nexus_search`, `nexus_store`, `nexus_forget` available to the agent.
 - **Shared store**: Same Qdrant collection as Hermes plugin and MCP server — one brain, many agents.
 
+## DeepSeek Harness Native Plugin (Recommended for DSH)
+
+The harness runs on Node, not Python, so it has its own plugin folder (`plugins/dsh/`) and its own installer. It talks to the running Nexus service on `127.0.0.1:9122`; it brings no store and no embeddings of its own.
+
+### Prerequisites
+
+- Node 22+ and npm (`node --version`)
+- A running Nexus service: `nexus-memory serve`, then `curl http://127.0.0.1:9122/healthz`
+- The installation key `<data-dir>/service_auth.key`
+
+### One-Command Install
+
+```bash
+node scripts/install_dsh_plugin.mjs            # profile "desktop" by default
+node scripts/install_dsh_plugin.mjs --profile <name>
+node scripts/install_dsh_plugin.mjs --dry-run  # check everything, write nothing
+```
+
+The installer finds the DSH profile, runs `npm install --omit=dev` in the folder the profile registers (that is where `@deepseek-ai/dsh-llm` and `@deepseek-ai/schemastery` come from — without them the plugin fails with `ERR_MODULE_NOT_FOUND`), enrols this harness via `POST /enroll`, and writes `NEXUS_AGENT_KEY` into the profile's `.env`. The tool bridge reads that key from the environment when the harness starts, so skipping this step leaves the bridge silent even though the plugin itself loads.
+
+### Verify
+
+```bash
+node scripts/install_dsh_plugin.mjs --dry-run  # re-run: key present, service reachable
+```
+
+After a restart of the harness the tool list shows the Nexus tools, and a recall with a known keyword returns entries. Contract, endpoints and acceptance tests: [`plugins/dsh/README.md`](plugins/dsh/README.md) and [`HANDOVER.md`](plugins/dsh/HANDOVER.md).
+
 ## Standalone Serve (Daemon Mode) — default since v0.21.0
 
 **New in v0.20.2, default since v0.21.0.** `nexus-memory serve` runs the same MCP server as a long-lived HTTP daemon (Streamable HTTP on 127.0.0.1:9122, healthz endpoint included). It is ADDITIVE: stdio and both native plugins work exactly as before. Use it when you want memory alive even with no agent running.
@@ -291,7 +319,7 @@ Nexus Memory uses a single Qdrant collection (`nexus`) backed by one embedder. T
 
 | Path | Best for | Setup | Memory mode |
 |------|----------|-------|-------------|
-| **Native Plugin** | Hermes Agent, OpenClaw | `./scripts/install_hermes_plugin.sh` or `./scripts/install_openclaw_plugin.sh` | **Automatic** — Auto-Recall + Auto-Capture |
+| **Native Plugin** | Hermes Agent, OpenClaw, DeepSeek Harness | `./scripts/install_hermes_plugin.sh`, `./scripts/install_openclaw_plugin.sh`, `node scripts/install_dsh_plugin.mjs` | **Automatic** — Auto-Recall + Auto-Capture |
 | **MCP Server** | Claude Code, Cursor, Codex, any MCP agent | `nexus-memory` (stdio) | **Manual** — explicit tool calls |
 
 ## Quick Install (MCP Server)
