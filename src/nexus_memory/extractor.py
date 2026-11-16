@@ -81,6 +81,52 @@ def _quick_health_check(base_url: str, timeout: float = 1.0) -> bool:
         return False
 
 
+_FRAGMENT_QUESTIONS = (
+    "heißt das", "heisst das", "kannst du", "hast du", "warum ", "wieso ", "weshalb ",
+    "wie ", "was ", "wann ", "wo ", "wer ", "welche", "ist das", "sind das", "gibt es",
+    "können wir", "koennen wir", "soll ich", "sollte ich", "darf ich", "muss ich",
+)
+
+_FRAGMENT_ADDRESS = (
+    "du hast", "du bist", "du machst", "du weißt", "du weisst", "du sollst",
+    "du kannst", "du musst", "dein ", "deine ", "deinen ", "deinem ", "deiner ",
+    "dir ", "dich ",
+)
+
+
+def _looks_like_fragment(text: str) -> bool:
+    """Ist das ein Gespraechsfetzen statt einer Aussage? (16.11.2026)
+
+    Ausloeser war ein Sitzungsende, das Eintraege wie diese schrieb: eine
+    Aussage des Nutzers an den Agenten, eine Rueckfrage, ein abgeschnittener
+    Satz. Der meldende Agent beschrieb sie als Eintraege ohne ueberpruefbare
+    Information; nur einer der fuenf trug einen datierten Repo-Stand.
+
+    Erkannt werden zwei Formen — eine Frage und eine Anrede an den Agenten.
+    Ein abgeschnittener Satz wird bewusst NICHT erkannt: Die naheliegende
+    Regel "kurz und ohne Satzende" hat im Testlauf echte Fakten verworfen
+    ("the user likes coffee", "Immer auf Deutsch antworten"). Lieber ein
+    Fragment zu viel als ein Fakt zu wenig. Welche der gemeldeten Texte
+    durchkommen, steht als Liste im Test — nicht hier.
+    """
+    klar = " ".join((text or "").split()).strip()
+    if not klar:
+        return True
+    nieder = klar.lower()
+
+    # Frage — mit oder ohne Fragezeichen
+    if klar.endswith("?"):
+        return True
+    if nieder.startswith(_FRAGMENT_QUESTIONS):
+        return True
+
+    # Anrede an den Agenten ("Du hast ..."/"dein ...")
+    if nieder.startswith(_FRAGMENT_ADDRESS):
+        return True
+
+    return False
+
+
 def _validate_llm_facts(facts: List[Any]) -> List[Dict[str, Any]]:
     """Validate and normalize the LLM's fact list.
 
@@ -102,6 +148,14 @@ def _validate_llm_facts(facts: List[Any]) -> List[Dict[str, Any]]:
             continue
         fact_text = str(raw_text).strip()
         if not fact_text:
+            continue
+        # Gespraechsfetzen aussortieren (16.11.2026): Fragen, Anreden an den
+        # Agenten und abgebrochene Saetze sind keine Fakten.
+        if _looks_like_fragment(fact_text):
+            logger.info(
+                "SessionExtractor: fragment skipped (no durable statement): %.80s",
+                fact_text,
+            )
             continue
         # Same for category: only a string is meaningful; null/numeric falls
         # back to the default instead of raising.

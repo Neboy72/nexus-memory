@@ -1,3 +1,45 @@
+## [0.22.53] - 2026-11-16
+
+### Keine Doppel mehr am Sitzungsende, keine Fragmente, ein Weg zum Zurueckziehen
+
+Drei Dinge, alle aus einem Befund vom selben Tag: Der Gesundheitsbericht meldete fuenf
+zeichengleiche Paare. Nachgeprueft waren es jeweils derselbe Text, derselbe Agent, dieselbe
+Quelle, dieselbe Stufe — nur vier Stunden auseinander (11:55 und 15:52). Im Protokoll stehen
+dazu zwei Sitzungsenden derselben Unterhaltung, eines aus 326 Nachrichten, eines aus 545.
+
+**1. Feste Kennung fuer Fakten aus dem Sitzungsende.** Der Grund fuer die Doppel war nicht der
+Extraktor, sondern die Kennung: Entitaeten bekommen seit jeher eine feste Kennung aus Typ und
+Name und ueberschreiben sich deshalb; Fakten bekamen eine zufaellige. Jetzt bildet der
+Sitzungsende-Weg einen Schluessel aus Herkunft und normalisiertem Text (Kleinschreibung,
+Mehrfach-Leerzeichen und Satzzeichen am Rand zaehlen nicht) und schreibt auf denselben Punkt.
+Existiert er schon, bleibt er unangetastet — auch created_at und die Nutzungszaehler. Kein
+Loeschen, keine Migration.
+
+**2. Gespraechsfetzen werden nicht mehr gespeichert.** Vier der fuenf Eintraege waren keine
+Fakten, sondern Aussagen des Nutzers an den Agenten, Rueckfragen und abgeschnittene Saetze. Der
+Extraktor verwirft jetzt die zwei klaren Formen: eine Frage (Fragewort am Anfang oder
+Fragezeichen am Ende) und eine Anrede an den Agenten ("Du hast ...", "dein ..."). Von den fuenf
+gemeldeten Eintraegen fallen damit zwei raus — die Anrede und die Frage; drei bleiben: der
+abgeschnittene Satz, die Antwort mit Befund und der Repo-Stand. Das ist im Test mit den fuenf
+Originaltexten festgehalten; eine erste Fassung der Notiz behauptete "drei von vier", der Test
+hat sie widerlegt.
+
+Eine zusaetzliche Regel "kurz und ohne Satzende ist ein Fragment" waere naheliegend, ist aber
+verworfen: Sie hat im Testlauf echte Fakten erwischt ("the user likes coffee", "Immer auf
+Deutsch antworten") und drei bestehende Testfaelle rot gemacht. Lieber ein Fragment zu viel als
+ein Fakt zu wenig.
+
+**3. Zurueckziehen und Zusammenlegen ueber das Aenderungswerkzeug.** Bisher liessen sich
+`lifecycle_status` und `supersede_reason` nur am Dienst vorbeischreiben — ohne Rollenpruefung
+und ohne Protokollzeile. Das Aenderungswerkzeug hat jetzt zwei Felder: `withdraw` (Wahrheitswert)
+und `reason` (Grund, dabei Pflicht), dazu optional `superseded_by` fuer das Zusammenlegen. Der
+Text bleibt stehen, gesetzt werden Lebenszyklus, Zeitpunkt, Gueltigkeitsende und Grund — in
+derselben Feldform, die der Dienst beim automatischen Ersetzen benutzt.
+
+Am laufenden Dienst geprueft: Ohne Grund wird abgelehnt und der Bestand bleibt unveraendert;
+mit Grund steht der Eintrag auf "deprecated", traegt den Grund und erscheint nicht mehr im
+Abruf. 16 neue Testfaelle fuer Schluessel, Doppellauf und Fragmente.
+
 ## [0.22.52] - 2026-11-16
 
 ### Eine Kennung wird woertlich gesucht, nicht der Bedeutung nach

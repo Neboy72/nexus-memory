@@ -891,6 +891,19 @@ _MEMORY_INJECTION_PATTERNS = (
 )
 
 
+def _fact_dedup_text(text: str, source: str = "") -> str:
+    """Schluessel fuer die feste Kennung eines Fakts (16.11.2026).
+
+    Zwei Laeufe, die denselben Fakt aus derselben Quelle ziehen, sollen
+    denselben Punkt treffen. Deshalb: Herkunft plus Text, wobei Groß- und
+    Kleinschreibung, mehrfache Leerzeichen und Satzzeichen am Rand keine
+    Rolle spielen. Inhaltliche Unterschiede bleiben Unterschiede.
+    """
+    klar = " ".join((text or "").split()).strip().lower()
+    klar = klar.strip(" .,;:!?\"'")
+    return f"{(source or '').strip()}|{klar}"
+
+
 def _memory_injection_score(text: str) -> int:
     """Number of embedded-instruction patterns in memory candidate text."""
     if not text:
@@ -3059,12 +3072,36 @@ class NexusMemoryProvider:
                     _refresh_selfcheck_if_needed()
             else: time.sleep(0.5)
 
+    def _point_exists(self, point_id: str) -> bool:
+        """Liegt dieser Punkt schon im Bestand? (16.11.2026)
+
+        Wird vom Session-End-Weg benutzt, um denselben Fakt nicht erneut zu
+        schreiben. Ein Fehler bei der Abfrage darf den Schreibweg nicht
+        anhalten: dann wird geschrieben wie bisher.
+        """
+        try:
+            treffer = self._qdrant.retrieve(
+                collection_name=self._collection, ids=[point_id],
+                with_payload=False, with_vectors=False,
+            )
+            return bool(treffer)
+        except Exception as exc:
+            logger.debug("Punkt-Pruefung fehlgeschlagen (%s): %s", point_id, exc)
+            return False
+
     def _upsert(self, text: str, category: str = "fact", access_level: str = "private",
                 source: str = "", confidence: float = 0.7, salience: Optional[float] = None,
                 source_url: str = "", scope: str = "default",
-                explicit: bool = False, rule_proof: str = "", **_: Any) -> Dict[str, Any]:
+                explicit: bool = False, rule_proof: str = "", dedup_key: str = "",
+                **_: Any) -> Dict[str, Any]:
         if not self._embedder or not self._qdrant: raise RuntimeError("Provider not initialized")
-        eid = str(uuid.uuid4()); ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Feste Kennung, wenn der Aufrufer eine Vergabe wuenscht (16.11.2026):
+        # Der Session-End-Weg schreibt denselben Fakt bei jedem Sitzungsende
+        # erneut. Mit einem Schluessel aus Quelle und Text landet er auf
+        # demselben Punkt statt als Kopie daneben.
+        eid = (str(uuid.uuid5(uuid.NAMESPACE_DNS, dedup_key)) if dedup_key
+               else str(uuid.uuid4()))
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         # Gemeinsames Schreibtor (10.11.2026): leerer Inhalt und Etiketten
         # werden abgewiesen, die Herkunft bleibt nie leer, und die
         # Zugriffsstufe ist die strengste aus Quelle und Angabe. Eine
@@ -3906,13 +3943,26 @@ class NexusMemoryProvider:
                 if self._write_stop.is_set() or not self._qdrant:
                     return
                 stored = 0
+                skipped = 0
                 for fact in facts:
                     if self._write_stop.is_set() or not self._qdrant:
                         break
                     try:
+                        # Feste Kennung je Fakt (16.11.2026): Ein Sitzungsende
+                        # kann mehrfach ausgeloest werden (Gateway-Neustart,
+                        # Ablauf) und liefert dann dieselben Fakten erneut.
+                        # Gemessen: fuenf Paare, gleicher Text, vier Stunden
+                        # auseinander. Der Schluessel macht daraus denselben
+                        # Punkt; existiert er schon, bleibt er unveraendert.
+                        dedup_key = "session-fact:" + _fact_dedup_text(fact["text"], source="hermes-plugin-session-end")
+                        vorhanden = str(uuid.uuid5(uuid.NAMESPACE_DNS, dedup_key))
+                        if self._point_exists(vorhanden):
+                            skipped += 1
+                            continue
                         written = self._upsert(
                             text=fact["text"],
                             category=fact["category"],
+                            dedup_key=dedup_key,
                             # Facts extracted from a conversation inherit that
                             # conversation's privacy: they carry the same content
                             # (invoices, addresses, family matters). This wrote
@@ -4215,7 +4265,7 @@ def _repair_command() -> str:
     # same revision ``[tool.uv.sources]`` names, not the tag `v0.22.28` that
     # will point at it: a tag can be moved, a sha cannot.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
-            "@ba056de8933980e18761d3dff1f3e0d27970e666")
+            "@2331d0643c0cae4a92ceca1c3a7806b2f0dd67ef")
     # A checkout of THIS repository may be reinstalled in editable mode — handy
     # while developing. It has to prove it is that repository, though: for a
     # catalog-installed plugin `__file__` lives under the Hermes plugin dir and
