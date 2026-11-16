@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:f
 import os from 'node:os'
 import path from 'node:path'
 
-import { Config, apply } from './index.js'
+import { Config, apply, captureText } from './index.js'
 
 const INSTALL_KEY = 'test-installation-key'
 
@@ -145,6 +145,15 @@ cases.push([
     } finally {
       rmSync(dataDir, { recursive: true, force: true })
     }
+  },
+])
+
+cases.push([
+  'captureText truncates a 2000-char turn to maxChars 1600 with an ellipsis',
+  async () => {
+    const text = captureText('u'.repeat(2000), 'a'.repeat(2000), 'session-1', 1, 1600)
+    assert.ok(text.length <= 1600, `length ${text.length} stays within 1600`)
+    assert.ok(text.endsWith('…'), 'result ends with the ellipsis character')
   },
 ])
 
