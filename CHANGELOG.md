@@ -1,3 +1,47 @@
+## [0.22.55] - 2026-11-16
+
+**Wer den Wortlaut zitiert, findet ihn jetzt oben.**
+
+Gemeldet und gemessen: Bei einer Abfrage, die den Text eines Eintrags woertlich zitierte, standen
+zwei Eintraege ueber die Ollama-Ueberwachung auf Platz eins und drei — inhaltlich ohne jeden Bezug
+zur Abfrage. Sie stehen in BEIDEN Trefferlisten (Wortlaut und Bedeutung), der zitierte Eintrag nur
+in einer. Die Rangfusion belohnt das doppelt: wer in beiden Listen mittelmaessig steht, schlaegt
+den einseitigen Spitzenreiter.
+
+Die Rangfusion selbst bleibt unangetastet. Stattdessen ein **Ausloeser**: Deckt genau ein
+sichtbarer Eintrag die Abfrage vollstaendig ab, gehoert er auf Platz 1. Deckt keiner oder mehr als
+einer ab, aendert sich nichts — deshalb werden umformulierte Fragen nicht schlechter.
+
+Drei Feinheiten, die beim Bauen aufgefallen sind und die den Unterschied machen:
+
+1. **Schreibvarianten werden vorher geglaettet** — Kleinschreibung, Eszett zu ss, Umlaute zu
+   ae/oe/ue, Satzzeichen weg, und zwar mit derselben Funktion fuer Abfrage und Eintraege. "scheiss"
+   und "scheiß" sind derselbe Term. Das ist keine Tippfehler-Toleranz: ein echter Tippfehler deckt
+   weiterhin nicht ab.
+2. **Keine Stoppwortliste, sondern eine Schwelle aus dem eigenen Bestand.** Die Regel feuert nur,
+   wenn die Abfrage mindestens zwei Terme enthaelt, die in hoechstens fuenf Prozent der Eintraege
+   vorkommen. Damit fallen "der", "die", "und" von selbst heraus, ohne sprachabhaengige Listen —
+   der Bestand ist deutsch und englisch gemischt.
+3. **Zurueckgezogene Eintraege zaehlen nicht als sichtbarer Volltreffer.** Ein zusammengelegter
+   Zwilling traegt denselben Text; ohne diese Unterscheidung findet die Regel immer zwei
+   Volltreffer und feuert nie. Gemessen: 12358 zurueckgezogene Eintraege im Bestand.
+
+Zwei Stellen mussten mitziehen, beide durch Messung gefunden und nicht durch Nachdenken: Der
+Retriever sortiert vor dem Schnitt, und der Dienst sortiert danach noch einmal nach Nutzungswert —
+eine Umsortierung im Retriever allein waere wirkungslos gewesen. Der Volltreffer traegt deshalb
+eine Markierung, die die Sortierung im Dienst respektiert.
+
+**Dazu zwei Haertungen aus dem Vorfall mit der springenden Zahl.** Beim Start stehen Sammlung und
+Punktzahl jetzt im Protokoll, und fehlt die Sammlung, bricht der Start mit einer klaren Meldung ab
+statt still gegen eine nicht existierende zu arbeiten. Der Grund fuer die Haertung: Die Anzeige
+schien von 53.6xx auf 535 zu springen — in Wahrheit hatte ein Ausgabeschnitt die Zahl gekappt.
+
+Gemessen nach dem Umbau, dieselbe Zitat-Abfrage: Grenze 1, 3, 5, 10 und 20 liefern den gesuchten
+Eintrag jeweils auf **Platz 1**. Gegenprobe mit drei umformulierten Fragen: Reihenfolge unveraendert
+plausibel.
+
+14 neue Testfaelle (`tests/test_coverage_rule.py`).
+
 ## [0.22.54] - 2026-11-16
 
 **Die Ausgabegrenze steuert die Menge, nicht die Trefferquote.**

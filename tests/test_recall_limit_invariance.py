@@ -40,6 +40,10 @@ def _retriever(bm25_hits, vector_hits):
     r._chunk_text_lookup = {}
     r._entity_index = {}
     r._skillgraph = None
+    # Abdeckungsregel still halten: ohne Bestandswissen feuert sie nicht.
+    r._df = None
+    r._doc_count = 0
+    r._suppressed_ids = set()
     r.search_bm25 = lambda query, top_k=10: list(bm25_hits)[:top_k]
     r.search_vector = lambda query_vector, top_k=10: list(vector_hits)[:top_k]
     r._time_decay = lambda ranked: ranked

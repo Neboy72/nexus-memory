@@ -2089,6 +2089,10 @@ class MemoryStore:
             
             entry = {
                 "id": r.get("id"),
+                # Markierung aus der Abdeckungsregel (16.11.2026): Wer die
+                # Abfrage vollstaendig deckt, bleibt vorn — auch nach der
+                # Sortierung nach Nutzungswert weiter unten.
+                "coverage_win": bool(r.get("coverage_win")),
                 # Meldungen kommen ZUSATZLICH als Warnzeile; der Inhalt selbst
                 # wird nicht umgeschrieben.
                 "text": _with_dispute_note(text[:2000], r),  # Cap for readability
@@ -2126,7 +2130,13 @@ class MemoryStore:
         # v0.15 (Review-Fix): Nach effective_score sortieren (Dynamik wirkt),
         # base-score als Tie-Breaker. MCP-Pfad hat keinen Reranker, daher ist
         # die direkte Sortierung hier das Gegenstück zum Plugin-Tie-Breaker.
-        results.sort(key=lambda x: (x.get("dynamic_score", x["score"]), x["score"]), reverse=True)
+        # Ausnahme (16.11.2026): der Volltreffer der Abdeckungsregel bleibt vorn
+        # — sonst wuerde die Umsortierung im Retriever hier wieder aufgehoben.
+        results.sort(
+            key=lambda x: (1 if x.get("coverage_win") else 0,
+                           x.get("dynamic_score", x["score"]), x["score"]),
+            reverse=True,
+        )
 
         # ── F1 Access-Tracking: Nutzung verstärken (set_payload, non-blocking) ──
         # Jeder ausgelieferte Treffer zählt als "erinnert" — use_count++,
@@ -4399,6 +4409,61 @@ server.add_request_handler("tools/list", types.PaginatedRequestParams, _list_too
 server.add_request_handler("tools/call", types.CallToolRequestParams, _call_tool_wrapper)
 
 
+def _log_start_state() -> None:
+    """Sammlung und Punktzahl beim Start ins Protokoll schreiben (16.11.2026).
+
+    Zwei Gruende, beide aus einem echten Vorfall:
+
+    1. BELEG STATT ERINNERUNG. Eine Anzeige schien von 53.6xx auf 535 zu
+       springen; in Wahrheit hatte ein Ausgabeschnitt die Zahl gekappt. Wer die
+       Zahl beim Start einmal protokolliert, kann beim naechsten Mal
+       nachsehen statt raetseln.
+
+    2. LAUT SCHEITERN STATT STILL SCHREIBEN. Der Sammlungsname kommt aus
+       NEXUS_COLLECTION mit der Vorgabe "nexus". Laeuft ein schreibender
+       Prozess ohne diese Variable, arbeitet er gegen eine Sammlung, die es
+       nicht gibt. Fehlt sie beim Start, brechen wir hier ab — eine neue,
+       leere Sammlung soll niemandem passieren.
+
+    Ein Fehler beim Abfragen (Qdrant kurz nicht erreichbar) fuehrt NICHT zum
+    Abbruch: Der Start soll nicht an einem Nebendienst haengen. Dann steht
+    eine Warnung im Protokoll, sonst nichts.
+    """
+    try:
+        import urllib.error
+        import urllib.request
+
+        ziel = f"http://{QDRANT_HOST}:{QDRANT_PORT}/collections/{COLLECTION_NAME}"
+        try:
+            with urllib.request.urlopen(ziel, timeout=5) as antwort:
+                daten = json.loads(antwort.read()).get("result") or {}
+            punkte = daten.get("points_count")
+            print(
+                f"  Sammlung: {COLLECTION_NAME} | Punkte: {punkte} | Qdrant: {QDRANT_HOST}:{QDRANT_PORT}",
+                file=sys.stderr,
+            )
+            if punkte is None:
+                print(
+                    f"  ABBRUCH: Sammlung '{COLLECTION_NAME}' liefert keine Punktzahl. "
+                    "NEXUS_COLLECTION pruefen — es wird NICHT in eine neue Sammlung geschrieben.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+        except urllib.error.HTTPError as fehler:
+            if fehler.code == 404:
+                print(
+                    f"  ABBRUCH: Sammlung '{COLLECTION_NAME}' existiert nicht. "
+                    "NEXUS_COLLECTION pruefen — es wird NICHT in eine neue Sammlung geschrieben.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2) from fehler
+            print(f"  WARNUNG: Startzustand nicht lesbar ({fehler}). Start laeuft weiter.", file=sys.stderr)
+    except SystemExit:
+        raise
+    except Exception as fehler:  # noqa: BLE001 — Start darf nicht an Qdrant haengen
+        print(f"  WARNUNG: Startzustand nicht lesbar ({fehler}). Start laeuft weiter.", file=sys.stderr)
+
+
 async def main():
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await server.run(
@@ -5057,6 +5122,11 @@ def serve(host: str = "127.0.0.1", port: Optional[int] = None) -> int:
     # Baustein C: eager daemons at boot (own fuel chain) — before uvicorn
     # blocks in its event loop. Never raises (see _serve_warmup).
     _serve_warmup()
+    # Sammlung und Punktzahl einmal ins Protokoll (16.11.2026): Damit gibt es
+    # beim naechsten Mal einen Beleg statt einer Erinnerung. Ausloeser war eine
+    # Anzeige, die von 53.6xx auf "535" zu springen schien — in Wahrheit hatte
+    # ein Ausgabeschnitt die Zahl gekappt.
+    _log_start_state()
     # stderr: stdout stays reserved for protocol output, matching the
     # stdio path's rule (see _check_webui_available).
     print(
