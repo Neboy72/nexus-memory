@@ -474,6 +474,9 @@ h2 {
   align-items: center;
   gap: 12px;
   margin-bottom: 8px;
+  /* Schmale Karten: die Badges rutschen in die naechste Zeile, statt
+     abgeschnitten zu werden (ID-Badge, 15.11.2026). */
+  flex-wrap: wrap;
 }
 
 .agent-logo {
@@ -483,6 +486,20 @@ h2 {
   object-fit: contain;
   background: #050810;
   padding: 2px;
+}
+
+/* Universal avatar (15.11.2026): every agent gets a face even without artwork.
+   Same box as the image logo so a card never jumps. */
+.agent-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex: 0 0 auto;
 }
 
 .agent-icon {
@@ -525,6 +542,13 @@ h2 {
   text-overflow: ellipsis;
   max-width: 160px;
   min-width: fit-content;
+}
+
+/* ID-Badge (Punkt 4c): steht rechts in der Badge-Zeile (``.agent-header`` ist
+   flex + flex-wrap). ``margin-left:auto`` schiebt sie an den rechten Rand
+   ihrer Zeile — auch dann, wenn sie allein in die naechste Zeile umbricht. */
+.id-badge {
+  margin-left: auto;
 }
 
 /* Host badge (local / remote) + hover tooltip showing the seat */
@@ -580,7 +604,9 @@ h2 {
   height: 8px;
   border-radius: 50%;
   background: #00b894;
-  margin-left: auto;
+  /* Nicht mehr ``auto``: die freie Strecke gehoert dem ID-Badge, sonst
+     teilen sich beide den Rest und die Kennung steht nicht mehr rechts. */
+  margin-left: 8px;
   box-shadow: 0 0 6px #00b894;
 }
 
@@ -628,6 +654,10 @@ h2 {
 }
 
 .agent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 22px;
   font-size: 12px;
   color: #636e72;
   margin-bottom: 10px;
@@ -636,17 +666,49 @@ h2 {
 /* Trust Level Buttons */
 .trust-buttons {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+}
+
+/* Control row (15.11.2026): Access and Role as two compact chip groups in ONE row,
+   each with its own label. Replaces the wide button row + separate role row. */
+.agent-controls {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Role group sits flush right: the free space stays in the middle of the card,
+   so Access reads from the left edge and Role from the right edge. */
+.agent-controls > .control-group:last-child {
+  margin-left: auto;
+}
+
+.control-label {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8f9aa3;
 }
 
 .trust-btn {
-  flex: 1;
-  padding: 8px 12px;
+  flex: 0 0 auto;
+  padding: 2px 10px;
   border: 1px solid #1a1a2e;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: #636e72;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.5;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
@@ -674,6 +736,58 @@ h2 {
   background: rgba(231, 76, 60, 0.15);
   border-color: #e74c3c;
   color: #e74c3c;
+}
+
+/* Role field (15.11.2026): three levels instead of "may do everything".
+   Deliberately a SECOND plane, not a second row of equal buttons: smaller
+   type, tight padding, small radius, and the whole block flush right. The
+   access choice above stays the prominent, full-width control. */
+.role-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.role-label {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: #636e72;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Own width, pushed to the right edge — never stretched over the row. */
+.role-row .trust-buttons {
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.role-btn {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+.trust-btn.active.admin {
+  background: rgba(231, 76, 60, 0.15);
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+
+.trust-btn.active.work {
+  background: rgba(253, 203, 110, 0.15);
+  border-color: #fdcb6e;
+  color: #fdcb6e;
+}
+
+.trust-btn.active.know {
+  background: rgba(0, 184, 148, 0.15);
+  border-color: #00b894;
+  color: #00b894;
 }
 
 /* Available Agent Card (not yet connected) */
@@ -947,6 +1061,69 @@ h2 {
 
 /* Fehlermeldung: Signal-Farbe (rot), NICHT neutrales Grau */
 .insp-error { color: #e74c3c; font-size: 13px; padding: 10px 0; }
+
+/* ── Service-Protokoll: Tabelle im Inspector-Overlay ─────────────────── */
+/* Kompakter als der Inspector-Knopf — er sitzt in der Kopfzeile. */
+.svclog-refresh { padding: 6px 12px; font-size: 12px; flex: 0 0 auto; }
+
+/* Feste Hoehe, beide Richtungen scrollbar: auf dem Telefon scrollt die
+   Tabelle, nicht das ganze Overlay. */
+.svclog-scroll {
+  height: min(46vh, 420px); overflow-y: auto; overflow-x: auto;
+  border: 1px solid #1a1a2e; border-radius: 10px;
+  background: linear-gradient(135deg, #0d0d18 0%, #0a0a14 100%);
+}
+.svclog-table {
+  width: 100%; min-width: 560px; border-collapse: collapse;
+  font-size: 13px;
+}
+.svclog-table th {
+  position: sticky; top: 0; z-index: 1;
+  padding: 9px 12px; text-align: left; font-weight: 600;
+  color: #8f9aa3; background: #12121f;
+  border-bottom: 1px solid #1a1a2e; white-space: nowrap;
+}
+.svclog-table td {
+  padding: 8px 12px; color: #DEDDDE;
+  border-bottom: 1px solid rgba(26, 26, 46, 0.6);
+  white-space: nowrap;
+}
+.svclog-table tbody tr:hover td { background: rgba(149, 78, 255, 0.06); }
+.svclog-table td.svclog-topic { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+/* Nebentexte: 13 px und #8f9aa3 — gegen den Overlay-Grund (#0d0d18) sind das
+   6.7:1, mit #636e72 waren es 3.7:1 und damit zu dunkel (Sichtpruefung). */
+.svclog-time { font-family: ui-monospace, monospace; font-size: 13px; color: #8f9aa3; }
+.svclog-private { font-size: 13px; color: #8f9aa3; font-style: italic; }
+/* Kennung: mindestens 12 px und eine Stufe heller als der Nebentext
+   (#a8b2bd: 9.0:1 gegen #0d0d18), damit die kurze Kennung lesbar bleibt. */
+.svclog-id {
+  font-family: ui-monospace, monospace; font-size: 12px; color: #a8b2bd;
+  margin-left: 6px;
+}
+/* Kennung unter dem Label in der Actor-Spalte — kleiner, aber lesbar
+   (12 px, #8f9aa3: 6.7:1 gegen den Overlay-Grund #0d0d18). */
+.svclog-actor-id {
+  font-family: ui-monospace, monospace; font-size: 12px; color: #8f9aa3;
+}
+/* Ergebnis: ok neutral, refused bernstein, failed rot. */
+.svclog-result { font-weight: 600; }
+.svclog-result--ok      { color: #DEDDDE; }
+.svclog-result--refused { color: #f5a623; }
+.svclog-result--failed  { color: #e74c3c; }
+
+/* Ketten-Status: links oben in der Kopfzeile, in derselben Groesse wie die
+   Spaltenkoepfe (13 px) und mit deren Ton — er ist die Aussage der Ansicht. */
+.svclog-chain { font-size: 13px; color: #8f9aa3; }
+/* Nur der Bruch ist eine Warnung. */
+.svclog-chain--warn { color: #e74c3c; }
+
+/* Telefon: der Ketten-Status bekommt eine eigene Zeile. In der Kopfzeile
+   bliebe sonst nur "K…" uebrig — der Status ist aber die Aussage der Ansicht. */
+@media (max-width: 600px) {
+  #serviceLogOverlay .insp-overlay__header { flex-wrap: wrap; }
+  .svclog-chain { flex: 1 1 100%; order: 3; white-space: normal; }
+}
+.svclog-empty { color: #8f9aa3; font-size: 13px; padding: 18px 2px; }
 
 /* Action-Bar-Variante (bleibt in Reihe mit den anderen) */
 .action-btn--inspector { border-color: #1a1a2e; }
