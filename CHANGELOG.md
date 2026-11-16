@@ -1,3 +1,22 @@
+## [0.22.49] - 2026-11-16
+
+### Harness-Plugin speichert wieder — und ein frischer Rechner laedt es
+
+Zwei Fehler im Plugin fuer den DeepSeek-Harness, beide an derselben Stelle sichtbar: das
+Gedaechtnis blieb still, ohne dass jemand einen Fehler sah.
+
+- `captureText` kuerzte lange Turns mit `rstrip()`. Das ist Python, nicht JavaScript: jeder Turn
+  ueber der Zeichengrenze warf einen `TypeError`, und das Speichern lief in den Fehlerzweig. Im
+  Gedaechtnis kam nichts an. Jetzt `trimEnd()`, abgesichert durch einen Testfall (2000 Zeichen
+  gegen eine Grenze von 1600).
+- Auf einem frischen Linux-Rechner brach das Plugin mit `ERR_MODULE_NOT_FOUND` fuer
+  `@deepseek-ai/dsh-llm` ab. Mac und Windows liefen nur, weil die Pakete dort zufaellig im Ordner
+  lagen. `package.json` nennt beide jetzt (`@deepseek-ai/dsh-llm`, `@deepseek-ai/schemastery`), und
+  der Installer fuehrt `npm install` im Plugin-Ordner aus und meldet Fehler deutlich statt still.
+- Die Testabhaengigkeiten nennen `python-dotenv` jetzt selbst. Drei Testdateien lesen es, bisher
+  verliessen sie sich auf ein zufaellig vorhandenes Paket.
+- `opentelemetry-api` auf 1.45.2 (Dependabot #110, DoS beim Parsen von `traceparent`).
+
 ## [0.22.48] - 2026-11-11
 
 ### Schreibtor - eine Prüfung für alle Schreibwege

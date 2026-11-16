@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.48-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.22.49-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-green-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -302,6 +302,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.49** | 2026-11-16 | The DeepSeek-Harness plugin stored nothing for long turns: `captureText` trimmed with `rstrip()`, which is Python and not JavaScript, so every turn past the character limit threw a `TypeError` and the capture fell into its error branch. Now `trimEnd()`, pinned by a test that runs 2000 characters against a 1600 limit. A fresh Linux machine also refused to load the plugin — `ERR_MODULE_NOT_FOUND` for `@deepseek-ai/dsh-llm`, because only Mac and Windows happened to have the packages lying in that folder; `package.json` names both dependencies now and the installer runs `npm install` and reports failures loudly instead of silently |
 | **v0.22.48** | 2026-11-11 | Recall could serve nothing from 632 points whose text sat in the wrong field, and short state facts ("Hermes version: 0.23.1", 21 characters) were filtered out of the injected block by the 40-character floor. The block now falls back from `content` to `text`, a state fact marked by the write gate needs only 12 characters, and the write gate recognises state values: a long text stores as before but comes back with a hint to keep the value as its own short fact. No second write, no automatic extraction |
 | **v0.22.47** | 2026-11-08 | The shared-room cap only guarded reads: recall served public memories while stores and captures still wrote at the configured level, so writing into a room with a stranger produced private memories. The pre-check now reads with the room level too, and every write is capped to public in a room proven shared. Reads stay fail-closed, writes cap only on proof, and nothing is rejected |
 | **v0.22.46** | 2026-11-07 | In a shared room the plugin served whatever the access level allowed, because nothing looked at who actually wrote there; recall, the tools and the graph now read the room state, which turns shared as soon as a human other than the owner posts, and bots never count. The owner is identified per platform, so one id per platform is enough |
@@ -376,4 +377,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.48 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.49 · One memory for all your agents</sub>
