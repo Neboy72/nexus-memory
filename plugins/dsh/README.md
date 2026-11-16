@@ -89,7 +89,13 @@ node scripts/install_dsh_plugin.mjs                  # Profil "desktop", Harness
 node scripts/install_dsh_plugin.mjs --harness dsh-win --base-url http://127.0.0.1:9122
 ```
 
-Das Skript prüft den Dienst, holt beim ersten Mal einen eigenen Schlüssel
+Das Skript installiert zuerst die Pakete des Plugins (`npm install --omit=dev` im
+Ordner, den das Profil registriert) — ohne `@deepseek-ai/dsh-llm` und
+`@deepseek-ai/schemastery` bricht der Harness beim Laden mit
+`ERR_MODULE_NOT_FOUND` ab, und das Plugin sieht trotzdem installiert aus.
+Voraussetzung ist Node 22+ und npm.
+
+Dann prüft es den Dienst, holt beim ersten Mal einen eigenen Schlüssel
 (`POST /enroll`), legt ihn unter `<datenverzeichnis>/agent_keys/<harness>.key` ab
 und schreibt `NEXUS_AGENT_KEY` in `<profil>/.env`. Gilt der vorhandene Schlüssel
 noch, wird nichts ersetzt (`--force-enroll` erzwingt es).
