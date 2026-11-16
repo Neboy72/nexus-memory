@@ -1411,16 +1411,32 @@ class HybridRetriever:
         return items
 
     def _tier_boost(self, ranked: list[dict]) -> list[dict]:
-        """Apply source-tier boosting — uses metadata source_tier if available, else keywords."""
+        """Quellen-Vertrauen entscheidet bei Gleichstand, nicht ueber die Relevanz.
+
+        Vorher wurde der Fusionswert mit dem Boost der Quelle MULTIPLIZIERT
+        (tier1 bis 1.2, tier3 1.0). Gemessen am 17.11.2026 an 40 Faellen
+        (Paraphrase und Stichwort): mit Multiplikator 7 auf Platz 1 und 17 in
+        den Top 5, ohne 20 und 32. Der Boost kostete also 13 von 40
+        Platz-1-Treffern — mehr als jede Aenderung an der Fusion je gebracht
+        hat.
+
+        Der Zweck bleibt erhalten: Bei EXAKT gleichem Fusionswert gewinnt
+        weiterhin die vertrauenswuerdigere Quelle. Nur ueberstimmt sie die
+        Relevanz nicht mehr. Gemessen: Als reiner Gleichstands-Entscheider
+        dieselben 20 und 32 wie ohne Boost.
+        """
         for item in ranked:
             text = item.get("text", "")
             metadata = item.get("metadata")  # May be None for BM25-only hits
             tier, boost = _resolve_tier(text, metadata)
-
             item["tier"] = tier
-            item["rrf_score"] *= boost
+            item["tier_boost"] = boost
 
-        return sorted(ranked, key=lambda x: x["rrf_score"], reverse=True)
+        return sorted(
+            ranked,
+            key=lambda x: (round(x.get("rrf_score", 0), 6), x.get("tier_boost", 1.0)),
+            reverse=True,
+        )
 
     def _time_decay(self, ranked: list[dict]) -> list[dict]:
         """Apply Gauss-shaped time decay to ranked results (v0.4.0).

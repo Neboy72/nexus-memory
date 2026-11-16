@@ -131,24 +131,38 @@ def main():
     rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                        "clientInfo": {"name": "messlatte", "version": "1"}})
 
-    punkte = [p for p in stichprobe() if brauchbar(p)]
-    random.Random(RANDOM_SEED).shuffle(punkte)
-    punkte = punkte[:AUSWAHL]
+    # Die Faelle werden EINMAL gezogen und dann festgehalten (17.11.2026).
+    # Vorher zog jeder Lauf eine neue Stichprobe — die Zahl der Kennungs-Faelle
+    # schwankte zwischen 8 und 36, und zwei Laeufe waren nicht vergleichbar.
+    # Mit fester Liste ist jeder Eingriff paarweise messbar.
+    fall_datei = pathlib.Path(__file__).resolve().parent / "messlatte-faelle.json"
+    if fall_datei.exists():
+        auswahl = json.loads(fall_datei.read_text())
+        print(f"Faelle aus {fall_datei.name}: {len(auswahl)}")
+    else:
+        punkte = [p for p in stichprobe() if brauchbar(p)]
+        random.Random(RANDOM_SEED).shuffle(punkte)
+        punkte = punkte[:AUSWAHL]
 
-    faelle = []
-    for punkt in punkte:
-        for art, frage in fragen_aus(punkt):
-            faelle.append({"art": art, "frage": frage, "ziel": str(punkt["id"])})
+        faelle = []
+        for punkt in punkte:
+            for art, frage in fragen_aus(punkt):
+                faelle.append({"art": art, "frage": frage, "ziel": str(punkt["id"])})
 
-    pro_art = {}
-    for fall in faelle:
-        pro_art.setdefault(fall["art"], []).append(fall)
-    auswahl = []
-    for art, liste in pro_art.items():
-        auswahl.extend(liste[:PRO_ART])
+        pro_art = {}
+        for fall in faelle:
+            pro_art.setdefault(fall["art"], []).append(fall)
+        auswahl = []
+        for art in sorted(pro_art):
+            auswahl.extend(pro_art[art][:PRO_ART])
+        fall_datei.write_text(json.dumps(auswahl, indent=2, ensure_ascii=False))
+        print(f"Faelle gezogen und festgehalten: {fall_datei.name} ({len(auswahl)})")
 
-    print(f"Stichprobe: {len(punkte)} Eintraege | Fragen: {len(auswahl)} "
-          f"({', '.join(f'{a}={len(l[:PRO_ART])}' for a, l in pro_art.items())})")
+    verteilung = {}
+    for fall in auswahl:
+        verteilung[fall["art"]] = verteilung.get(fall["art"], 0) + 1
+    print(f"Fragen: {len(auswahl)} "
+          f"({', '.join(f'{a}={n}' for a, n in sorted(verteilung.items()))})")
 
     ergebnisse = []
     start = time.time()

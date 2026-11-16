@@ -47,3 +47,9 @@ plugins/openclaw/reports/
 # Agent worktrees (local agent copies, never part of the repo)
 .claude/
 plugins/dsh/node_modules/
+
+# Messlatte: erzeugte Falldateien (enthalten Woertliches aus dem eigenen Bestand,
+# Fragen und Textanfaenge). Der Code liegt im Repo, die Daten bleiben lokal —
+# dasselbe Prinzip wie bei Zugangsdaten.
+benchmarks/messlatte-faelle.json
+benchmarks/paraphrase-faelle.json
