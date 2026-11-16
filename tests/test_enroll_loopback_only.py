@@ -59,7 +59,7 @@ def test_loopback_gets_a_key(isolated_agents_registry):
 
 
 def test_other_address_is_refused():
-    r = _enroll(peer=("192.0.2.9", 5555))
+    r = _enroll(peer=("198.51.100.9", 5555))
 
     assert r.status_code == 403
     assert r.json() == {"error": "enroll is loopback only"}
