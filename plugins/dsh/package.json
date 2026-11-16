@@ -1,0 +1,28 @@
+{
+  "name": "@local/dsh-nexus-memory",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Native Nexus Memory plugin for the Harness: auto-recall before a turn, auto-capture after it.",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "nexus_bridge.py",
+    "smoke-test.py",
+    "smoke-test-http.py",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "HANDOVER.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

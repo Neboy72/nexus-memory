@@ -17,6 +17,21 @@ export type SearchResult = {
 }
 
 /**
+ * Der Inhalt eines Punktes: `content`, sonst `text`, sonst `""`.
+ *
+ * `content` ist das fuehrende Feld. `text` bleibt lesbar, weil 628 Punkte der
+ * Sammlung ihren Inhalt am 15.11.2026 nur dort trugen und an jeder Stelle
+ * durchfielen, die ausschliesslich `content` las. Liegen beide vor, gewinnt
+ * `content`. Nicht-Strings (untrusted payload) werden nie durchgereicht.
+ */
+export function pointText(payload: Record<string, unknown> | null | undefined): string {
+  // `||`, nicht `??`: ein leerer `content` faellt auf `text` zurueck — dieselbe
+  // Reihenfolge wie `point_text()` auf der Python-Seite.
+  const value = payload?.content || payload?.text || ""
+  return typeof value === "string" ? value : ""
+}
+
+/**
  * Hard cap on how many scroll pages a single query walks via
  * `next_page_offset`. Bounds the worst case (latency/fan-out) on large
  * collections while still returning far more than the first page.
@@ -56,6 +71,67 @@ export const ACCESS_LEVEL_ORDER: Record<string, number> = {
   public: 0,
   trusted: 1,
   private: 2,
+}
+
+// ── Geltungsbereich (scope, entschieden 15.11.2026) ──────────────────
+// "default" ist der GEMEINSAME Bereich: Fakten, Regeln, Lehren, Prozeduren,
+// Entities, Praeferenzen, Beliefs und Entscheidungen liegen dort, und jeder
+// Agent liest sie, gleich wer sie geschrieben hat. Eine Zugriffsstufe heisst
+// "nicht nach aussen", nicht "nur fuer den Schreiber".
+// Jeder andere Wert ist ein VERBUND — die Agenten-Kennung. Dort bleiben die
+// Sitzungsprotokolle (category "session"). Stufe und Verbund sind zwei
+// getrennte Achsen: sie werden ueber `must` kombiniert, nie ersetzt.
+export const SHARED_SCOPE = "default"
+
+const SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]{0,39}$/
+
+/**
+ * Der Verbund dieses Aufbaus — seine eigene Protokoll-Ablage.
+ *
+ * Ein gesetzter `scope` in der Config ist der EIGENE Bereich dieses Agenten
+ * (so hat ihn die Auto-Recall-Drossel immer benutzt und dorthin legt der
+ * Capture-Weg seine Protokolle). Ohne Override ist der Verbund die
+ * Agenten-Kennung dieses Plugins: `openclaw`.
+ */
+export function scopeBundle(cfg: { scope?: string } | undefined): string {
+  const manual = typeof cfg?.scope === "string" ? cfg.scope.trim().toLowerCase() : ""
+  if (manual && SCOPE_VALUE_RE.test(manual)) return manual
+  return "openclaw"
+}
+
+/**
+ * Die drei Sichtbarkeits-Bedingungen als Qdrant-`should`.
+ *
+ * `default` (gemeinsam), der eigene Verbund, und Punkte OHNE `scope`-Feld —
+ * der Altbestand verhaelt sich wie `default` und darf nicht verschwinden.
+ * Diese Liste gehoert NEBEN den Zugriffsstufen-Filter in `must`; zwei
+ * Geschwister-`should`-Listen waeren ein ODER und liessen fremde Protokolle
+ * mit niedriger Stufe durch.
+ */
+export function scopeShould(bundle: string): Array<Record<string, unknown>> {
+  return [
+    { key: "scope", match: { value: SHARED_SCOPE } },
+    { key: "scope", match: { value: bundle } },
+    { is_empty: { key: "scope" } },
+  ]
+}
+
+/**
+ * Dieselben drei Bedingungen in TypeScript — fuer Pfade, die den Payload schon
+ * in der Hand haben (Graph-Nachbarn, Entity-Aufloesung).
+ *
+ * Ein fehlender Payload bleibt sichtbar: das ist der Altbestand-Fall, keine
+ * Freigabe fremder Verbunde.
+ */
+export function scopeVisible(
+  payload: Record<string, unknown> | null | undefined,
+  bundle: string,
+): boolean {
+  const scope = payload?.scope
+  if (scope === null || scope === undefined) return true // Altbestand
+  const text = typeof scope === "string" ? scope.trim().toLowerCase() : ""
+  if (!text) return true // leeres Feld ebenso
+  return text === SHARED_SCOPE || text === bundle
 }
 
 /**
@@ -107,6 +183,17 @@ export function recordAgentAccess(read: boolean, write: boolean): void {
     // Same ISO form the core writes (``+00:00``, not JS's ``Z``).
     const now = new Date().toISOString().replace("Z", "+00:00")
     let entry = agents.find((a) => a?.id === id)
+    // Punkt 4c: a renamed agent carries its old name in ``formerly``. Resolve
+    // it BEFORE creating anything — otherwise this direct writer would add a
+    // second entry next to the renamed one.
+    if (!entry) {
+      entry = agents.find((a) => {
+        const former = a?.formerly
+        return Array.isArray(former) && former.some(
+          (name) => typeof name === "string" && name.trim() === id,
+        )
+      })
+    }
     if (!entry) {
       entry = {
         id,
@@ -192,11 +279,22 @@ export class QdrantClient {
    */
   private vectorName: string | null = null
 
-  constructor(qdrantUrl: string, collection: string, dimensions: number) {
+  /** Der Verbund dieses Aufbaus (Sichtbarkeitsregel 15.11.2026). Kommt aus
+   *  der Config (`scope`, sonst `openclaw`) und wird von `search()` als
+   *  `should`-Block an JEDEN Lesefilter gehaengt. */
+  private bundle: string
+
+  constructor(
+    qdrantUrl: string,
+    collection: string,
+    dimensions: number,
+    bundle: string = "openclaw",
+  ) {
     this.qdrantUrl = qdrantUrl.replace(/\/+$/, "")
     this.collection = collection
     this.configuredDimensions = dimensions
-    log.info(`Qdrant client initialized (url=${this.qdrantUrl}, collection=${collection}, dims=${dimensions})`)
+    this.bundle = bundle
+    log.info(`Qdrant client initialized (url=${this.qdrantUrl}, collection=${collection}, dims=${dimensions}, bundle=${bundle})`)
   }
 
   /** Read dimension + vector name out of Qdrant's two possible layouts.
@@ -564,7 +662,7 @@ export class QdrantClient {
       id: String(r.id),
       // entity points carry their label in content, the Python side
       // already falls back, both readers must share one contract.
-      text: ((r.payload?.text ?? r.payload?.content) as string) ?? "",
+      text: pointText(r.payload),
       score: r.score,
       // Labels for a RESULT, not values to be trusted as authority. A payload
       // without an access_level is treated as "private" everywhere it matters
@@ -594,24 +692,33 @@ export class QdrantClient {
       return []
     }
 
-    const filter =
-      // OCR-6 (bug medium): the literal `3` hardcoded ACCESS_LEVEL_ORDER's
-      // size — adding a level above private silently DROPPED the filter for
-      // private agents (leaking the new higher-privilege memories). Compare
-      // against the hierarchy size instead.
-      levels.length < Object.keys(ACCESS_LEVEL_ORDER).length
-        ? { must: [{ key: "access_level", match: { any: levels } }] }
-        : undefined // agent sees every level — no filter needed
+    // Zwei getrennte Achsen (15.11.2026):
+    //   must   → Zugriffsstufe (nur wenn der Agent nicht alle Stufen sieht)
+    //   should → Verbund (gemeinsam / eigener Verbund / Altbestand ohne Feld)
+    // Der Verbund-Filter steht auch dann, wenn die Stufe keinen braucht: ein
+    // fremdes Sitzungsprotokoll ist fuer diesen Agenten Ballast, unabhaengig
+    // von seiner Stufe. Beide Achsen werden ueber `must` kombiniert, nie
+    // ersetzt; zwei `should`-Listen waeren ein ODER.
+    const must: Array<Record<string, unknown>> = []
+    // OCR-6 (bug medium): the literal `3` hardcoded ACCESS_LEVEL_ORDER's
+    // size — adding a level above private silently DROPPED the filter for
+    // private agents (leaking the new higher-privilege memories). Compare
+    // against the hierarchy size instead.
+    if (levels.length < Object.keys(ACCESS_LEVEL_ORDER).length) {
+      must.push({ key: "access_level", match: { any: levels } })
+    }
+    const filter: Record<string, unknown> = { should: scopeShould(this.bundle) }
+    if (must.length > 0) filter.must = must
 
     const body: Record<string, unknown> = {
       vector: this.vectorField(queryVector),
       limit,
       with_payload: true,
+      filter,
     }
-    if (filter) body.filter = filter
 
     log.debugRequest("search", { collection: this.collection, limit, accessLevel, levels,
-                                 vectorName: this.vectorName })
+                                 bundle: this.bundle, vectorName: this.vectorName })
 
     const resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points/search`,
@@ -1050,9 +1157,12 @@ export class QdrantClient {
   /**
    * Vector search used by forget-by-query.
    *
-   * Applies the SAME access-level filter as search(): a memory an agent at
-   * `accessLevel` cannot see must never be matched (and then deleted) via
-   * forget-by-query. Unknown levels fail closed (match nothing).
+   * Applies the SAME two axes as search(): the access level in `must` (a
+   * memory an agent at `accessLevel` cannot see must never be matched and
+   * then deleted) and the bundle in `should` (entschieden 15.11.2026: fremde
+   * Verbunde sind nicht loeschbar — forget-by-query must not reach another
+   * agent's session logs, whatever their access level). Unknown levels fail
+   * closed (match nothing).
    */
   async searchByVector(
     queryVector: number[],
@@ -1071,21 +1181,25 @@ export class QdrantClient {
       return []
     }
 
-    const filter =
-      // OCR-6 (bug medium): the literal `3` hardcoded ACCESS_LEVEL_ORDER's
-      // size — adding a level above private silently DROPPED the filter for
-      // private agents (leaking the new higher-privilege memories). Compare
-      // against the hierarchy size instead.
-      levels.length < Object.keys(ACCESS_LEVEL_ORDER).length
-        ? { must: [{ key: "access_level", match: { any: levels } }] }
-        : undefined // agent sees every level — no filter needed
+    const must: Array<Record<string, unknown>> = []
+    // OCR-6 (bug medium): the literal `3` hardcoded ACCESS_LEVEL_ORDER's
+    // size — adding a level above private silently DROPPED the filter for
+    // private agents (leaking the new higher-privilege memories). Compare
+    // against the hierarchy size instead.
+    if (levels.length < Object.keys(ACCESS_LEVEL_ORDER).length) {
+      must.push({ key: "access_level", match: { any: levels } })
+    }
+    // Der Verbund steht wie in search() IMMER: ein Agent, der alle Stufen
+    // sieht, darf trotzdem keine fremden Sitzungsprotokolle loeschen.
+    const filter: Record<string, unknown> = { should: scopeShould(this.bundle) }
+    if (must.length > 0) filter.must = must
 
     const body: Record<string, unknown> = {
       vector: this.vectorField(queryVector),
       limit,
       with_payload: true,
+      filter,
     }
-    if (filter) body.filter = filter
 
     const resp = await fetchWithTimeout(
       `${this.qdrantUrl}/collections/${this.collection}/points/search`,

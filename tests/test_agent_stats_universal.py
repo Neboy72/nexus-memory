@@ -83,7 +83,11 @@ def test_unknown_agent_id_is_registered_on_first_write(isolated_agents_registry)
     entry = agents[0]
     assert entry["id"] == "brandneuer-agent"
     assert entry["name"] == "brandneuer-agent", "name defaults to the id"
-    assert entry["trust_level"] == "public", "safe default: no visibility gain"
+    # The FIRST agent in an empty registry is the owner (Nebo's rule): private
+    # visibility and admin role, otherwise a fresh install has nobody who can
+    # manage it. Later arrivals stay at public — see the next test.
+    assert entry["trust_level"] == "private", "erster Agent = Eigentuemer"
+    assert entry["role"] == "admin", "der Eigentuemer muss verwalten koennen"
     assert entry["writes"] == 1
     assert entry["reads"] == 0
     assert entry["connected_at"], "connected_at must be stamped"

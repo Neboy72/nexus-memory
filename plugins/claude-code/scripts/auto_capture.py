@@ -74,21 +74,26 @@ EMBEDDING_MODEL = (os.getenv("NEXUS_EMBEDDING_MODEL")
 _SCOPE_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 
-def _resolve_capture_scope(embedding) -> str:
-    """Self-organizing memory scope resolution for auto-capture.
+def _resolve_capture_scope(category: str) -> str:
+    """Schreibziel des Captures: genau zwei Bereiche (entschieden 15.11.2026).
 
-    Explicit NEXUS_SCOPE wins; else infer from scoped centroids (clear match
-    via the shared scope_auto lib); else 'default'. Fail-open everywhere.
+    Ein Sitzungsprotokoll (``category == "session"``) gehoert in den EIGENEN
+    Verbund — ``scope_auto.own_bundle()``: ein gueltiges ``NEXUS_SCOPE``,
+    sonst die Agenten-Kennung (Vorgabe ``claude-code``). Alles andere gehoert
+    in den GEMEINSAMEN Bereich ``default``.
+
+    ``infer_scope`` wird hier bewusst NICHT mehr befragt: ein aus Zentroiden
+    geratener Themen-Bereich ist kein Verbund, und ein Punkt in einem
+    geratenen Bereich waere fuer ALLE unsichtbar — auch fuer den Schreiber.
+    Fail-open: jeder Fehler bei der Ermittlung → ``default``.
     """
-    manual = os.getenv("NEXUS_SCOPE", "").strip().lower()
-    if manual_scope_ok(manual):
-        return manual
+    if category != "session":
+        return "default"
     try:
         import scope_auto as _scope_auto  # same dir
-        cents = _scope_auto.fetch_centroids(QDRANT_URL, COLLECTION)
-        return _scope_auto.infer_scope(embedding, cents)
+        return _scope_auto.own_bundle()
     except Exception as exc:
-        print(f"[nexus auto_capture] capture inference skipped ({exc}) — default", file=sys.stderr)
+        print(f"[nexus auto_capture] own bundle unresolved ({exc}) — default", file=sys.stderr)
         return "default"
 
 
@@ -97,8 +102,8 @@ def manual_scope_ok(s: str) -> bool:
 
     Applies the shared normalization (``_normalize_scope``: strip + lowercase)
     and then the scope contract ``^[a-z0-9][a-z0-9-]{0,39}$``. Empty or
-    otherwise invalid input → False, so the caller falls through to centroid
-    inference / 'default'.
+    otherwise invalid input → False, so the caller falls through to
+    'default' (never to a guessed area).
 
     H252: a hand-built per-char check previously accepted a leading dash
     ("-foo", "-" alone) and rejected uppercase — diverging from ``_SCOPE_RE``
@@ -152,7 +157,10 @@ def _resolve_trust_level() -> str:
         with open(AGENTS_FILE) as f:
             registry = json.load(f)
         for agent in registry.get("agents", []):
-            if agent.get("id") == agent_id:
+            # A renamed agent keeps its old name under "formerly": the caller may
+            # still identify itself with the old one (env var, older config).
+            known = [agent.get("id")] + list(agent.get("formerly") or [])
+            if agent_id in known:
                 trust = agent.get("trust_level", "public")
                 if trust in ("public", "trusted", "private"):
                     return trust
@@ -169,6 +177,15 @@ def _resolve_trust_level() -> str:
         )
         return "public"
 
+def _agent_id() -> str:
+    """Who this hook is: ``NEXUS_AGENT_ID``, else ``claude-code``.
+
+    Used for the local movement-log line only. The service learns the sender
+    from the agent key (15.11.2026) — no header claims it any more.
+    """
+    return (os.getenv("NEXUS_AGENT_ID") or "").strip() or "claude-code"
+
+
 def get_embedding(text: str) -> list:
     """Get embedding from configured provider.
 
@@ -178,6 +195,7 @@ def get_embedding(text: str) -> list:
     """
     if _embedding.is_serve_provider(EMBEDDING_PROVIDER):
         # Automatic path: the local Nexus service embeds the document side.
+        # 15.11.2026: no caller header any more — the agent key names us.
         return _embedding.embed_via_serve(text, is_query=False)
     try:
         if EMBEDDING_PROVIDER == "ollama":
@@ -278,7 +296,7 @@ def _prepare_write(**fields):
     try:
         from nexus.write_gate import prepare
     except Exception as exc:
-        _GATE_LOAD_ERROR = f"Schreibtor nicht ladbar: {type(exc).__name__}: {exc}"
+        _GATE_LOAD_ERROR = f"write gate not loadable: {type(exc).__name__}: {exc}"
         print(f"[nexus auto-capture] {_GATE_LOAD_ERROR} — abgewiesen",
               file=sys.stderr)
         return None
@@ -295,6 +313,37 @@ def _write_refusal() -> str:
         return _GATE_LOAD_ERROR or "abgewiesen"
 
 
+def _log_movement(action, result, *, text="", access_level="", category=None,
+                  scope=None, target_id=None, reason=None, after_text=None):
+    """Eine Zeile ins Bewegungsprotokoll — fail-open, ``via="hook"``.
+
+    Der Hook schrieb bisher direkt nach Qdrant und damit an jeder
+    Protokollzeile vorbei (15.11.2026). Kein Inhalt: das Thema bestimmt
+    ``service_log.record`` (bei ``private`` leer, Zahlen ersetzt), sonst
+    stehen nur Kennung, Kategorie, Bereich und Pruefsumme in der Zeile.
+    Meldungen gehen nach stderr, nie nach stdout — stdout ist der Hook-Kanal
+    und muss sauber bleiben.
+
+    ``actor`` ist die eigene Kennung: der Hook schreibt direkt nach Qdrant,
+    es gibt keinen Dienst, der sie setzen koennte — ohne sie stuende
+    ``unidentified`` in einer Zeile, die dieser Hook selbst verfasst.
+    """
+    try:
+        from nexus_memory import service_log
+        service_log.record(
+            action, result, text=text, access_level=access_level,
+            target_id=target_id, category=category, scope=scope,
+            reason=reason,
+            actor=_agent_id(),
+            after_hash=(service_log.content_hash(after_text)
+                        if after_text is not None else None),
+            via="hook",
+        )
+    except Exception as exc:  # noqa: BLE001 — Protokoll ist eine Zugabe
+        print(f"[nexus auto-capture] Bewegungsprotokoll nicht geschrieben: {exc}",
+              file=sys.stderr)
+
+
 def store_memory(text: str, category: str = "session", point_id: str = None):
     """Store a memory in Qdrant."""
     import uuid
@@ -305,10 +354,11 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
     # abgewiesen, die Herkunft bleibt nie leer, und die Zugriffsstufe ist die
     # strengste aus Quelle und Angabe. ``chat`` ist die Herkunftsart dieses
     # Weges: der Hook liest ein Gespraech, die Quelle steht daneben.
+    requested_level = _resolve_trust_level()
     prepared = _prepare_write(
         content=text,
         category=category,
-        access_level=_resolve_trust_level(),
+        access_level=requested_level,
         source="claude-code",  # guard-ok: Name des Adapters, kein Modell
         provenance={
             "source_type": "claude-code",  # guard-ok: Name des Adapters, kein Modell
@@ -318,8 +368,14 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
         source_type="chat",
     )
     if prepared is None:
+        reason = _write_refusal()
+        # Fehlversuche gehoeren ins Protokoll: ohne sie saehe ein Hook, der
+        # jeden Turn gegen die Wand laeuft, wie ein Hook ohne Arbeit aus.
+        _log_movement("denied", "refused", text=text,
+                      access_level=requested_level, category=category,
+                      reason=reason)
         print(
-            f"[nexus auto-capture] memory rejected: {_write_refusal()}",
+            f"[nexus auto-capture] memory rejected: {reason}",
             file=sys.stderr,
         )
         return False
@@ -333,6 +389,7 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
     if not embedding:
         return False
 
+    scope = _resolve_capture_scope(category)
     point_data = json.dumps({
         "points": [{
             "id": point_id,
@@ -352,10 +409,10 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
                 # scope centroids, which breaks the self-organizing feedback
                 # loop (parity with the mcp_server.py writer).
                 "lifecycle_status": "canonical",
-                # Scope (self-organizing memory, project rule 07.09): explicit
-                # NEXUS_SCOPE wins; else infer from scoped centroids on a
-                # CLEAR match; else 'default'. Fail-open, zero config.
-                "scope": _resolve_capture_scope(embedding),
+                # Scope (Schreibziel, entschieden 15.11.2026): ein
+                # Sitzungsprotokoll in den eigenen Verbund, alles andere in den
+                # gemeinsamen Bereich. Kein geratener Themen-Bereich.
+                "scope": scope,
                 # Kennzeichen aus dem Schreibtor: die Einspielung laesst
                 # Zustandswerte am Laengenfilter vorbei (12 statt 40 Zeichen).
                 **({"state_value": True} if prepared.get("state_value") else {}),
@@ -384,6 +441,12 @@ def store_memory(text: str, category: str = "session", point_id: str = None):
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
+            # Bewegungsprotokoll: der Hook schrieb bisher an jeder Zeile
+            # vorbei. Genau eine Zeile je angelegtem Punkt, mit Pruefsumme
+            # des geschriebenen Inhalts — kein Text.
+            _log_movement("write", "ok", text=text, access_level=access_level,
+                          target_id=point_id, category=category, scope=scope,
+                          after_text=text)
             return True
     except Exception as exc:
         # H254: never drop a memory silently — report to stderr (stdout is the

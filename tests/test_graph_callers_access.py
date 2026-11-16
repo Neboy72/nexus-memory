@@ -28,6 +28,10 @@ from nexus.graph.traversal import visible_access_levels
 # same wiring at different layers.
 from test_graph_access_level import GraphFixture, fid  # noqa: F401
 
+# Rollen (15.11.2026): die Graph-Werkzeuge verlangen mindestens ``work``.
+# Diese Datei prueft die Weitergabe der Sichtbarkeitsstufe, nicht die Rolle.
+pytestmark = pytest.mark.usefixtures("admin_caller")
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_PATH = REPO_ROOT / "plugins" / "memory" / "nexus" / "__init__.py"
 

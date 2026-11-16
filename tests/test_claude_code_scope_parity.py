@@ -86,14 +86,41 @@ class TestCentroids:
 
 
 class TestAutoCaptureScopeResolution:
-    def test_manual_scope_wins(self, sa, monkeypatch):
+    """Schreibziel (entschieden 15.11.2026): genau zwei Ziele.
+
+    ``session`` → eigener Verbund (``NEXUS_SCOPE``, sonst die Agenten-Kennung),
+    alles andere → ``default``. Ein aus Zentroiden geratener Themen-Bereich
+    darf NICHT mehr vorkommen: der Punkt waere fuer alle unsichtbar.
+    """
+
+    def test_session_lands_in_the_own_bundle(self, sa, monkeypatch):
+        ac = _load("auto_capture")
+        monkeypatch.delenv("NEXUS_SCOPE", raising=False)
+        monkeypatch.setenv("NEXUS_AGENT_ID", "claude-code")
+        monkeypatch.syspath_prepend(str(SCRIPTS))
+        assert ac._resolve_capture_scope("session") == "claude-code"
+
+    def test_manual_scope_is_the_own_bundle(self, sa, monkeypatch):
         ac = _load("auto_capture")
         monkeypatch.setenv("NEXUS_SCOPE", "voice")
-        assert ac._resolve_capture_scope([0.0, 0.0]) == "voice"
+        assert ac._resolve_capture_scope("session") == "voice"
 
-    def test_falls_back_to_default_without_centroids(self, sa, monkeypatch):
+    def test_everything_else_is_shared(self, sa, monkeypatch):
+        ac = _load("auto_capture")
+        monkeypatch.setenv("NEXUS_SCOPE", "voice")
+        for category in ("fact", "rule", "belief", "preference", "temp"):
+            assert ac._resolve_capture_scope(category) == "default", category
+
+    def test_centroids_are_never_consulted(self, sa, monkeypatch):
         ac = _load("auto_capture")
         monkeypatch.delenv("NEXUS_SCOPE", raising=False)
         monkeypatch.syspath_prepend(str(SCRIPTS))
-        monkeypatch.setattr("scope_auto.fetch_centroids", lambda *a, **k: {})
-        assert ac._resolve_capture_scope([1.0, 0.0]) == "default"
+        import scope_auto
+
+        def _boom(*_a, **_kw):
+            raise AssertionError("die Schreibziel-Wahl darf keine Zentroiden lesen")
+
+        monkeypatch.setattr(scope_auto, "fetch_centroids", _boom)
+        monkeypatch.setattr(scope_auto, "infer_scope", _boom)
+        assert ac._resolve_capture_scope("fact") == "default"
+        assert ac._resolve_capture_scope("session") == "claude-code"

@@ -74,9 +74,11 @@ def _client(monkeypatch):
 
 
 def _headers():
+    # 15.11.2026: der Installationsschluessel schreibt keine Daten mehr — der
+    # Test meldet sich wie ein Plugin mit einem eigenen Agentenschluessel an.
     from nexus_memory import service_auth
 
-    return {service_auth.AUTH_HEADER: "test-service-key"}
+    return {service_auth.AUTH_HEADER: service_auth.issue_key("hermes", "Hermes")}
 
 
 def _post(monkeypatch, payload):
@@ -94,7 +96,7 @@ def test_leerer_inhalt_wird_abgewiesen_und_nicht_geschrieben(monkeypatch, writte
     assert r.status_code == 422
     body = r.json()
     assert body["status"] == "rejected"
-    assert "leer" in body["reason"]
+    assert "empty" in body["reason"]
     assert written == [], "ein abgewiesener Eintrag darf die Sammlung nicht erreichen"
 
 

@@ -36,6 +36,11 @@ import nexus_memory.mcp_server as mcp
 from nexus import MemoryCategory
 from nexus.config import is_success
 
+# Rollen (15.11.2026): diese Datei prueft Werkzeuge, nicht Berechtigungen.
+# Sie laeuft deshalb als bekannter Agent mit allen Rechten — die Rollenpruefung
+# selbst steht in ``tests/test_roles.py``.
+pytestmark = pytest.mark.usefixtures("admin_caller")
+
 
 # ===========================================================================
 # Helpers / shared fixtures

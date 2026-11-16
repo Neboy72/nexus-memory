@@ -62,20 +62,22 @@ class TestNr499SkipOffByOneAlreadyFixed:
 
 # ---------------------------------------------------------------- Nr 500
 class TestNr500UnusedEmbedderParam:
-    """inferCaptureScope never used `embedder` — parameter removed."""
+    """inferCaptureScope never used `embedder` — parameter removed.
 
-    def test_source_no_embedder_param(self):
-        src = _read("plugins/openclaw/hooks/capture.ts")
-        seg = src[src.index("async function inferCaptureScope"):]
-        sig = seg[:seg.index(")")]
-        assert "embedder" not in sig
+    Since 15.11.2026 the helper is gone entirely: a capture is a session log
+    and lands in this agent's own bundle, never in a guessed centroid area.
+    The finding's invariant is kept and strengthened — no parameter of the
+    write scope is unused, and no centroid inference is called on this path.
+    """
 
-    def test_call_site_matches_signature(self):
+    def test_capture_path_has_no_scope_inference(self):
         src = _read("plugins/openclaw/hooks/capture.ts")
-        call = re.search(r"inferCaptureScope\(([^)]*)\)", src.split("async function inferCaptureScope", 1)[1])
-        assert call is not None
-        args = [a.strip() for a in call.group(1).split(",")]
-        assert args == ["vector", "centroidCache", "cfg.scope"]
+        assert "inferCaptureScope" not in src
+        assert "inferScope" not in src
+
+    def test_write_scope_comes_from_the_own_bundle(self):
+        src = _read("plugins/openclaw/hooks/capture.ts")
+        assert "scope: scopeBundle(cfg)," in src
 
 
 # ---------------------------------------------------------------- Nr 501

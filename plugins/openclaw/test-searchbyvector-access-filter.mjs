@@ -1,9 +1,14 @@
 /**
- * Regressionstest: searchByVector access-level Filter (H11, Welle 12)
+ * Regressionstest: searchByVector Filter (H11, Welle 12 + Verbund 15.11.2026)
  *
  * searchByVector() hatte KEINEN access-level Filter — forget-by-query konnte
  * Punkte treffen (und löschen), die der Agent-Level nicht sehen darf. Jetzt
  * derselbe Filter wie search(); forget.ts reicht _cfg.accessLevel durch.
+ *
+ * Verbund, entschieden 15.11.2026: fremde Verbünde sind NICHT löschbar. Der
+ * Verbund-Filter steht deshalb auch dann, wenn die Stufe keinen braucht (ein
+ * Agent, der alle Stufen sieht, darf trotzdem keine fremden Sitzungsprotokolle
+ * löschen) — er ersetzt den Stufen-Filter nicht, er kommt daneben.
  */
 import assert from "node:assert"
 import { register } from "node:module"
@@ -45,9 +50,18 @@ await t("accessLevel 'trusted' → Filter any ['public','trusted']", async () =>
   assert.deepStrictEqual(body.filter.must[0].match.any, ["public", "trusted"])
 })
 
-await t("accessLevel 'private' → KEIN Filter (sieht alles)", async () => {
+await t("accessLevel 'private' → Verbund-Filter, aber KEIN Stufen-Filter (sieht alle Stufen)", async () => {
   const body = await captureBody("private")
-  assert.strictEqual(body.filter, undefined)
+  assert.ok(body.filter, "der Verbund-Filter muss stehen: " + JSON.stringify(body))
+  assert.deepStrictEqual(body.filter.should, [
+    { key: "scope", match: { value: "default" } },
+    { key: "scope", match: { value: "openclaw" } },
+    { is_empty: { key: "scope" } },
+  ])
+  assert.ok(
+    !(body.filter.must ?? []).some((c) => c.key === "access_level"),
+    "die Zugriffsstufe darf bei 'private' NICHT als Filter erscheinen: " + JSON.stringify(body.filter),
+  )
 })
 
 await t("unbekannter accessLevel → kein Qdrant-Call (fail-closed, W31-16)", async () => {

@@ -117,6 +117,53 @@ def isolated_rule_confirm(tmp_path, monkeypatch):
     yield path
 
 
+@pytest.fixture(autouse=True)
+def isolated_service_log(tmp_path, monkeypatch):
+    """Redirect the movement log to a temp directory for EVERY test.
+
+    Every write path (``remember``, ``POST /write``, the MCP tools) appends a
+    line to ``service-YYYY-MM-DD.jsonl``. Without this redirect a plain test
+    run would leave test payloads in the developer's real
+    ``~/.nexus-memory/logs`` — an audit log that then records writes nobody
+    made. Same reasoning as ``isolated_agents_registry``.
+    """
+    log_dir = tmp_path / "service-log"
+    monkeypatch.setenv("NEXUS_LOG_DIR", str(log_dir))
+    yield log_dir
+
+
+@pytest.fixture
+def caller_as(monkeypatch, isolated_agents_registry):
+    """Name the calling agent and give it a role.
+
+    Rollen (15.11.2026): die MCP-Werkzeuge fragen jetzt, WER aufruft. Tests,
+    die das Verhalten eines Werkzeugs pruefen (nicht seine Berechtigung),
+    melden sich hier als bekannter Agent an — sonst waeren sie der anonyme
+    Aufrufer ``unidentified`` und damit ``know``. Die Rolle selbst wird in
+    ``tests/test_roles.py`` geprueft; hier ist sie nur die Voraussetzung.
+
+    ``NEXUS_AGENT_ID`` ist derselbe Weg, den ein stdio-MCP-Prozess geht
+    (``resolve_agent_id``); der HTTP-Kopf ``x-nexus-agent-id`` landet ueber
+    ``_request_agent_id`` an derselben Stelle.
+    """
+    from nexus_memory import agent_detect
+
+    def _as(agent_id: str = "hermes", role: str = "admin") -> str:
+        monkeypatch.delenv("NEXUS_AGENT_ID", raising=False)
+        monkeypatch.setenv("NEXUS_AGENT_ID", agent_id)
+        result = agent_detect.set_agent_role(agent_id, role)
+        assert "error" not in result, result
+        return agent_id
+
+    return _as
+
+
+@pytest.fixture
+def admin_caller(caller_as):
+    """Run the test as an identified admin agent (the pre-role default)."""
+    return caller_as("hermes", "admin")
+
+
 @pytest.fixture
 def isolated_env(monkeypatch):
     """Strip embedding-provider API keys from the environment.

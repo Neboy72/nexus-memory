@@ -8,7 +8,7 @@
 import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
-import { visibleAccessLevels } from "../lib/qdrant-client.ts"
+import { pointText, scopeBundle, scopeShould, scopeVisible, visibleAccessLevels } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { clampInt } from "../lib/num.ts"
 import { isActiveEdge, normalizeEdge } from "../lib/edge.ts"
@@ -65,9 +65,16 @@ const KG_RELATIONS: readonly string[] = [
  * group turn (and every call not bound to a session with a fresh marker) to
  * "public".
  */
-function visibilityGate(accessLevel: string): (payload?: Record<string, unknown>) => boolean {
+function visibilityGate(
+  accessLevel: string,
+  bundle: string,
+): (payload?: Record<string, unknown>) => boolean {
   const levels = visibleAccessLevels(accessLevel)
-  return (payload) => levels.includes(String(payload?.access_level ?? "private"))
+  return (payload) =>
+    levels.includes(String(payload?.access_level ?? "private")) &&
+    // Geltungsbereich (15.11.2026): zweite Achse neben der Zugriffsstufe.
+    // Gemeinsamer Bereich, eigener Verbund und Altbestand ohne `scope`.
+    scopeVisible(payload, bundle)
 }
 
 /**
@@ -143,7 +150,10 @@ export function registerGraphTraverseTool(
         const targetType = params.target_type || undefined
 
         try {
-          const isVisible = visibilityGate(toolCallAccessLevel(cfg.accessLevel, toolCallId))
+          const isVisible = visibilityGate(
+            toolCallAccessLevel(cfg.accessLevel, toolCallId),
+            scopeBundle(cfg),
+          )
           // 24.10.2026: strict lookup — "not found" may only mean Qdrant
           // confirmed the point is absent (404); a failed request throws into
           // the catch below instead of masquerading as a missing fact.
@@ -278,6 +288,10 @@ export function registerFindEntitiesTool(
               match: { any: levels },
             })
           }
+          // Geltungsbereich (15.11.2026): fremde Verbunde bleiben aus der
+          // Entity-Liste. Eigener `should`-Block NEBEN den `must`-Bedingungen
+          // — die Entitaet muss sichtbar sein UND die Stufe bestehen.
+          filter.should = scopeShould(scopeBundle(cfg))
 
           // W31-18(b): `limit` is the PER-PAGE scroll limit; scrollFiltered
           // walks up to 5 pages, so without a total cap this returned up to
@@ -287,7 +301,10 @@ export function registerFindEntitiesTool(
           // a `public` agent saw every `private` entity. Filter BEFORE mapping,
           // so no field of a hidden point can leak into the result. Kept as the
           // SECOND defence behind the Qdrant filter above.
-          const isVisible = visibilityGate(toolCallAccessLevel(cfg.accessLevel, toolCallId))
+          const isVisible = visibilityGate(
+            toolCallAccessLevel(cfg.accessLevel, toolCallId),
+            scopeBundle(cfg),
+          )
           const visiblePoints = points.filter((pt) => isVisible(pt.payload))
           const entities = visiblePoints.map((pt) => {
             const payload = (pt.payload ?? {}) as Record<string, unknown>
@@ -295,7 +312,7 @@ export function registerFindEntitiesTool(
               id: pt.id,
               name: payload.entity_name ?? "",
               entity_type: payload.entity_type ?? "",
-              content: String(payload.content ?? "").slice(0, 200),
+              content: pointText(payload).slice(0, 200),
               attributes: payload.entity_attributes ?? {},
             }
           })
@@ -378,7 +395,10 @@ export function registerGetSubgraphTool(
           // found" answer as an absent one.
           const { nodes, edges } = await bfsEdges(qdrantClient, factId, maxDepth, {
             collectEdges: true,
-            isVisible: visibilityGate(toolCallAccessLevel(cfg.accessLevel, toolCallId)),
+            isVisible: visibilityGate(
+              toolCallAccessLevel(cfg.accessLevel, toolCallId),
+              scopeBundle(cfg),
+            ),
           })
 
           if (nodes.length <= 1) {
@@ -445,7 +465,10 @@ export function registerGetRelatedTool(
         const relation = params.relation || undefined
 
         try {
-          const isVisible = visibilityGate(toolCallAccessLevel(cfg.accessLevel, toolCallId))
+          const isVisible = visibilityGate(
+            toolCallAccessLevel(cfg.accessLevel, toolCallId),
+            scopeBundle(cfg),
+          )
           // Strict like graph_traverse: a failed lookup must not read as an
           // absent fact (see loadPointStrict in lib/bfs.ts).
           const point = await loadPointStrict(qdrantClient, factId)

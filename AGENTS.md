@@ -225,12 +225,26 @@ provider list, so a machine with nothing installed still gets memory. Their own
 default is `NEXUS_EMBEDDING_PROVIDER=auto`; naming a provider (`ollama`,
 `openai`, `google`, `jina`) still works, it is just never automatic.
 
+**Two keys, two jobs.** `<data-dir>/service_auth.key` is the installation key and
+opens exactly one door: `POST /enroll`, from loopback only. It cannot read or
+write data any more (it answers `401 plugin update required`). Data calls need
+the agent's own key in `<data-dir>/agent_keys/<harness>.key` (`hermes`,
+`openclaw`, `claude-code`, `dsh`), which the plugin fetches and stores on its
+first start. The key names the agent; the `x-nexus-agent-id` header is ignored
+on data routes. An entry that already owns a key is **never** adopted again: a
+second installation of the same harness gets its own entry and id, and the first
+installation keeps its key. Enrolment adopts only an entry that has no key yet.
+Losing a key therefore means a fresh entry with the standard role, not a takeover
+of the old one.
+
 ```bash
-curl -s -X POST http://127.0.0.1:9122/embed -H 'Content-Type: application/json' \
+KEY=$(cat ~/.nexus-memory/agent_keys/hermes.key)
+curl -s -X POST http://127.0.0.1:9122/embed \
+     -H 'Content-Type: application/json' -H "x-nexus-service-key: $KEY" \
      -d '{"text":"hello"}' | head -c 120
 ```
 
-The service also answers `POST /write` (same service key, same loopback
+The service also answers `POST /write` (same agent key, same loopback
 rules). It runs the text through `nexus/write_gate.py` and only stores it if
 the five rules hold: non-empty content; a `fact` that is a statement and not
 just a label (`wort: wert` without punctuation or verb — short facts with a
@@ -248,7 +262,7 @@ fails loudly rather than writing unchecked.
 
 ```bash
 curl -s -X POST http://127.0.0.1:9122/write \
-     -H 'Content-Type: application/json' -H "x-nexus-service-key: $(cat ~/.nexus-memory/service_auth.key)" \
+     -H 'Content-Type: application/json' -H "x-nexus-service-key: $(cat ~/.nexus-memory/agent_keys/hermes.key)" \
      -d '{"content":"Der Verteiler steht im Flur","category":"fact","source":"chat","source_type":"chat"}'
 ```
 

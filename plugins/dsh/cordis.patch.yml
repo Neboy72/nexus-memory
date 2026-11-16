@@ -1,0 +1,48 @@
+- insert:
+    - id: nexus-memory
+      name: '@local/dsh-nexus-memory'
+      config:
+        # --- transport: redet HTTP mit einem laufenden `nexus-memory serve` ---
+        transport: http
+        baseUrl: 'http://127.0.0.1:9122'
+        keyFile: '~/.nexus-memory/service_auth.key'
+        accessLevel: private
+        captureCategory: session
+
+        # --- Auto-Recall ---
+        recall: true
+        recallLimit: 5
+        recallBudgetChars: 1600
+        recallTimeoutMs: 4000
+
+        # --- Auto-Capture ---
+        capture: true
+        captureMinChars: 12
+        captureMaxChars: 1600
+        captureSubagents: false
+
+        # --- Fallback ohne Daemon: transport: stdio --------------------------
+        # Nur noetig, wenn kein nexus-memory-Dienst laeuft, aber das Python-Paket
+        # installiert ist. Pfade sind Beispiele, bitte an das eigene System anpassen.
+        # transport: stdio
+        # python: '/pfad/zu/python3'
+        # nexusHome: '/pfad/zu/nexus-memory'
+        # pythonPath: '/pfad/zu/nexus-memory/src:/pfad/zu/pylibs'
+        # qdrantHost: 127.0.0.1
+        # qdrantPort: 6333
+        # embeddingProvider: ollama
+
+    # --- Werkzeuge: recall, remember, forget, fact_history, report, health ----
+    # Der Harness bringt einen MCP-Client mit; damit werden die Nexus-Werkzeuge zu
+    # echten Werkzeugen des Agenten, nicht nur zu automatischem Erinnern.
+    # Der Agentenschluessel kommt aus der Umgebung: `nexus-memory-dsh-install`
+    # (oder das Install-Skript) legt ihn nach dem Enroll in <profil>/.env ab.
+    # Fehlt er, startet der Harness trotzdem — dann nur ohne Werkzeuge.
+    - id: mcp-nexus
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: nexus
+        transport: streamable-http
+        url: http://127.0.0.1:9122/mcp
+        headers:
+          x-nexus-service-key: !!js process.env.NEXUS_AGENT_KEY

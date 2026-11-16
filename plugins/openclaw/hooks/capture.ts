@@ -2,33 +2,13 @@ import { randomUUID } from "node:crypto"
 import { Embedder } from "../lib/embedder.ts"
 import { WriteGateRejected, type MemoryWriter } from "../lib/write-gate.ts"
 import type { NexusConfig } from "../lib/config.ts"
-import { ScopeCentroidCache, inferScope } from "../lib/scope-auto.ts"
+import { ScopeCentroidCache } from "../lib/scope-auto.ts"
+import { scopeBundle } from "../lib/qdrant-client.ts"
 import { neutralizeContextClose, stripNexusContextBlock } from "../lib/prompt-safety.ts"
 import { isRoomShared, roomKeyOf } from "../lib/room-state.ts"
 import { log } from "../logger.ts"
 import { isInteractiveTrigger } from "./trigger.ts"
 import { enqueueCapture, drainQueue } from "./capture-retry-queue.ts"
-
-/**
- * Resolve the scope for an auto-captured memory (self-organizing memory):
- * explicit cfg.scope wins; otherwise infer from the vector against scoped
- * centroids on a CLEAR match; else 'default'. Fail-open everywhere.
- */
-async function inferCaptureScope(
-  vector: number[],
-  centroidCache: ScopeCentroidCache | undefined,
-  manualScope: string,
-): Promise<string> {
-  if (manualScope) return manualScope
-  if (!centroidCache) return "default"
-  try {
-    const cents = await centroidCache.get()
-    return inferScope(vector, cents)
-  } catch (err) {
-    log.debug("scope_auto: capture inference failed — fail-open to default", err)
-    return "default"
-  }
-}
 
 const SKIPPED_PROVIDERS = ["exec-event", "cron-event", "heartbeat"]
 
@@ -151,7 +131,7 @@ export function buildCaptureHandler(
     log.debug(`capturing ${captured.length} texts (${content.length} chars)`)
 
     // ID und Payload VOR dem try: der Retry-Requeue (catch) muss exakt dieselbe
-    // ID und denselben (ggf. inferierten) Scope wiederverwenden — sonst kann
+    // ID und denselben Scope wiederverwenden — sonst kann
     // derselbe Text unter 2 IDs doppelt im Store landen.
 
     // Write-side room cap (13.11.2026): in a shared room "public" is the
@@ -168,7 +148,19 @@ export function buildCaptureHandler(
     )
 
     const id = randomUUID()
-    let payload: Record<string, unknown> = {
+    // Scope of a capture — exactly two targets (15.11.2026). Auto-capture only
+    // writes `category: "session"`, and a session log belongs to this agent's
+    // own bundle (`scopeBundle`: a configured `scope`, else `openclaw`). It is
+    // never inferred from the centroids: a *guessed* topic area is not a
+    // bundle, so the point would be invisible to everyone — the writer
+    // included. Fail-open: an invalid configuration yields the default bundle.
+    // Set here (not after embedding) so the retry queue carries the same value.
+    const payload: Record<string, unknown> = {
+      // `content` ist das fuehrende Feld und wird von jedem Leser gelesen;
+      // `text` bleibt zusaetzlich stehen (Altbestaende, Abwaertskompatibilitaet).
+      // Ohne `content` entstanden Punkte, die nur ein Feld trugen (628 Stueck,
+      // gemessen 15.11.2026) und in jedem `content`-Leser unsichtbar waren.
+      content,
       text: content,
       access_level: roomShared === true ? "public" : cfg.accessLevel,
       category: "session",
@@ -182,20 +174,12 @@ export function buildCaptureHandler(
       source_url: "",
       confidence: 0.7,
       created_at: new Date().toISOString(),
-      scope: cfg.scope || "default",
+      scope: scopeBundle(cfg),
     }
 
     try {
       // Embed the captured content
       const vector = await embedder.embed(content)
-
-      // Scope (self-organizing memory, project rule 07.09): infer the area from
-      // existing scoped centroids on a CLEAR match; explicit cfg.scope wins;
-      // else 'default'. Fail-open, zero config, zero LLM cost.
-      payload = {
-        ...payload,
-        scope: await inferCaptureScope(vector, centroidCache, cfg.scope),
-      }
 
       // Shared gate (lib/write-gate.ts): a captured session is not written
       // unchecked either — the service enforces content, provenance, access
@@ -227,7 +211,7 @@ export function buildCaptureHandler(
       }
       log.error("capture failed", err)
       // Retry-Queue (Astra-R6 P1): nichts geht verloren — dieselbe ID + Payload
-      // (mit inferiertem Scope) in die Warteschlange, Drain beim nächsten Versuch.
+      // (mit demselben Scope) in die Warteschlange, Drain beim nächsten Versuch.
       enqueueCapture({ id, text: content, payload })
     }
   }

@@ -44,6 +44,16 @@ _UPDATE_CHECK_ENABLED = os.environ.get("NEXUS_UPDATE_CHECK", "").strip().lower()
 # Kept as a literal here so the plugin does not import nexus_memory.
 _SERVICE_AUTH_HEADER = "x-nexus-service-key"
 _SERVICE_AUTH_KEY_FILE = "service_auth.key"
+# Self-enrolment (15.11.2026): the installation key above only ENROLS this
+# plugin (POST /enroll) and gets it a key of its own. From then on only that
+# key is sent — it names the agent, so no header has to claim an identity.
+_HARNESS = "hermes"
+_AGENT_KEY_DIR = "agent_keys"
+
+
+def _service_agent_id() -> str:
+    """This plugin's id as the service should record it: env, else ``hermes``."""
+    return _sanitize_agent_id(os.environ.get("NEXUS_AGENT_ID") or "hermes")
 
 
 def _plugin_data_dir() -> Path:
@@ -61,8 +71,8 @@ def _plugin_data_dir() -> Path:
     return Path(os.path.expanduser("~/.nexus-memory"))
 
 
-def _service_auth_key() -> str:
-    """Read the per-installation key the service demands on /embed and /mcp.
+def _install_key() -> str:
+    """The per-installation key — used for ONE thing: ``POST /enroll``.
 
     Mirrors ``nexus_memory.service_auth.load_service_key()`` without importing
     ``nexus_memory`` (catalog rule 135493). The environment variable wins for
@@ -78,6 +88,87 @@ def _service_auth_key() -> str:
     except Exception as exc:
         logger.warning("service-auth: cannot read %s: %s", path, exc)
         return ""
+
+
+def _agent_key_path(harness: str = _HARNESS) -> Path:
+    """``<data-dir>/agent_keys/<harness>.key`` — this plugin's OWN key."""
+    return _plugin_data_dir() / _AGENT_KEY_DIR / f"{harness}.key"
+
+
+def _read_agent_key(harness: str = _HARNESS) -> str:
+    try:
+        return _agent_key_path(harness).read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _forget_agent_key(harness: str = _HARNESS) -> None:
+    """Drop a key the service no longer accepts (it answered 401)."""
+    try:
+        _agent_key_path(harness).unlink()
+    except Exception:
+        pass
+
+
+def _write_agent_key(key: str, harness: str = _HARNESS) -> None:
+    """Store the key with mode 0600, replacing any previous one atomically."""
+    path = _agent_key_path(harness)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".key.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(key)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+        raise
+
+
+def _enroll(base_url: str) -> str:
+    """Ask the service for a key of our own; returns "" when that fails.
+
+    The installation key is presented here and nowhere else. A successful
+    answer is written to ``agent_keys/<harness>.key``; the plaintext key is
+    never logged.
+    """
+    import urllib.request
+
+    install = _install_key()
+    if not install:
+        logger.warning(
+            "service-auth: no installation key for %s/enroll "
+            "(set NEXUS_SERVICE_AUTH_KEY or ensure %s/%s is readable)",
+            base_url, _plugin_data_dir(), _SERVICE_AUTH_KEY_FILE)
+        return ""
+    try:
+        body = json.dumps({"harness": _HARNESS, "label": "Hermes Agent"}).encode("utf-8")
+        request = urllib.request.Request(
+            base_url + "/enroll", data=body,
+            headers={"Content-Type": "application/json",
+                     _SERVICE_AUTH_HEADER: install})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+        key = payload.get("key")
+        if not isinstance(key, str) or not key.strip():
+            logger.warning("service-auth: /enroll returned no key")
+            return ""
+        _write_agent_key(key.strip())
+        return key.strip()
+    except Exception as exc:
+        logger.warning("service-auth: /enroll against %s failed: %s", base_url, exc)
+        return ""
+
+
+def _service_auth_key() -> str:
+    """This plugin's own key — read once, enrolled once when missing."""
+    key = _read_agent_key()
+    if key:
+        return key
+    return _enroll(_embed_service_base())
 
 
 def _plugin_venv_dir() -> Path:
@@ -245,27 +336,38 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
     """POST /embed. Returns ``{"embedding","model","dim"}`` or None (never raises).
 
     ``is_query`` picks the query/document side of an asymmetric model, exactly
-    as the engine does internally.
+    as the engine does internally. Only this plugin's own key is sent; a 401
+    means the key was revoked or replaced, so the plugin enrols once more and
+    repeats the call once.
     """
+    import urllib.error
     import urllib.request
     url = _embed_service_base() + "/embed"
-    key = _service_auth_key()
-    if not key:
-        # Missing key is a configuration problem, not "the service is gone".
-        # Fail soft (None) but loud so the status note points at the real cause.
-        logger.warning(
-            "service-auth: no key available for %s/embed "
-            "(set NEXUS_SERVICE_AUTH_KEY or ensure %s/%s is readable)",
-            _embed_service_base(), _plugin_data_dir(), _SERVICE_AUTH_KEY_FILE)
-        return None
-    try:
-        body = json.dumps({"text": text, "is_query": bool(is_query)}).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=body,
-            headers={"Content-Type": "application/json",
-                     _SERVICE_AUTH_HEADER: key})
-        with urllib.request.urlopen(req, timeout=_EMBED_SERVICE_TIMEOUT_SEC) as resp:
-            payload = json.loads(resp.read().decode("utf-8", "replace"))
+    body = json.dumps({"text": text, "is_query": bool(is_query)}).encode("utf-8")
+    for attempt in (0, 1):
+        key = _service_auth_key()
+        if not key:
+            # Missing key is a configuration problem, not "the service is gone".
+            # Fail soft (None) but loud so the status note points at the real cause.
+            logger.warning(
+                "service-auth: no agent key for %s/embed — enrolment needs "
+                "NEXUS_SERVICE_AUTH_KEY or a readable %s/%s",
+                _embed_service_base(), _plugin_data_dir(), _SERVICE_AUTH_KEY_FILE)
+            return None
+        try:
+            req = urllib.request.Request(
+                url, data=body,
+                headers={"Content-Type": "application/json",
+                         _SERVICE_AUTH_HEADER: key})
+            with urllib.request.urlopen(req, timeout=_EMBED_SERVICE_TIMEOUT_SEC) as resp:
+                payload = json.loads(resp.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401 and attempt == 0:
+                _forget_agent_key()
+                continue
+            return None
+        except Exception:
+            return None
         vector = payload.get("embedding")
         if not isinstance(vector, list) or not vector:
             return None
@@ -274,8 +376,7 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
             "model": str(payload.get("model", "")),
             "dim": int(payload.get("dim") or len(vector)),
         }
-    except Exception:
-        return None
+    return None
 
 
 def _plugin_venv_python() -> Path:
@@ -1073,7 +1174,7 @@ def _keyword_boost_order(points: List[Any], query: str) -> List[Any]:
         # Suchvarianten (10.11.2026): beim Schreiben erzeugte Wortteile und
         # Umlautschreibweisen. Ohne sie findet eine Frage wie "Heizöl-Lieferant"
         # den Eintrag "type=Oellieferant" nicht, obwohl "Lieferant" darin steckt.
-        text = _fold_umlauts(str(payload.get("content") or "") + " "
+        text = _fold_umlauts(_point_text(payload) + " "
                              + str(payload.get("search_terms") or ""))
         return (1 if any(t in text for t in toks) else 0, float(getattr(p, "score", 0.0) or 0.0))
 
@@ -1134,7 +1235,7 @@ def _gate_prepare(**fields: Any) -> Optional[Dict[str, Any]]:
     try:
         from nexus.write_gate import prepare
     except Exception as exc:
-        _gate_load_error = f"Schreibtor nicht ladbar: {type(exc).__name__}: {exc}"
+        _gate_load_error = f"write gate not loadable: {type(exc).__name__}: {exc}"
         logger.error("%s — Schreibvorgang abgewiesen", _gate_load_error)
         return None
     _gate_load_error = ""
@@ -1150,6 +1251,44 @@ def _gate_rejection() -> Dict[str, Any]:
     except Exception:
         reason = _gate_load_error or reason
     return {"status": "rejected", "reason": reason}
+
+
+def _log_movement(action: str, result: str, *, text: str = "",
+                  access_level: Any = "", target_id: Any = None,
+                  category: Any = None, scope: Any = None,
+                  reason: Any = None, after_text: Any = None,
+                  before_text: Any = None) -> None:
+    """Eine Zeile ins Bewegungsprotokoll — fail-open, nie ein zweiter Weg.
+
+    Das Hermes-Plugin ist der Hauptschreiber (3.455 Sitzungen), schrieb aber
+    bisher ueber das Schreibtor direkt nach Qdrant und damit an
+    ``MemoryStore.remember`` vorbei — ohne Protokollzeile. Diese Zeile schliesst
+    die Luecke; ``via="plugin"`` benennt den Weg.
+
+    Kein Inhalt: das Thema bestimmt ``service_log.record`` (bei ``private``
+    leer, Zahlen ersetzt), sonst stehen nur Kennung, Kategorie, Bereich und
+    Pruefsumme in der Zeile. Ein Fehler hier darf den Schreibvorgang nie
+    verhindern.
+
+    ``actor`` ist die eigene Kennung (``NEXUS_AGENT_ID``, sonst ``hermes``):
+    der Pfad schreibt direkt nach Qdrant, es gibt keinen Dienst, der sie
+    setzen koennte — ohne sie stuende ``unidentified`` in der Zeile.
+    """
+    try:
+        from nexus_memory import service_log
+        service_log.record(
+            action, result, text=text, access_level=access_level,
+            target_id=target_id, category=category, scope=scope,
+            reason=reason,
+            actor=_service_agent_id(),
+            before_hash=(service_log.content_hash(before_text)
+                         if before_text is not None else None),
+            after_hash=(service_log.content_hash(after_text)
+                        if after_text is not None else None),
+            via="plugin",
+        )
+    except Exception as exc:  # noqa: BLE001 — Protokoll ist eine Zugabe
+        logger.debug("Bewegungsprotokoll nicht geschrieben: %s", exc)
 
 
 def _index_written_point(payload: Dict[str, Any], collection: str) -> None:
@@ -1232,6 +1371,56 @@ def _rrf_order(vector_points: List[Any], keyword_points: List[Any]) -> List[Any]
     return [by_id[pid] for pid in ids if pid in by_id]
 
 
+_SHARED_SCOPE = "default"
+_SCOPE_VALUE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def _own_bundle() -> str:
+    """Der Verbund dieses Aufbaus — seine eigene Agenten-Kennung.
+
+    Dieselbe Kennung, die der Punkt als ``agent`` traegt
+    (``NEXUS_AGENT_ID``, sonst ``hermes``). Punkt und Unterstrich werden auf
+    ``-`` abgebildet, weil ein Punkt nur ``[a-z0-9-]`` traegt; sonst landete
+    eine plausible Kennung stillschweigend im gemeinsamen Bereich.
+    """
+    raw = re.sub(r"[._]", "-",
+                 str(os.environ.get("NEXUS_AGENT_ID") or "hermes").strip().lower())
+    return raw if _SCOPE_VALUE_RE.match(raw) else "hermes"
+
+
+def _scope_should(bundle: str) -> List[Any]:
+    """Die drei Sichtbarkeits-Bedingungen als Qdrant-``should``.
+
+    ``default`` (gemeinsam), der eigene Verbund, und Punkte OHNE ``scope``-
+    Feld — der Altbestand verhaelt sich wie ``default`` und darf nicht
+    verschwinden.
+    """
+    return [
+        qmodels.FieldCondition(key="scope", match=qmodels.MatchValue(value=_SHARED_SCOPE)),
+        qmodels.FieldCondition(key="scope", match=qmodels.MatchValue(value=bundle)),
+        qmodels.IsEmptyCondition(is_empty=qmodels.PayloadField(key="scope")),
+    ]
+
+
+def _scope_visible(payload: Any, bundle: str) -> bool:
+    """Dieselben drei Bedingungen in Python.
+
+    Der Volltextpfad (FTS5/BM25) traegt keine Qdrant-Bedingung: ein zweiter
+    Volltextfilter in Qdrant kostet Sekunden (gemessen), deshalb wird die
+    Stichwortliste hier nachgefiltert. Ein fehlender Payload bleibt sichtbar —
+    das ist der Altbestand-Fall, keine Freigabe fremder Verbunde.
+    """
+    if not isinstance(payload, dict):
+        return True
+    scope = payload.get("scope")
+    if scope is None:
+        return True                      # Altbestand: kein Feld = gemeinsam
+    text = scope.strip().lower() if isinstance(scope, str) else ""
+    if not text:
+        return True                      # leeres Feld ebenso
+    return text in (_SHARED_SCOPE, bundle)
+
+
 def _cosine(a: Any, b: Any) -> float:
     """Aehnlichkeit zweier Vektoren (Qdrant speichert normiert)."""
     if not a or not b or len(a) != len(b):
@@ -1273,7 +1462,13 @@ def _keyword_candidate_points(qdrant: Any, collection: str, query: str,
                                limit=pool, with_payload=True,
                                with_vectors=bool(query_vector))
     gewertet = []
+    # Geltungsbereich (15.11.2026): die Stichwortliste wird im Python-Code
+    # nachgefiltert — eine zweite Bedingung im Qdrant-Volltextfilter kostet
+    # Sekunden (gemessen). Fremde Protokolle belegen so keinen Platz im Topf.
+    _bundle = _own_bundle()
     for r in records:
+        if not _scope_visible(getattr(r, "payload", None), _bundle):
+            continue
         vec = getattr(r, "vector", None)
         if isinstance(vec, dict):
             vec = next(iter(vec.values()), None)
@@ -2479,6 +2674,11 @@ class NexusMemoryProvider:
         """
         boosted: List[str] = []
         if not self._qdrant: return boosted
+        # Geltungsbereich (15.11.2026): ein Nachbar aus einem fremden Verbund
+        # ist fuer diesen Aufbau Ballast — dieselbe Regel wie im Einspielweg.
+        # Der Payload liegt beim Boost schon vor (sg.get_point), es braucht
+        # deshalb keinen zusaetzlichen Qdrant-Aufruf.
+        _bundle = _own_bundle()
         try:
             from nexus.graph.traversal import GraphTraversal
             sg = self._get_skill_graph()
@@ -2518,7 +2718,13 @@ class NexusMemoryProvider:
                         _nb_level = "private"  # fail closed, same as the gate
                     if _nb_level not in self._visible_levels():
                         continue
-                    text = pt_payload.get("content", "")
+                    # Geltungsbereich (15.11.2026): der Graph-Boost zog seine
+                    # Nachbarn bisher OHNE Sichtbarkeitsfilter nach — ein
+                    # fremdes Sitzungsprotokoll kam so in den eingespielten
+                    # Block, obwohl der Vektorweg es ausschliesst.
+                    if not _scope_visible(pt_payload, _bundle):
+                        continue
+                    text = _point_text(pt_payload)
                     if text:
                         # depth-2 items: shorter excerpt, still tagged for provenance
                         text = text[:400] if max_depth <= 1 else text[:240]
@@ -2676,32 +2882,18 @@ class NexusMemoryProvider:
                 self._clear_prefetch_result()
                 return
             budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
-            # Scope filter (project/agent areas): auto-prefetch surfaces only
-            # 'default' memories plus the agent's OWN scope. Explicit recall()
-            # is never scope-filtered (core principle, 2026-09-07).
-            # Fail-open: no NEXUS_SCOPE set → agent sees everything (old behavior).
-            my_scope = os.environ.get("NEXUS_SCOPE", "").strip().lower()
-            # Auto-scoping (self-organizing memory, principle 2026-09-07): the query
-            # itself can clearly belong to one area → surface only 'default'
-            # + that area's memories. Ambiguous/no match → None = no filtering
-            # (exactly the old behavior). Zero cost, fail-open per query.
-            allowed_scopes = None
-            try:
-                from nexus_memory.scope_auto import ScopeCentroids, prefetch_filter_scopes
-                # Double-checked lock: _do_prefetch runs in multiple threads,
-                # so two could otherwise each build a ScopeCentroids and race
-                # on the attribute while one is already calling .get().
-                if self._scope_centroids is None:
-                    lock = getattr(self, "_scope_centroids_lock", None) or threading.Lock()
-                    with lock:
-                        if self._scope_centroids is None:
-                            self._scope_centroids = ScopeCentroids(self._qdrant, self._collection)
-                allowed_scopes = prefetch_filter_scopes(vector, self._scope_centroids.get(), my_scope)
-            except Exception as exc:
-                logger.debug("scope_auto: prefetch inference skipped (%s)", exc)
-                allowed_scopes = None
+            # Geltungsbereich (15.11.2026): der eingespielte Block traegt, was
+            # gemeinsam ist ('default'), was im EIGENEN Verbund liegt, und den
+            # Altbestand ohne ``scope``-Feld. Fremde Protokolle bleiben draussen
+            # — sie sind fuer diesen Aufbau Ballast und haben frueher den
+            # Kontext verwaessert (gemessen: ein fremder Trip-Wire-Eintrag).
+            bundle = _own_bundle()
             pts = self._qdrant.query_points(
                 collection_name=self._collection, query=vector, limit=32,
+                # Der Filter haelt fremde Verbunde schon aus dem
+                # Kandidatenkreis; die Pruefung in der Schleife gilt zusaetzlich
+                # fuer die Stichwortliste, die sich nicht filtern laesst.
+                query_filter=qmodels.Filter(should=_scope_should(bundle)),
                 **using_name(getattr(self, "vector_name", None)),
             ).points
             # Kandidatenkreis (10.11.2026): Stichwortliste (BM25, seltene
@@ -2745,13 +2937,9 @@ class NexusMemoryProvider:
                 # private/trusted memories must not reach a group chat.
                 if not self._can_read(pl):
                     continue
-                # Scope gating: manual env override + auto-inferred allowed set.
-                # allowed_scopes=None → no gating (fail-open, old behavior).
-                p_scope = (pl.get("scope") or "default").strip().lower() or "default"
-                if allowed_scopes is not None:
-                    if p_scope not in allowed_scopes:
-                        continue
-                elif my_scope and p_scope != "default" and p_scope != my_scope:
+                # Geltungsbereich: dieselbe Regel wie im Qdrant-Filter oben, hier
+                # fuer die Stichwortliste (FTS5/BM25), die keinen Filter traegt.
+                if not _scope_visible(pl, bundle):
                     continue
                 if text:
                     item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: " \
@@ -2897,7 +3085,11 @@ class NexusMemoryProvider:
             rule_proof=rule_proof,
         )
         if prepared is None:
-            return _gate_rejection()
+            rejection = _gate_rejection()
+            _log_movement("denied", "refused", text=text,
+                          access_level=access_level, category=category,
+                          scope=scope, reason=rejection["reason"])
+            return rejection
         text = prepared["content"]
         category = prepared["category"]
         access_level = prepared["access_level"]
@@ -2934,6 +3126,11 @@ class NexusMemoryProvider:
             scope = _scope_s
         else:
             scope = "default"
+        # Geltungsbereich (15.11.2026): ein Sitzungsprotokoll bleibt im Verbund
+        # dieses Aufbaus, alles andere ist gemeinsam. Ein ausdruecklich
+        # gesetzter Bereich (Argument oder NEXUS_SCOPE) gewinnt.
+        if scope == _SHARED_SCOPE and category == "session":
+            scope = _own_bundle()
         payload = {"id": eid, "content": text, "access_level": access_level, "category": category,
                     # Who stored it — ``source`` says where the INFORMATION
                     # came from, this says which agent/installation wrote it.
@@ -2956,6 +3153,12 @@ class NexusMemoryProvider:
         )
         # Erst nach erfolgreichem Schreiben: der Punkt ist jetzt auffindbar.
         _index_written_point(payload, self._collection)
+        # Bewegungsprotokoll (15.11.2026): das Plugin ist der Hauptschreiber
+        # und lief bisher an jeder Protokollzeile vorbei. Genau eine Zeile je
+        # erfolgreichem Punkt, mit Pruefsumme des geschriebenen Inhalts.
+        _log_movement("write", "ok", text=text, access_level=access_level,
+                      target_id=eid, category=category, scope=scope,
+                      after_text=text)
         try: self._bump_agent_stats(write=True)
         except Exception: pass
         result = {"status": "ok", "id": eid, "category": category}
@@ -3030,8 +3233,14 @@ class NexusMemoryProvider:
             # Fetch a larger pool so the reranker can reorder beyond limit.
             from nexus_memory.reranker import DEFAULT_POOL_K
             fetch_k = max(limit, int(cfg.get("pool_k", DEFAULT_POOL_K)))
+        # Geltungsbereich (15.11.2026): auch der ausdrueckliche Abruf liefert
+        # nur, was sichtbar ist — gemeinsam, eigener Verbund, Altbestand. Der
+        # Filter haelt fremde Protokolle schon aus dem Kandidatenkreis; die
+        # Pruefung in der Schleife unten ist die zweite, unabhaengige Schranke.
+        _bundle = _own_bundle()
         pts = self._qdrant.query_points(
             collection_name=self._collection, query=vector, limit=fetch_k,
+            query_filter=qmodels.Filter(should=_scope_should(_bundle)),
             **using_name(getattr(self, "vector_name", None)),
         ).points
         # Roadmap 4.6 + review: filter BEFORE rerank so deprecated points
@@ -3077,6 +3286,11 @@ class NexusMemoryProvider:
             # through auto-recall (prefetch) and through the nexus_recall tool.
             if not self._can_read(pl):
                 continue
+            # Geltungsbereich: dieselbe Regel wie im Qdrant-Filter oben. Ein
+            # fremdes Sitzungsprotokoll ist fuer diesen Aufbau Ballast — auch
+            # im ausdruecklichen Abruf.
+            if not _scope_visible(pl, _bundle):
+                continue
             # Roadmap 4.5: point-in-time - skip memories newer than as_of
             if as_of and (pl.get("created_at") or "")[:10] > as_of:
                 continue
@@ -3092,7 +3306,7 @@ class NexusMemoryProvider:
                 flywheel.append((pid, pl.get("use_count", 0) or 0,
                                  pl.get("access_count", 0) or 0,
                                  (pl.get("lifecycle_status") or "canonical")))
-            results.append({"id": pid, "text": (pl.get("content") or "")[:2000],
+            results.append({"id": pid, "text": _point_text(pl)[:2000],
                             "score": round(float(p.score or 0.0), 3), "source": pl.get("source"),
                             "source_url": pl.get("source_url"), "access_level": pl.get("access_level"),
                             "category": pl.get("category", "fact"),
@@ -3788,7 +4002,11 @@ class NexusMemoryProvider:
             source_type="chat",
         )
         if prepared is None:
-            return _gate_rejection()
+            rejection = _gate_rejection()
+            _log_movement("denied", "refused", text=text,
+                          access_level=access_level, category="entity",
+                          reason=rejection["reason"])
+            return rejection
         text = prepared["content"]
         access_level = prepared["access_level"]
         source = prepared["source"]
@@ -3841,6 +4059,10 @@ class NexusMemoryProvider:
         )
         # Erst nach erfolgreichem Schreiben: der Punkt ist jetzt auffindbar.
         _index_written_point(payload, self._collection)
+        # Bewegungsprotokoll: auch ein Entity-Punkt ist ein Schreibvorgang —
+        # genau eine Zeile, wie jeder andere Weg.
+        _log_movement("write", "ok", text=text, access_level=access_level,
+                      target_id=eid, category="entity", after_text=text)
         return {"status": "ok", "id": eid, "entity_type": entity.entity_type}
 
     def on_memory_write(self, action: str, target: str, content: str,

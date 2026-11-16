@@ -356,9 +356,15 @@ class TestH7FailClosed:
                 return []
 
         monkeypatch.setattr(mcp, "_store", _Store())
-        out = await mcp.handle_call_tool(
-            "recall", {"query": "q", "filter_level": "private"}
-        )
+        # The dashboard level is the ceiling: an owner may ask for private.
+        token = mcp._REQUEST_AGENT_ID.set("eigentuemer")
+        monkeypatch.setattr(mcp, "_caller_max_level", lambda: "private")
+        try:
+            out = await mcp.handle_call_tool(
+                "recall", {"query": "q", "filter_level": "private"}
+            )
+        finally:
+            mcp._REQUEST_AGENT_ID.reset(token)
         body = json.loads(out[0].text)
         assert body["count"] == 0
         assert seen["level"] == "private"

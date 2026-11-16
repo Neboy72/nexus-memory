@@ -37,11 +37,11 @@ FAKT = "Der Verteiler liegt im Flur neben der Kellertuer"  # 47 Zeichen
 class TestLeererInhalt:
     def test_leerer_text_wird_abgewiesen(self):
         assert prepare("") is None
-        assert "leer" in last_reason()
+        assert "empty" in last_reason()
 
     def test_nur_leerzeichen_werden_abgewiesen(self):
         assert prepare("   \n\t ") is None
-        assert "leer" in last_reason()
+        assert "empty" in last_reason()
 
     def test_none_wird_abgewiesen(self):
         assert prepare(None) is None
@@ -64,7 +64,7 @@ class TestEtikettenerkennung:
     ])
     def test_etikett_wird_abgewiesen(self, text):
         assert prepare(text, category="fact") is None
-        assert "Etikett" in last_reason()
+        assert "label" in last_reason()
 
     @pytest.mark.parametrize("text", [
         "Tuer-Code: 4711",
@@ -428,7 +428,7 @@ class TestPluginSchreibweg:
         ergebnis = provider._upsert(text=FAKT, category="fact")
 
         assert ergebnis["status"] == "rejected"
-        assert "Schreibtor nicht ladbar" in ergebnis["reason"]
+        assert "write gate not loadable" in ergebnis["reason"]
         assert gespeichert == [], "ohne Tor darf kein Punkt geschrieben werden"
 
     def test_fehler_im_stichwortindex_verhindern_das_schreiben_nicht(self, monkeypatch):

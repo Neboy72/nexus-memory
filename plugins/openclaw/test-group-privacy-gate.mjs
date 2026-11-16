@@ -69,6 +69,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "nexus-privacy-gate-"));
 process.env.NEXUS_CAPTURE_QUEUE_FILE = join(SANDBOX_DIR, "capture-retry-queue.jsonl");
+// 15.11.2026: der Agentenschluessel des Plugins lebt im Datenverzeichnis. Ein
+// eigener Sandkasten haelt den Test vom echten Schluessel des Entwicklers fern.
+process.env.NEXUS_DATA_DIR = join(SANDBOX_DIR, "nexus-data");
 
 const mod = await import(DIST_ENTRY);
 
@@ -89,6 +92,16 @@ globalThis.fetch = async (url, opts) => {
   // The write path is POST /write on the Nexus service (10.11.2026). Recorded
   // as the "upsert" this privacy gate is about; Qdrant no longer sees writes.
   if (u.includes("127.0.0.1:9122")) {
+    if (u.endsWith("/enroll")) {
+      // Self-enrolment (15.11.2026): the installation key asks once for a key
+      // of the plugin's own; every write then carries that key.
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ agent_id: "probe123", key: "agent-key-test", is_owner: false, created: true }),
+        text: async () => JSON.stringify({ agent_id: "probe123", key: "agent-key-test" }),
+      };
+    }
     if (u.endsWith("/write") && opts && opts.method === "POST") {
       let body;
       try {
@@ -251,10 +264,13 @@ try {
     assert.ok(searches.length > 0, "Suche muss stattfinden");
     for (const s of searches) {
       // Fund W36 (medium): auch hier ALLE — keine zweite uncapped Suche durchrutschen lassen.
-      assert.strictEqual(
-        s.accessLevel,
-        "no-filter",
-        "DM-Recall (private = kein Filter) muss fuer ALLE Calls gelten — got: " + s.accessLevel,
+      // Entschieden 15.11.2026: "privat = kein Filter" gilt nur noch fuer die ZUGRIFFSSTUFE.
+      // Der Verbund-Filter (scope) ist eine zweite, unabhaengige Achse und darf auch in einer DM
+      // gesetzt sein — sonst saehe der Agent fremde Sitzungsprotokolle. Verboten bleibt jede
+      // Stufen-Einschraenkung (public/trusted) in einer privaten DM.
+      assert.ok(
+        s.accessLevel === "no-filter" || s.accessLevel === "filter-without-any",
+        "DM-Recall darf keinen Stufen-Filter setzen (Verbund-Filter ist erlaubt) — got: " + s.accessLevel,
       );
     }
   });

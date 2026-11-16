@@ -672,6 +672,26 @@ class GuardrailEngine:
                 f"Override audit entry could not be persisted: {e}"
             ) from e
 
+        # Bewegungsprotokoll (Nachtrag 15.11.2026): der Override legt einen
+        # Punkt an und war der letzte Weg ohne Zeile. Bewusst NACH dem
+        # ``try``: die Zeile darf nie wie ein gescheitertes Speichern
+        # aussehen — ``record`` ist ohnehin fail-open. Sie nennt Kennung und
+        # Zahl der ueberstimmten Regeln, nicht Befehl und Begruendung (die
+        # stehen im Audit-Punkt selbst).
+        #
+        # ``agent_id`` hat den Vorgabewert ``"unknown"``: das heisst "kein
+        # Aufrufer bekannt" und ist damit kein Absender, sondern ein
+        # Systemvorgang (``system:guard``, siehe ``service_log.SYSTEM_ACTORS``).
+        known_agent = (agent_id or "").strip()
+        from nexus_memory import service_log
+        service_log.record(
+            "guardrail_override", "ok", target_id=override_id,
+            category="session", reason="override granted",
+            detail=f"{len(matched_rules)} rules",
+            via="guard",
+            actor=(known_agent if known_agent not in ("", "unknown")
+                   else service_log.SYSTEM_ACTORS["guard"]),
+        )
         return override_id
 
     @staticmethod

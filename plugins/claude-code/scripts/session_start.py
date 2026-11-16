@@ -17,6 +17,21 @@ from typing import Optional
 # explicit = the provider you name. See _embedding.py for the rule.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _embedding  # noqa: E402
+from _point_text import point_text  # noqa: E402 (same dir)
+
+# Geltungsbereich (15.11.2026): shared scope-auto lib provides the verbund
+# filter. Same import guard as auto_recall.py — a missing/broken scope_auto
+# (partial install, syntax error) must NOT kill the SessionStart hook; the
+# hook then loads WITHOUT the filter and says so, exactly like auto_recall.
+try:
+    import scope_auto as _scope_auto  # noqa: E402 (same dir)
+except Exception as _scope_import_exc:  # pragma: no cover - defensive
+    _scope_auto = None
+    print(
+        f"[nexus session-start] scope_auto unavailable ({_scope_import_exc}) — "
+        "recalling without scope filter",
+        file=sys.stderr,
+    )
 
 QDRANT_URL = os.getenv("NEXUS_QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.getenv("NEXUS_COLLECTION", "nexus")
@@ -187,17 +202,33 @@ def _get_trust_filter(trust_level: str) -> dict:
 
     W40-1: the level is resolved once by the caller. Resolving it again here
     re-read the registry and could disagree with the client-side cutoff.
+
+    Since 15.11.2026 the level group sits as its own ``must`` entry and the
+    verbund group NEXT TO it: access level and verbund are two separate axes.
+    Two sibling ``should`` lists would OR them together.
     """
     level_order = ["public", "trusted", "private"]
     idx = level_order.index(trust_level) if trust_level in level_order else 0
     allowed = level_order[:idx + 1]
 
-    return {
-        "should": [
-            {"key": "access_level", "match": {"value": lvl}}
-            for lvl in allowed
-        ]
-    }
+    must = [
+        {
+            "should": [
+                {"key": "access_level", "match": {"value": lvl}}
+                for lvl in allowed
+            ]
+        }
+    ]
+    if _scope_auto is not None:
+        try:
+            bundle = _scope_auto.own_bundle()
+            must.append({"should": _scope_auto.scope_should(bundle)})
+        except Exception as exc:  # pragma: no cover - defensive
+            print(
+                f"[nexus session-start] scope filter skipped ({exc}) — fail-open",
+                file=sys.stderr,
+            )
+    return {"must": must}
 
 def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     """Search Qdrant with trust-level filter + client-side defense-in-depth.
@@ -237,6 +268,15 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
         return []
 
     # Client-side defense-in-depth filter
+    bundle = None
+    if _scope_auto is not None:
+        try:
+            bundle = _scope_auto.own_bundle()
+        except Exception as exc:  # pragma: no cover - defensive
+            print(
+                f"[nexus session-start] scope filter skipped ({exc}) — fail-open",
+                file=sys.stderr,
+            )
     filtered = []
     for hit in results:
         # H250: Qdrant can store points without a payload — ``"payload": null``
@@ -249,6 +289,10 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
             payload = {}
         mem_level = payload.get("access_level", "private")
         mem_idx = level_order.index(mem_level) if mem_level in level_order else 2
+        # Geltungsbereich (15.11.2026): fremde Protokolle bleiben draussen —
+        # zweite, unabhaengige Pruefung hinter dem Qdrant-Filter.
+        if bundle is not None and not _scope_auto.scope_visible(payload, bundle):
+            continue
         if mem_idx <= agent_idx:
             filtered.append(hit)
         if len(filtered) >= limit:
@@ -281,7 +325,7 @@ def main():
             # W40-1: same payload-variance class as the `text` guard below —
             # a non-dict payload has no `.get` and would abort the hook.
             payload = {}
-        text = payload.get("text") or payload.get("content", "")
+        text = point_text(payload)
         category = payload.get("category", "fact")
         # W40-1: the payload is untrusted JSON — a truthy non-string `text`
         # (e.g. an int) raised TypeError on the slice and aborted the hook
