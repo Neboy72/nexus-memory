@@ -110,6 +110,13 @@ def _resolve_tier(content: str, metadata: dict | None = None) -> tuple[str, floa
     return "tier3", SOURCE_TIERS["tier3"]["boost"]
 
 RRF_K = 60  # Reciprocal Rank Fusion constant
+
+# Untergrenze fuer den Kandidatenpool (16.11.2026). Ohne sie haengt die
+# Grundgesamtheit an der Ausgabegrenze: Bei top_k=5 wurden nur 10 Kandidaten
+# geholt, und die waren oft fuer den Aufrufer unsichtbar (fremde Sitzungs-
+# protokolle) — nach dem Aussieben blieb nichts. Mit Boden ist das Ergebnis
+# fuer eine kleine Grenze der Anfang des Ergebnisses fuer eine grosse.
+POOL_FLOOR = 100
 # Wie stark die woertliche Liste zaehlt, wenn ihr Spitzenreiter deutlich vor
 # dem Zweiten liegt (seltene Woerter, Kennung, Zitat). Sonst gilt 1.0 fuer
 # beide Seiten. Gemessen 16.11.2026: ein wortgleicher Treffer verlor gegen
@@ -877,7 +884,12 @@ class HybridRetriever:
             List of dicts with id, rrf_score, tier, methods, text, (rerank_score).
         """
         # Cross-encoder rerank needs a larger pool — search 5x top_k
-        pool_k = top_k * 5 if rerank else top_k * 2
+        # Der Pool hat eine Untergrenze (16.11.2026): Sonst haengt die
+        # Grundgesamtheit an top_k, und dann ist das Ergebnis fuer eine kleine
+        # Grenze nicht der Anfang des Ergebnisses fuer eine grosse — die
+        # Rangfolge verschiebt sich mit der Ausgabegrenze. Mit festem Boden
+        # gilt die Praefix-Invariante (Test: test_recall_limit_controls_output_only).
+        pool_k = max(POOL_FLOOR, top_k * 5 if rerank else top_k * 2)
         
         bm25_hits = self.search_bm25(query, top_k=pool_k)
 

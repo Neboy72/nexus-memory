@@ -110,6 +110,16 @@ for env_path in env_paths:
 QDRANT_HOST = os.environ.get("NEXUS_QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("NEXUS_QDRANT_PORT", "6333"))
 COLLECTION_NAME = os.environ.get("NEXUS_COLLECTION", "nexus")
+
+# Kandidatenpool fuer die Hybride Suche — Untergrenze, unabhaengig von der
+# Ausgabegrenze (16.11.2026). Begruendung: Der Pool wurde vorher aus `limit`
+# abgeleitet (limit*2). Bei einer Grenze von 3 bis 5 — der Art, wie Agenten
+# fragen — passten nur wenige Kandidaten hinein, und die waren oft fremde
+# Sitzungsprotokolle, die der Aufrufer nicht sehen darf. Nach dem Aussieben
+# blieb dann nichts uebrig, und ein leerer Abruf sieht aus wie "nicht
+# vorhanden". Gemessen: Zitat-Abfrage lieferte bei Grenze 3/5/6 null Treffer,
+# bei Grenze 20 zehn — mit dem gesuchten Eintrag auf Platz 1.
+HYBRID_POOL_FLOOR = 100
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
@@ -1739,10 +1749,21 @@ class MemoryStore:
 
             # Try hybrid search first
             if self._hybrid_retriever:
+                # Der Kandidatenpool haengt NICHT an der Ausgabegrenze
+                # (16.11.2026, nach Messung): Vorher wurden nur limit*2
+                # Kandidaten geholt und danach gefiltert. Bei kleinen Grenzen
+                # (3 bis 5, wie Agenten fragen) war das Fenster mit fremden
+                # Sitzungsprotokollen gefuellt, die der Aufrufer nicht sehen
+                # darf — uebrig blieb nichts. Gemessen an einer Zitat-Abfrage:
+                # Grenze 3/5/6 = null Treffer, Grenze 20 = zehn, der gesuchte
+                # Eintrag dort auf Platz 1. Der Pool hat jetzt einen festen
+                # Boden, damit die Grenze nur die Ausgabemenge steuert und
+                # nicht die Trefferquote (Praefix-Invariante im Test).
+                _pool = max(HYBRID_POOL_FLOOR, limit * 4)
                 h_results = self._hybrid_retriever.search(
                     query,
                     query_vector=query_vector,
-                    top_k=limit * 2,  # Fetch extra for filtering
+                    top_k=_pool,
                 )
                 raw_results = h_results
                 logging.debug(f"Hybrid search returned {len(raw_results)} results")

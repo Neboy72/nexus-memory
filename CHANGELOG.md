@@ -1,3 +1,36 @@
+## [0.22.54] - 2026-11-16
+
+**Die Ausgabegrenze steuert die Menge, nicht die Trefferquote.**
+
+Gemeldet von einem zweiten Agenten, nachgemessen am laufenden Dienst: Ein Eintrag, dessen Text
+woertlich abgefragt wurde, war bei einer Grenze von drei, fuenf oder sechs **ueberhaupt nicht
+dabei** — null Treffer. Bei Grenze acht einmal, bei zwanzig auf Platz eins. Dieselbe Abfrage,
+derselbe Bestand, nur eine andere Zahl im Aufruf.
+
+Ursache, gemessen: Der Kandidatenpool wurde aus der Grenze berechnet (`limit * 2`). Bei kleiner
+Grenze waren das sechs bis zehn Kandidaten, und die waren zum grossen Teil Eintraege, die der
+Aufrufer gar nicht sehen darf — in einer Probe trugen 31 von 40 Kandidaten den Geltungsbereich
+einer fremden Sitzung. Der gesuchte Eintrag stand auf Rang 25, also hinter lauter unsichtbaren.
+Nach dem Aussieben blieb nichts uebrig, und ein leerer Abruf sieht aus wie "gibt es nicht". Ein
+Agent, der mit drei bis fuenf Treffern fragt, schliesst daraus falsch auf einen fehlenden Eintrag.
+
+Was jetzt gilt: Der Pool hat eine Untergrenze von 100 Kandidaten, unabhaengig von der
+Ausgabegrenze — an beiden Stellen (Retriever und Dienst). Die Grenze steuert damit nur noch, wie
+viele Treffer ausgegeben werden. Als Test steht die **Praefix-Invariante**: Das Ergebnis fuer eine
+kleine Grenze ist der Anfang des Ergebnisses fuer eine grosse.
+
+Gemessen nach dem Umbau, dieselbe Zitat-Abfrage: Grenze 1, 2, 3, 5, 6, 8, 10 und 15 liefern den
+gesuchten Eintrag — auf Platz eins. Bei Grenze 20 steht er auf Platz zwei, weil in der Zwischenzeit
+ein anderer Eintrag haeufiger gelesen wurde; die Nutzung zaehlt in die Rangfolge, und jeder Abruf
+ist ein Zugriff.
+
+Was NICHT geaendert wurde: die Fusion selbst. Ein einseitiger Wortlaut-Sieger verliert in der
+Rangfusion weiterhin gegen Eintraege, die in beiden Listen mittelmaessig stehen. Das ist der
+naechste Schritt und braucht eine eigene Messung — der jetzige Umbau behebt den Fall, weil der
+gesuchte Eintrag unter den sichtbaren ohnehin vorn steht.
+
+Dazu 14 neue Testfaelle (`tests/test_recall_limit_invariance.py`).
+
 ## [0.22.53] - 2026-11-16
 
 ### Keine Doppel mehr am Sitzungsende, keine Fragmente, ein Weg zum Zurueckziehen
