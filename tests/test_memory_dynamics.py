@@ -120,9 +120,42 @@ def test_parse_ts_variants():
 
 
 def test_reinforcement_log_cap():
+    from nexus_memory.memory_dynamics import REINFORCE_LOG_CAP
     p = {"use_count": 10**9}
     f = reinforcement_factor(p)
-    assert f <= 1.0 + 3.0  # gedeckelt
+    assert f <= 1.0 + REINFORCE_LOG_CAP  # gedeckelt
+
+
+def test_a_fresh_entry_outscores_an_old_workhorse():
+    """16.11.2026: Ein gerade geschriebener Eintrag hat use_count 0 und verlor
+    gegen jeden Dauerbrenner, auch bei gleichem Grundtreffer. Bei gleichem
+    Basis-Score muss jetzt der frische gewinnen."""
+    now = NOW
+    frisch = {"use_count": 0, "created_at": NOW.isoformat(), "salience": 0.5}
+    alt = {"use_count": 15, "created_at": "2026-01-01T00:00:00+00:00",
+           "last_accessed": "2026-01-01T00:00:00+00:00", "salience": 0.5}
+    assert effective_score(0.7, frisch, now) > effective_score(0.7, alt, now)
+
+
+def test_fresh_boost_expires_after_a_day():
+    from nexus_memory.memory_dynamics import FRESH_BOOST, fresh_boost
+    from datetime import timedelta
+    neu = {"created_at": NOW.isoformat()}
+    alt = {"created_at": (NOW - timedelta(hours=48)).isoformat()}
+    assert fresh_boost(neu, NOW) == FRESH_BOOST
+    assert fresh_boost(alt, NOW) == 1.0
+    assert fresh_boost({}, NOW) == 1.0
+
+
+def test_usage_no_longer_dominates_relevance():
+    """Die Nutzung darf die Relevanz nur noch begrenzt verschieben: vorher
+    vervierfachte ein Dauerbrenner seinen Grundtreffer, jetzt hoechstens 1.5-fach."""
+    now = NOW
+    passend = {"use_count": 0, "created_at": (NOW - timedelta(hours=2)).isoformat(), "salience": 0.5}
+    beliebt = {"use_count": 50, "created_at": "2026-06-01T00:00:00+00:00",
+               "last_accessed": "2026-06-01T00:00:00+00:00", "salience": 0.5}
+    verhaeltnis = effective_score(1.0, beliebt, now) / effective_score(1.0, passend, now)
+    assert verhaeltnis < 2.0, f"Nutzung verschiebt noch um Faktor {verhaeltnis:.2f}"
 
 
 # ---------- Review-Fixes (03.09.2026, Claude-Review + Auto-Review) ----------
