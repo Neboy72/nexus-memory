@@ -9,10 +9,12 @@
  * step before the first start:
  *
  *   1. find the DSH profile,
- *   2. read the installation key,
- *   3. check the running service,
- *   4. enrol this harness (`POST /enroll`),
- *   5. store the agent key and put it into the profile's `.env`.
+ *   2. install the plugin's runtime dependencies in the folder the profile
+ *      registers (`npm install --omit=dev`),
+ *   3. read the installation key,
+ *   4. check the running service,
+ *   5. enrol this harness (`POST /enroll`),
+ *   6. store the agent key and put it into the profile's `.env`.
  *
  * Pure Node, `node:` modules only — macOS, Linux and Windows.
  *
@@ -21,6 +23,7 @@
  *   node scripts/install_dsh_plugin.mjs --dry-run
  */
 
+import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
   copyFileSync,
@@ -38,6 +41,11 @@ const DEFAULT_HARNESS = 'dsh'
 const DEFAULT_BASE_URL = 'http://127.0.0.1:9122'
 const HARNESS_PATTERN = /^[a-z0-9._-]{1,64}$/
 const PROFILE_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
+// The bundle name the DSH profile depends on — its link target is the plugin
+// folder the harness loads, so that is where npm install has to run.
+const PLUGIN_PACKAGE = '@local/dsh-nexus-memory'
+// A first npm install may download the whole tree; give it room.
+const NPM_TIMEOUT_MS = 600_000
 const NETWORK_TIMEOUT_MS = 10_000
 const HEALTH_TIMEOUT_MS = 5_000
 // A first /embed may load the model, so the probe gets more room than /enroll.
@@ -53,8 +61,10 @@ Optionen:
   --harness <name>     Harness-Name für /enroll und agent_keys/<name>.key (Default: ${DEFAULT_HARNESS})
   --base-url <url>     Adresse des nexus-memory-Dienstes (Default: ${DEFAULT_BASE_URL})
   --force-enroll       Auch dann neu anmelden, wenn der vorhandene Schlüssel gilt
-  --dry-run            Alles prüfen, nichts schreiben und nicht enrolen
+  --dry-run            Alles prüfen, nichts schreiben, kein npm install, nicht enrolen
   --help               Diese Hilfe anzeigen
+
+Plugin-Abhängigkeiten werden per npm install mitinstalliert; --dry-run überspringt das.
 
 Der Installationsschlüssel kommt aus NEXUS_SERVICE_AUTH_KEY oder aus
 <data-dir>/service_auth.key (data-dir: NEXUS_DATA_DIR oder ~/.nexus-memory).
@@ -399,6 +409,83 @@ function writeEnvFile(envPath, key) {
   writeFileSync(envPath, output.join(os.EOL) + os.EOL, 'utf8')
 }
 
+/**
+ * The folder the profile's `dependencies[PLUGIN_PACKAGE]` points at — `link:`
+ * or `file:` prefix, `~` allowed. That target is the bundle folder the
+ * harness loads, so its own dependencies have to live there too.
+ * Returns null while the profile does not register the plugin yet.
+ */
+function resolvePluginDir(profileDir) {
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(path.join(profileDir, 'package.json'), 'utf8'))
+  } catch {
+    return null
+  }
+  const spec = manifest?.dependencies?.[PLUGIN_PACKAGE]
+  const link = typeof spec === 'string' ? /^(?:link|file):(.+)$/.exec(spec.trim()) : null
+  // A registry spec needs no separate install — npm fetched its dependencies
+  // when the profile was built.
+  if (!link) return null
+  return path.resolve(profileDir, expandHome(link[1]))
+}
+
+/**
+ * Install the plugin's runtime dependencies where the harness loads them.
+ * `dsh plugin add` links the bundle instead of copying it, so npm never
+ * fetches its `dependencies` — without them the harness starts without tools.
+ */
+function installRuntimeDependencies(pluginDir, { dryRun = false, log = console.log } = {}) {
+  if (dryRun) {
+    log(`würde npm install in ${pluginDir} ausführen`)
+    return
+  }
+
+  const result = spawnSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], {
+    cwd: pluginDir,
+    // Windows only finds npm through npm.cmd, which needs a shell.
+    shell: process.platform === 'win32',
+    timeout: NPM_TIMEOUT_MS,
+    encoding: 'utf8',
+    // npm's progress goes straight to the user; only the error tail is kept.
+    stdio: ['ignore', 'inherit', 'pipe'],
+  })
+
+  if (!result.error && result.status === 0) {
+    log(`Abhängigkeiten installiert in ${pluginDir}`)
+    return
+  }
+
+  let reason
+  if (result.error) {
+    reason =
+      result.error.code === 'ENOENT'
+        ? existsSync(pluginDir)
+          ? 'npm nicht gefunden'
+          : `Plugin-Ordner fehlt: ${pluginDir}`
+        : result.error.code === 'ETIMEDOUT'
+          ? `Zeitüberschreitung (${NPM_TIMEOUT_MS / 1000} s)`
+          : result.error.message || String(result.error)
+  } else if (result.signal) {
+    reason = `abgebrochen (${result.signal})`
+  } else {
+    reason = `npm endete mit Status ${result.status}`
+  }
+
+  const tail = (result.stderr || '')
+    .trim()
+    .split(/\r?\n/)
+    .slice(-8)
+    .join('\n')
+  throw new ExitError(
+    1,
+    `npm install in ${pluginDir} fehlgeschlagen: ${reason}.` +
+      (tail ? `\nLetzte Ausgabe:\n${tail}` : '') +
+      '\nOhne diese Abhängigkeiten fehlen dem Plugin @deepseek-ai/dsh-llm und ' +
+      'schemastery — der Harness startet dann ohne Werkzeuge.',
+  )
+}
+
 function describeError(error) {
   if (error?.name === 'TimeoutError') return 'Zeitüberschreitung'
   if (error?.cause?.code) return error.cause.code
@@ -432,6 +519,19 @@ async function main(argv) {
       `Profil nicht gefunden: ${profileDir}\n` +
         'Lege das Profil zuerst an oder wähle mit --profile ein vorhandenes.',
     )
+  }
+
+  // Before the service: missing dependencies break the next harness start
+  // whether or not the daemon is up.
+  const pluginDir = resolvePluginDir(profileDir)
+  if (pluginDir === null) {
+    console.warn(
+      `Hinweis: ${path.join(profileDir, 'package.json')} registriert ${PLUGIN_PACKAGE} ` +
+        'nicht — die Plugin-Abhängigkeiten werden nicht installiert. ' +
+        'Zuerst `dsh plugin --profile <name> add <pfad>` ausführen.',
+    )
+  } else {
+    installRuntimeDependencies(pluginDir, { dryRun: options.dryRun })
   }
 
   const dataDir = resolveDataDir()
