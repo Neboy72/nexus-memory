@@ -138,7 +138,10 @@ class TestRetrievalSearchBody:
         r, rec = self._retriever(monkeypatch, FP)
         r.search_vector([0.1] * 4, top_k=3)
 
-        body = rec.bodies[0]
+        # Letzter Body, nicht der erste: seit 0.22.55 holt der Retriever beim
+        # Start die zurueckgezogenen Eintraege per Scroll, und der landet als
+        # erster Aufruf im Recorder. Geprueft wird der Suchaufruf.
+        body = rec.bodies[-1]
         assert body["vector"] == {"name": FP, "vector": [0.1] * 4}
         assert "using" not in body
 
@@ -146,7 +149,7 @@ class TestRetrievalSearchBody:
         r, rec = self._retriever(monkeypatch, None)
         r.search_vector([0.2] * 4, top_k=3)
 
-        body = rec.bodies[0]
+        body = rec.bodies[-1]
         assert body["vector"] == [0.2] * 4
         assert "using" not in body
 

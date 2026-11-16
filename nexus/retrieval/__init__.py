@@ -117,6 +117,43 @@ RRF_K = 60  # Reciprocal Rank Fusion constant
 # protokolle) — nach dem Aussieben blieb nichts. Mit Boden ist das Ergebnis
 # fuer eine kleine Grenze der Anfang des Ergebnisses fuer eine grosse.
 POOL_FLOOR = 100
+
+# Abdeckungsregel (16.11.2026, nach Beratung): Wer den Text eines Eintrags
+# woertlich abfragt, soll ihn oben finden — auch wenn ein anderer Eintrag in
+# beiden Trefferlisten steht und die Rangfusion gewinnt. Die Regel ist ein
+# AUSLOESER, kein Gewicht: Deckt genau ein Eintrag alle Terme der Abfrage ab,
+# rueckt er auf Platz 1. Sonst bleibt die Reihenfolge unveraendert, damit
+# umformulierte Fragen nicht schlechter werden.
+#
+# Schwelle statt Stoppwortliste: Die Regel feuert nur, wenn die Abfrage
+# mindestens zwei TERME MIT HOHER AUSSAGEKRAFT enthaelt — definiert ueber den
+# eigenen Bestand (ein Term, der in hoechstens 5 Prozent der Eintraege
+# vorkommt). Damit fallen "du", "den", "ist" und "the" von selbst heraus,
+# ohne sprachabhaengige Wortlisten, und eine Abfrage aus lauter Fuellwoertern
+# loest die Regel nicht aus.
+COVERAGE_RARE_DF_RATIO = 0.05
+COVERAGE_MIN_RARE_TERMS = 2
+
+
+def _coverage_normalize(text: str) -> str:
+    """Schreibvarianten aufeinander abbilden — keine Tippfehler-Toleranz.
+
+    Deterministisch dieselbe Abbildung fuer Abfrage und Eintraege: Unicode
+    normalisieren, Kleinschreibung, Eszett zu ss, Umlaute zu ae/oe/ue,
+    Satzzeichen zu Leerzeichen. "scheiss" und "scheiß" sind damit derselbe
+    Term; ein echter Tippfehler bleibt es und wird NICHT geglaettet.
+    """
+    import unicodedata
+
+    klar = unicodedata.normalize("NFKC", text or "").lower()
+    klar = klar.replace("ß", "ss").replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
+    for zeichen in ",.;:!?()[]{}\"'`´„“”‚‘’<>|/\\-_=+*&%$#@~^°":
+        klar = klar.replace(zeichen, " ")
+    return " ".join(klar.split())
+
+
+def _coverage_terms(text: str) -> list[str]:
+    return _coverage_normalize(text).split()
 # Wie stark die woertliche Liste zaehlt, wenn ihr Spitzenreiter deutlich vor
 # dem Zweiten liegt (seltene Woerter, Kennung, Zitat). Sonst gilt 1.0 fuer
 # beide Seiten. Gemessen 16.11.2026: ein wortgleicher Treffer verlor gegen
@@ -235,6 +272,14 @@ class HybridRetriever:
         # O(results × entities) (H233).
         self._entity_index_reverse: dict[str, set[str]] = {}
         self._bm25 = None
+        # Dokumenthaeufigkeit fuer die Abdeckungsregel (16.11.2026) — gefuellt
+        # in _rebuild_aux_indexes(), leer heisst: Regel feuert nicht.
+        self._df = None
+        self._doc_count = 0
+        # Zurueckgezogene Eintraege (deprecated/rolled_back) — sie bleiben im
+        # Index, damit die Zeitpunkt-Abfrage (as_of) sie findet, zaehlen aber
+        # bei der Abdeckungsregel nicht als sichtbarer Volltreffer.
+        self._suppressed_ids: set[str] = set()
 
         # Try to load cached BM25 index
         self._index_dir = Path.home() / ".hermes" / "nexus-bm25"
@@ -430,6 +475,37 @@ class HybridRetriever:
         self._chunk_text_lookup = {
             str(pid): txt for pid, txt in zip(self._ids, self._texts)
         }
+
+        # Dokumenthaeufigkeit je Term (16.11.2026) — Grundlage der
+        # Abdeckungsregel. Gezaehlt wird je Dokument EINMAL (nicht jedes
+        # Vorkommen), mit derselben Normalisierung wie die Abfrage, sonst
+        # zaehlt der Bestand andere Woerter als die Frage. Kosten: einmal pro
+        # Indexaufbau, nicht pro Abfrage.
+        from collections import Counter as _Counter
+
+        self._df = _Counter()
+        self._doc_count = 0
+        for _txt in self._texts:
+            _terme = set(_coverage_terms(_txt))
+            if not _terme:
+                continue
+            self._doc_count += 1
+            for _t in _terme:
+                self._df[_t] += 1
+
+        # Zurueckgezogene Eintraege sammeln (16.11.2026): Sie bleiben im Index
+        # (die Zeitpunkt-Abfrage braucht sie), zaehlen aber nicht als
+        # sichtbarer Volltreffer. Ohne diesen Schritt findet die
+        # Abdeckungsregel bei einem Text mit zurueckgezogenem Zwilling immer
+        # ZWEI Volltreffer und feuert nie — gemessen am 16.11.2026.
+        self._suppressed_ids = set()
+        for _p in (points or []):
+            _pl = _p.get("payload") or {}
+            if _pl.get("lifecycle_status") in ("deprecated", "rolled_back"):
+                _pid = str(_p.get("id") or "")
+                if _pid:
+                    self._suppressed_ids.add(_pid)
+                    self._suppressed_ids.add(f"chunk::{_pid}")
 
         # Session chunk graph — keyed on the corpus ids (H234).
         self._chunk_graph = {}
@@ -660,6 +736,55 @@ class HybridRetriever:
         return {"replaced": replaced, "missing": missing,
                 "total_ids": len(self._ids), "bm25_built": self._bm25 is not None}
 
+    def _refresh_suppressed_ids(self) -> None:
+        """Zurueckgezogene Eintraege aus Qdrant holen (16.11.2026).
+
+        Nur fuer den Weg noetig, der aus dem BM25-Cache startet: Dort liegen
+        keine Payloads vor, also kennt der Retriever die zurueckgezogenen
+        Eintraege nicht und die Abdeckungsregel findet bei einem Text mit
+        zurueckgezogenem Zwilling zwei Volltreffer — sie feuert dann nie.
+        Gemessen am 16.11.2026: 0 statt 12358 Eintraege.
+
+        Ein Fehler hier ist nicht toedlich: Dann bleibt die Menge leer und die
+        Regel schweigt, statt falsch zu entscheiden.
+        """
+        self._suppressed_ids = set()
+        if not HAS_REQUESTS:
+            return
+        try:
+            offset = None
+            while True:
+                body = {
+                    "limit": 10000,
+                    "with_payload": ["lifecycle_status"],
+                    "with_vector": False,
+                    "filter": {
+                        "should": [
+                            {"key": "lifecycle_status", "match": {"value": "deprecated"}},
+                            {"key": "lifecycle_status", "match": {"value": "rolled_back"}},
+                        ]
+                    },
+                }
+                if offset is not None:
+                    body["offset"] = offset
+                antwort = requests.post(
+                    f"{self.qdrant_url}/collections/{self.collection}/points/scroll",
+                    json=body, timeout=15,
+                )
+                antwort.raise_for_status()
+                daten = antwort.json().get("result", {})
+                for punkt in daten.get("points", []):
+                    pid = str(punkt.get("id") or "")
+                    if pid:
+                        self._suppressed_ids.add(pid)
+                        self._suppressed_ids.add(f"chunk::{pid}")
+                offset = daten.get("next_page_offset")
+                if offset is None:
+                    break
+        except Exception as fehler:  # noqa: BLE001 — Regel schweigt lieber als falsch
+            log.warning("Zurueckgezogene Eintraege nicht lesbar: %s", fehler)
+            self._suppressed_ids = set()
+
     def _load_bm25_cache(self) -> bool:
         """Load persisted BM25 index from disk. Returns True if loaded."""
         idx_dir = self._index_dir / "bm25"
@@ -698,6 +823,10 @@ class HybridRetriever:
             # they are not persisted, so without this they'd stay empty
             # after a restart and graph_expand/entity_boost would no-op.
             self._rebuild_aux_indexes()
+            # Aus dem Cache kommen keine Payloads mit — die zurueckgezogenen
+            # Eintraege fehlen dann, und die Abdeckungsregel wuerde bei einem
+            # Text mit Zwilling zwei Volltreffer finden und nie feuern.
+            self._refresh_suppressed_ids()
             return True
         except Exception as exc:
             # A corrupt/partial cache must not look identical to "no cache" —
@@ -958,6 +1087,15 @@ class HybridRetriever:
             fused = self._entity_boost(fused, query)
             fused.sort(key=lambda x: x.get("rrf_score", 0), reverse=True)
 
+        # Abdeckungsregel (16.11.2026): Deckt genau ein Eintrag die Abfrage
+        # vollstaendig ab, gehoert er nach vorn. Steht bewusst GANZ AM ENDE,
+        # unmittelbar vor dem Schnitt: Graph-Boost, Rerank, Step-Back und
+        # Entity-Boost sortieren danach noch um (Step-Back und Entity-Boost
+        # rufen sogar sort()), und ein frueherer Einschub wurde davon wieder
+        # aufgehoben — gemessen am 16.11.2026: isoliert wirkte die Regel, im
+        # Dienst nicht.
+        fused = self._apply_coverage(fused, query)
+
         return fused[:top_k]
 
 
@@ -1113,6 +1251,66 @@ class HybridRetriever:
         if not text or len(text.split()) > IDENTIFIER_MAX_WORDS:
             return False
         return bool(IDENTIFIER_PATTERN.search(text))
+
+    def _rare_query_terms(self, query: str) -> list[str]:
+        """Terme der Abfrage, die im eigenen Bestand selten sind (16.11.2026).
+
+        Ein Term gilt als aussagekraeftig, wenn er in hoechstens
+        COVERAGE_RARE_DF_RATIO der Eintraege vorkommt. Damit fallen "du",
+        "den", "ist", "the" von selbst heraus, ohne Stoppwortliste — und eine
+        Abfrage aus lauter Fuellwoertern hat weniger als zwei solche Terme,
+        loest die Abdeckungsregel also nicht aus.
+        """
+        if not self._df or not self._doc_count:
+            return []
+        gesehen: list[str] = []
+        for term in _coverage_terms(query):
+            if term in gesehen:
+                continue
+            if self._df.get(term, 0) / self._doc_count <= COVERAGE_RARE_DF_RATIO:
+                gesehen.append(term)
+        return gesehen
+
+    def _apply_coverage(self, ranked: list[dict], query: str) -> list[dict]:
+        """Der einzige Volltreffer kommt nach vorn (16.11.2026).
+
+        Ausloeser, kein Gewicht: Nur wenn die Abfrage genug aussagekraeftige
+        Terme hat UND genau EIN Eintrag sie alle enthaelt, rueckt dieser auf
+        Platz 1. Deckt keiner oder mehr als einer ab, bleibt die Reihenfolge
+        unveraendert — deshalb werden umformulierte Fragen nicht schlechter.
+
+        Schreibvarianten sind vorher geglaettet ("scheiss" und "scheiß" sind
+        derselbe Term); ein echter Tippfehler zaehlt nicht als Deckung.
+        """
+        if len(ranked) < 2:
+            return ranked
+        _selten = self._rare_query_terms(query)
+        if len(_selten) < COVERAGE_MIN_RARE_TERMS:
+            return ranked
+
+        gesucht = _coverage_terms(query)
+        volltreffer = []
+        for treffer in ranked:
+            if str(treffer.get("id") or "") in self._suppressed_ids:
+                continue  # zurueckgezogen — nicht sichtbar, darf nicht zaehlen
+            vorhanden = set(_coverage_terms(treffer.get("text") or ""))
+            if all(term in vorhanden for term in gesucht):
+                volltreffer.append(treffer)
+
+        if len(volltreffer) != 1:
+            return ranked
+        sieger = volltreffer[0]
+        # Markierung fuer den Aufrufer (16.11.2026): Der Dienst sortiert die
+        # Treffer am Ende neu (nach Nutzungswert). Ohne diese Spur waere die
+        # Umsortierung hier wirkungslos — gemessen: der Retriever setzte den
+        # Volltreffer auf Platz 1, die Antwort zeigte ihn auf Platz 2.
+        sieger = dict(sieger)
+        sieger["coverage_win"] = True
+        # Nach Kennung filtern, nicht nach Objektidentitaet: `sieger` ist eine
+        # Kopie, das Original steckt noch in `ranked` — sonst stuende der
+        # Eintrag zweimal in der Liste (vom Test gefangen).
+        _sid = str(sieger.get("id"))
+        return [sieger] + [t for t in ranked if str(t.get("id")) != _sid]
 
     def _lexical_weight(self, bm25_hits: list[dict]) -> float:
         """Wie stark soll die woertliche Liste zaehlen?
