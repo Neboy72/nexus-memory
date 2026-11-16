@@ -110,6 +110,12 @@ def _resolve_tier(content: str, metadata: dict | None = None) -> tuple[str, floa
     return "tier3", SOURCE_TIERS["tier3"]["boost"]
 
 RRF_K = 60  # Reciprocal Rank Fusion constant
+# Wie stark die woertliche Liste zaehlt, wenn ihr Spitzenreiter deutlich vor
+# dem Zweiten liegt (seltene Woerter, Kennung, Zitat). Sonst gilt 1.0 fuer
+# beide Seiten. Gemessen 16.11.2026: ein wortgleicher Treffer verlor gegen
+# einen inhaltlich aehnlichen, weil beide exakt denselben Fusionswert hatten.
+LEXICAL_WEIGHT_STRONG = 1.5
+LEXICAL_CLEAR_RATIO = 2.0
 
 
 def _timestamp_sort_key(point: dict) -> str:
@@ -1064,6 +1070,36 @@ class HybridRetriever:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
+    def _lexical_weight(self, bm25_hits: list[dict]) -> float:
+        """Wie stark soll die woertliche Liste zaehlen?
+
+        Gemessen am 16.11.2026: Bei einer wortgleichen Frage stand der gesuchte
+        Eintrag woertlich auf Platz 1 (36.4 gegen 12.5 fuer den Zweiten), im
+        Vektor aber nicht unter den ersten zwanzig. Der Konkurrent war
+        Vektor-Platz 1 und woertlich weit hinten — beide bekamen dadurch exakt
+        denselben Fusionswert, und im Gleichstand entschied die Reihenfolge,
+        nicht die Qualitaet.
+
+        Ein grosser Abstand an der Spitze heisst: seltene Woerter, Kennung oder
+        Zitat. Dann bekommt die woertliche Seite mehr Gewicht. Liegen die
+        Treffer dicht beieinander, bleibt es bei gleich stark.
+        """
+        scores = [self._hit_score(h) for h in bm25_hits[:2]]
+        if not scores or scores[0] <= 0:
+            return 1.0
+        if len(scores) < 2 or scores[1] <= 0:
+            return LEXICAL_WEIGHT_STRONG
+        return (LEXICAL_WEIGHT_STRONG
+                if scores[0] / scores[1] >= LEXICAL_CLEAR_RATIO else 1.0)
+
+    @staticmethod
+    def _hit_score(hit: dict) -> float:
+        for key in ("bm25_score", "score"):
+            value = hit.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+        return 0.0
+
     def _rrf(self, bm25_hits: list[dict], vector_hits: list[dict]) -> list[dict]:
         """Reciprocal Rank Fusion.
 
@@ -1082,10 +1118,16 @@ class HybridRetriever:
         # the local BM25 corpus (vector-only hits, stale/partial cache).
         hit_texts: dict[str, str] = {}
 
+        lex_weight = self._lexical_weight(bm25_hits)
+        lex_scores: dict[str, float] = {}
+
         for hit in bm25_hits + vector_hits:
             doc_id = hit["id"]
             rank = hit["rank"]
-            scores[doc_id] += 1.0 / (RRF_K + rank)
+            weight = lex_weight if hit.get("method") == "bm25" else 1.0
+            scores[doc_id] += weight / (RRF_K + rank)
+            if hit.get("method") == "bm25":
+                lex_scores[doc_id] = max(lex_scores.get(doc_id, 0.0), self._hit_score(hit))
             methods[doc_id].add(hit["method"])
             payload = hit.get("payload")
             if isinstance(payload, dict) and doc_id not in hit_payloads:
@@ -1101,7 +1143,11 @@ class HybridRetriever:
                 if i < len(self._texts):
                     id_to_text[did] = self._texts[i][:200]
 
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        # Bei gleichem Fusionswert entscheidet der staerkere woertliche Beleg,
+        # nicht die Reihenfolge der Listen (16.11.2026).
+        ranked = sorted(scores.items(),
+                        key=lambda x: (x[1], lex_scores.get(x[0], 0.0)),
+                        reverse=True)
         items = []
         for doc_id, score in ranked:
             item = {
