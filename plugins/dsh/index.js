@@ -133,10 +133,10 @@ function renderMemories(memories, budget) {
 }
 
 /** Build the stored text for one captured turn. */
-function captureText(user, assistant, session, turn, maxChars) {
+export function captureText(user, assistant, session, turn, maxChars) {
   const header = `[DSH session ${String(session).slice(0, 8)} · turn ${turn}]`
   let text = `${header}\nUser: ${user.trim()}\n\nAssistant: ${assistant.trim()}`
-  if (text.length > maxChars) text = `${text.slice(0, maxChars - 1).rstrip()}…`
+  if (text.length > maxChars) text = `${text.slice(0, maxChars - 1).trimEnd()}…`
   return text
 }
 
