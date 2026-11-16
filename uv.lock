@@ -1231,7 +1231,7 @@ wheels = [
 
 [[package]]
 name = "nexus-memory"
-version = "0.22.52"
+version = "0.22.53"
 source = { editable = "." }
 dependencies = [
     { name = "bm25s" },

@@ -2723,6 +2723,33 @@ async def handle_list_tools(role: Optional[str] = None) -> list[types.Tool]:
                         ),
                         "default": None,
                     },
+                    "withdraw": {
+                        "type": "boolean",
+                        "description": (
+                            "Withdraw this memory instead of rewriting it: the text "
+                            "stays, the lifecycle status becomes 'deprecated' and the "
+                            "reason is recorded. Use it to merge duplicates (point "
+                            "superseded_by at the entry that stays) or to retire an "
+                            "entry that no longer holds. Requires reason."
+                        ),
+                        "default": False,
+                    },
+                    "superseded_by": {
+                        "type": "string",
+                        "description": (
+                            "Optional: the memory that replaces this one when "
+                            "withdrawing (for merging duplicates)."
+                        ),
+                        "default": "",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "Why this memory was withdrawn; required with "
+                            "withdraw=true and recorded with the entry."
+                        ),
+                        "default": "",
+                    },
                 },
                 "required": ["memory_id"],
             },
@@ -3417,6 +3444,23 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             new_text = arguments.get("text", "")
             modified_by = arguments.get("modified_by", "")
             effective_from = arguments.get("effective_from")
+            withdraw = bool(arguments.get("withdraw", False))
+            superseded_by = str(arguments.get("superseded_by", "") or "").strip()
+            withdraw_reason = str(arguments.get("reason", "") or "").strip()
+
+            # Zurueckziehen (16.11.2026): Der Text bleibt, der Lebenszyklus
+            # aendert sich. Bis hierher gab es dafuer keinen abgesegneten Weg —
+            # Zusammenlegen und Zurueckziehen liefen am Dienst vorbei, ohne
+            # Rollenpruefung und ohne Protokollzeile. Der Grund ist Pflicht,
+            # weil ein Eintrag ohne Begruendung niemandem hilft.
+            if withdraw and not withdraw_reason:
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": "withdraw=true requires a reason; store was not modified",
+                    }),
+                )]
 
             # ── Input validation BEFORE any write (review fix) ─────────
             # A client can still send an invalid effective_from through
@@ -3527,6 +3571,19 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             _update_metadata = {"lifecycle_status": "canonical"}
             if _effective_from_dt is not None:
                 _update_metadata["valid_from"] = _effective_from_dt.isoformat()
+            if withdraw:
+                # Text bleibt stehen; nur der Lebenszyklus wird gesetzt. Die
+                # Feldnamen sind dieselben, die der Dienst beim automatischen
+                # Ersetzen benutzt — damit lesen alle Leser sie gleich.
+                _withdraw_at = datetime.now(timezone.utc).isoformat()
+                _update_metadata = {
+                    "lifecycle_status": "deprecated",
+                    "superseded_at": _withdraw_at,
+                    "valid_to": _withdraw_at,
+                    "supersede_reason": withdraw_reason,
+                }
+                if superseded_by:
+                    _update_metadata["superseded_by"] = superseded_by
             from nexus import nexus_update
             result = nexus_update(
                 point_id=memory_id,
