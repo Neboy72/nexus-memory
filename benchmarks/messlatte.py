@@ -126,6 +126,45 @@ def fragen_aus(punkt):
     return fragen
 
 
+def nur_sichtbare(faelle):
+    """Faelle behalten, deren Zieleintrag ein public-Aufrufer sehen darf."""
+    ids = [str(f.get("ziel") or f.get("id")) for f in faelle]
+    if not ids:
+        return faelle
+    try:
+        body = {"ids": ids, "with_payload": True, "with_vector": False}
+        req = urllib.request.Request(f"{QD}/collections/{COLLECTION}/points",
+                                     data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=60) as antwort:
+            punkte = json.loads(antwort.read())["result"]
+    except Exception as fehler:  # noqa: BLE001 — ohne Payloads lieber ungefiltert messen
+        print(f"  WARNUNG: Sichtbarkeit nicht pruefbar ({fehler}) — messe ungefiltert.")
+        return faelle
+
+    payloads = {str(p["id"]): (p.get("payload") or {}) for p in punkte}
+    behalten, verworfen = [], {"privat": 0, "zurueckgezogen": 0, "fremder Bereich": 0, "fehlt": 0}
+    for fall in faelle:
+        pl = payloads.get(str(fall.get("ziel") or fall.get("id")), {})
+        if not pl:
+            verworfen["fehlt"] += 1
+            continue
+        if pl.get("lifecycle_status") in ("deprecated", "rolled_back"):
+            verworfen["zurueckgezogen"] += 1
+            continue
+        if (pl.get("access_level") or "private") != "public":
+            verworfen["privat"] += 1
+            continue
+        if (pl.get("scope") or "default") != "default":
+            verworfen["fremder Bereich"] += 1
+            continue
+        behalten.append(fall)
+    if any(verworfen.values()):
+        print(f"  Ausgeschlossen (fuer diesen Aufruf unsichtbar): "
+              f"{', '.join(f'{k}={v}' for k, v in verworfen.items() if v)}")
+    return behalten
+
+
 def main():
     rpc = rpc_factory()
     rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -136,7 +175,11 @@ def main():
     # schwankte zwischen 8 und 36, und zwei Laeufe waren nicht vergleichbar.
     # Mit fester Liste ist jeder Eingriff paarweise messbar.
     fall_datei = pathlib.Path(__file__).resolve().parent / "messlatte-faelle.json"
-    if fall_datei.exists():
+    fremd = next((a for a in sys.argv[1:] if a.endswith(".json")), None)
+    if fremd:
+        auswahl = json.loads(pathlib.Path(fremd).read_text())
+        print(f"Fremde Fallliste: {fremd} ({len(auswahl)})")
+    elif fall_datei.exists():
         auswahl = json.loads(fall_datei.read_text())
         print(f"Faelle aus {fall_datei.name}: {len(auswahl)}")
     else:
@@ -158,6 +201,14 @@ def main():
         fall_datei.write_text(json.dumps(auswahl, indent=2, ensure_ascii=False))
         print(f"Faelle gezogen und festgehalten: {fall_datei.name} ({len(auswahl)})")
 
+    for fall in auswahl:
+        fall.setdefault("art", "paraphrase")
+
+    # Sichtbarkeit pruefen (17.11.2026): Ein Fall, dessen Zieleintrag der Aufrufer
+    # nicht sehen darf, ist kein Suchfehler — er wird ausgeblendet, weil er
+    # privat, zurueckgezogen oder aus einem fremden Geltungsbereich ist. Ohne
+    # diesen Schritt misst die Messlatte die Filter statt der Suche.
+    auswahl = nur_sichtbare(auswahl)
     verteilung = {}
     for fall in auswahl:
         verteilung[fall["art"]] = verteilung.get(fall["art"], 0) + 1
@@ -171,7 +222,8 @@ def main():
                                      "arguments": {"query": fall["frage"], "limit": TOP_K}})
         treffer = json.loads(antwort["result"]["content"][0]["text"])["results"]
         ids = [str(m["id"]) for m in treffer]
-        rang = next((n for n, kennung in enumerate(ids, 1) if kennung == fall["ziel"]), None)
+        ziel = fall.get("ziel") or fall.get("id")
+        rang = next((n for n, kennung in enumerate(ids, 1) if kennung == ziel), None)
         ergebnisse.append({**fall, "rang": rang, "anzahl": len(ids)})
         if i % 20 == 0:
             print(f"  ... {i}/{len(auswahl)} ({time.time()-start:.0f}s)")

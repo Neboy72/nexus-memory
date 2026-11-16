@@ -82,3 +82,30 @@ Alle drei waren in der Messung, nicht im Produkt:
 Stichprobe aus dem Suchkorpus, Punkte mit `doc_id` (gescannte Rechnungen, Arztbriefe)
 ausgeschlossen. Die erzeugten Falldateien stehen in `.gitignore`, weil sie Woertliches aus dem
 privaten Bestand enthalten. In Ausgaben erscheinen nur kurze Textanfragen.
+
+## Paraphrasen mit echten Umformulierungen (17.11.2026)
+
+Die Paraphrase-Zeile der Messlatte war bisher schwach gebaut: "was steht zu <drei Woerter aus dem
+Eintrag> im bestand" wiederholt den Wortlaut und misst nichts. `benchmarks/fragen_bauen.py` laesst
+deshalb ein Modell je eine Frage formulieren, die dasselbe wissen will, und weist je Frage den
+Anteil wortgleicher Woerter aus. 60 Fragen, davon 51 unter 50 Prozent wortgleich.
+
+Ergebnis ueber den Dienst, nach Ausschluss der Faelle, deren Zieleintrag der Aufrufer nicht sehen
+darf (25 der 60 tragen einen privaten Eintrag — das ist kein Suchfehler, das ist eine
+Zugriffsgrenze):
+
+| Kennzahl | Wert |
+|---|---|
+| Faelle (fair, public-Ziel) | 35 |
+| Platz 1 | 12 (34 %) |
+| Top 5 | 22 (63 %) |
+| nicht gefunden | 8 (23 %) |
+
+Vor dem Ausschluss sahen dieselben Fragen wie 8 von 60 aus (13 % Platz 1, 55 % nicht gefunden).
+Diese Zahl war falsch: Sie mass die Zugriffsgrenze, nicht die Suche. Deshalb prueft die Messlatte
+seit diesem Lauf vorab die Payloads der Ziele und schliesst aus, was der Aufrufer nicht sehen darf
+— zurueckgezogen, privat, fremder Geltungsbereich.
+
+Damit ist die Paraphrase-Leistung ehrlich beziffert: rund ein Drittel oben, zwei Drittel in den
+Top 5, ein Fuenftel gar nicht. Die Stufendiagnose sagt auch warum: Von 40 Paraphrasen hat BM25
+31 auf Platz 1, der Vektor nur 6.
