@@ -603,11 +603,27 @@ h2 {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #00b894;
+  background: #4a4a55;
   /* Nicht mehr ``auto``: die freie Strecke gehoert dem ID-Badge, sonst
      teilen sich beide den Rest und die Kennung steht nicht mehr rechts. */
   margin-left: 8px;
+}
+
+/* Der Punkt zeigt den letzten Kontakt (16.11.2026): vorher war die Farbe fest
+   gruen und behauptete eine Verbindung, die es nicht gab. */
+.agent-status.online {
+  background: #00b894;
   box-shadow: 0 0 6px #00b894;
+}
+
+.agent-status.idle {
+  background: #fdcb6e;
+  box-shadow: 0 0 6px #fdcb6e;
+}
+
+.agent-status.offline {
+  background: #4a4a55;
+  box-shadow: none;
 }
 
 /* iOS-style On/Off toggle (Nebo design) — sits right of the status dot,
@@ -654,13 +670,21 @@ h2 {
 }
 
 .agent-meta {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, max-content));
+  justify-content: start;
   align-items: baseline;
-  gap: 6px 22px;
-  font-size: 12px;
+  gap: 4px 18px;
+  font-size: 11.5px;
   color: #636e72;
   margin-bottom: 10px;
+}
+
+/* Jede Angabe bleibt in ihrer Zelle und bricht nie um: sonst rutscht bei langen
+   Zahlen (Hermes, 16.042 writes) nur die letzte Angabe in eine zweite Zeile und
+   die Karten sehen unterschiedlich aus (16.11.2026). */
+.agent-meta > span {
+  white-space: nowrap;
 }
 
 /* Trust Level Buttons */

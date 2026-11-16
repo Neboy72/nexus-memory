@@ -1,3 +1,27 @@
+## [0.22.50] - 2026-11-16
+
+### Ein frischer Eintrag hat wieder eine Chance
+
+Ein gerade geschriebener Eintrag war in der Rangfolge praktisch nicht zu sehen, auch wenn die
+Frage wortgleich zu ihm passte. Zwei Ursachen, beide gemessen:
+
+- **Die Nutzung wog zu schwer.** Der Rangfaktor war `Grundtreffer × (1 + ln(1+Abrufe)) ×
+  Verfall`, gedeckelt bei Faktor 4. Ein Eintrag mit 15 Abrufen bekam also das Vierfache
+  dessen, was er inhaltlich verdiente — und schlug damit jeden Neuzugang, der inhaltlich
+  genauso passte. Jetzt ist der Deckel 1,5. Oft gelesen heisst weiter "wichtig", aber es
+  ueberstimmt nicht mehr die Passung.
+- **Ein Neuzugang hatte gar nichts.** Er hat null Abrufe, also weder Verstaerkung noch
+  Verfall (der ist fuer ihn neutral). Er trat damit gegen den vollen Bonus der Dauerbrenner
+  an. Eintraege der letzten 24 Stunden bekommen jetzt einen Vorsprung von 1,15 — klein genug,
+  um Relevanz nicht zu ueberstimmen, gross genug, um Gleichstand zu ihren Gunsten aufzuloesen.
+
+Gemessen an einem echten Fall (ein Eintrag, den ein Agent 20 Minuten zuvor geschrieben hatte
+und ueber eine wortgleiche Frage nicht wiederfand): vorher Platz 10 von 20, nachher Platz 6.
+Der Rest des Abstands liegt nicht mehr an der Rangfolge, sondern am Grundtreffer selbst.
+
+Die alten Grenzen sind unveraendert: Verfall senkt weiter nur das Ranking, geloescht wird
+nichts, und `rule`/`procedure` bleiben immun (`salience >= 0.8`).
+
 ## [0.22.49] - 2026-11-16
 
 ### Harness-Plugin speichert wieder — und ein frischer Rechner laedt es

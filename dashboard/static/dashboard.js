@@ -22,6 +22,10 @@ const AGENT_LOGOS = {
   'crush': '/assets/agent-logos/crush.png',
   'deepseek-harness': '/assets/agent-logos/dsh.svg',
   'dsh': '/assets/agent-logos/dsh.svg',
+  'ds-bot': '/assets/agent-logos/ds-bot.png',
+  'ds bot': '/assets/agent-logos/ds-bot.png',
+  'dsbot': '/assets/agent-logos/ds-bot.png',
+  'ayosha': '/assets/agent-logos/ds-bot.png',
   // Weitere Marken aus der Datenbank: bereit, sobald die Erkennung den Agenten kennt.
   'aider': '/assets/agent-logos/aider.png',
   'continue': '/assets/agent-logos/continue.png',
@@ -393,11 +397,29 @@ async function loadAgents() {
       ? new Date(agent.connected_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       : '';
     const sincePart = sinceDate ? ` · connected ${sinceDate}` : '';
-    // Self-enrolment (15.11.2026): when the agent last enrolled and how often.
+    // Anschluss und Schluessel sind zwei Daten: connected_at ist der Tag, an dem der
+    // Agent zum ersten Mal da war, enrolled_at der Tag, an dem er sich seinen eigenen
+    // Schluessel geholt hat. Nur das Schluessel-Datum zu zeigen liest sich wie ein
+    // frischer Anschluss, obwohl der Agent seit Monaten laeuft (16.11.2026).
     const enrolledDate = agent.enrolled_at
       ? new Date(agent.enrolled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       : '';
     const enrollCount = Number(agent.enroll_count || 0);
+    // Die Zeile "enrolled <Datum> · n×" wird bewusst NICHT gezeigt (Nebo, 16.11.2026):
+    // alle Agenten holten ihre Schluessel am Tag des Umbaus, also stand auf jeder Karte
+    // dasselbe Datum und las wie ein frischer Anschluss. Wer es wissen will, fragt den
+    // Agenten; die Felder bleiben im Register.
+    void enrolledDate; void enrollCount;
+    // Verbindungszustand aus dem letzten Kontakt, nicht aus einer festen Farbe
+    // (Nebo, 16.11.2026): der Punkt war reine Dekoration und leuchtete auch fuer
+    // einen Agenten, dessen Rechner aus ist.
+    const seenMin = agent.last_seen
+      ? (Date.now() - new Date(agent.last_seen).getTime()) / 60000
+      : Infinity;
+    const statusCls = seenMin <= 15 ? 'online' : seenMin <= 120 ? 'idle' : 'offline';
+    const statusTitle = agent.last_seen
+      ? `last contact ${timeAgo(agent.last_seen)}`
+      : 'no contact yet';
     const logo = getAgentLogo(agent, agent.icon);
     const badge = getInstallBadge(agent.install_type);
     // Disambiguation (Nebo, 07.09. v2): Sitzort als BADGE neben Local/Remote —
@@ -423,7 +445,7 @@ async function loadAgents() {
           ${hostBadge(agent)}
           ${seatBadge(agent, seat)}
           ${idBadge(agent)}
-          <span class="agent-status"></span>
+          <span class="agent-status ${statusCls}" title="${statusTitle}"></span>
           ${toggle}
         </div>
         <div class="agent-meta">
@@ -431,7 +453,6 @@ async function loadAgents() {
           <span>${nf(reads)} reads</span>
           <span>${nf(writes)} writes</span>
           ${sinceDate ? `<span>connected since ${sinceDate}</span>` : ''}
-          ${enrolledDate ? `<span title="self-enrolment via POST /enroll">enrolled ${enrolledDate}${enrollCount ? ` · ${nf(enrollCount)}×` : ''}</span>` : ''}
           <span>${agent.has_own_key ? 'own key' : 'no own key'}</span>
         </div>
         <div class="agent-controls">

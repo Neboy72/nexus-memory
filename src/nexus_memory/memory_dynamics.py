@@ -24,8 +24,14 @@ DEFAULT_SALIENCE = 0.5
 DECAY_PER_MONTH = 0.05      # 5% Gewichtsverlust pro Monat Nichtnutzung
 DECAY_FLOOR = 0.3           # nie tiefer als 30% (vergessen != gelöscht)
 SALIENCE_IMMUNE = 0.8       # ab hier immun gegen Decay
-REINFORCE_LOG_CAP = 3.0     # ln-Verstärkung gedeckelt: Boost max. +3 → Faktor ≤ 4.0,
-                            # Kappe praktisch bei ~20 Nutzungen (ln(21) ≈ 3.04)
+REINFORCE_LOG_CAP = 0.5     # ln-Verstaerkung gedeckelt: Boost max. +0.5 → Faktor ≤ 1.5.
+                            # Vorher 3.0 (Faktor 4.0): damit schlug ein 15-fach gelesener
+                            # Eintrag jeden frischen, inhaltlich passenden — die Rangfolge
+                            # zeigte dann "oft gelesen" statt "passt" (16.11.2026).
+                            # 0.5 gemessen: bei gleichem Grundtreffer gewinnt ein frischer
+                            # Eintrag gegen einen 15-fach genutzten von vor acht Monaten.
+FRESH_HOURS = 24            # Vorsprung fuer Eintraege der letzten 24 Stunden
+FRESH_BOOST = 1.15          # klein genug, um Relevanz nicht zu ueberstimmen
 
 # Kategorie-Gruppen für Salience-Defaults (Store-Pfade MCP + Hermes-Plugin)
 SALIENT_CATEGORIES = ("rule", "procedure")
@@ -82,10 +88,30 @@ def reinforcement_factor(payload: Dict[str, Any]) -> float:
     return 1.0 + min(REINFORCE_LOG_CAP, 0.0 if use == 0 else math.log(1 + use))
 
 
+def fresh_boost(payload: Dict[str, Any], now: datetime | None = None) -> float:
+    """Kleiner Vorsprung fuer Eintraege der letzten FRESH_HOURS.
+
+    Ein gerade geschriebener Eintrag hat use_count 0 und damit keine
+    Verstaerkung; ohne diesen Vorsprung landet er unter allem, was in der
+    Zwischenzeit ein paar Mal gelesen wurde (16.11.2026). Der Faktor ist
+    bewusst klein — er soll Relevanz nicht ueberstimmen, nur den Gleichstand
+    unter sonst aehnlichen Treffern zugunsten des Neuen aufloesen.
+    """
+    created = parse_ts(payload.get("created_at"))
+    if created is None:
+        return 1.0
+    now = parse_ts(now) or datetime.now(timezone.utc)
+    age_h = (now - created).total_seconds() / 3600
+    if age_h < 0:
+        return 1.0
+    return FRESH_BOOST if age_h <= FRESH_HOURS else 1.0
+
+
 def effective_score(base_score: float, payload: Dict[str, Any],
                     now: datetime | None = None) -> float:
-    """Finaler Ranking-Score = base * reinforcement * decay."""
-    return base_score * reinforcement_factor(payload) * decay_factor(payload, now)
+    """Finaler Ranking-Score = base * reinforcement * decay * fresh_boost."""
+    return (base_score * reinforcement_factor(payload)
+            * decay_factor(payload, now) * fresh_boost(payload, now))
 
 
 def access_update_payload(payload: Dict[str, Any],
