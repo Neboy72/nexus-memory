@@ -1,3 +1,41 @@
+## [0.22.56] - 2026-11-17
+
+**Der Quellen-Bonus hat die Relevanz ueberstimmt.**
+
+Gemessen an 128 festgehaltenen Fragen ueber den laufenden Dienst, einmal mit und einmal ohne die
+Aenderung: Der Bonus fuer vertrauenswuerdige Quellen wurde bisher mit dem Rangwert
+**multipliziert** (bis Faktor 1,2). Das klingt harmlos, kostete aber 13 von 40 Platz-1-Treffern —
+mehr als jede Aenderung an der Rangfusion je gebracht hat. Der Grund: Ein Fusionswert von 0,016
+mal 1,2 sind 0,019, und damit springt ein Eintrag ueber mehrere Raenge, sobald er aus einer
+bevorzugten Quelle stammt.
+
+Jetzt entscheidet die Quelle nur noch bei **exakt gleichem** Rangwert. Gemessen: Als reiner
+Gleichstands-Entscheider dieselben Treffer wie ganz ohne Bonus — der Sicherheitszweck bleibt also
+erhalten, die Relevanz bleibt oben.
+
+Vorher und nachher, dieselben 128 Fragen:
+
+| Art | Platz 1 vorher | Platz 1 nachher | Top 5 vorher | Top 5 nachher |
+|---|---|---|---|---|
+| Zitat | 37 | 38 | 38 | 38 |
+| Stichwort | 29 | 31 | 31 | 36 |
+| Paraphrase | 13 | 16 | 22 | 29 |
+| Kennung | 1 | 1 | 1 | 6 |
+| **gesamt** | **80** | **86** | **92** | **109** |
+
+Nicht gefunden: 20 vorher, 11 nachher. Keine Kategorie ist schlechter geworden.
+
+Dazu ein Messwerkzeug, das diese Zahlen erzeugt (`benchmarks/messlatte.py`): eine festgehaltene
+Liste von Fragen mit ihren Zieleintraegen, vier Arten, ueber den Dienst gemessen. Die Falldateien
+bleiben lokal, weil sie Woertliches aus dem eigenen Bestand enthalten — im Repo liegt nur das
+Werkzeug. Ebenso `benchmarks/diagnose_stufen.py` (Rang je Stufe der Kette) und
+`benchmarks/fragen_bauen.py` (laesst ein Modell Paraphrase-Fragen bauen, mit Nachweis, wie
+wortgleich sie sind).
+
+Was NICHT gebaut wurde, obwohl es nahelag: ein Reranker, HyDE, ein Umschreiber bei jeder Abfrage,
+oder ein anderer RRF-Wert. Der Befund zeigt, dass der Verlust nicht in der Fusion lag — die
+Werkzeuge sind jetzt da, um das an echten Fragen zu belegen statt zu vermuten.
+
 ## [0.22.55] - 2026-11-16
 
 **Wer den Wortlaut zitiert, findet ihn jetzt oben.**
