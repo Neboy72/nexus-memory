@@ -51,9 +51,8 @@ an individual is officially representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement through GitHub:
-open an issue or a private report addressed to @Neboy72. All complaints will be
-reviewed and investigated
+reported to the community leaders responsible for enforcement at
+neboy72@googlemail.com. All complaints will be reviewed and investigated
 promptly and fairly.
 
 ## Enforcement Guidelines
