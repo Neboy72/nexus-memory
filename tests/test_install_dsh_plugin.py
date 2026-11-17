@@ -26,5 +26,13 @@ def test_install_dsh_plugin_self_test():
         [node, str(script)], capture_output=True, text=True, timeout=120
     )
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
-    assert "Fälle grün" in result.stdout
+
+    def _ascii_skeleton(text):
+        """Non-ASCII as ``?`` — the runner's console codepage may replace the
+        umlauts on their way into the log, and the wording of the closing line
+        does not depend on that encoding. The self-test itself has already
+        proven every case by exiting 0; this keeps the final line checked."""
+        return text.encode("ascii", "replace").decode("ascii")
+
+    assert _ascii_skeleton("Fälle grün") in _ascii_skeleton(result.stdout)
     print(result.stdout, end="")
