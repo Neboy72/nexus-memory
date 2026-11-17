@@ -22,6 +22,9 @@ register("./_typebox-test-loader.mjs", import.meta.url)
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "nexus-formerly-"))
 process.env.HOME = SANDBOX
+// Windows: os.homedir() liest USERPROFILE, nicht HOME. Ohne diese Zeile
+// schreibt der Test in das echte Benutzerverzeichnis und zaehlt dort nichts.
+process.env.USERPROFILE = SANDBOX
 // Diesen Writer pruefen — der Selbsttest-Riegel muss aus sein.
 delete process.env.NEXUS_AGENT_SELFTEST
 mkdirSync(join(SANDBOX, ".nexus-memory"), { recursive: true })
