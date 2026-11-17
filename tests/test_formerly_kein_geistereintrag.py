@@ -242,8 +242,10 @@ def test_health_audit_daemon_startet_im_test_nicht():
     daemon = threading.Thread(target=lambda: None,
                               name="nexus-health-audit", daemon=True)
     daemon.start()
-    daemon.join(1)
 
+    # ``ident`` wird nur von einem wirklich gestarteten Thread gesetzt. Kein
+    # ``join()``: ein nie gestarteter Thread laesst sich nicht joinen, und
+    # genau das ist hier der Punkt.
     assert daemon.ident is None, "der Audit-Daemon darf unter pytest nicht starten"
 
 
