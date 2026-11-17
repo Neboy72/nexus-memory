@@ -23,16 +23,30 @@ def test_install_dsh_plugin_self_test():
         / "test_install_dsh_plugin.mjs"
     )
     result = subprocess.run(
-        [node, str(script)], capture_output=True, text=True, timeout=120
+        [node, str(script)], capture_output=True, timeout=120
     )
-    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+    def _decode(raw):
+        """Decode the self-test output without trusting the console codepage.
+
+        Node writes UTF-8; a Windows console hands it a codepage instead, so a
+        fixed ``encoding=`` is wrong on one of the two machines. UTF-8 first,
+        the console codepage only when the bytes are not valid UTF-8.
+        """
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("cp1252", "replace")
+
+    stdout = _decode(result.stdout)
+    stderr = _decode(result.stderr)
+    assert result.returncode == 0, stdout[-2000:] + stderr[-2000:]
 
     def _ascii_skeleton(text):
-        """Non-ASCII as ``?`` — the runner's console codepage may replace the
-        umlauts on their way into the log, and the wording of the closing line
-        does not depend on that encoding. The self-test itself has already
-        proven every case by exiting 0; this keeps the final line checked."""
+        """Non-ASCII as ``?`` — if the codepage still mangles the umlauts, the
+        wording of the closing line is unchanged; the self-test itself has
+        already proven every case by exiting 0."""
         return text.encode("ascii", "replace").decode("ascii")
 
-    assert _ascii_skeleton("Fälle grün") in _ascii_skeleton(result.stdout)
-    print(result.stdout, end="")
+    assert _ascii_skeleton("Fälle grün") in _ascii_skeleton(stdout)
+    print(stdout, end="")
