@@ -36,16 +36,6 @@ os.environ.setdefault("NEXUS_COLLECTION", "test-collection")
 os.environ["NEXUS_TRUST_SWEEP"] = "0"
 os.environ["NEXUS_RETRIEVAL_WATCH"] = "0"
 
-# The health-audit daemon is switched off for the same reason, and for one of
-# its own: 45 s after start it runs ``cleanup_removed_agents()`` in a
-# background thread against whatever registry path is current AT THAT MOMENT.
-# Under pytest that is the next test's temp ``agents.json``, so the sweep
-# reaped an entry a running test had just written and left the file empty —
-# ``test_dashboard_detect_legt_keine_eintraege_an`` went red on the Windows
-# runner although ``GET /api/detect`` had not written anything. The audit
-# behaviour itself is covered by tests that build ``HealthAuditor`` directly
-# (tests/test_health_audit_invariants.py, tests/test_dedup_sweep.py).
-os.environ["NEXUS_HEALTH_AUDIT"] = "0"
 
 # Die Einspielung laesst Inhalte unter 40 Zeichen weg (Etiketten ohne Aussage,
 # gemessen 10.11.2026). Tests arbeiten mit kurzen Beispieltexten wie "fresh";
@@ -78,6 +68,42 @@ REPO_ROOT = _REPO_ROOT
 # ---------------------------------------------------------------------------
 # 2. Fixtures
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True, scope="session")
+def kein_health_audit_daemon():
+    """Der Audit-Daemon darf im Test nicht laufen — er sweepet das Register.
+
+    45 s nach dem Start ruft ``HealthAuditor.run_audit()`` in einem
+    Hintergrund-Thread ``cleanup_removed_agents()`` gegen den DANN aktuellen
+    Registerpfad. Unter pytest ist das die temporaere ``agents.json`` des
+    NAECHSTEN Tests: der Sweep raeumte einen Eintrag weg, den ein laufender
+    Test gerade geschrieben hatte, und liess die Datei leer —
+    ``test_dashboard_detect_legt_keine_eintraege_an`` wurde auf dem
+    Windows-Runner rot, obwohl ``GET /api/detect`` nichts geschrieben hatte
+    (der Hinweis "Health audit failed: '_FakeClient' object has no attribute
+    'scroll'" in jenem Log ist genau dieser Durchlauf).
+
+    Die Sperre sitzt auf ``threading.Thread.start`` und nicht auf
+    ``HealthAuditor.start``: ``tests/test_wave21_fixes.py`` laedt das Modul neu,
+    danach waere ein Klassen-Patch weg. Das Verhalten des Audits selbst prüfen
+    Tests, die ``HealthAuditor`` direkt bauen
+    (``tests/test_health_audit_invariants.py``, ``tests/test_dedup_sweep.py``).
+    """
+    import threading
+
+    original_start = threading.Thread.start
+
+    def _guarded_start(self):
+        if self.name == "nexus-health-audit":
+            return
+        return original_start(self)
+
+    threading.Thread.start = _guarded_start
+    try:
+        yield
+    finally:
+        threading.Thread.start = original_start
+
 
 @pytest.fixture(autouse=True)
 def isolated_agents_registry(tmp_path, monkeypatch):

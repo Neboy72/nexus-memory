@@ -227,35 +227,24 @@ def test_dashboard_detect_legt_keine_eintraege_an(umbenannt):
     assert umbenannt.read_text(encoding="utf-8") == before
 
 
-def test_health_audit_daemon_startet_im_test_nicht(monkeypatch):
+def test_health_audit_daemon_startet_im_test_nicht():
     """Der Audit-Daemon sweepet das Register aus einem Hintergrund-Thread.
 
     45 s nach dem Start ruft er ``cleanup_removed_agents()`` gegen den DANN
     aktuellen Pfad — unter pytest also gegen das Register des naechsten Tests.
     Genau das hat ``test_dashboard_detect_legt_keine_eintraege_an`` auf dem
     Windows-Runner rot gemacht: der Daemon leerte die Datei, die der Test
-    gerade geschrieben hatte. Der Schalter steht in ``conftest.py``; hier
-    steht, dass er greift.
+    gerade geschrieben hatte. Die Sperre sitzt in ``conftest.py``; hier steht,
+    dass sie greift.
     """
-    import os
+    import threading
 
-    assert os.environ.get("NEXUS_HEALTH_AUDIT") == "0"
+    daemon = threading.Thread(target=lambda: None,
+                              name="nexus-health-audit", daemon=True)
+    daemon.start()
+    daemon.join(1)
 
-    from nexus_memory import health_audit as ha
-
-    created = []
-    original = ha.threading.Thread
-
-    def _spy(*args, **kwargs):
-        created.append(1)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(ha.threading, "Thread", _spy)
-    auditor = ha.HealthAuditor.__new__(ha.HealthAuditor)
-    auditor._thread = None
-    auditor.start()
-
-    assert created == [], "der Audit-Daemon darf unter pytest nicht starten"
+    assert daemon.ident is None, "der Audit-Daemon darf unter pytest nicht starten"
 
 
 # ===========================================================================
