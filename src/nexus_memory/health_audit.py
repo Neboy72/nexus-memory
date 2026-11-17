@@ -665,6 +665,18 @@ class HealthAuditor:
 
     # ── background loop ────────────────────────────────────────────────
     def start(self) -> None:
+        # Kill-switch, same shape as NEXUS_TRUST_SWEEP / NEXUS_RETRIEVAL_WATCH:
+        # the test suite turns the daemon off. Its first pass calls
+        # ``cleanup_removed_agents()`` 45 s after start, from a background
+        # thread, against whatever registry path is current at that moment.
+        # Under pytest that is the NEXT test's temp ``agents.json``: the sweep
+        # reaped an entry the running test had just written and emptied the
+        # file (``test_dashboard_detect_legt_keine_eintraege_an``, Windows CI —
+        # the "Health audit failed: '_FakeClient' object has no attribute
+        # 'scroll'" warning in that log is this very pass, where the registry
+        # cleanup runs BEFORE the Qdrant audit that then raised).
+        if os.environ.get("NEXUS_HEALTH_AUDIT", "1") == "0":
+            return
         # Nr 461: idempotent — a second start() used to spawn a SECOND loop, so
         # every audit (including the dedup sweep) ran twice.
         if self._thread is not None and self._thread.is_alive():

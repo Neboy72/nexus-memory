@@ -36,6 +36,17 @@ os.environ.setdefault("NEXUS_COLLECTION", "test-collection")
 os.environ["NEXUS_TRUST_SWEEP"] = "0"
 os.environ["NEXUS_RETRIEVAL_WATCH"] = "0"
 
+# The health-audit daemon is switched off for the same reason, and for one of
+# its own: 45 s after start it runs ``cleanup_removed_agents()`` in a
+# background thread against whatever registry path is current AT THAT MOMENT.
+# Under pytest that is the next test's temp ``agents.json``, so the sweep
+# reaped an entry a running test had just written and left the file empty —
+# ``test_dashboard_detect_legt_keine_eintraege_an`` went red on the Windows
+# runner although ``GET /api/detect`` had not written anything. The audit
+# behaviour itself is covered by tests that build ``HealthAuditor`` directly
+# (tests/test_health_audit_invariants.py, tests/test_dedup_sweep.py).
+os.environ["NEXUS_HEALTH_AUDIT"] = "0"
+
 # Die Einspielung laesst Inhalte unter 40 Zeichen weg (Etiketten ohne Aussage,
 # gemessen 10.11.2026). Tests arbeiten mit kurzen Beispieltexten wie "fresh";
 # sie pruefen Reihenfolge, Zugriffsstufen und Lifecycle, nicht die Laengengrenze.
