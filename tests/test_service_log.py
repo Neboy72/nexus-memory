@@ -837,7 +837,12 @@ def test_hermes_plugin_enrolls_and_then_sends_only_its_own_key(monkeypatch):
 
     key_file = Path(os.environ["NEXUS_DATA_DIR"]) / "agent_keys" / "hermes.key"
     assert key_file.read_text(encoding="utf-8") == "agent-key-123"
-    assert (key_file.stat().st_mode & 0o777) == 0o600
+    if os.name != "nt":
+        # 0600 is a POSIX-mode promise. On Windows ``chmod`` only toggles the
+        # read-only attribute (``st_mode`` is 0o666 for every writable file),
+        # so the bits say nothing about who may read the key; the ACL is not
+        # what this test is about.
+        assert (key_file.stat().st_mode & 0o777) == 0o600
 
 
 def test_hermes_plugin_reuses_the_stored_key(monkeypatch):
