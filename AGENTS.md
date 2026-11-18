@@ -770,7 +770,31 @@ All memories live in a single Qdrant collection called **`nexus`**:
 
 ## Release
 
-```bash
-git tag v0.2.1 && git push --tags
-pip install build && python3 -m build && python3 -m twine upload dist/*
-```
+Releases are cut from `main` in one pass and published from the tag afterwards.
+Nothing is uploaded to PyPI.
+
+1. **Bump the version everywhere it is carried.** `pyproject.toml`,
+   `plugins/memory/nexus/pyproject.toml`, the `__version__` fallback in
+   `nexus/__init__.py`, the README version badge and the README footer line, and
+   a new entry at the top of `CHANGELOG.md`.
+2. **Run the tests**, at minimum
+   `pytest tests/test_review_findings_20261010.py`.
+   `test_readme_and_fallback_versions_are_current` compares the README footer and
+   the `__version__` fallback against `pyproject.toml`; a footer left on the old
+   version is what turns an audit red.
+3. **Commit the version bump.**
+4. **Pin the plugin to that version commit.** `plugins/memory/nexus/pyproject.toml`
+   and `plugins/memory/nexus/__init__.py` both carry the full 40-character commit
+   id of the version commit, because a commit cannot contain its own id. A moving
+   reference such as a branch or tag name is rejected by a test.
+5. **Tag the pin commit** `vX.Y.Z` and push `main` and the tag together.
+   `scripts/release_gate.sh` compares the version field against the newest tag, so
+   a gap between the two commits reads as a red gate even though nothing is
+   broken.
+6. **Wait for both CI jobs** (`audit` and `audit-windows`) to pass on the tagged
+   commit, then create the GitHub release for that tag with `draft=false` and
+   `prerelease=false`.
+7. **Re-pin the catalog entry** in `plugin-catalog/nexus.yaml` of the Hermes
+   repository: `sha` is the pin commit id, `version` is the new version, and the
+   `docs_url` and `image` links move with it. The catalog is what users install
+   from, so it follows a release and never leads one.
