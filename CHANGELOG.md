@@ -1,3 +1,31 @@
+## [0.22.57] - 2026-11-18
+
+**Der Engine-Pin zeigt wieder auf einen Commit, den `main` erreicht.**
+
+Der Katalog-Eintrag pinnte die Engine auf `c41d832`, einen Commit aus der alten,
+neu geschriebenen Kette. Der ist von `main` aus nicht erreichbar, ein
+Katalog-Install haette also ins Leere oder auf einen fremden Stand gegriffen.
+`8bee285` setzt den Pin auf den Release-Commit `09d5e9b` (0.22.56). Beide
+Manifeste nennen dieselbe Kennung; `tests/test_pin_chain_is_closed.py` haelt das
+fest.
+
+Windows-Tests, vier Fehler, jeder mit Ursache im Test und nicht im Motor:
+
+- `b7877de` — der Sandbox-Test schrieb ueber `HOME` statt `USERPROFILE` und
+  landete auf einem gesperrten Pfad.
+- `dc9b728` — der Node-Selbsttest wurde als Codepage gelesen; jetzt UTF-8 mit
+  cp1252 als Rueckfall.
+- `de529b0` — ein `join` auf einen Thread, den die Sperre nie startet.
+- `669632d` — POSIX-Modusbits werden auf Windows nicht mehr geprueft, dort gibt
+  es sie nicht.
+
+Der Health-Audit-Daemon bleibt aus der Testsuite (`ce835b5`), der Motor ist
+dafuer unveraendert geblieben; der erste Versuch griff in `src/` ein und wurde
+zurueckgenommen.
+
+Dazu die Kontaktadresse im Repo wiederhergestellt (`3390d6f`, `a14d08e`) und
+die Benchmark-Werkzeuge mit ihren Messungen (`e5c5e73`, `2f942b4`, `da63c83`).
+
 ## [0.22.56] - 2026-11-17
 
 **Der Quellen-Bonus hat die Relevanz ueberstimmt.**
