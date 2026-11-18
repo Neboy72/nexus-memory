@@ -1,3 +1,16 @@
+## [0.22.58] - 2026-11-18
+
+**Die Fußzeile im README trug noch die alte Version, deshalb war der Audit von 0.22.57 rot.**
+
+0.22.57 wurde veroeffentlicht, waehrend die Fußzeile im README noch `v0.22.56` sagte.
+`test_readme_and_fallback_versions_are_current` vergleicht genau das und schlug an: der
+Linux-Lauf brach nach 1801 bestandenen Tests mit diesem einen Fehler ab. Der Fehler lag
+im Text, nicht im Motor. Hier sind Fußzeile und Badge nachgezogen, sonst aendert sich
+nichts gegenueber 0.22.57.
+
+Merke fuer den naechsten Schnitt: die Versionsnummer steht an fuenf Stellen und im README
+an zwei, Badge und Fußzeile.
+
 ## [0.22.57] - 2026-11-18
 
 **Der Engine-Pin zeigt wieder auf einen Commit, den `main` erreicht.**
