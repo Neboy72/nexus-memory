@@ -145,6 +145,12 @@ def resolve_llm_config(hermes_home: str) -> Dict[str, str]:
     if not config["base_url"]:
         config["base_url"] = _LOCAL_BASE_URL
 
+    # ``env:NAME`` is Hermes' indirection: the real value lives in the environment or
+    # .env, never in config.yaml. Sending the literal text as the bearer token made every
+    # extraction fail with 401 and fall back to the heuristic, which finds no relations.
+    if config["api_key"].startswith("env:"):
+        config["api_key"] = _env_file_key(hermes_home, config["api_key"][4:].strip())
+
     # Then the key. Only a key whose provider matches the endpoint is eligible:
     # an `OLLAMA_API_KEY` is used for a local/ollama endpoint, an
     # `OPENAI_API_KEY` only for an OpenAI endpoint — a mismatched key is never

@@ -184,30 +184,30 @@ def _load_llm_config(hermes_home: str) -> Dict[str, str]:
 
 
 def _ollama_native_base(base_url: str) -> str:
-    """Liefert die Basis fuer Ollama's /api/chat, wenn der Dienst lokal laeuft (Port 11434).
+    """Liefert die Basis fuer Ollama's /api/chat, wenn dort ``think: false`` greift.
 
-    WARUM (gemessen 11.10.2026, echter Speichertext 1385 Zeichen):
-    Auf der OpenAI-Schiene (/v1) wird ``think: false`` NICHT durchgereicht. Das Denk-Modell
-    verbrennt dann das komplette Token-Budget im versteckten ``reasoning`` und liefert
-    leeren ``content`` -> ``json.loads("")`` -> "Expecting value: line 1 column 1 (char 0)".
-    Folge: 313 gemessene Extraktionen zwischen 01.10. und 11.10.2026 fielen still auf
-    die Heuristik zurueck (Gateway-Fehlerprotokoll, 267 davon mit leerer Antwort), und die
-    Heuristik liefert 0 Beziehungen. Auf ``/api/chat`` greift ``think: false``:
-    dieselbe Extraktion 1,9 s und 0 Reasoning-Token statt 15,5 s und 6531 Completion-Token.
-
-    Andere Anbieter bleiben unberuehrt: leerer Rueckgabewert = OpenAI-Schiene wie bisher.
+    Zwei Faelle: der lokale Dienst (Port 11434) UND die Cloud unter ollama.com. In der
+    Cloud-Schiene ueber /v1 wurde das Denken nicht abgeschaltet (``think`` wird dort nicht
+    durchgereicht), die Antwort kam leer zurueck und jede Extraktion fiel auf die Heuristik
+    zurueck — gemessen am 18.11.2026 um 14:43. Auf /api/chat liefert dasselbe Modell mit
+    ``think: false`` sofort Inhalt und null Denk-Token.
     """
     try:
         p = urlparse(base_url)
-        if p.port == 11434:
+        host = (p.hostname or "").lower()
+        if p.port == 11434 or host == "ollama.com" or host.endswith(".ollama.com"):
             return f"{p.scheme}://{p.netloc}"
     except Exception:
         pass
     return ""
 
 
-def _ollama_chat(base_url: str, model: str, prompt: str) -> str:
-    """Eine Extraktion ueber Ollama's /api/chat (dort greift think: false)."""
+def _ollama_chat(base_url: str, model: str, prompt: str, api_key: str = "") -> str:
+    """Eine Extraktion ueber Ollama's /api/chat (dort greift think: false).
+
+    Die Cloud (ollama.com) verlangt denselben Bearer-Schluessel wie /v1; der lokale Dienst
+    ignoriert den Kopf. Ohne ihn antwortet die Cloud mit 401.
+    """
     import urllib.request
 
     body = {
@@ -217,10 +217,13 @@ def _ollama_chat(base_url: str, model: str, prompt: str) -> str:
         "think": False,
         "options": {"temperature": 0.3, "num_predict": 4000},
     }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
     req = urllib.request.Request(
         base_url.rstrip("/") + "/api/chat",
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         resp = json.loads(r.read().decode("utf-8"))
@@ -295,7 +298,7 @@ def _llm_extract_entities(
         native_base = _ollama_native_base(config["base_url"])
         if native_base:
             # Lokaler Ollama: ueber /api/chat, weil dort think:false greift (siehe oben).
-            raw = _ollama_chat(native_base, config["model"], prompt)
+            raw = _ollama_chat(native_base, config["model"], prompt, config.get("api_key", ""))
         else:
             from openai import OpenAI
             client = OpenAI(
