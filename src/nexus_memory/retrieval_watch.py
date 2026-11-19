@@ -83,7 +83,7 @@ MIN_SCORE = _env_float("NEXUS_WATCH_MIN_SCORE", DEFAULT_MIN_SCORE, 0.0)
 DEFAULT_QUERIES: List[Tuple[str, str]] = [
     ("Bose SoundLink Audio-Ausgabe Bluetooth", "Bose"),
     ("Razer USB Mikrofon Input", "Razer"),
-    ("Windows PC nebos-pc Desktop", "nebos-pc"),
+    ("Windows PC desktop-beispiel Desktop", "desktop-beispiel"),
 ]
 
 
