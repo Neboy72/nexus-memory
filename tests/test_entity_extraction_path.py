@@ -73,6 +73,10 @@ def _config(base_url: str) -> dict:
     ("http://localhost:11434/v1", "http://localhost:11434"),
     ("http://127.0.0.1:11434", "http://127.0.0.1:11434"),
     ("http://ollama-box.local:11434/v1/", "http://ollama-box.local:11434"),
+    # ollama.com has the same problem as the local port: /v1 drops think:false, the answer
+    # stays empty and every extraction falls back to the heuristic (measured 18.11.2026).
+    ("https://ollama.com/v1", "https://ollama.com"),
+    ("https://ollama.com", "https://ollama.com"),
     ("https://api.example.com/v1", ""),
     ("http://localhost:8000/v1", ""),
     ("", ""),
@@ -85,10 +89,11 @@ def test_native_path_exists_only_for_the_local_port(url: str, expected: str) -> 
 def test_local_endpoint_goes_through_the_native_chat_path(tmp_path, monkeypatch) -> None:
     seen: dict = {}
 
-    def fake_chat(base: str, model: str, prompt: str) -> str:
+    def fake_chat(base: str, model: str, prompt: str, api_key: str = "") -> str:
         seen["base"] = base
         seen["model"] = model
         seen["prompt_has_text"] = "Nachricht" in prompt
+        seen["api_key"] = api_key
         return GOOD_ANSWER
 
     monkeypatch.setattr(ee, "_load_llm_config",
