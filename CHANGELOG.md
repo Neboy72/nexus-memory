@@ -1,3 +1,21 @@
+## [0.22.59] - 2026-11-19
+
+**Zwei stille Ausfaelle in der Extraktion: der Schluessel `env:NAME` ging woertlich raus, und
+ollama.com lieferte ueber `/v1` leere Antworten.**
+
+Beide Male fiel die Extraktion auf die Heuristik zurueck, die keine Beziehungen findet — der
+Graph wuchs nicht mehr, waehrend alles gesund aussah.
+
+- `api_key: env:NAME` in `config.yaml`: der Aufloeser hatte keinen Zweig fuer diese Schreibweise
+  und gab den Text unveraendert als Schluessel weiter. Jede Anfrage antwortete 401 (808 im
+  Dienst-Log). Jetzt wird der Name ueber `_env_file_key` aufgeloest.
+- `ollama.com`: ueber `/v1` wird `think: false` nicht durchgereicht, die Antwort kam leer zurueck.
+  Der Extraktor geht fuer ollama.com jetzt denselben `/api/chat`-Weg wie fuer den lokalen Dienst
+  und schickt den Bearer-Schluessel mit; andere Anbieter bleiben unberuehrt.
+
+Tests: `tests/test_llm_env_indirection.py` neu, `tests/test_entity_extraction_path.py` um zwei
+ollama.com-Faelle erweitert.
+
 ## [0.22.58] - 2026-11-18
 
 **Die Fußzeile im README trug noch die alte Version, deshalb war der Audit von 0.22.57 rot.**
