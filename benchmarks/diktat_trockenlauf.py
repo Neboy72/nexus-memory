@@ -123,13 +123,59 @@ def lauf(regeln: list[dict]) -> dict:
     }
 
 
+def vorschlag(ergebnis: dict) -> dict:
+    """Die Treffer als Vorschlagsliste: id, alt, neu. Nichts wird angewendet.
+
+    Der Vorschlag ist eine Liste zum Vorlegen, kein Auftrag: die Sammlung
+    bleibt unberuehrt, bis ein Mensch zustimmt.
+    """
+    eintraege = []
+    for treffer in ergebnis["erkannt"]["eintraege"]:
+        eintraege.append({
+            "id": treffer["id"],
+            "alt": "rule",
+            "neu": "session",
+            "datum": treffer["datum"],
+            "textanfang": treffer["textanfang"],
+            "warum": treffer.get("warum", ""),
+            "bewertung": treffer.get("bewertung", "unbewertet"),
+        })
+    return {
+        "titel": "Vorschlag: Diktat-Reste von 'rule' auf 'session' herabstufen",
+        "stand": ergebnis["stand"],
+        "grundlage": {
+            "schwelle": ergebnis["schwelle"],
+            "regeln_geprueft": ergebnis["regeln_gesamt"],
+            "treffer": len(eintraege),
+            "fehlalarm": ergebnis.get("fehlalarm", {}),
+        },
+        "hinweis": (
+            "VORSCHLAG — nichts angewendet. Die Sammlung ist unveraendert; "
+            "die Herabstufung erfolgt erst nach ausdruecklichem Go."
+        ),
+        "eintraege": eintraege,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--aus", required=True)
+    ap.add_argument("--aus", required=False)
+    ap.add_argument("--vorschlag-aus",
+                    help="aus dem Trockenlauf-Ergebnis eine Vorschlagsliste schreiben")
     ap.add_argument("--bewertung", default=argparse.SUPPRESS,
                     help="Pfad einer JSON-Datei mit {'<id>': 'fehlalarm'|'diktat'}")
     args = ap.parse_args()
 
+    if args.vorschlag_aus:
+        quelle = json.loads(Path(args.aus).read_text())
+        Ziel = Path(args.vorschlag_aus)
+        Ziel.parent.mkdir(parents=True, exist_ok=True)
+        Ziel.write_text(json.dumps(vorschlag(quelle), ensure_ascii=False, indent=2))
+        print(f"Vorschlag: {len(quelle['erkannt']['eintraege'])} Eintraege -> {Ziel}")
+        return 0
+
+    if not args.aus:
+        ap.error("--aus fehlt")
     regeln = lade_regeln()
     ergebnis = lauf(regeln)
     if getattr(args, "bewertung", ""):
