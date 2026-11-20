@@ -87,12 +87,17 @@ export const Config = z.object({
     .default('DeepSeek Harness')
     .description('Label stored for this agent at /enroll (default DeepSeek Harness).'),
   logDir: z.string().description('stdio only: directory for bridge logs.'),
+  reportIncidents: z
+    .boolean()
+    .description('Report failed tool calls to the service (/events) so the nightly learner sees them (default true; HTTP transport only).'),
+  reportMaxChars: z.number().description('Cap the error text of one report (default 2000).'),
+  reportPerSessionMax: z.number().description('How many failures one session reports at most (default 50).'),
 })
 
 const REQUEST_TIMEOUT_MS = 30_000
 const MAX_INJECTED_ITEMS = 10
 const MCP_PROTOCOL_VERSION = '2025-06-18'
-const PLUGIN_VERSION = '0.3.0'
+const PLUGIN_VERSION = '0.3.1'
 
 /** Expand a leading `~` so config files can use home-relative paths. */
 function expandHome(value) {
@@ -165,6 +170,37 @@ export function captureText(user, assistant, session, turn, maxChars) {
   let text = `${header}\nUser: ${user.trim()}\n\nAssistant: ${assistant.trim()}`
   if (text.length > maxChars) text = `${text.slice(0, maxChars - 1).trimEnd()}…`
   return text
+}
+
+/** Collapse whitespace so one incident stays one line. */
+function collapse(text) {
+  return String(text ?? '').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Turn one tool result into an incident for `POST /events`, or null.
+ *
+ * Only the platform's own failure marks count: `isError` on the message or an
+ * `error` object on the event. This function never guesses from the text — the
+ * classification (which error class, whether it is a lesson) belongs to Nexus,
+ * and a plugin that tries it here would do it four times in four languages.
+ *
+ * `agent` is deliberately left out: the service names the agent from the key
+ * that writes, so a report cannot claim to come from someone else.
+ */
+export function incidentFromToolResult({ tool, message, error, session, maxChars = 2000 }) {
+  if (!tool) return null
+  if (!error && message?.isError !== true) return null
+  const teile = [textOf(message?.content), error?.reason, error?.code ? `code=${error.code}` : '']
+  const text = collapse(teile.filter(Boolean).join(' '))
+  if (!text) return null
+  return {
+    tool: String(tool).slice(0, 64),
+    ok: false,
+    error: text.slice(0, Math.max(1, maxChars)),
+    hint: '',
+    session: String(session ?? '').slice(0, 128),
+  }
 }
 
 /** Race a promise against a timeout, keeping the caller's abort signal live. */
@@ -481,6 +517,19 @@ class HttpStore {
     return { stored: payload.status === 'ok', id: String(payload.id ?? '') }
   }
 
+  /**
+   * Report one failed tool call (0.22.62). Best effort: a learner that misses
+   * an incident loses nothing, a turn that waits on it loses time.
+   */
+  async reportIncident(incident, signal) {
+    const response = await this.authenticatedFetch(`${this.baseUrl}/events`, incident, {
+      signal,
+      timeoutMs: 4000,
+    })
+    if (!response.ok) throw new Error(`Nexus /events returned ${response.status}`)
+    return true
+  }
+
   dispose() {}
 }
 
@@ -609,6 +658,11 @@ class StdioStore {
     )
   }
 
+  /** stdio has no /events endpoint: the bridge talks JSON-RPC, not HTTP. */
+  async reportIncident() {
+    return false
+  }
+
   dispose() {
     this.disposed = true
     this.failAll(new Error('plugin disposed'))
@@ -721,6 +775,9 @@ export function apply(ctx, config) {
   const recallMinWords = Math.max(1, config.recallMinWords ?? 4)
   const captureSubagents = config.captureSubagents === true
   const captureMinChars = config.captureMinChars ?? 12
+  const reportEnabled = config.reportIncidents !== false
+  const reportMaxChars = Math.max(200, config.reportMaxChars ?? 2000)
+  const reportPerSessionMax = Math.max(1, config.reportPerSessionMax ?? 50)
 
   /** Per-session turn buffer, flushed on turn/end. */
   const turns = new Map()
@@ -818,7 +875,42 @@ export function apply(ctx, config) {
     }
   })
 
+  // Failed tool calls, reported to the service so the nightly learner sees
+  // them. Deliberately separate from capture: one can be wanted without the
+  // other, and a broken report must never cost a turn.
+  const toolNames = new Map()
+  const reportedPerSession = new Map()
+  ctx.on('session/event', (session, event) => {
+    if (!reportEnabled) return
+    if (event?.type === 'tool/call') {
+      const callId = String(event.data?.callId ?? '')
+      if (callId) toolNames.set(callId, String(event.data?.name ?? ''))
+      return
+    }
+    if (event?.type !== 'tool/result') return
+    const callId = String(event.data?.message?.toolCallId ?? '')
+    const tool =
+      (callId ? toolNames.get(callId) : '') ||
+      String(event.data?.name ?? event.data?.message?.source?.name ?? '')
+    if (callId) toolNames.delete(callId)
+    const incident = incidentFromToolResult({
+      tool,
+      message: event.data?.message,
+      error: event.data?.error,
+      session: session?.id,
+      maxChars: reportMaxChars,
+    })
+    if (!incident) return
+    const count = (reportedPerSession.get(session) ?? 0) + 1
+    if (count > reportPerSessionMax) return
+    reportedPerSession.set(session, count)
+    Promise.resolve()
+      .then(() => store.reportIncident(incident))
+      .catch((error) => debugTrace(`incident not reported: ${String(error)}`))
+  })
+
   ctx.on('session/disposed', (session) => {
     turns.delete(session)
+    reportedPerSession.delete(session)
   })
 }

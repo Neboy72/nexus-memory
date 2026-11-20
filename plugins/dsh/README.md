@@ -71,6 +71,9 @@ auf einem anderen Rechner anpassen muss.
 | `recallMinWords` | `4` | keine Einblendung, wenn sie weniger Wörter hat |
 | `captureMinChars` / `captureMaxChars` | `12` / `1600` | Capture-Grenzen |
 | `captureSubagents` | `false` | Turns von Subagenten mitcapturen |
+| `reportIncidents` | `true` | Gescheiterte Werkzeugaufrufe an `POST /events` melden, damit das nächtliche Lernen sie sieht (nur HTTP-Transport) |
+| `reportMaxChars` | `2000` | Grenze des Fehlertextes je Meldung |
+| `reportPerSessionMax` | `50` | Höchstzahl der Meldungen je Sitzung |
 
 Zwei Installationen am selben Dienst brauchen **keine** verschiedenen Namen: ein
 Eintrag, der schon einen eigenen Schlüssel hat, wird nie übernommen — die zweite

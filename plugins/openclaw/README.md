@@ -182,6 +182,7 @@ Add to `~/.openclaw/openclaw.json`:
 | `embedding.dimensions` | `number` | provider default | Vector dimensions |
 | `autoRecall` | `boolean` | `true` | Inject relevant memories before every AI turn |
 | `autoCapture` | `boolean` | `true` | Store conversation turns to Qdrant after each AI turn |
+| `reportIncidents` | `boolean` | `true` | Report failed tool calls to the Nexus service (`POST /events`) so the nightly learner sees them; the error text is sent, no prompt content |
 | `maxRecallResults` | `number` | `10` | Max memories injected per turn (1–20) |
 | `accessLevel` | `string` | `private` | Agent access level: `public`, `trusted`, or `private` |
 | `ownerUserIds` | `string[]` | `[]` | Owner identities (the human), one per platform. The only owner source besides an already existing `owner.json`; the plugin never claims an owner itself. Empty and no file = owner unknown, all reads `public` (see "Owner") |
