@@ -1,3 +1,40 @@
+## [0.22.65] - 2026-11-20
+
+**Der Abruf liefert weniger, aber das Richtige, und jeder Lesezugriff steht im Protokoll.**
+
+Gemessen an 25 echten Fragen: die automatische Erinnerung schickte im Schnitt
+2,96 unpassende Eintraege pro Nachricht mit. Nicht weil die Suche schlecht war,
+sondern weil ein fester Block von fuenf Eintraegen auch dann gefuellt wurde,
+wenn nur zwei zur Frage passten.
+
+- **Auswahl an einer Stelle:** neues Modul `src/nexus_memory/recall_policy.py`.
+  Kategorien, Mindestpunktzahl und Anzahl werden dort entschieden, nicht in den
+  Plugins; MCP und alle vier Wege reichen nur durch. Vorgabe: drei Eintraege,
+  `session` und `entity` bleiben draussen.
+- **Mindestpunktzahl standardmaessig aus.** Gemessen: 0.35 filtert nichts und
+  kostet ab 0.45 passende Treffer (1,76 auf 1,84 Unpassende). Der Regler bleibt,
+  die Vorgabe ist keine Schwelle.
+- **Punktzahl richtig benannt:** `relevance` ist der Kosinus, nicht der
+  normierte RRF-Rang. Der lag beim Spitzenreiter immer bei 1.0, weshalb die alte
+  Schwelle wirkungslos war.
+- **Lese-Protokoll:** `service_log.record_read()` schreibt eine Zeile je
+  Lesevorgang in `read-YYYY-MM-DD.jsonl`: Zeit, Urheber, Anzahl Treffer,
+  Kennungen der gelieferten Eintraege, Anfrage nur als Pruefsumme. Kein Inhalt,
+  Rotation ueber dieselbe `RETENTION_DAYS = 90`, fail-open. Ein leerer Abruf
+  schreibt nichts.
+- **Schreibtor Regel 10:** ein diklierter Rest (Flickwoerter, Wortdopplungen,
+  fehlendes Satzzeichen am Ende, langer Schachtelsatz, gewichtet ab fuenf
+  Merkmalen) wird nicht verworfen, sondern als `session` abgelegt. Eine am
+  Terminal bestaetigte Regel schlaegt die Heuristik. Trockenlauf ueber 2466
+  Regeln: 10 Treffer, 0 Fehlalarme, einzeln gelesen.
+
+Ergebnis der Messung: 2,96 auf 1,76 unpassende Eintraege je Nachricht, allein
+durch drei statt fuenf. Der Kategorienfilter aendert auf dieser Stichprobe
+nichts Messbares und kostet drei passende Treffer. Er bleibt trotzdem, weil
+Sitzungsprotokolle und Entities dort nicht hingehoeren.
+
+Python 3378 Tests gruen ausser den elf bekannten roten aus der Baseline.
+
 ## [0.22.64] - 2026-11-20
 
 **Alle vier Wege melden jetzt: Claude Code und Hermes schliessen die Luecke.**

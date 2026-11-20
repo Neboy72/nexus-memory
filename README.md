@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.64-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.22.65-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-green-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -305,6 +305,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.65** | 2026-11-20 | The automatic recall decides in one place (`recall_policy.py`): three entries by default, `session` and entities excluded, no minimum score. Measured on 25 real questions: 2.96 → 1.76 off-topic entries per message, the gain coming from the smaller block; 0.35 filtered nothing and 0.45 cost matching hits. `relevance` now reports the cosine instead of the always-1.0 normalised RRF rank. New read log (`record_read()`, one line per recall, ids only, 90-day rotation) and write-gate rule 10, which files dictated fragments as `session` instead of `rule` (dry run: 10 of 2466, no false alarms) |
 | **v0.22.64** | 2026-11-20 | All four ways now report. The Hermes provider sends the failed tool calls of a session at `on_session_end` (new `incident_report.py`), and Claude Code gets a `Stop` hook (`scripts/report_incidents.py`) that reads the `is_error` marks of the transcript. No cron and no second schedule on either side: the harness reports about itself. Both send tool name, capped error text, environment hint and session id, no conversation content, both switch off with `NEXUS_REPORT_INCIDENTS=0`, and both fail silently so a session end never waits on a quiet service. Six new tests, including two round trips against a local test service that check path, key and body |
 | **v0.22.63** | 2026-11-20 | A shell command that exits 1 is a failure, not a success. The DSH reporter of 0.22.62 only sent what the harness marked as a tool error (`isError`, `error`), and a command that runs and fails is a successful tool call from the harness's point of view — measured after a restart: one failed command line, zero reports. The reporter now reads the harness's own verdict at the end of the result, `[exit code: N]`: 0 is no failure, `null` (no code, e.g. killed) is not guessed. Four test cases, plus one that pins the marker in the source tree. The OpenClaw package needs no new version: its `exec` result carries `exitCode` as a field, which the reporter already reads |
 | **v0.22.62** | 2026-11-20 | Every harness now reports its own failures, with the same rule in both plugin paths. The DSH plugin listens on `tool/result`, the OpenClaw plugin on `after_tool_call`; both send only what the platform marks as failure (`isError` or an `error` object), never a guess from the text, and both cap the error text at 2000 characters and the reports at 50 per session. The service names the agent from the key that writes, so a plugin cannot claim another origin. Classification (which error class, whether it becomes a lesson) stays in Nexus, in one place. New setting `reportIncidents` in both plugins, default on, and in the OpenClaw manifest schema — which has `additionalProperties: false`, so a missing key would fail the load. Nine and seven offline tests hold the reports down, plus six Python tests over both source trees; no conversation content is sent |
@@ -393,4 +394,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.64 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.65 · One memory for all your agents</sub>
