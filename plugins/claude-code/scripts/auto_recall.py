@@ -156,13 +156,15 @@ def _env_float(name: str, default: float) -> float:
 
 
 MAX_RESULTS = _env_int("NEXUS_MAX_RECALL", 3, minimum=1)
-# Auswahlregel (20.11.2026) — Voreinstellung wie im Dienst: Wissen statt
-# Protokolle, und nur was die Mindestpunktzahl haelt.
-# ``NEXUS_RECALL_CATEGORIES=""`` schaltet den Kategorienfilter ab.
-MIN_SCORE = _env_float("NEXUS_RECALL_MIN_SCORE", 0.35)
-CATEGORIES = tuple(
+# Auswahlregel (20.11.2026), Voreinstellung wie im Dienst: Protokolle und
+# Etiketten raus, alles andere (auch lesson/pattern/procedure/belief) rein.
+# ``NEXUS_RECALL_EXCLUDE_CATEGORIES=""`` schaltet den Filter ab.
+# Die Mindestpunktzahl ist AUS: unter 0.45 filtert sie nichts, darueber
+# verliert sie zuerst die passenden Eintraege (Messung 20.11.2026).
+MIN_SCORE = _env_float("NEXUS_RECALL_MIN_SCORE", 0.0)
+EXCLUDE_CATEGORIES = tuple(
     teil.strip().lower()
-    for teil in (os.getenv("NEXUS_RECALL_CATEGORIES", "fact,rule,preference") or "").split(",")
+    for teil in (os.getenv("NEXUS_RECALL_EXCLUDE_CATEGORIES", "session,entity") or "").split(",")
     if teil.strip()
 )
 # Zeichenbudget des eingespeisten Blocks (Voreinstellung: drei Eintraege, 800).
@@ -420,10 +422,11 @@ def effective_category(payload: dict) -> str:
     return str(payload.get("category") or "").strip().lower() or "fact"
 
 
-def passes_categories(payload: dict, categories) -> bool:
-    if not categories:
+def passes_categories(payload: dict, exclude) -> bool:
+    """Der Ausschluss: was in ``exclude`` steht, bleibt draussen."""
+    if not exclude:
         return True
-    return effective_category(payload) in set(categories)
+    return effective_category(payload) not in set(exclude)
 
 
 def search_qdrant(query_embedding: list, limit: int = 5) -> list:
@@ -446,10 +449,12 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
         "vector": _vector_body(query_embedding),
         "limit": fetch_n,
         "with_payload": True,
-        # Kosinus-Schwelle des Dienstes (20.11.2026). Qdrant vergleicht hier
-        # die Kosinus-Aehnlichkeit — dieselbe Zahl, gegen die auch
+        # Kosinus-Schwelle (20.11.2026). Qdrant vergleicht hier die
+        # Kosinus-Aehnlichkeit — dieselbe Zahl, gegen die auch
         # ``recall_policy`` prueft, nicht der normalisierte RRF-Rang.
-        "score_threshold": MIN_SCORE,
+        # Standard AUS: unter 0.45 filtert sie nichts, darueber kostet sie
+        # Treffer. Nur senden, wenn wirklich eine Schwelle gesetzt ist.
+        **({"score_threshold": MIN_SCORE} if MIN_SCORE > 0 else {}),
         "filter": _get_trust_filter()
     }).encode()
     req = urllib.request.Request(
@@ -496,7 +501,7 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
             continue
         # Kategorienfilter: derselbe wie im Dienst. Ohne ihn kamen Entities
         # und halbe Sprachsaetze mit (Anlass vom 20.11.2026).
-        if not passes_categories(payload, CATEGORIES):
+        if not passes_categories(payload, EXCLUDE_CATEGORIES):
             continue
         if allowed_scopes is not None:
             p_scope = (payload.get("scope") or "default").strip().lower() or "default"
@@ -682,7 +687,7 @@ def main():
         score = hit.get("score", 0)
         if not text or score <= MIN_SCORE:
             continue
-        if not passes_categories(payload, CATEGORIES):
+        if not passes_categories(payload, EXCLUDE_CATEGORIES):
             continue
         zeile = f"[{category}] (score: {score:.2f}) {text[:200]}"
         if budget_used + len(zeile) > MAX_CONTEXT_CHARS:

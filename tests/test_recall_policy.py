@@ -33,16 +33,31 @@ from nexus_memory import recall_policy
 # ── Kategorien ───────────────────────────────────────────────────────
 
 
-def test_kategorienfilter_haelt_entities_und_protokolle_draussen():
+def test_ausschluss_haelt_entities_und_protokolle_draussen():
     eintraege = [
         {"category": "fact", "vector_score": 0.8},
         {"category": "entity", "vector_score": 0.9},
         {"category": "session", "vector_score": 0.9},
         {"category": "rule", "vector_score": 0.7},
     ]
-    gewaehlt = recall_policy.select(
-        eintraege, categories=("fact", "rule", "preference"))
+    gewaehlt = recall_policy.select(eintraege, exclude=recall_policy.DEFAULT_RECALL_EXCLUDE)
     assert [e["category"] for e in gewaehlt] == ["fact", "rule"]
+
+
+def test_ausschluss_laesst_wissen_durch():
+    """Der Grund fuer den Ausschluss statt einer Erlaubnisliste (20.11.2026).
+
+    Eine Erlaubnisliste (fact/rule/preference) sperrte lesson, pattern,
+    procedure und belief still mit aus — gemessen kostete das drei passende
+    Treffer in 25 Fragen. Diese Kategorien sind Wissen, keine Etiketten.
+    """
+    eintraege = [
+        {"category": "lesson"}, {"category": "pattern"},
+        {"category": "procedure"}, {"category": "belief"},
+        {"category": "decision"}, {"category": "idea"},
+    ]
+    gewaehlt = recall_policy.select(eintraege, exclude=recall_policy.DEFAULT_RECALL_EXCLUDE)
+    assert len(gewaehlt) == len(eintraege)
 
 
 def test_eintrag_ohne_kategorie_gilt_als_fakt():
@@ -77,12 +92,14 @@ def test_unbekannte_kategorie_ist_ein_fehler_statt_kein_filter():
         recall_policy.select([], categories=["fakt"])
 
 
-def test_kategorien_als_kommaliste():
+def test_ausschluss_als_kommaliste():
     """Umgebungsvariablen und Kommandozeilen liefern eine Zeichenkette."""
-    assert recall_policy.normalize_categories("fact, rule ,,") == ("fact", "rule")
-    assert recall_policy.normalize_categories("") is None
-    assert recall_policy.normalize_categories([]) is None
-    assert recall_policy.normalize_categories(None) is None
+    assert recall_policy.normalize_exclude("session, entity ,,") == ("session", "entity")
+    assert recall_policy.normalize_exclude("") is None
+    assert recall_policy.normalize_exclude([]) is None
+    assert recall_policy.normalize_exclude(None) is None
+    # Die Erlaubnisliste bleibt als umgekehrte Form erhalten.
+    assert recall_policy.normalize_categories("fact") == ("fact",)
 
 
 # ── Mindestpunktzahl ─────────────────────────────────────────────────
@@ -150,8 +167,8 @@ def test_kein_treffer_ueber_der_schwelle_gibt_einen_leeren_block():
     ]
     assert recall_policy.select(
         eintraege,
-        categories=recall_policy.DEFAULT_RECALL_CATEGORIES,
-        min_score=recall_policy.DEFAULT_RECALL_MIN_SCORE,
+        exclude=recall_policy.DEFAULT_RECALL_EXCLUDE,
+        min_score=0.45,
     ) == []
 
 
@@ -168,8 +185,11 @@ def test_ohne_angabe_bleibt_alles_wie_vorher():
 def test_voreinstellungen_sind_die_des_auftrags():
     assert recall_policy.DEFAULT_RECALL_LIMIT == 3
     assert recall_policy.DEFAULT_RECALL_BUDGET_CHARS == 800
-    assert recall_policy.DEFAULT_RECALL_CATEGORIES == ("fact", "rule", "preference")
-    assert 0.0 < recall_policy.DEFAULT_RECALL_MIN_SCORE <= 1.0
+    assert recall_policy.DEFAULT_RECALL_EXCLUDE == ("session", "entity")
+    # Schwelle standardmaessig AUS: unter 0.45 filtert sie nichts, darueber
+    # kostet sie Treffer (Messung 20.11.2026).
+    assert recall_policy.DEFAULT_RECALL_MIN_SCORE is None
+    assert recall_policy.RECALL_MIN_SCORE_HAS_EFFECT_FROM == 0.45
 
 
 def test_grenze_kuerzt_nach_der_auswahl():
@@ -178,5 +198,5 @@ def test_grenze_kuerzt_nach_der_auswahl():
         {"category": "entity", "id": "b", "vector_score": 0.9},
         {"category": "fact", "id": "c", "vector_score": 0.8},
     ]
-    gewaehlt = recall_policy.select(eintraege, categories=["fact"], limit=1)
+    gewaehlt = recall_policy.select(eintraege, exclude=["entity"], limit=1)
     assert [e["id"] for e in gewaehlt] == ["a"]

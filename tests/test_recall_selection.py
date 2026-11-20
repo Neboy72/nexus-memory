@@ -113,10 +113,21 @@ def _ids(treffer):
 
 
 @pytest.mark.asyncio
-async def test_kategorien_und_schwelle_gemeinsam(store):
+async def test_ausschluss_wirkt(store):
+    """session und entity bleiben draussen, Wissen bleibt drin."""
     treffer = await store.recall(
         "frage", agent_level="private", limit=5,
-        categories=["fact", "rule", "preference"], min_score=0.35,
+        exclude_categories=["session", "entity"],
+    )
+    assert _ids(treffer) == ["h-junk", "h-fact", "h-rule"]
+
+
+@pytest.mark.asyncio
+async def test_schwelle_wirkt_zusaetzlich(store):
+    """Die Schwelle ist eine bewusst zu setzende Option, standardmaessig aus."""
+    treffer = await store.recall(
+        "frage", agent_level="private", limit=5,
+        exclude_categories=["session", "entity"], min_score=0.35,
     )
     assert _ids(treffer) == ["h-fact", "h-rule"]
 
@@ -147,7 +158,7 @@ async def test_grenzfall_leerer_block_statt_fuellmaterial(store):
     """Nichts ueber der Schwelle ergibt eine leere Liste."""
     treffer = await store.recall(
         "frage", agent_level="private", limit=5,
-        categories=["fact", "rule", "preference"], min_score=0.99,
+        exclude_categories=["session", "entity"], min_score=0.99,
     )
     assert treffer == []
 
@@ -157,7 +168,7 @@ async def test_unbekannte_kategorie_scheitert_laut(store):
     """Ein Tippfehler darf nicht stillschweigend alles durchlassen."""
     with pytest.raises(ValueError):
         await store.recall("frage", agent_level="private", limit=5,
-                           categories=["fakt"])
+                           exclude_categories=["fakten"])
 
 
 @pytest.mark.asyncio
@@ -194,13 +205,13 @@ def _lesezeilen() -> list[dict]:
 @pytest.mark.asyncio
 async def test_abruf_schreibt_eine_lesezeile_mit_den_kennungen(store):
     await store.recall("frage", agent_level="private", limit=5,
-                       categories=["fact", "rule", "preference"], min_score=0.35,
+                       exclude_categories=["session", "entity"],
                        via="mcp", actor="leser")
     zeilen = _lesezeilen()
     assert len(zeilen) == 1
     assert zeilen[0]["action"] == "read"
-    assert zeilen[0]["hits"] == 2
-    assert zeilen[0]["ids"] == ["h-fact", "h-rule"]
+    assert zeilen[0]["hits"] == 3
+    assert zeilen[0]["ids"] == ["h-junk", "h-fact", "h-rule"]
     assert zeilen[0]["via"] == "mcp"
     # Kein Klartext der Anfrage.
     assert "frage" not in __import__("json").dumps(zeilen[0])

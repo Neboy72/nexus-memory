@@ -1712,6 +1712,7 @@ class MemoryStore:
         limit: int = 5,
         as_of: Optional[str] = None,
         categories: Any = None,
+        exclude_categories: Any = None,
         min_score: Optional[float] = None,
         via: str = "library",
         actor: Any = None,
@@ -1721,12 +1722,16 @@ class MemoryStore:
         Auswahlregel (20.11.2026), beides opt-in — ohne Angabe bleibt alles wie
         vorher:
 
-        * ``categories`` — nur diese Kategorien (``fact``, ``rule``, ...).
-          Ein Eintrag ohne Kategorie gilt als ``fact``; ein aufgezeichneter
-          Turn gilt als ``session``. Ohne Angabe: kein Filter.
+        * ``exclude_categories`` — diese Kategorien bleiben draussen. Der
+          Weg des Auto-Recall: ``session`` und ``entity`` raus, der Rest
+          (auch ``lesson``, ``pattern``, ``procedure``, ``belief``) bleibt.
+        * ``categories`` — die umgekehrte Form (nur diese), fuer Aufrufer,
+          die genau eine Kategorie suchen. Ein Eintrag ohne Kategorie gilt
+          als ``fact``; ein aufgezeichneter Turn gilt als ``session``.
         * ``min_score`` — Mindestpunktzahl auf der Kosinus-Skala (0..1),
-          geprueft gegen ``relevance``. Unter der Schwelle bleibt der Block
-          LEER; es wird nichts nachgefuellt. Eintraege ohne Kosinus (nur
+          geprueft gegen ``relevance``. Voreinstellung AUS; unter 0.45 ohne
+          Wirkung, darueber kostet sie Treffer. Unter der Schwelle bleibt der
+          Block LEER; es wird nichts nachgefuellt. Eintraege ohne Kosinus (nur
           woertlich gefunden) bestehen, wenn sie einen echten Worttreffer
           haben — siehe ``nexus_memory.recall_policy``.
 
@@ -2186,14 +2191,15 @@ class MemoryStore:
 
         # Auswahlregel (20.11.2026), opt-in. Faellt alles durch, bleibt es
         # LEER statt Fuellmaterial; ungueltige Angabe scheitert laut.
-        if categories is not None or min_score is not None:
+        if categories is not None or exclude_categories is not None or min_score is not None:
             try:
                 erlaubte = _recall_policy.normalize_categories(categories)
+                verboten = _recall_policy.normalize_exclude(exclude_categories)
                 schwelle = _recall_policy.normalize_min_score(min_score)
             except _recall_policy.RecallPolicyError as policy_err:
                 raise ValueError(str(policy_err)) from None
             results = _recall_policy.select(results, categories=erlaubte,
-                                            min_score=schwelle)
+                                            exclude=verboten, min_score=schwelle)
             if _point_by_doc:  # nur Geliefertes zaehlt als "erinnert"
                 _point_ids_for_tracking = [
                     _point_by_doc[e.get("doc_id")] for e in results
@@ -2786,6 +2792,16 @@ async def handle_list_tools(role: Optional[str] = None) -> list[types.Tool]:
                             "belief, session, entity-free). Omit = no category filter "
                             "(unchanged behavior). An entry without a category counts "
                             "as 'fact'; a recorded turn counts as 'session'."
+                        ),
+                        "default": None,
+                    },
+                    "exclude_categories": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional: these categories stay OUT (auto-recall uses "
+                            "['session','entity']). Everything else passes, including "
+                            "lesson/pattern/procedure/belief. Omit = no filter."
                         ),
                         "default": None,
                     },
@@ -3501,6 +3517,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             results = await store.recall(
                 query, agent_level=filter_level, limit=limit, as_of=as_of,
                 categories=arguments.get("categories"),
+                exclude_categories=arguments.get("exclude_categories"),
                 min_score=arguments.get("min_score"),
                 via="mcp", actor=_request_agent_id(),
             )

@@ -126,8 +126,8 @@ cases.push([
       const decision = await runPreStep(handlers, FRAGE)
       assert.equal(recalls.length, 1, 'genau ein recall')
       assert.equal(recalls[0].limit, 3, 'drei Eintraege')
-      assert.deepEqual(recalls[0].categories, ['fact', 'rule', 'preference'])
-      assert.equal(recalls[0].min_score, 0.35)
+      assert.deepEqual(recalls[0].exclude_categories, ['session', 'entity'])
+      assert.equal('min_score' in recalls[0], false, 'Schwelle ist aus')
       assert.equal(decision.messages.length, 2, 'ein Block wird eingespielt')
     }, BEISPIEL)
   },
@@ -139,7 +139,7 @@ cases.push([
     await withHarness({ recallFilter: false }, async ({ recalls, handlers }) => {
       await runPreStep(handlers, FRAGE)
       assert.equal(recalls.length, 1)
-      assert.equal('categories' in recalls[0], false, 'kein Kategorienfilter')
+      assert.equal('exclude_categories' in recalls[0], false, 'kein Kategorienfilter')
       assert.equal('min_score' in recalls[0], false, 'keine Schwelle')
     }, BEISPIEL)
   },
@@ -149,11 +149,11 @@ cases.push([
   'eigene Werte werden durchgereicht',
   async () => {
     await withHarness(
-      { recallLimit: 7, recallCategories: ['fact'], recallMinScore: 0.6 },
+      { recallLimit: 7, recallExcludeCategories: ['session'], recallMinScore: 0.6 },
       async ({ recalls, handlers }) => {
         await runPreStep(handlers, FRAGE)
         assert.equal(recalls[0].limit, 7)
-        assert.deepEqual(recalls[0].categories, ['fact'])
+        assert.deepEqual(recalls[0].exclude_categories, ['session'])
         assert.equal(recalls[0].min_score, 0.6)
       },
       BEISPIEL,
@@ -213,7 +213,7 @@ cases.push([
   async () => {
     // Der Config-Parser darf die Felder nicht ablehnen (alte Datei ohne sie
     // muss ebenfalls durchlaufen — deshalb die zweite Pruefung).
-    Config({ recallCategories: ['fact'], recallMinScore: 0.2, recallFilter: true })
+    Config({ recallExcludeCategories: ['session'], recallMinScore: 0.2, recallFilter: true })
     Config({})
   },
 ])

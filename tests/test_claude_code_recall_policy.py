@@ -57,26 +57,29 @@ def test_kategorie_ist_in_beiden_fassungen_gleich():
 
 
 def test_auswahl_ist_in_beiden_fassungen_gleich():
-    """Kategorien plus Schwelle, ueber eine Reihe von Punktzahlen."""
+    """Ausschluss plus Schwelle, ueber eine Reihe von Punktzahlen."""
     hook = _hook()
-    kategorien = ("fact", "rule", "preference")
+    aus = recall_policy.DEFAULT_RECALL_EXCLUDE
     for payload, _ in FAELLE:
-        for score in (0.0, 0.2, 0.3499, 0.35, 0.8, 1.0):
-            kanonisch = recall_policy.passes(
-                {"category": payload.get("category"),
-                 "type": payload.get("type"),
-                 "vector_score": score},
-                categories=kategorien,
-                min_score=recall_policy.DEFAULT_RECALL_MIN_SCORE,
-            )
-            gespiegelt = hook.passes_categories(payload, kategorien) and (
-                score >= recall_policy.DEFAULT_RECALL_MIN_SCORE)
-            assert kanonisch is gespiegelt, (payload, score)
+        for score in (0.0, 0.2, 0.4499, 0.45, 0.8, 1.0):
+            for schwelle in (None, 0.45):
+                kanonisch = recall_policy.passes(
+                    {"category": payload.get("category"),
+                     "type": payload.get("type"),
+                     "vector_score": score},
+                    exclude=aus,
+                    min_score=schwelle,
+                )
+                gespiegelt = hook.passes_categories(payload, aus) and (
+                    schwelle is None or score >= schwelle)
+                assert kanonisch is gespiegelt, (payload, score, schwelle)
 
 
 def test_hook_voreinstellungen_sind_die_des_auftrags():
     hook = _hook()
     assert hook.MAX_RESULTS == recall_policy.DEFAULT_RECALL_LIMIT
-    assert hook.CATEGORIES == recall_policy.DEFAULT_RECALL_CATEGORIES
-    assert hook.MIN_SCORE == recall_policy.DEFAULT_RECALL_MIN_SCORE
+    assert hook.EXCLUDE_CATEGORIES == recall_policy.DEFAULT_RECALL_EXCLUDE
+    # Schwelle aus: 0.0 heisst "keine".
+    assert hook.MIN_SCORE == 0.0
+    assert recall_policy.DEFAULT_RECALL_MIN_SCORE is None
     assert hook.MAX_CONTEXT_CHARS == recall_policy.DEFAULT_RECALL_BUDGET_CHARS

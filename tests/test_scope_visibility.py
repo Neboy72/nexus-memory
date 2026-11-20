@@ -366,7 +366,7 @@ class TestVorauswahl:
         # 20.11.2026: Der Vorlauf laesst Sitzungsprotokolle standardmaessig
         # draussen. Dieser Test prueft die SICHTBARKEITSREGEL (eigenes
         # Protokoll ja, fremdes nein) — dafuer muss die Kategorieauswahl aus.
-        monkeypatch.setenv("NEXUS_PREFETCH_CATEGORIES", "")
+        monkeypatch.setenv("NEXUS_PREFETCH_EXCLUDE_CATEGORIES", "")
         prov, _ = _prefetch_provider(monkeypatch, [
             _Point("a", {"content": "gemeinsamer Fakt zur Arbeit", "category": "fact",
                          "scope": _SHARED}),

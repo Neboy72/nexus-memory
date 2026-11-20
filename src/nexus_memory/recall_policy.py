@@ -9,11 +9,16 @@ die Schalter durch und entscheiden nichts selbst.
 
 Zwei Hebel, beide opt-in (ohne Angabe bleibt das Verhalten wie vorher):
 
-* ``categories`` — erlaubte Kategorien. Ohne Angabe wird nicht gefiltert.
-  ``session`` und ``entity`` draussen zu lassen ist eine Entscheidung des
-  AUFRUFERS (die Plugins setzen sie als Voreinstellung), nicht des Dienstes:
-  ein ausdruecklicher ``recall`` ueber MCP darf weiterhin alles finden.
-* ``min_score`` — Mindestpunktzahl auf der Kosinus-Skala (0..1).
+* ``exclude`` — Kategorien, die NICHT eingespeist werden. Das ist der Weg des
+  Auto-Recall: ``session`` (Sitzungsprotokolle) und ``entity`` (Etiketten wie
+  "software: x.com") sind fuer den Kontext Ballast; alles, was Wissen ist —
+  ``fact``, ``rule``, ``preference``, ``belief``, ``procedure``, ``lesson``,
+  ``pattern`` — bleibt drin. Eine Ausschlussliste statt einer Erlaubnisliste,
+  weil eine Erlaubnisliste jede neue Wissenskategorie still mit aussperrt
+  (gemessen 20.11.2026: sie kostete drei passende Eintraege in 25 Fragen).
+* ``categories`` — die umgekehrte Form (nur diese). Bleibt fuer Aufrufer, die
+  genau eine Kategorie suchen; im Auto-Recall nicht benutzt.
+* ``min_score`` — Mindestpunktzahl auf der Kosinus-Skala (0..1), Standard AUS.
 
 Punktzahlen, nicht Raenge: Die Fusion ist RRF, und ein RRF-Wert ist kein
 Aehnlichkeitsmass — er haengt an der Listenposition und belohnt jeden Treffer,
@@ -22,6 +27,13 @@ besten Treffer hat der Spitzenreiter IMMER 1.0, auch wenn er zur Frage nicht
 passt. Eine Schwelle darauf waere Zierde. Die vergleichbare Zahl ist der
 Kosinus des Vektorbeins; sie kommt aus der Qdrant-Suche und ist ueber Fragen
 hinweg vergleichbar.
+
+Zur Schwelle, gemessen (25 echte Fragen, 20.11.2026): 0.30 bis 0.40 filtern
+NICHTS — die Stichprobe liefert dort dieselben Treffer. Ab 0.45 fallen zuerst
+die passenden Eintraege weg, waehrend der Ballastanteil steigt (0.45 → 60 %,
+0.60 → 73 %). Eine Schwelle unter 0.45 ist also ohne Wirkung; ueber 0.45
+schadet sie. Deshalb ist sie nicht voreingestellt, sondern eine bewusst zu
+setzende Option.
 
 Eintraege ohne Kosinus (nur ueber BM25 gefunden) bestehen die Schwelle, wenn
 sie mindestens einen echten Worttreffer haben. Begruendung: die Vektorsuche
@@ -37,23 +49,52 @@ from typing import Any, Iterable, Optional
 #: Voreinstellung fuer Auto-Recall (die Plugins setzen sie, nicht der Dienst).
 DEFAULT_RECALL_LIMIT = 3
 DEFAULT_RECALL_BUDGET_CHARS = 800
-#: Was automatisch eingespeist wird: Wissen, keine Protokolle.
-DEFAULT_RECALL_CATEGORIES = ("fact", "rule", "preference")
-#: Voreinstellung der Mindestpunktzahl (Kosinus, 0..1). 0.35 ist der Wert,
-#: den der Claude-Code-Hook seit jeher als ``score_threshold`` benutzt; er
-#: wird hier nicht neu erfunden, sondern uebernommen.
-DEFAULT_RECALL_MIN_SCORE = 0.35
+#: Was der Auto-Recall NICHT einspeist: Protokolle und Etiketten.
+DEFAULT_RECALL_EXCLUDE = ("session", "entity")
+#: Mindestpunktzahl: nicht voreingestellt. Siehe Modul-Docstring zur Messung —
+#: unter 0.45 ohne Wirkung, darueber schaedlich. Wer sie setzt, setzt sie
+#: bewusst (0.45 ist die erste Schwelle mit messbarer Wirkung).
+DEFAULT_RECALL_MIN_SCORE: Optional[float] = None
+#: Die erste Schwelle, ab der sich das Ergebnis messbar aendert.
+RECALL_MIN_SCORE_HAS_EFFECT_FROM = 0.45
 
-#: Kategorien, die der Dienst kennt (``nexus.MemoryCategory``). Eine
-#: unbekannte Angabe wird abgelehnt statt still ignoriert: ein Tippfehler
+#: Kategorien, die der Dienst kennt (``nexus.MemoryCategory``) plus die
+#: Etikett- und Wissenskategorien, die im Bestand tatsaechlich vorkommen.
+#: Eine unbekannte Angabe wird abgelehnt statt still ignoriert: ein Tippfehler
 #: darf nicht zu "kein Filter" werden.
 KNOWN_CATEGORIES = frozenset({
     "fact", "belief", "session", "rule", "preference", "procedure", "temp",
+    "entity", "lesson", "pattern", "decision", "idea",
 })
 
 
 class RecallPolicyError(ValueError):
     """Ungueltige Auswahlangabe — der Aufrufer soll es erfahren, nicht raten."""
+
+
+def _normalize_category_list(value: Any, feld: str) -> Optional[tuple[str, ...]]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        roh = list(value.split(","))
+    elif isinstance(value, Iterable):
+        roh = list(value)
+    else:
+        raise RecallPolicyError(
+            f"{feld} muss eine Liste oder eine Zeichenkette sein, nicht {type(value).__name__}"
+        )
+    sauber: list[str] = []
+    for teil in roh:
+        name = str(teil).strip().lower()
+        if not name:
+            continue
+        if name not in KNOWN_CATEGORIES:
+            raise RecallPolicyError(
+                f"unbekannte Kategorie {name!r} in {feld} — erlaubt: {sorted(KNOWN_CATEGORIES)}"
+            )
+        if name not in sauber:
+            sauber.append(name)
+    return tuple(sauber) or None
 
 
 def normalize_categories(value: Any) -> Optional[tuple[str, ...]]:
@@ -63,28 +104,12 @@ def normalize_categories(value: Any) -> Optional[tuple[str, ...]]:
     (damit auch Umgebungsvariablen und Kommandozeilen es koennen). Leer heisst
     "kein Filter"; eine unbekannte Kategorie ist ein Fehler.
     """
-    if value is None:
-        return None
-    if isinstance(value, str):
-        roh = [teil for teil in value.split(",")]
-    elif isinstance(value, Iterable):
-        roh = list(value)
-    else:
-        raise RecallPolicyError(
-            f"categories muss eine Liste oder eine Zeichenkette sein, nicht {type(value).__name__}"
-        )
-    sauber: list[str] = []
-    for teil in roh:
-        name = str(teil).strip().lower()
-        if not name:
-            continue
-        if name not in KNOWN_CATEGORIES:
-            raise RecallPolicyError(
-                f"unbekannte Kategorie {name!r} — erlaubt: {sorted(KNOWN_CATEGORIES)}"
-            )
-        if name not in sauber:
-            sauber.append(name)
-    return tuple(sauber) or None
+    return _normalize_category_list(value, "categories")
+
+
+def normalize_exclude(value: Any) -> Optional[tuple[str, ...]]:
+    """``exclude`` als Tupel ausgeschlossener Kategorien — ``None``: keins."""
+    return _normalize_category_list(value, "exclude")
 
 
 def normalize_min_score(value: Any) -> Optional[float]:
@@ -134,8 +159,8 @@ def has_lexical_evidence(item: dict) -> bool:
     """Gab es einen echten Worttreffer (BM25 > 0)?
 
     ``_bm25`` ist der interne Schluessel der Abruf-Ausgabe (der rohe BM25-Wert
-    gehoert nicht in die oeffentliche Form), ``bm25_score`` der der
-    Retriever-Treffer.
+    gehoert nicht in die oeffentliche Form), ``bm25_score`` der des
+    Retriever-Treffers.
     """
     wert = item.get("bm25_score")
     if wert is None:
@@ -144,11 +169,19 @@ def has_lexical_evidence(item: dict) -> bool:
 
 
 def passes(item: dict, *, categories: Optional[Iterable[str]] = None,
+           exclude: Optional[Iterable[str]] = None,
            min_score: Optional[float] = None) -> bool:
-    """Besteht dieser Eintrag die Auswahlregel?"""
+    """Besteht dieser Eintrag die Auswahlregel?
+
+    ``exclude`` schlaegt ``categories``: eine Kategorie, die in beiden Listen
+    steht, ist draussen — der Ausschluss ist die strengere Aussage.
+    """
+    kategorie = effective_category(item)
     if categories:
-        if effective_category(item) not in set(categories):
+        if kategorie not in set(categories):
             return False
+    if exclude and kategorie in set(exclude):
+        return False
     if min_score is not None:
         wert = relevance(item)
         if wert is not None:
@@ -162,12 +195,17 @@ def passes(item: dict, *, categories: Optional[Iterable[str]] = None,
 
 
 def select(items: Iterable[dict], *, categories: Optional[Iterable[str]] = None,
+           exclude: Optional[Iterable[str]] = None,
            min_score: Optional[float] = None,
            limit: Optional[int] = None) -> list[dict]:
     """Die Auswahl in einem Schritt: filtern, dann kuerzen. Reihenfolge bleibt."""
-    kategorien = normalize_categories(categories)
+    erlaubte = normalize_categories(categories)
+    verboten = normalize_exclude(exclude)
     schwelle = normalize_min_score(min_score)
-    gewaehlt = [item for item in items if passes(item, categories=kategorien, min_score=schwelle)]
+    gewaehlt = [
+        item for item in items
+        if passes(item, categories=erlaubte, exclude=verboten, min_score=schwelle)
+    ]
     if limit is not None:
         gewaehlt = gewaehlt[:max(0, int(limit))]
     return gewaehlt

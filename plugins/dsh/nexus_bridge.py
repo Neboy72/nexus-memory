@@ -174,6 +174,7 @@ class Bridge:
                 results = await self.store().recall(
                     query, agent_level=ACCESS_LEVEL, limit=limit,
                     categories=request.get("categories"),
+                    exclude_categories=request.get("exclude_categories"),
                     min_score=request.get("min_score"),
                     via="plugin", actor=request.get("actor"),
                 )

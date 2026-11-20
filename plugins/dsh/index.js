@@ -59,12 +59,12 @@ export const Config = z.object({
   recallLimit: z.number().description('How many memories to inject at most (default 3).'),
   recallBudgetChars: z.number().description('Character budget of the injected block (default 800).'),
   recallFilter: z.boolean().description('Apply the recall selection rule (default true: categories + min score).'),
-  recallCategories: z
+  recallExcludeCategories: z
     .array(z.string())
-    .description("Categories auto-recall may use (default ['fact','rule','preference']). Empty array = no filter."),
+    .description("Categories auto-recall keeps out (default ['session','entity']). Empty array = no filter."),
   recallMinScore: z
     .number()
-    .description('Minimum relevance (cosine 0..1) for auto-recall (default 0.35). 0 = no threshold.'),
+    .description('Minimum relevance (cosine 0..1) for auto-recall. Off by default; below 0.45 it has no effect.'),
   recallTimeoutMs: z.number().description('Give up on recall after this many milliseconds (default 4000).'),
   recallMinChars: z.number().description('Skip auto-recall when the last human message is shorter than this (default 30).'),
   recallMinWords: z.number().description('Skip auto-recall when the last human message has fewer words than this (default 4).'),
@@ -516,7 +516,7 @@ class HttpStore {
         filter_level: this.accessLevel,
         // Auswahlregel im Dienst (20.11.2026). Fehlt der Wert, verhaelt sich
         // der Dienst wie vorher — die Voreinstellung ist Sache des Plugins.
-        ...(options.categories ? { categories: options.categories } : {}),
+        ...(options.excludeCategories ? { exclude_categories: options.excludeCategories } : {}),
         ...(options.minScore !== null && options.minScore !== undefined
           ? { min_score: options.minScore }
           : {}),
@@ -686,7 +686,7 @@ class StdioStore {
       {
         query,
         limit,
-        ...(options.categories ? { categories: options.categories } : {}),
+        ...(options.excludeCategories ? { exclude_categories: options.excludeCategories } : {}),
         ...(options.minScore !== null && options.minScore !== undefined
           ? { min_score: options.minScore }
           : {}),
@@ -821,10 +821,16 @@ export function apply(ctx, config) {
   // Die Auswahlregel gilt im Dienst (recall_policy); das Plugin reicht nur
   // die Schalter durch. `recallFilter: false` schaltet beides ab.
   const recallFilter = config.recallFilter !== false
-  const recallCategories = recallFilter
-    ? (config.recallCategories ?? ['fact', 'rule', 'preference'])
+  // Ausschluss statt Erlaubnis (20.11.2026, nach Messung): eine Erlaubnisliste
+  // (fact/rule/preference) sperrte Wissen wie lesson/pattern/procedure aus und
+  // kostete drei passende Treffer in 25 Fragen. Draussen bleiben nur
+  // Protokolle und Etiketten.
+  const recallExclude = recallFilter
+    ? (config.recallExcludeCategories ?? ['session', 'entity'])
     : null
-  const recallMinScore = recallFilter ? (config.recallMinScore ?? 0.35) : null
+  // Schwelle: standardmaessig AUS. Unter 0.45 filtert sie nichts, darueber
+  // verliert sie zuerst die passenden Eintraege.
+  const recallMinScore = recallFilter ? (config.recallMinScore ?? null) : null
   const recallTimeout = Math.max(500, config.recallTimeoutMs ?? 4000)
   const recallMinChars = Math.max(4, config.recallMinChars ?? 30)
   const recallMinWords = Math.max(1, config.recallMinWords ?? 4)
@@ -849,7 +855,7 @@ export function apply(ctx, config) {
       try {
         memories = await withTimeout(
           store.recall(query, recallLimit, payload.signal, {
-            categories: recallCategories,
+            excludeCategories: recallExclude,
             minScore: recallMinScore,
           }),
           recallTimeout,
