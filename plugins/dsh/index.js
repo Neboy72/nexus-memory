@@ -97,7 +97,7 @@ export const Config = z.object({
 const REQUEST_TIMEOUT_MS = 30_000
 const MAX_INJECTED_ITEMS = 10
 const MCP_PROTOCOL_VERSION = '2025-06-18'
-const PLUGIN_VERSION = '0.3.1'
+const PLUGIN_VERSION = '0.3.2'
 
 /** Expand a leading `~` so config files can use home-relative paths. */
 function expandHome(value) {
@@ -172,6 +172,21 @@ export function captureText(user, assistant, session, turn, maxChars) {
   return text
 }
 
+/**
+ * Did the harness's own exit marker report a non-zero code?
+ *
+ * The shell tool appends `[exit code: N]` to its result; that marker is the
+ * harness's verdict on the command, not our reading of the text. `null` means
+ * "no code" (killed), which is a different case and deliberately not guessed
+ * here.
+ */
+function nonZeroExit(text) {
+  const treffer = /\n\[exit code: (-?\d+|null)\]\s*$/.exec(String(text ?? ''))
+  if (!treffer) return false
+  const code = Number(treffer[1])
+  return Number.isFinite(code) && code !== 0
+}
+
 /** Collapse whitespace so one incident stays one line. */
 function collapse(text) {
   return String(text ?? '').replace(/\s+/g, ' ').trim()
@@ -190,8 +205,10 @@ function collapse(text) {
  */
 export function incidentFromToolResult({ tool, message, error, session, maxChars = 2000 }) {
   if (!tool) return null
-  if (!error && message?.isError !== true) return null
-  const teile = [textOf(message?.content), error?.reason, error?.code ? `code=${error.code}` : '']
+  const roh = textOf(message?.content)
+  const befehlFehler = nonZeroExit(roh)
+  if (!error && message?.isError !== true && !befehlFehler) return null
+  const teile = [roh, error?.reason, error?.code ? `code=${error.code}` : '']
   const text = collapse(teile.filter(Boolean).join(' '))
   if (!text) return null
   return {
