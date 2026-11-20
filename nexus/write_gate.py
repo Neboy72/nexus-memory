@@ -60,6 +60,12 @@ Die Regeln:
    gestartet``/``fertig`` als ganze Meldung. Eine Zustandsmeldung ist nach
    dem naechsten Start falsch; wer sie trotzdem halten will, schreibt sie
    als ``temp`` (7 Tage), dann geht sie durch.
+10. Ein Diktat-Rest wird ``session``, nicht abgewiesen (20.11.2026): was
+   gesprochen klingt (Flickwoerter, Wortdopplungen, Anrede, fehlendes
+   Satzzeichen, langer Schachtelsatz), ist ein Transkript, kein Wissen. Der
+   Inhalt bleibt Wort fuer Wort stehen — nur die Dauerwirkung einer Regel
+   entsteht nicht. Ein Mensch, der die Regel am Terminal bestaetigt, schlaegt
+   die Heuristik: dann bleibt sie eine Regel.
 """
 
 from __future__ import annotations
@@ -107,6 +113,56 @@ _PUBLIC_MARKERS = ("public", "oeffentlich", "öffentlich", "open", "open-data")
 
 # Etikett statt Aussage ("Farbe: blau"). Nur bei ``fact`` geprueft.
 _LABEL_RE = re.compile(r"^\s*([^:\n]{1,40}?)\s*:\s*(\S.*?)\s*$")
+# ── Diktat-Reste (20.11.2026) ────────────────────────────────────────
+# Der Bestand zeigt den Fehler: 2466 Eintraege der Kategorie ``rule``, davon
+# seit dem 08.11. kein neuer — das Tor haelt inzwischen. Der Ballast, der bei
+# jedem Turn eingespielt wird, ist Altbestand aus August bis Oktober: diktierte
+# Sprachfetzen, die als dauerhafte Regel gespeichert wurden ("dann müssten die
+# alle da rein oder oder wie soll ich mir das vorstellen sagte dir nee nee").
+#
+# Erkannt wird an der FORM, nicht am Inhalt: ein Diktat-Rest ist gesprochene
+# Rede (Flickwoerter, Wortdopplungen, Anrede, Satzzeichen fehlen, ein langer
+# Schachtelsatz), eine Regel ist geschrieben (Etikett, Datum, Aussage).
+# Erkannt heisst NICHT verworfen: die Kategorie wird auf ``session``
+# herabgestuft — dort gehoert ein Transkript hin, und der Auto-Recall laesst
+# Sitzungen draussen. Kein Inhalt geht verloren.
+#
+# Die Kalibrierung ist gemessen, nicht geschaetzt (Trockenlauf 20.11.2026 ueber
+# den ganzen Bestand): Schwelle und Einzelgewichte stehen als Konstanten hier,
+# damit die Zahl im Test nachpruefbar bleibt.
+_DICTATION_SCORE_THRESHOLD = 5
+
+#: Flickwoerter gesprochener Rede. Nur ganze Woerter — "ne" steckt sonst in
+#: jedem zweiten Satz ("eine").
+_DICTATION_FILLERS = frozenset({
+    "nee", "ne", "nö", "äh", "ähm", "hmm", "hm", "halt", "eben",
+    "irgendwie", "sozusagen", "quasi",
+})
+
+#: Wendungen, die ein Mensch beim Sprechen benutzt und beim Schreiben nicht.
+_DICTATION_PHRASES = (
+    "oder oder", "sagte dir", "sag ich", "sag mal", "weisst du", "weißt du",
+    "ja ne", "ne ne", "oder so", "und so", "nicht wahr",
+)
+
+#: Wortdopplung ("oder oder", "nee nee") — beim Diktieren passiert das.
+#: GROSS/KLEIN wird unterschieden: "eine Eine-Zeilen-Warnung" ist eine
+#: Zusammenfuehrung, keine Dopplung — mit IGNORECASE traf sie 15 echte Regeln
+#: (im Trockenlauf 20.11.2026 gesehen und korrigiert).
+_DOUBLED_WORD_RE = re.compile(r"\b(\w{3,})\s+\1\b")
+#: Ein Satzende irgendwo im Text (nicht am Rand): dann ist es kein Schachtelsatz.
+_INNER_SENTENCE_RE = re.compile(r"[.!?]\s")
+#: Zweite Person / Icherzaehlung: der Agent redet, statt eine Regel zu notieren.
+_ADDRESS_RE = re.compile(
+    r"\b(du|dir|dich|dein|deine|deinen|ihr|euch|ich|mich|wir|uns)\b",
+    re.IGNORECASE,
+)
+#: Ab hier gilt ein satzzeichenloser Text als Schachtelsatz.
+_RUNON_CHARS = 160
+#: Ein Etikett am Anfang ("MORGENRAPPORT-REGEL (Nebo, 21.09.): ...") ist das
+#: Gegenteil eines Diktats: ein geschriebener Kopf ueber einer Aussage.
+_LABEL_HEAD_RE = re.compile(r"^[^\n]{0,80}:\s", re.UNICODE)
+
 #: Satzzeichen, das einen Satz beendet — ein Punkt in "Skill.md" nicht.
 _SENTENCE_PUNCT = re.compile(r"[!?;]|\.(?=\s|$)")
 _DIGIT = re.compile(r"\d")
@@ -429,6 +485,76 @@ def _lowercase_scrap(text: str, category: str) -> bool:
     return value[:1].islower()
 
 
+def dictation_reasons(text: str) -> tuple[int, list[str]]:
+    """Punktzahl und Gruende fuer "das ist ein Diktat-Rest".
+
+    Reine Formpruefung, kein Inhalt und keine Kategorie: gesprochene Rede hat
+    Merkmale, die geschriebene Saetze nicht haben. Die Gewichte sind klein und
+    lesbar, damit ein einzelnes Merkmal nie reicht — erkannt wird nur, was
+    mehrere traegt.
+    """
+    roh = str(text or "").strip()
+    if not roh:
+        return 0, []
+    punkte = 0
+    gruende: list[str] = []
+
+    if not _SENTENCE_PUNCT.search(roh[-1:]) and not roh.endswith(("…", '"', "'")):
+        punkte += 1
+        gruende.append("kein Satzzeichen am Ende")
+
+    doppelt = _DOUBLED_WORD_RE.search(roh)
+    if doppelt:
+        punkte += 2
+        gruende.append(f"Wortdopplung ({doppelt.group(0)})")
+
+    woerter = re.findall(r"[A-Za-zÄÖÜäöüß]+", roh.lower())
+    treffer = [w for w in woerter if w in _DICTATION_FILLERS]
+    if treffer:
+        punkte += min(2, len(treffer))
+        gruende.append("Flickwoerter (" + ", ".join(sorted(set(treffer))[:3]) + ")")
+
+    # Wendungen als GANZE Woerter: "ne ne" steckt sonst in "eine neue" und
+    # traefe jede zweite Regel (im Trockenlauf so passiert und korrigiert).
+    klein = roh.lower()
+    for wendung in _DICTATION_PHRASES:
+        if re.search(r"\b" + re.escape(wendung) + r"\b", klein):
+            punkte += 2
+            gruende.append(f"Wendung ({wendung})")
+            break
+
+    if roh[:1].islower():
+        punkte += 1
+        gruende.append("beginnt klein")
+
+    if len(roh) >= _RUNON_CHARS and not _INNER_SENTENCE_RE.search(roh):
+        punkte += 2
+        gruende.append(f"Schachtelsatz ({len(roh)} Zeichen ohne Satzbruch)")
+
+    if _ADDRESS_RE.search(roh):
+        punkte += 1
+        gruende.append("Anrede/Icherzaehlung")
+
+    if _LABEL_HEAD_RE.match(roh):
+        # Ein geschriebener Kopf ueber einer Aussage ist das Gegenteil.
+        punkte -= 3
+        gruende.append("Etikett-Kopf (Abzug)")
+
+    return punkte, gruende
+
+
+def is_dictated_residue(text: str) -> Optional[str]:
+    """Grund, warum der Text ein Diktat-Rest ist — ``None``, wenn nicht.
+
+    Die Rueckgabe ist der Text fuer die Protokollzeile und den Trockenlauf;
+    ``None`` heisst "sieht aus wie geschriebene Rede".
+    """
+    punkte, gruende = dictation_reasons(text)
+    if punkte >= _DICTATION_SCORE_THRESHOLD:
+        return f"{punkte} Punkte: " + ", ".join(gruende)
+    return None
+
+
 def is_status_snippet(text: str) -> bool:
     """Reine Zustandsmeldung: laeuft noch, neu gestartet, fertig.
 
@@ -605,6 +731,12 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
 
     cat = _normalize_category(category)
 
+    # Diktat-Rest (20.11.2026): gesprochene Rede ist ein Transkript, kein
+    # Wissen. EINMAL hier bestimmt und unten zur Herabstufung benutzt — die
+    # Formpruefungen (Frage, Gruss, klein anfangend) gelten fuer sie nicht:
+    # ein Transkript darf klein anfangen und Stocken enthalten.
+    dictation = is_dictated_residue(text) if cat != "session" else None
+
     # ── Gespraechsrest (20.11.2026) ────────────────────────────────────
     # Steckt ein abgeschnittener Satz aus dem Gespraech im Text, bleibt bei
     # einer Entitaet nur der Kopf stehen (dort steht das Wissen: Rolle, Pfad,
@@ -622,7 +754,7 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
     # ── Frage statt Aussage ────────────────────────────────────────────
     # Eine Frage ist kein Wissen. Ein Transkript (``session``) darf Fragen
     # enthalten: dort ist der Verlauf die Sache selbst.
-    if cat != "session":
+    if cat != "session" and not dictation:
         if is_question(text, cat):
             if cat in ("rule", "preference"):
                 return _refuse("a rule/preference must be a statement, not a question", cat, source)
@@ -653,15 +785,22 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
     prov_input = provenance if isinstance(provenance, dict) else {}
     origin_text = _origin_text(source, source_type, prov_input)
 
-    if war_regel:
+    if war_regel and _confirmed(rule_proof, text):
+        # Ein Mensch hat die Regel am Terminal bestaetigt — dann bleibt sie
+        # eine Regel. Die Formheuristik schlaegt keine Bestaetigung.
+        prov_input = dict(prov_input)
+        prov_input["rule_confirmed"] = True
+        prov_input["rule_confirmed_at"] = _now_iso()
+    elif dictation:
+        # Nicht verwerfen: der Inhalt bleibt, nur die Dauerwirkung entfaellt.
+        cat = "session"
+        prov_input = dict(prov_input)
+        prov_input["dictated_residue"] = dictation
+        logger.info("write_gate: Diktat-Rest als session abgelegt (%s)", dictation)
+    elif war_regel:
         # Herabstufen statt abweisen: der Inhalt bleibt erhalten, nur die
         # Dauerwirkung einer Regel entsteht ohne menschliche Bestaetigung nicht.
-        if _confirmed(rule_proof, text):
-            prov_input = dict(prov_input)
-            prov_input["rule_confirmed"] = True
-            prov_input["rule_confirmed_at"] = _now_iso()
-        else:
-            cat = "fact"
+        cat = "fact"
 
     # Wendungen mitten im Satz ("Jetzt muss ich das Muster verstehen") gelten
     # erst hier: eine Regel, die ein Mensch am Terminal bestaetigt hat, wird
