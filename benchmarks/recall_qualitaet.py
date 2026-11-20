@@ -124,8 +124,9 @@ async def _lauf(modus: str, fragen: list[dict]) -> list[dict]:
                 frage,
                 agent_level="private",
                 limit=3,
-                categories=["fact", "rule", "preference"],
-                min_score=0.35,
+                # Die Regel nach der Entscheidung vom 20.11.2026: Ausschluss
+                # statt Erlaubnisliste, Schwelle aus.
+                exclude_categories=["session", "entity"],
             )
         aus.append({
             "nr": nr,
@@ -192,9 +193,9 @@ def _kurve(roh: list[dict], bewertung: dict, top_n: int = 3) -> list[dict]:
     """
     from nexus_memory import recall_policy as rp
 
-    kategorien = rp.DEFAULT_RECALL_CATEGORIES
+    ausgeschlossen = rp.DEFAULT_RECALL_EXCLUDE
     zeilen = []
-    for schwelle in [0.0, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]:
+    for schwelle in [0.0, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]:
         geliefert = 0
         passend = 0
         mit_treffer = 0
@@ -204,7 +205,7 @@ def _kurve(roh: list[dict], bewertung: dict, top_n: int = 3) -> list[dict]:
             gewaehlt = [
                 e for e in fall["treffer"]
                 if rp.passes({**e, "bm25_score": e.get("bm25")},
-                             categories=kategorien,
+                             exclude=ausgeschlossen,
                              min_score=(schwelle or None))
             ][:top_n]
             geliefert += len(gewaehlt)

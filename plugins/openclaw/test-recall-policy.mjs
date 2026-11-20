@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 
 import { passesRecallRule, effectiveCategory } from './hooks/recall.ts'
 import {
-  DEFAULT_RECALL_CATEGORIES,
+  DEFAULT_RECALL_EXCLUDE_CATEGORIES,
   DEFAULT_RECALL_MIN_SCORE,
   parseConfig,
 } from './lib/config.ts'
@@ -49,29 +49,49 @@ for (const [payload, erwartet] of FAELLE) {
 }
 ok('Kategorie: Turn = session, ohne Kategorie = fact')
 
-// 2. Auswahl (Kategorien + Schwelle)
+// 2. Auswahl (Ausschluss + Schwelle)
 for (const [payload, _] of FAELLE) {
-  for (const score of [0, 0.2, 0.3499, 0.35, 0.8, 1]) {
-    const item = { ...payload, score, id: 'x', text: 'x' }
-    const erwartet = DEFAULT_RECALL_CATEGORIES.includes(effectiveCategory(payload))
-      && score >= DEFAULT_RECALL_MIN_SCORE
-    assert.equal(
-      passesRecallRule(item, DEFAULT_RECALL_CATEGORIES, DEFAULT_RECALL_MIN_SCORE),
-      erwartet,
-      `${JSON.stringify(payload)} @ ${score}`,
-    )
+  for (const score of [0, 0.2, 0.4499, 0.45, 0.8, 1]) {
+    for (const schwelle of [0, 0.45]) {
+      const item = { ...payload, score, id: 'x', text: 'x' }
+      const erwartet = !DEFAULT_RECALL_EXCLUDE_CATEGORIES.includes(effectiveCategory(payload))
+        && (schwelle === 0 || score >= schwelle)
+      assert.equal(
+        passesRecallRule(item, DEFAULT_RECALL_EXCLUDE_CATEGORIES, schwelle),
+        erwartet,
+        `${JSON.stringify(payload)} @ ${score}, Schwelle ${schwelle}`,
+      )
+    }
   }
 }
-ok('Auswahl: Kategorien und Mindestpunktzahl wirken wie im Dienst')
+ok('Auswahl: Ausschluss und Mindestpunktzahl wirken wie im Dienst')
 
-// 3. Nichts ueber der Schwelle -> leerer Block (kein Fuellmaterial)
+// 2b. Wissen bleibt drin, Etiketten und Protokolle nicht
+for (const kategorie of ['lesson', 'pattern', 'procedure', 'belief', 'decision', 'idea']) {
+  assert.equal(
+    passesRecallRule({ category: kategorie, score: 0.9, id: 'x', text: 'x' },
+      DEFAULT_RECALL_EXCLUDE_CATEGORIES, 0),
+    true,
+    `${kategorie} ist Wissen und muss durch`,
+  )
+}
+for (const kategorie of ['session', 'entity']) {
+  assert.equal(
+    passesRecallRule({ category: kategorie, score: 0.9, id: 'x', text: 'x' },
+      DEFAULT_RECALL_EXCLUDE_CATEGORIES, 0),
+    false,
+    `${kategorie} bleibt draussen`,
+  )
+}
+ok('Ausschluss: lesson/pattern/procedure/belief bleiben drin')
+
+// 3. Eine hohe Schwelle ergibt einen leeren Block (kein Fuellmaterial)
 const alles_drunter = [
   { category: 'fact', score: 0.1, id: 'a', text: 'a' },
   { category: 'rule', score: 0.2, id: 'b', text: 'b' },
 ]
 assert.deepEqual(
-  alles_drunter.filter((r) =>
-    passesRecallRule(r, DEFAULT_RECALL_CATEGORIES, DEFAULT_RECALL_MIN_SCORE)),
+  alles_drunter.filter((r) => passesRecallRule(r, DEFAULT_RECALL_EXCLUDE_CATEGORIES, 0.45)),
   [],
 )
 ok('Grenzfall: kein Treffer ueber der Schwelle ergibt nichts')
@@ -80,23 +100,23 @@ ok('Grenzfall: kein Treffer ueber der Schwelle ergibt nichts')
 const cfg = parseConfig({})
 assert.equal(cfg.maxRecallResults, 3, 'drei Eintraege')
 assert.equal(cfg.recallBudgetChars, 800, '800 Zeichen')
-assert.deepEqual(cfg.recallCategories, DEFAULT_RECALL_CATEGORIES)
+assert.deepEqual(cfg.recallExcludeCategories, DEFAULT_RECALL_EXCLUDE_CATEGORIES)
 assert.equal(cfg.recallMinScore, DEFAULT_RECALL_MIN_SCORE)
-ok('Voreinstellung: 3 Eintraege, 800 Zeichen, fact/rule/preference, 0.35')
+ok('Voreinstellung: 3 Eintraege, 800 Zeichen, session/entity raus, Schwelle aus')
 
 // 5. Abschalten und eigene Werte
-const aus = parseConfig({ recallCategories: [], recallMinScore: 0 })
-assert.deepEqual(aus.recallCategories, [], 'leere Liste = kein Kategorienfilter')
+const aus = parseConfig({ recallExcludeCategories: [], recallMinScore: 0 })
+assert.deepEqual(aus.recallExcludeCategories, [], 'leere Liste = kein Filter')
 assert.equal(aus.recallMinScore, 0, '0 = keine Schwelle')
 const eigen = parseConfig({
   maxRecallResults: 7,
   recallBudgetChars: 2400,
-  recallCategories: ['fact'],
+  recallExcludeCategories: ['session'],
   recallMinScore: 0.6,
 })
 assert.equal(eigen.maxRecallResults, 7)
 assert.equal(eigen.recallBudgetChars, 2400)
-assert.deepEqual(eigen.recallCategories, ['fact'])
+assert.deepEqual(eigen.recallExcludeCategories, ['session'])
 assert.equal(eigen.recallMinScore, 0.6)
 ok('Schalter: abschaltbar und frei einstellbar')
 

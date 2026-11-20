@@ -920,19 +920,25 @@ def _memory_injection_score(text: str) -> int:
 # Auswertung fuer den VORLAUF (Auto-Recall) — ein ausdruecklicher
 # ``nexus_recall`` entscheidet ueber seine Parameter, nicht ueber die Umgebung.
 def _prefetch_recall_rule() -> tuple:
-    """(Kategorien, Mindestpunktzahl) des Auto-Recall-Vorlaufs."""
-    roh = os.environ.get("NEXUS_PREFETCH_CATEGORIES", "fact,rule,preference")
-    cats = tuple(t.strip().lower() for t in roh.split(",") if t.strip())
+    """(Ausschluss-Kategorien, Mindestpunktzahl) des Auto-Recall-Vorlaufs.
+
+    Ausschluss statt Erlaubnisliste (20.11.2026, nach Messung): Protokolle und
+    Etiketten raus, alles Wissen (auch lesson/pattern/procedure/belief) bleibt.
+    Die Schwelle ist aus — unter 0.45 filtert sie nichts, darueber kostet sie
+    zuerst die passenden Eintraege.
+    """
+    roh = os.environ.get("NEXUS_PREFETCH_EXCLUDE_CATEGORIES", "session,entity")
+    aus = tuple(t.strip().lower() for t in roh.split(",") if t.strip())
     try:
-        mind = float(os.environ.get("NEXUS_PREFETCH_MIN_SCORE", "0.35"))
+        mind = float(os.environ.get("NEXUS_PREFETCH_MIN_SCORE", "0"))
     except ValueError:
-        mind = 0.35
-    return cats, max(0.0, min(1.0, mind))
+        mind = 0.0
+    return aus, max(0.0, min(1.0, mind))
 
 
-def _recall_rule_passes(payload: dict, score, categories, min_score) -> bool:
+def _recall_rule_passes(payload: dict, score, exclude, min_score) -> bool:
     """Wendet die verbindliche Regel auf einen Qdrant-Treffer an (fail-open)."""
-    if not categories and not min_score:
+    if not exclude and not min_score:
         return True
     try:
         from nexus_memory import recall_policy as _rp
@@ -944,7 +950,7 @@ def _recall_rule_passes(payload: dict, score, categories, min_score) -> bool:
         "vector_score": score if isinstance(score, (int, float)) else None,
     }
     try:
-        return _rp.passes(item, categories=categories or None,
+        return _rp.passes(item, exclude=exclude or None,
                           min_score=min_score or None)
     except _rp.RecallPolicyError:
         return True

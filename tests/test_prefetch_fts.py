@@ -294,7 +294,7 @@ class TestPrefetchOhneJaNeinSortierung:
         # 20.11.2026: Der Vorlauf filtert seither nach Kategorie (Vorgabe
         # fact/rule/preference). Dieser Test prueft den Stichwortweg, nicht
         # die Kategorieauswahl — deshalb hier ohne Kategorienfilter.
-        monkeypatch.setenv("NEXUS_PREFETCH_CATEGORIES", "")
+        monkeypatch.setenv("NEXUS_PREFETCH_EXCLUDE_CATEGORIES", "")
         # ... und ohne Mindestpunktzahl: der Stichworttreffer hier hat keine
         # Aehnlichkeit (Testvektoren sind orthogonal), er ist rein woertlich.
         monkeypatch.setenv("NEXUS_PREFETCH_MIN_SCORE", "0")

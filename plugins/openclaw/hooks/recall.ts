@@ -76,10 +76,14 @@ export function effectiveCategory(item: { category?: string; type?: string }): s
 
 export function passesRecallRule(
   item: SearchResult,
-  categories: readonly string[],
+  excludeCategories: readonly string[],
   minScore: number,
 ): boolean {
-  if (categories.length > 0 && !categories.includes(effectiveCategory(item))) return false
+  // Ausschluss statt Erlaubnisliste: was drin steht, bleibt draussen; alles
+  // andere ist Wissen und passiert (auch lesson/pattern/procedure/belief).
+  if (excludeCategories.length > 0 && excludeCategories.includes(effectiveCategory(item))) {
+    return false
+  }
   if (minScore > 0 && typeof item.score === "number" && item.score < minScore) return false
   return true
 }
@@ -368,8 +372,8 @@ export function buildRecallHandler(
       const gated = scopeGated.filter((r) =>
         passesRecallRule(
           r,
-          cfg.recallCategories ?? ["fact", "rule", "preference"],
-          cfg.recallMinScore ?? 0.35,
+          cfg.recallExcludeCategories ?? ["session", "entity"],
+          cfg.recallMinScore ?? 0,
         ),
       )
 
