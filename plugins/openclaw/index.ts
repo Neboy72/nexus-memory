@@ -8,6 +8,7 @@ import { buildCaptureHandler } from "./hooks/capture.ts"
 import { buildMessageReceivedHandler } from "./hooks/room-observer.ts"
 import { buildRecallHandler } from "./hooks/recall.ts"
 import { buildPreToolGateHandler, resolvePlanLockPath } from "./hooks/pre-tool-gate.ts"
+import { buildIncidentHandler } from "./lib/incidents.ts"
 import { buildThoughtFilterHandler } from "./hooks/thought-filter.ts"
 import { buildCronFormGateHandler } from "./hooks/cron-form-gate.ts"
 import { buildSelfCheckWarningHandler } from "./hooks/self-check-warning.ts"
@@ -278,6 +279,17 @@ export default {
         cfg.planGate.enabled ? `enabled, lock=${resolvePlanLockPath(cfg.planGate)}, ${cfg.planGate.maxAgeSeconds}s` : "aus"
       })`,
     )
+
+    // Vorfall-Meldung (20.11.2026): das naechtliche Lernen haengt an keinem
+    // Harness mehr. Dieser Agent meldet seine gescheiterten Werkzeugaufrufe an
+    // POST /events; Nexus klassifiziert selbst, welcher Fehler wiederkehrt.
+    // Standard an — wer nichts meldet, von dem lernt der Speicher nichts.
+    if (cfg.reportIncidents) {
+      api.on("after_tool_call", buildIncidentHandler(cfg))
+      log.info("nexus-incidents: after_tool_call hook aktiv (/events)")
+    } else {
+      log.info("nexus-incidents: aus (reportIncidents=false)")
+    }
 
     // Thought-Filter (29.08.2026): GLM-5.x emittiert CoT als plain text
     // (GitHub #42062) — filtert Reasoning-Blöcke vor dem Senden.

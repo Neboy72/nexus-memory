@@ -1,3 +1,33 @@
+## [0.22.62] - 2026-11-20
+
+**Jeder Harness meldet seine Fehlschlaege jetzt selbst — die Regel ist in beiden Plugins dieselbe.**
+
+0.22.61 hat die Quelle des naechtlichen Lernens umgedreht: Nexus liest keine fremde
+Sitzungsablage mehr, sondern nimmt Vorfaelle unter `POST /events` an. Damit das nicht
+nur fuer Hermes gilt, melden jetzt auch die beiden grossen Plugin-Pfade:
+
+- **DSH-Plugin:** hoert auf `tool/result`, meldet nur, was die Plattform selbst als
+  Fehler markiert (`isError` oder ein `error`-Objekt). Schalter `reportIncidents`
+  (Standard an), Fehlertext auf `reportMaxChars` gekappt (2000), hoechstens
+  `reportPerSessionMax` Meldungen je Sitzung (50). Nur der HTTP-Transport meldet;
+  stdio hat keinen Endpunkt.
+- **OpenClaw-Plugin:** neuer `after_tool_call`-Hook ueber `lib/incidents.ts`, dieselbe
+  Regel und dieselben Grenzen. Das Plugin nennt keinen Agentennamen: der Dienst nimmt
+  ihn aus dem Schluessel, der schreibt, damit keine Meldung eine fremde Herkunft
+  vortaeuschen kann. Neue Einstellung `reportIncidents` im Manifest (das Schema hat
+  `additionalProperties: false`, ein fehlender Schluessel waere ein Ladefehler) und in
+  der Doku.
+
+Beide melden nur die Fehlerzeichen der Plattform, nie aus dem Text geraten: die
+Klassifikation (welche Fehlerklasse, ob daraus eine Lehre wird) bleibt in Nexus, an
+einer Stelle und in einer Sprache. Ein Plugin, das nichts meldet, sieht von aussen
+aus wie eines, das funktioniert — deshalb halten Tests die Meldung fest: neun
+Faelle im DSH-Plugin (`test-report-incidents.mjs`), sieben im OpenClaw-Plugin
+(`_test_incidents.mjs`), dazu sechs Python-Tests, die beide Quellbaeume pruefen.
+
+Nichts davon sendet Gespraechsinhalt: gemeldet werden Werkzeugname, Fehlertext und
+Sitzungskennung.
+
 ## [0.22.61] - 2026-11-20
 
 **Das naechtliche Lernen haengt an keinem Harness mehr und legt keine Textfetzen ab.**

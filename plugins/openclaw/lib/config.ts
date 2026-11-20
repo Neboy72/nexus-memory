@@ -51,6 +51,10 @@ export type NexusConfig = {
   embedding: EmbeddingConfig
   autoRecall: boolean
   autoCapture: boolean
+  /** Report failed tool calls to the Nexus service (/events) so the nightly
+   *  learner sees them. Default true; off means the store learns nothing
+   *  from this harness. */
+  reportIncidents: boolean
   thoughtFilter: boolean
   maxRecallResults: number
   /** OCR-6 (maintainability low, L655): minimum similarity score the forget
@@ -101,6 +105,7 @@ const ALLOWED_KEYS = [
   "embedding",
   "autoRecall",
   "autoCapture",
+  "reportIncidents",
   "thoughtFilter",
   "maxRecallResults",
   "forgetMinScore",
@@ -461,6 +466,7 @@ export function parseConfig(raw: unknown): NexusConfig {
     embedding,
     autoRecall: toBool(cfg.autoRecall, true),
     autoCapture: toBool(cfg.autoCapture, true),
+    reportIncidents: toBool(cfg.reportIncidents, true),
     thoughtFilter: toBool(cfg.thoughtFilter, true),
     maxRecallResults: toClampedInt(cfg.maxRecallResults, 10, 1, 20),
     // OCR-6 (maintainability low, L655): forget-tool confidence threshold is
@@ -499,6 +505,7 @@ export const nexusConfigSchema = {
       },
       autoRecall: { type: "boolean" },
       autoCapture: { type: "boolean" },
+      reportIncidents: { type: "boolean" },
       thoughtFilter: { type: "boolean" },
       maxRecallResults: { type: "number", minimum: 1, maximum: 20 },
       forgetMinScore: { type: "number", minimum: 0, maximum: 1 },

@@ -128,6 +128,10 @@
       "placeholder": "",
       "help": "Rooms explicitly released for private memories, e.g. [\"-1001234567890\"]. Default empty: every group/channel turn reads public, because silence in a channel never proves a private audience. A bare chat id means chat:<id>; use session:<key> for a turn that carries no chat id.",
       "advanced": true
+    },
+    "reportIncidents": {
+      "label": "Report failed tool calls",
+      "help": "Sends failed tool calls (with the error text, no prompt content) to the local Nexus service so its nightly learner can find recurring problems. Turn off to keep this harness out of that journal."
     }
   },
   "configSchema": {
@@ -291,6 +295,11 @@
         "type": "number",
         "minimum": 0,
         "maximum": 1
+      },
+      "reportIncidents": {
+        "type": "boolean",
+        "default": true,
+        "description": "Report failed tool calls to the Nexus service (POST /events) so the nightly learner sees them. Default true; off means the store learns nothing from this harness."
       }
     },
     "required": []
