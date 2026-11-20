@@ -538,6 +538,23 @@ class TestGuardrailAuditExclusion:
             c._store_fact("fact", "audit-1",
                           source_payload={"guardrail_override": True})
 
+    def test_gate_refuses_garbage_fact_and_nothing_is_written(self):
+        """Das Tor gilt auch fuer den Verdichter (20.11.2026).
+
+        Er baut Fakten aus rohen Gespraechs-Dumps — genau die Stelle, an der
+        ein Modell Muell erzeugt. Ein abgewiesener Fakt wird uebersprungen."""
+        q = FakeQdrant([], similar_points=[])
+        c, prompts = _make(q, [])
+        with pytest.raises(C._SkipPointError):
+            c._store_fact("app neu gestartet", "raw-1")
+        assert q.upserts == []
+
+    def test_gate_lets_a_real_fact_through(self):
+        q = FakeQdrant([], similar_points=[])
+        c, prompts = _make(q, [])
+        c._store_fact("Der Verteiler steht im Flur neben der Kellertuer", "raw-1")
+        assert q.upserts and q.upserts[0][1][0].payload["content"].startswith("Der Verteiler")
+
 
 # ── 8. security: conflict resolution respects access boundaries ──────
 # A fact may only conflict (duplicate/supersede) with candidates whose

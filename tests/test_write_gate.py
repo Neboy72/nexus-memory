@@ -78,7 +78,7 @@ class TestEtikettenerkennung:
         assert prepared["content"] == text
 
     def test_satz_mit_doppelpunkt_ist_kein_etikett(self):
-        assert prepare("Status: Der Verteiler laeuft wieder", category="fact") is not None
+        assert prepare("Status: Der Verteiler steht im Flur", category="fact") is not None
 
     def test_satz_ohne_doppelpunkt_ist_kein_etikett(self):
         assert prepare("Kurz", category="fact") is not None
@@ -92,6 +92,192 @@ class TestEtikettenerkennung:
         """Der Schwellwert steht in der Bibliothek, nicht beim Aufrufer."""
         monkeypatch.setenv("NEXUS_WRITE_GATE_MIN_FACT_CHARS", "0")
         assert prepare("Farbe: blau", category="fact") is None
+
+
+# ── 2b. Gespraechsrest, Frage, Zustandsmeldung (20.11.2026) ───────────
+#
+# Befund aus der Bestandsdurchsicht: 303 belegte Muell-Eintraege — 157 ein
+# abgeschnittener Gespraechsrest, 99 reine Zustandsmeldungen, 25 als Regel
+# gespeicherte Rohsaetze. Die Beispiele unten sind echte Eintraege aus der
+# Sammlung, keine erfundenen.
+
+
+class TestGespraechsrest:
+    """``User:``/``Assistant:`` heisst: ein Modell hat den letzten Satz des
+    Gespraechs mitgeschrieben. Bei einer Entitaet bleibt der Kopf stehen."""
+
+    def test_fakt_mit_gespraechsrest_wird_abgewiesen(self):
+        assert prepare("User: Das Problem ist das Netzteil", category="fact") is None
+        assert "conversation rest" in last_reason()
+
+    def test_assistant_rest_wird_abgewiesen(self):
+        assert prepare("Assistant: Der Verteiler steht im Flur", category="fact") is None
+        assert "conversation rest" in last_reason()
+
+    def test_rollenmarke_wird_erkannt(self):
+        assert prepare("[role: user] und dann ging es los", category="fact") is None
+
+    def test_entitaet_behaelt_den_kopf_und_verliert_den_schwanz(self):
+        """Der Kopf traegt das Wissen (Rolle, Pfad, Preis), der Schwanz ist
+        der letzte Satz eines Gespraechs."""
+        prepared = prepare(
+            "concept: helper (role=Monitoring-Agent) — User: das Problem "
+            "ist, wenn ich den Router mit Strom gebe, dann startet er neu",
+            category="entity",
+        )
+        assert prepared is not None, last_reason()
+        assert prepared["content"] == "concept: helper (role=Monitoring-Agent)"
+
+    def test_entitaet_ohne_kopf_wird_abgewiesen(self):
+        assert prepare("User: hallo", category="entity") is None
+        assert "conversation rest" in last_reason()
+
+    def test_sitzung_darf_ein_transkript_sein(self):
+        """Bei ``session`` ist der Verlauf die Sache selbst."""
+        prepared = prepare("User: was ist das?\nAssistant: der Verteiler",
+                           category="session")
+        assert prepared is not None, last_reason()
+
+    def test_satz_ueber_einen_benutzer_ist_kein_rest(self):
+        assert prepare("Der Benutzer:innen-Kreis trifft sich am Donnerstag",
+                       category="fact") is not None
+
+    def test_datenbank_benutzer_ist_kein_rest(self):
+        """``DB-User:`` ist ein Benutzername, keine Rollenmarke.
+
+        Gemessen 20.11.2026: zwei Paperless-Eintraege wurden abgewiesen, weil
+        die erste Fassung den Bindestrich als Trenner vor ``User:`` erlaubte.
+        """
+        text = ("Paperless-ngx runs on ZimaOS (root@192.168.1.220) with media "
+                "files at /DATA/AppData/Paperless-ngx/nebo/paperless/media/ "
+                "(DB-User: paperless)")
+        assert prepare(text, category="fact") is not None
+        # "DB-User: paperless" allein ist ein Etikett (Regel 2), aber kein
+        # Gespraechsrest — der Grund muss der Etikettengrund sein.
+        assert prepare("DB-User: paperless", category="fact") is None
+        assert "label" in last_reason()
+
+    @pytest.mark.parametrize("text", [
+        # OAuth-Scope, kein Rollenwechsel
+        "Der Bot braucht den Scope `assistant:write` fuer Threads",
+        # Beispiel fuer ein Praefix, kleingeschrieben
+        "ADK nutzt `user:`, `app:`, `temp:` Prefixe fuer den Bereich",
+        # Datenbankbenutzer in Klammern
+        "PostgreSQL-Container broker-db-1 (User: paperless, DB: paperless)",
+        # Kontozeile in einem Dokument
+        "- **User:** das Konto sieht 2.416 Dokumente",
+    ])
+    def test_kein_falscher_rollenwechsel(self, text):
+        """Sechs Fehlalarme im Altbestand am 20.11.2026 — die Regel greift
+        nur am Textanfang oder hinter einem Gedankenstrich.
+
+        Ein Etikett darf dabei weiterhin an Regel 2 scheitern; es darf nur
+        nicht als Gespraechsrest gelesen werden."""
+        prepare(text, category="fact")
+        assert "conversation rest" not in last_reason(), last_reason()
+
+
+class TestFrage:
+    """Eine Frage ist kein Wissen."""
+
+    @pytest.mark.parametrize("text", [
+        "Was muss ich machen",
+        "muss ich jetzt was machen oder machst du weiter",
+        "Wo muss ich denn da hin, um das einzutragen?",
+        "Kannst du das nochmal erklaeren",
+        "Wie kann ich das zuruecksetzen?",
+    ])
+    def test_frage_als_fakt_wird_abgewiesen(self, text):
+        assert prepare(text, category="fact") is None
+        assert "question" in last_reason()
+
+    def test_frage_als_regel_wird_abgewiesen(self):
+        """Eine Regel wirkt bei jedem Turn — ein Rohsatz darf keine werden."""
+        assert prepare("Okay, was muss ich jetzt machen", category="rule") is None
+        assert "rule" in last_reason() or "question" in last_reason() or "fragment" in last_reason()
+
+    def test_frage_als_praeferenz_wird_abgewiesen(self):
+        assert prepare("Soll ich das wirklich so machen", category="preference") is None
+
+    def test_regel_von_hand_muss_nicht_fragen(self):
+        """Eine formulierte Regel scheitert nicht an einer Wendung mitten im
+        Satz: sie kommt ohne Nachweis als ``fact`` an, aber sie faellt nicht."""
+        assert prepare("Wenn etwas fehlt, soll ich nachfragen",
+                       category="rule") is not None
+
+    def test_protokoll_mit_frage_am_ende_ist_keine_frage(self):
+        text = ("Der Austausch lief ruhig. Wir haben den Verteiler geprueft. "
+                "Offen bleibt: passt der Platz an der Kellertuer?")
+        assert prepare(text, category="session") is not None
+
+    def test_langer_fakt_mit_frage_am_ende_geht_durch(self):
+        text = ("Der Verteiler wurde am Dienstag umgeklemmt und laeuft seither "
+                "ohne Unterbrechung. Wer das gemacht hat, ist nicht notiert. "
+                "Soll das nachgetragen werden?")
+        assert prepare(text, category="fact") is not None
+
+    def test_sitzung_darf_eine_frage_enthalten(self):
+        assert prepare("Was muss ich machen", category="session") is not None
+
+
+class TestFragmente:
+    """Gruss, Zustimmung und Flickwort statt einer Aussage."""
+
+    @pytest.mark.parametrize("text", [
+        "Ok",
+        "Okay, ich verstehe nur Bahnhof",
+        "Ja, da hast du recht, das ist Arbeitventurator.",
+        "Danke, das hat geklappt",
+        "Hallo zusammen",
+        "Alles klar",
+    ])
+    def test_kurzes_fragment_wird_abgewiesen(self, text):
+        assert prepare(text, category="fact") is None
+        assert "fragment" in last_reason()
+
+    def test_eine_aussage_mit_ja_am_anfang_ist_zu_lang_fuer_ein_fragment(self):
+        text = ("Ja, der Verteiler steht im Flur neben der Kellertuer und ist "
+                "seit dem Umbau am Dienstag wieder angeschlossen")
+        assert len(text) > 80
+        assert prepare(text, category="fact") is not None
+
+
+class TestZustandsmeldung:
+    """``laeuft noch``, ``neu gestartet``, ``fertig`` sagt, wie etwas gerade
+    steht — nach dem naechsten Start ist es falsch. In ``temp`` (7 Tage) ist
+    es richtig aufgehoben, als ``fact`` nie."""
+
+    @pytest.mark.parametrize("text", [
+        "app neu gestartet",
+        "läuft noch",
+        "fertig",
+        "erledigt",
+        "Der Dienst ist neu gestartet",
+    ])
+    def test_kurze_zustandsmeldung_wird_abgewiesen(self, text):
+        assert prepare(text, category="fact") is None
+        assert "status" in last_reason()
+
+    def test_zustandsmeldung_als_entitaet_wird_abgewiesen(self):
+        assert prepare("software: browser-use Daemon (status=neu gestartet)",
+                       category="entity") is None
+        assert "status" in last_reason()
+
+    def test_in_temp_ist_die_meldung_erlaubt(self):
+        prepared = prepare("app neu gestartet", category="temp")
+        assert prepared is not None, last_reason()
+        assert prepared["category"] == "temp"
+
+    def test_langer_text_ist_keine_meldung(self):
+        text = ("Der Dienst wurde neu gestartet und der Verteiler steht wieder. "
+                * 8)
+        assert len(text) > 140
+        assert prepare(text, category="fact") is not None
+
+    def test_wissen_ueber_einen_start_bleibt_erlaubt(self):
+        """Ein Fakt ueber das Startverhalten ist Wissen, keine Meldung."""
+        assert prepare("Der Dienst startet nach einem Neustart von selbst",
+                       category="fact") is not None
 
 
 # ── 3. Herkunft nie leer ─────────────────────────────────────────────
@@ -572,6 +758,35 @@ class TestBibliotheksweg:
         payload = qdrant_put.call_args.kwargs["json"]["points"][0]["payload"]
         assert payload["category"] == "fact"
 
+    def test_frage_wird_auch_hier_abgewiesen(self, qdrant_put):
+        """Das Tor gilt fuer jeden Weg — auch fuer die Bibliothek."""
+        import nexus
+
+        with pytest.raises(ValueError, match="abgewiesen"):
+            nexus.nexus_remember("Was muss ich jetzt machen",
+                                 collection_name="test-collection")
+        assert not qdrant_put.called
+
+    def test_zustandsmeldung_wird_auch_hier_abgewiesen(self, qdrant_put):
+        import nexus
+
+        with pytest.raises(ValueError, match="abgewiesen"):
+            nexus.nexus_remember("app neu gestartet",
+                                 collection_name="test-collection")
+        assert not qdrant_put.called
+
+    def test_gespraechsrest_wird_auch_hier_abgewiesen(self, qdrant_put):
+        """Die Bibliothek kennt keine ``entity``; dort faellt der Rest durch."""
+        import nexus
+
+        with pytest.raises(ValueError, match="abgewiesen"):
+            nexus.nexus_remember(
+                "concept: helper (role=Monitoring-Agent) — User: das "
+                "Problem ist, wenn ich den Router mit Strom gebe",
+                collection_name="test-collection",
+            )
+        assert not qdrant_put.called
+
 
 # ── 10. Zustandswert (11.11.2026) ────────────────────────────────────
 
@@ -618,7 +833,7 @@ class TestZustandswertErkennen:
     @pytest.mark.parametrize("text", [
         FAKT,
         "Was kostet der Energieausweis",
-        "Der Port steht noch nicht fest",
+        "Die Kellertuer schliesst wieder sauber",
         "Port 8",  # eine bloße Ziffer ist kein Zustandswert
     ])
     def test_ohne_zustandswert_bleibt_das_ergebnis_unveraendert(self, text):
@@ -764,11 +979,11 @@ class TestInhaltMitRueckfall:
 
     def test_inhalt_nur_im_text_kommt_in_den_block(self, tmp_path, monkeypatch):
         block = _block_mit([{"id": "nurtext", "payload": {
-            "text": "Der Heizöl-Lieferant ist Nordlicht Brennstoffe",
+            "text": "Der Heizöl-Lieferant ist Marsolek Brennstoffe",
             "category": "fact"}}],
             "Wer liefert unser Heizöl", tmp_path, monkeypatch)
 
-        assert "nordlicht" in block.lower()
+        assert "marsolek" in block.lower()
 
 
 class TestStichwortindexRueckfall:

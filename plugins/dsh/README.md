@@ -67,6 +67,8 @@ auf einem anderen Rechner anpassen muss.
 | `recallLimit` | `5` | maximale Treffer pro Turn |
 | `recallBudgetChars` | `1600` | Zeichenbudget des injizierten Blocks |
 | `recallTimeoutMs` | `4000` | danach ohne Erinnerung weiter |
+| `recallMinChars` | `30` | keine Einblendung, wenn die letzte menschliche Nachricht kürzer ist |
+| `recallMinWords` | `4` | keine Einblendung, wenn sie weniger Wörter hat |
 | `captureMinChars` / `captureMaxChars` | `12` / `1600` | Capture-Grenzen |
 | `captureSubagents` | `false` | Turns von Subagenten mitcapturen |
 

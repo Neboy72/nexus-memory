@@ -412,3 +412,25 @@ def test_archive_never_touches_facts_with_real_fact_present(monkeypatch, tmp_pat
     archive_forgetting.archive_once(store, "nexus", dry_run=False)
     assert all(d != 42_000_002 for d in store.deleted)
     assert 42_000_003 in store.deleted  # numeric-string session WAS deleted
+
+def test_store_playbook_goes_through_the_write_gate(monkeypatch):
+    """Das Traeumen schrieb als eigener Weg direkt in die Sammlung.
+
+    Seit 20.11.2026 gilt dasselbe Tor wie fuer jeden Agenten: ein Muster ohne
+    Aussage ("laeuft noch") wird abgewiesen und nichts geschrieben."""
+    from unittest.mock import MagicMock
+
+    store = MagicMock()
+    store.client = MagicMock()
+    dreamer = dreaming.Dreamer(store=store)
+
+    aufgerufen = {"n": 0}
+
+    def kein_schreiben(*a, **k):
+        aufgerufen["n"] += 1
+        return MagicMock()
+
+    monkeypatch.setattr(dreaming, "upsert_named", kein_schreiben, raising=False)
+
+    assert dreamer._store_playbook({"pattern": "laeuft noch", "verdict": ""}) is False
+    assert aufgerufen["n"] == 0, "ein abgewiesenes Muster darf die Sammlung nicht erreichen"

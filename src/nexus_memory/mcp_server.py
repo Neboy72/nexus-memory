@@ -3297,6 +3297,23 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             # Fire-and-forget: dispatch "memory.remember" to any subscribers.
             # The dispatcher swallows every error so a broken subscriber
             # cannot affect the response we return to the client.
+            # Ein abgewiesener Schreibvorgang ist eine Antwort mit Grund, kein
+            # Fehler: das Tor liefert ``{"status": "rejected", "reason": ...}``
+            # ohne ``id``. Vorher lief das in einen ``KeyError('id')`` beim
+            # Ereignis unten — der Aufrufer sah "'id'" statt "status message,
+            # not knowledge". Gemessen 20.11.2026 am MCP-Weg.
+            # Die Protokollzeile schreibt ``MemoryStore.remember`` selbst;
+            # eine zweite hier waere doppelt (siehe /write).
+            if not isinstance(result, dict) or result.get("status") == "rejected":
+                grund = result.get("reason") if isinstance(result, dict) else ""
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "rejected",
+                        "reason": grund or "rejected",
+                    }),
+                )]
+
             await dispatch_event("memory.remember", result["id"])
 
             response = result
@@ -4903,7 +4920,7 @@ def build_serve_app():
         The TypeScript plugins speak HTTP to Qdrant and used to bypass every
         check. They now send the write intent here; ``MemoryStore.remember``
         runs it through ``nexus.write_gate`` before anything is embedded or
-        stored, so the five rules hold on this path too.
+        stored, so every rule of the gate holds on this path too.
 
         Request:  {"content": "...", "category": "fact", "access_level": "...",
                    "source": "...", "source_type": "chat", "source_url": "",

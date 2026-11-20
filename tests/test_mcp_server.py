@@ -490,6 +490,29 @@ class TestCallToolRemember:
         assert body["status"] == "ok"
         assert body["category"] == "fact"
 
+    async def test_rejection_carries_its_reason(self, mcp_store):
+        """Ein abgewiesener Schreibvorgang ist eine Antwort mit Grund.
+
+        Vorher lief die Abweisung des Tors in einen ``KeyError('id')``: der
+        Aufrufer sah ``"'id'"`` statt "status message, not knowledge".
+        Gemessen 20.11.2026 am MCP-Weg.
+        """
+        out = await mcp.handle_call_tool(
+            "remember", {"text": "app neu gestartet", "category": "fact"}
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "rejected"
+        assert "status message" in body["reason"]
+
+    async def test_rejection_does_not_reach_qdrant(self, mcp_store, mock_qdrant_client):
+        out = await mcp.handle_call_tool(
+            "remember", {"text": "Was muss ich jetzt machen", "category": "fact"}
+        )
+        body = _decode(out[0].text)
+        assert body["status"] == "rejected"
+        assert "question" in body["reason"]
+        assert not mock_qdrant_client.upsert.called
+
     async def test_missing_category_coerced_to_fact(self, mcp_store):
         # Simulate an old client that doesn't send `category` at all.
         out = await mcp.handle_call_tool("remember", {"text": "x"})

@@ -21,7 +21,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,6 +36,18 @@ export const inject = ['agents', 'sessions']
 /** Same rule the service applies to a harness name (service_auth.py). */
 const AGENT_HARNESS_PATTERN = /^[a-z0-9._-]{1,64}$/
 
+/** Opt-in tracing for the capture path: NEXUS_PLUGIN_DEBUG=1. Never logs content. */
+function debugTrace(line) {
+  if (process.env.NEXUS_PLUGIN_DEBUG !== '1') return
+  try {
+    const dir = path.join(os.homedir(), '.nexus-memory', 'logs')
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(path.join(dir, 'plugin-events.log'), `${new Date().toISOString()} ${line}\n`)
+  } catch {
+    /* tracing must never break a turn */
+  }
+}
+
 export const Config = z.object({
   transport: z.string().description('http (serve daemon) or stdio (local nexus_memory package).'),
   baseUrl: z.string().description('Serve daemon base URL (default http://127.0.0.1:9122).'),
@@ -47,6 +59,8 @@ export const Config = z.object({
   recallLimit: z.number().description('How many memories to inject at most (default 5).'),
   recallBudgetChars: z.number().description('Character budget of the injected block (default 1600).'),
   recallTimeoutMs: z.number().description('Give up on recall after this many milliseconds (default 4000).'),
+  recallMinChars: z.number().description('Skip auto-recall when the last human message is shorter than this (default 30).'),
+  recallMinWords: z.number().description('Skip auto-recall when the last human message has fewer words than this (default 4).'),
   capture: z.boolean().description('Enable auto-capture (default true).'),
   captureMinChars: z.number().description('Skip turns whose human message is shorter than this (default 12).'),
   captureMaxChars: z.number().description('Maximum stored characters per captured turn (default 1600).'),
@@ -106,6 +120,19 @@ function latestHumanText(messages) {
     if (text) return text
   }
   return ''
+}
+
+/** True when a human message carries enough substance to justify a recall.
+ *
+ * Measured 20.11.2026: a bare status line ("app neu gestartet", 18 characters,
+ * 3 words) recalled five unrelated August entries with score 1.0 and 0.801 —
+ * a score threshold does not help there, only the query itself does.
+ */
+export function isSubstantialQuery(text, minChars, minWords) {
+  const trimmed = String(text ?? '').trim()
+  if (trimmed.length < minChars) return false
+  const words = trimmed.split(/\s+/).filter(Boolean)
+  return words.length >= minWords
 }
 
 /** Render recalled memories into one budgeted block, or '' when nothing fits. */
@@ -690,6 +717,8 @@ export function apply(ctx, config) {
   const recallLimit = Math.max(1, Math.min(config.recallLimit ?? 5, 20))
   const recallBudget = Math.max(200, config.recallBudgetChars ?? 1600)
   const recallTimeout = Math.max(500, config.recallTimeoutMs ?? 4000)
+  const recallMinChars = Math.max(4, config.recallMinChars ?? 30)
+  const recallMinWords = Math.max(1, config.recallMinWords ?? 4)
   const captureSubagents = config.captureSubagents === true
   const captureMinChars = config.captureMinChars ?? 12
 
@@ -703,7 +732,7 @@ export function apply(ctx, config) {
       if (!recallEnabled || payload.step !== 1) return decision
       if (decision.kind === 'reject' || payload.signal.aborted) return decision
       const query = latestHumanText(decision.messages)
-      if (query.length < 4) return decision
+      if (!isSubstantialQuery(query, recallMinChars, recallMinWords)) return decision
       let memories
       try {
         memories = await withTimeout(
@@ -737,6 +766,11 @@ export function apply(ctx, config) {
 
   ctx.on('session/event', (session, event) => {
     if (!captureEnabled) return
+    debugTrace(
+      `event=${String(event?.type)} session=${String(session?.id)} `
+      + `parent=${String(session?.header?.parentSession !== undefined)} `
+      + `dataKeys=${Object.keys(event?.data ?? {}).join(',')}`,
+    )
     const state = turns.get(session)
     switch (event.type) {
       case 'turn/start':
@@ -744,6 +778,10 @@ export function apply(ctx, config) {
         return
       case 'user/message': {
         if (!state) return
+        // Gemessen 20.11.2026 im Trace: role=user, source.kind=user. Die
+        // ursprüngliche Bedingung war also richtig; sie bleibt, damit keine
+        // Bot-Nachricht als Mensch im Speicher landet.
+        debugTrace(`user/message role=${String(event.data.role)} sourceKind=${String(event.data.source?.kind)}`)
         if (event.data.source?.kind !== 'user') return
         const text = textOf(event.data.content)
         if (text) state.user = text
@@ -758,6 +796,7 @@ export function apply(ctx, config) {
       case 'turn/end': {
         if (!state) return
         turns.delete(session)
+        debugTrace(`turn/end user=${state.user.length} assistant=${state.assistant.length}`)
         if (!captureSubagents && session.header?.parentSession !== undefined) return
         if (!state.user || !state.assistant) return
         if (state.user.trim().length < captureMinChars) return
@@ -768,7 +807,10 @@ export function apply(ctx, config) {
             user: state.user,
             assistant: state.assistant,
           })
-          .catch((error) => ctx.logger?.warn(`nexus-memory: auto-capture failed: ${String(error)}`))
+          .catch((error) => {
+            debugTrace(`capture failed: ${String(error)}`)
+            ctx.logger?.warn(`nexus-memory: auto-capture failed: ${String(error)}`)
+          })
         return
       }
       default:

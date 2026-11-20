@@ -14,6 +14,10 @@ Design rules:
 
 Env knobs:
 - NEXUS_DREAMING (default "1")           master kill-switch
+- NEXUS_DREAM_STORE (default "0")       write learned playbooks into the
+  memory store. Off by default: measured 20.11.2026, the extractor still
+  feeds text windows of long prompts as "patterns", which are not lessons.
+  The JSON file under learned-playbooks/ is written either way.
 - NEXUS_DREAMING_SOURCES (optional)      JSON list of source configs, e.g.
   [{"type": "hermes", "db": "/abs/path/state.db"},
    {"type": "jsonl", "dir": "/abs/dir"}]
@@ -40,6 +44,49 @@ MIN_TOOLCALLS = int(os.environ.get("NEXUS_DREAMING_MIN_TOOLCALLS", "5"))
 PLAYBOOK_DIR = Path(os.environ.get(
     "NEXUS_DREAMING_PLAYBOOK_DIR",
     str(Path.home() / ".nexus-memory" / "learned-playbooks")))
+
+_JA_NEIN = re.compile(r"(?i)\b(ja|nein|yes|no)\b")
+
+
+def _verdict_ist_nein(verdict: str) -> bool:
+    """Liest das erste klare Ja oder Nein aus dem Urteil.
+
+    Bis 0.22.59 wurde nur ``verdict.lower()[:12]`` geprueft. Die Antwort des
+    Modells beginnt aber meist mit "Wiederkehrendes Muster: nein", das Nein
+    steht also hinter Zeichen 12 und rutschte durch — jedes Urteil galt als
+    Muster. Jetzt zaehlt das erste Ja/Nein-Wort im ganzen Text.
+    """
+    text = str(verdict or "").lower()
+    treffer = _JA_NEIN.search(text)
+    if not treffer:
+        return True  # ohne klares Ja wird nichts gelernt
+    return treffer.group(1) in ("nein", "no")
+
+
+def _store_collection(store) -> Optional[str]:
+    """Name der Sammlung, egal wie das Speicherobjekt ihn traegt.
+
+    ``MemoryStore`` hat kein Feld ``collection`` — es haelt den Namen in
+    ``_binding.collection_name``. Das alte ``self._store.collection`` warf
+    deshalb immer einen AttributeError, der in ``_similar_known`` still
+    gefangen wurde: die Dublettenpruefung lief nie.
+    """
+    for feld in ("collection", "collection_name"):
+        wert = getattr(store, feld, None)
+        if isinstance(wert, str) and wert:
+            return wert
+    binding = getattr(store, "_binding", None)
+    if binding is not None:
+        wert = getattr(binding, "collection_name", None)
+        if isinstance(wert, str) and wert:
+            return wert
+    return None
+
+
+def _embed_sync(store, text: str) -> list:
+    """Einbettung aus dem Daemon-Thread (dort laeuft keine Schleife)."""
+    import asyncio
+    return asyncio.run(store._embedder.embed(text, is_query=False))
 
 _SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{6,}$")
 
@@ -182,7 +229,7 @@ class Dreamer:
         try:
             vec = self._store._embed([text])[0]
             qp_kwargs = {
-                "collection_name": self._store.collection,
+                "collection_name": _store_collection(self._store),
                 "query": vec,
                 "limit": 1,
             }
@@ -196,6 +243,65 @@ class Dreamer:
         except Exception as exc:
             log.info("dreaming: dedup-embed skipped (%s)", exc)
         return False
+
+    def _store_playbook(self, playbook: Dict[str, Any]) -> bool:
+        """Schreibt ein gelerntes Muster als Eintrag in den Speicher.
+
+        Bis 0.22.59 blieben Traeume Dateien auf der Platte: der Speicher wurde
+        nur gefragt, ob etwas bekannt ist, geschrieben wurde nie. Damit war das
+        Gelernte fuer niemanden auffindbar. Kategorie ``procedure``, weil es
+        Handlungswissen ist und vom Alternsaudit geschuetzt wird.
+        """
+        if self._store is None:
+            return False
+        import uuid
+        from qdrant_client.models import PointStruct
+        from nexus_memory.collection_vectors import upsert_named
+
+        muster = str(playbook.get("pattern", "")).strip()
+        urteil = str(playbook.get("verdict", "")).strip()
+        if not muster:
+            return False
+        text = f"Gelernt: {muster}" + (f" — {urteil}" if urteil else "")
+        text = " ".join(text.split())[:900]
+
+        # ── Gemeinsames Schreibtor (20.11.2026) ───────────────────────
+        # Das Traeumen schrieb als eigener Weg direkt in die Sammlung. Mit
+        # NEXUS_DREAM_STORE=0 ist der Schreibpfad abgeschaltet; sobald er
+        # wieder anschaltet wird, gilt dasselbe Tor wie fuer jeden Agenten.
+        from nexus.write_gate import prepare as _gate, last_reason as _gate_reason
+        _prepared = _gate(
+            content=text, category="procedure", access_level="private",
+            source="nexus-dreaming", source_type="dreaming",
+            provenance={"source_type": "dreaming",
+                        "created_by": "dreaming-v1"},
+        )
+        if _prepared is None:
+            log.info("dreaming: Schreibtor weist ab (%s) — Muster nicht gespeichert",
+                     _gate_reason() or "refused")
+            return False
+        text = _prepared["content"]
+
+        vec = _embed_sync(self._store, text)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        point = PointStruct(
+            id=str(uuid.uuid4()), vector=vec,
+            payload={"content": text, "text": text, "category": "procedure",
+                     "access_level": "private", "scope": "default",
+                     "source": "nexus-dreaming", "created_at": now,
+                     "lifecycle_status": "canonical", "confidence": 0.6,
+                     "provenance": {"source_type": "dreaming",
+                                    "created_by": "dreaming-v1",
+                                    "session_id": playbook.get("session_id"),
+                                    "timestamp": now}},
+        )
+        sammlung = _store_collection(self._store)
+        if not sammlung:
+            log.warning("dreaming: Sammlungsname unbekannt — Eintrag nicht geschrieben")
+            return False
+        upsert_named(self._store.client, sammlung, [point],
+                     getattr(self._store, "vector_name", None))
+        return True
 
     def dream(self, dry_run: bool = False) -> Dict[str, Any]:
         """One dreaming pass. Returns a summary dict; never raises."""
@@ -243,7 +349,7 @@ class Dreamer:
                                         llm_exc)
                             pass_error = f"llm_fn failed: {llm_exc}"[:200]
                             break
-                        if not verdict or "nein" in verdict.lower()[:12]:
+                        if _verdict_ist_nein(verdict):
                             continue
                         playbook = {"pattern": hint,
                                     "verdict": verdict[:300],
@@ -260,6 +366,18 @@ class Dreamer:
                 result["error"] = pass_error
                 return result
             if learned and not dry_run:
+                geschrieben = 0
+                if _store_enabled():
+                    for pb in learned:
+                        try:
+                            if self._store_playbook(pb):
+                                geschrieben += 1
+                        except Exception as exc:
+                            log.info("dreaming: playbook write skipped (%s)", exc)
+                else:
+                    result["store_skipped"] = (
+                        "NEXUS_DREAM_STORE=0 — Playbooks nur als Datei")
+                result["stored"] = geschrieben
                 base.mkdir(parents=True, exist_ok=True)
                 out = base / f"dream-{time.strftime('%Y%m%d-%H%M%S')}.json"
                 out.write_text(json.dumps(learned, ensure_ascii=False,
@@ -273,6 +391,17 @@ class Dreamer:
             log.warning("dreaming: pass failed (%s) — fail-open", exc)
             result["error"] = str(exc)[:200]
         return result
+
+
+def _store_enabled() -> bool:
+    """Whether learned playbooks may be written into the memory store.
+
+    Default off (NEXUS_DREAM_STORE=0). The store is only useful when the
+    extracted pattern is a real recurring lesson; until the extractor is
+    fixed it produces text slices, so the JSON file is the safer sink.
+    """
+    return str(os.environ.get("NEXUS_DREAM_STORE", "0")).strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 def dream_once(store=None, llm_fn=None, dry_run: bool = False) -> Dict[str, Any]:
