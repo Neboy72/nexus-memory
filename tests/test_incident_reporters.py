@@ -32,6 +32,19 @@ def test_dsh_plugin_only_reports_platform_failures() -> None:
     assert "error?.reason" in quelle
 
 
+def test_dsh_plugin_reads_the_harness_exit_marker() -> None:
+    """Ein Shell-Befehl mit exit 1 ist ein Fehlschlag, kein Erfolg.
+
+    Der Harness haengt `[exit code: N]` an das Werkzeug-Ergebnis; das ist sein
+    Urteil, nicht unsere Lesart des Textes. Ohne diese Regel meldete der
+    DSH-Plugin nur Werkzeugfehler und keine einzige gescheiterte Kommandozeile.
+    """
+    quelle = _text(DSH / "index.js")
+    assert "nonZeroExit" in quelle
+    assert "[exit code:" in quelle
+    assert "|null)" in quelle, "null heisst ohne Code und wird nicht geraten"
+
+
 def test_dsh_plugin_has_a_cap_and_a_switch() -> None:
     quelle = _text(DSH / "index.js")
     assert "reportPerSessionMax" in quelle

@@ -163,6 +163,42 @@ cases.push([
 ])
 
 cases.push([
+  'the harness exit marker decides, not a guess',
+  async () => {
+    const failed = incidentFromToolResult({
+      tool: 'bash',
+      message: {
+        content: [{ type: 'text', text: 'ls: nope: No such file or directory\n[exit code: 1]' }],
+      },
+      session: 's',
+    })
+    assert.ok(failed, 'exit code 1 is a failure')
+    assert.ok(failed.error.includes('No such file'), 'the error text comes along')
+
+    const ok = incidentFromToolResult({
+      tool: 'bash',
+      message: { content: [{ type: 'text', text: 'total 0\n[exit code: 0]' }] },
+      session: 's',
+    })
+    assert.equal(ok, null, 'exit code 0 is not a failure')
+
+    const ohne = incidentFromToolResult({
+      tool: 'bash',
+      message: { content: [{ type: 'text', text: 'irgendwas, ohne Marker' }] },
+      session: 's',
+    })
+    assert.equal(ohne, null, 'without the marker nothing is assumed')
+
+    const unklar = incidentFromToolResult({
+      tool: 'bash',
+      message: { content: [{ type: 'text', text: 'abgebrochen\n[exit code: null]' }] },
+      session: 's',
+    })
+    assert.equal(unklar, null, 'null means no code, not a guessed failure')
+  },
+])
+
+cases.push([
   'no tool name means no report',
   async () => {
     assert.equal(

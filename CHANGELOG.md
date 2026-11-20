@@ -1,3 +1,21 @@
+## [0.22.63] - 2026-11-20
+
+**Ein Shell-Befehl mit Exit 1 ist ein Fehlschlag, kein Erfolg.**
+
+0.22.62 liess den DSH-Plugin nur melden, was der Harness als Werkzeugfehler markiert
+(`isError` oder ein `error`-Objekt). Ein Befehl, der laeuft und mit 1 endet, ist aus
+Sicht des Harness ein gelungener Werkzeugaufruf — und damit ging die eigentliche
+Fehlerquelle des Alltags nicht ins Journal. Gemessen nach dem Neustart: eine
+gescheiterte Kommandozeile erzeugte null Meldungen.
+
+Der Harness haengt sein eigenes Urteil an: `[exit code: N]` am Ende des Ergebnisses.
+Der Reporter liest jetzt genau diesen Marker. `0` ist kein Fehlschlag; ein `null`
+(Prozess ohne Exit-Code, etwa durch ein Signal) wird nicht geraten. Vier Testfaelle
+halten die Regel fest, dazu einer, der den Marker im Quellbaum pinnt.
+
+Das OpenClaw-Paket braucht keine neue Version: sein `exec`-Ergebnis traegt `exitCode`
+als Feld, das der Reporter seit 0.22.62 schon liest.
+
 ## [0.22.62] - 2026-11-20
 
 **Jeder Harness meldet seine Fehlschlaege jetzt selbst — die Regel ist in beiden Plugins dieselbe.**
