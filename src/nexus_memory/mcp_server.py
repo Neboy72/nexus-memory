@@ -69,6 +69,10 @@ from nexus_memory import service_log
 # Rollen und Eigentum (15.11.2026): welche Stufe welches Werkzeug darf.
 from nexus_memory import roles
 
+# Die Auswahlregel des Abrufs (20.11.2026) — Kategorien und Mindestpunktzahl
+# an EINER Stelle, damit MCP und Plugins dieselbe Regel benutzen.
+from nexus_memory import recall_policy as _recall_policy
+
 # Repo-Root dynamisch ableiten (nexus/ liegt im Repo-Root)
 _NEXUS_REPO = os.path.dirname(os.path.dirname(nexus.__file__))
 NEXUS_REPO_PATH = os.environ.get("NEXUS_REPO_PATH", _NEXUS_REPO)
@@ -1707,8 +1711,27 @@ class MemoryStore:
         agent_level: str = ACCESS_PUBLIC,
         limit: int = 5,
         as_of: Optional[str] = None,
+        categories: Any = None,
+        min_score: Optional[float] = None,
+        via: str = "library",
+        actor: Any = None,
     ) -> list[dict]:
         """Search memories with hybrid search (BM25 + Vector + RRF) + access filtering.
+
+        Auswahlregel (20.11.2026), beides opt-in — ohne Angabe bleibt alles wie
+        vorher:
+
+        * ``categories`` — nur diese Kategorien (``fact``, ``rule``, ...).
+          Ein Eintrag ohne Kategorie gilt als ``fact``; ein aufgezeichneter
+          Turn gilt als ``session``. Ohne Angabe: kein Filter.
+        * ``min_score`` — Mindestpunktzahl auf der Kosinus-Skala (0..1),
+          geprueft gegen ``relevance``. Unter der Schwelle bleibt der Block
+          LEER; es wird nichts nachgefuellt. Eintraege ohne Kosinus (nur
+          woertlich gefunden) bestehen, wenn sie einen echten Worttreffer
+          haben — siehe ``nexus_memory.recall_policy``.
+
+        ``via``/``actor`` landen im Lese-Protokoll (service_log, eigene
+        Tagesdatei ``read-*.jsonl``). Sie aendern das Ergebnis nicht.
 
         Temporal Fact Validity (Unreleased): pass ``as_of`` (ISO-8601) for a
         point-in-time query. ``as_of=None`` keeps the default behavior exactly
@@ -1966,6 +1989,9 @@ class MemoryStore:
 
         # Collect internal point-ids for access-tracking (F1)
         _point_ids_for_tracking = []
+        # doc_id → Point-ID: nötig, damit nach der Auswahlregel nur die
+        # wirklich gelieferten Einträge als "erinnert" gezählt werden.
+        _point_by_doc: dict[str, str] = {}
 
         # Normalize scores relative to max score in results
         # Handles both RRF scores (0.001-0.1) and Qdrant scores (0.0-1.0)
@@ -2042,6 +2068,11 @@ class MemoryStore:
             # v0.15 (Review-Fix): dynamic_score auf max(eff) normiert → bleibt
             # garantiert in [0,1]; base-score als Tie-Breaker in der Sortierung.
             dynamic_score = round(eff / max_eff, 3)
+
+            # Vergleichbare Punktzahl (20.11.2026): Kosinus aus dem Vektorbein,
+            # sonst None. Nicht der normalisierte RRF-Wert — der ist ein Rang
+            # und gibt dem Spitzenreiter immer 1.0, auch wenn er nicht passt.
+            relevance_score = _recall_policy.relevance(r)
             
             # Determine match type
             if normalized_score > 0.7:
@@ -2107,6 +2138,19 @@ class MemoryStore:
                 "doc_id": doc_id,
                 "access_level": mem_level,
                 "category": r.get("category"),
+                # Der Dokumenttyp steht sonst nur im Payload. Die Auswahlregel
+                # braucht ihn, um einen aufgezeichneten Turn als Sitzungs-
+                # protokoll zu erkennen (recall_policy.effective_category).
+                "type": (r.get("_payload") or {}).get("type"),
+                # Vergleichbare Punktzahl (Kosinus, 0..1) neben dem RRF-Wert.
+                # Der RRF-Wert ist ein Rang und als Schwelle wertlos; hier
+                # steht die Zahl, gegen die eine Mindestpunktzahl prueft.
+                "relevance": relevance_score,
+                # Roher BM25-Wert fuer die Auswahlregel: ein woertlicher
+                # Treffer ist Evidenz, auch wenn es keinen Kosinus gibt.
+                # Interner Schluessel — der Rangwert gehoert nicht in die
+                # oeffentliche Form.
+                "_bm25": r.get("bm25_score"),
                 "confidence": round(composite_confidence, 2),
                 "confidence_label": confidence_label,
                 "evidence_count": evidence_count,
@@ -2125,6 +2169,8 @@ class MemoryStore:
             else:
                 if doc_id:
                     seen_docs.add(doc_id)
+                if doc_id and r.get("_point_id"):
+                    _point_by_doc[str(doc_id)] = str(r["_point_id"])
                 results.append(entry)
 
         # v0.15 (Review-Fix): Nach effective_score sortieren (Dynamik wirkt),
@@ -2137,6 +2183,22 @@ class MemoryStore:
                            x.get("dynamic_score", x["score"]), x["score"]),
             reverse=True,
         )
+
+        # Auswahlregel (20.11.2026), opt-in. Faellt alles durch, bleibt es
+        # LEER statt Fuellmaterial; ungueltige Angabe scheitert laut.
+        if categories is not None or min_score is not None:
+            try:
+                erlaubte = _recall_policy.normalize_categories(categories)
+                schwelle = _recall_policy.normalize_min_score(min_score)
+            except _recall_policy.RecallPolicyError as policy_err:
+                raise ValueError(str(policy_err)) from None
+            results = _recall_policy.select(results, categories=erlaubte,
+                                            min_score=schwelle)
+            if _point_by_doc:  # nur Geliefertes zaehlt als "erinnert"
+                _point_ids_for_tracking = [
+                    _point_by_doc[e.get("doc_id")] for e in results
+                    if e.get("doc_id") in _point_by_doc
+                ]
 
         # ── F1 Access-Tracking: Nutzung verstärken (set_payload, non-blocking) ──
         # Jeder ausgelieferte Treffer zählt als "erinnert" — use_count++,
@@ -2201,6 +2263,7 @@ class MemoryStore:
                 "_is_update_notice": True,
             }
 
+
         results = results[:limit]
         if notice is not None:
             # Append AFTER the slice — otherwise a full result page cut the
@@ -2208,6 +2271,23 @@ class MemoryStore:
             # 7-day void). Stamp it only when the notice is really returned.
             self._update_nudged_at = time.time()
             results.append(notice)
+
+        # ── Lese-Protokoll (20.11.2026) ─────────────────────────────────
+        # Eine Zeile je Lesevorgang, ohne Inhalt: nur Kennungen der
+        # gelieferten Eintraege und eine Pruefsumme der Anfrage. Leerer
+        # Abruf schreibt nichts (kein Rauschen ueber gescheiterte Suchen);
+        # ein Protokollfehler darf den Abruf nie scheitern lassen (fail-open).
+        _gelieferte = [str(e.get("doc_id") or e.get("id") or "")
+                       for e in results
+                       if not e.get("_is_update_notice")]
+        if _gelieferte:
+            service_log.record_read(
+                query=query,
+                hits=len(_gelieferte),
+                ids=[kennung for kennung in _gelieferte if kennung],
+                via=via,
+                actor=actor,
+            )
 
         return results
 
@@ -2697,6 +2777,29 @@ async def handle_list_tools(role: Optional[str] = None) -> list[types.Tool]:
                             "when they were valid at that date."
                         ),
                         "default": None,
+                    },
+                    "categories": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional: only these categories (fact, rule, preference, "
+                            "belief, session, entity-free). Omit = no category filter "
+                            "(unchanged behavior). An entry without a category counts "
+                            "as 'fact'; a recorded turn counts as 'session'."
+                        ),
+                        "default": None,
+                    },
+                    "min_score": {
+                        "type": "number",
+                        "description": (
+                            "Optional: minimum relevance (cosine, 0..1). Entries below "
+                            "it are dropped; if nothing passes, the result is EMPTY. "
+                            "This is not the RRF rank — see the 'relevance' field of "
+                            "each result. Omit = no threshold."
+                        ),
+                        "default": None,
+                        "minimum": 0.0,
+                        "maximum": 1.0,
                     },
                 },
                 "required": ["query"],
@@ -3392,8 +3495,14 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                     }),
                 )]
 
+            # Auswahlregel (20.11.2026): Kategorien und Mindestpunktzahl,
+            # opt-in. Beides wird im Dienst angewandt, nicht hier — der
+            # Handler reicht nur durch (eine Regel, eine Stelle).
             results = await store.recall(
-                query, agent_level=filter_level, limit=limit, as_of=as_of
+                query, agent_level=filter_level, limit=limit, as_of=as_of,
+                categories=arguments.get("categories"),
+                min_score=arguments.get("min_score"),
+                via="mcp", actor=_request_agent_id(),
             )
             return [types.TextContent(
                 type="text",

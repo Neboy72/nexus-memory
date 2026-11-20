@@ -179,18 +179,18 @@ def test_h409_ui_hint_defaults_match_the_code():
     """H409 is a false alarm: every uiHints default claim is accurate.
 
     qdrantUrl → DEFAULT_QDRANT_URL, collection → DEFAULT_COLLECTION,
-    maxRecallResults → toClampedInt(..., 10, 1, 20) default 10, and the ollama
+    maxRecallResults → toClampedInt(..., 3, 1, 20) default 3, and the ollama
     baseUrl note matches PROVIDER_DEFAULTS in lib/embedder.ts.
     """
     config = CONFIG_TS.read_text(encoding="utf-8")
     assert 'export const DEFAULT_QDRANT_URL = "http://localhost:6333"' in config
     assert 'export const DEFAULT_COLLECTION = "nexus"' in config
-    assert "toClampedInt(cfg.maxRecallResults, 10, 1, 20)" in config
+    assert "toClampedInt(cfg.maxRecallResults, 3, 1, 20)" in config
 
     hints = _json(PLUGIN_MANIFEST)["uiHints"]
     assert "http://localhost:6333" in hints["qdrantUrl"]["help"]
     assert "'nexus'" in hints["collection"]["help"]
-    assert hints["maxRecallResults"]["placeholder"] == "10"
+    assert hints["maxRecallResults"]["placeholder"] == "3"
     assert "http://localhost:11434" in hints["embedding.baseUrl"]["help"]
 
     embedder = (CONFIG_TS.parent / "embedder.ts").read_text(encoding="utf-8")

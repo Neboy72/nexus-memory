@@ -147,7 +147,26 @@ def _env_int(name: str, default: int, minimum: int | None = None) -> int:
     return value
 
 
-MAX_RESULTS = _env_int("NEXUS_MAX_RECALL", 5, minimum=1)
+def _env_float(name: str, default: float) -> float:
+    """Eine Bruchzahl aus der Umgebung, defensiv gelesen (H242-Muster)."""
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+MAX_RESULTS = _env_int("NEXUS_MAX_RECALL", 3, minimum=1)
+# Auswahlregel (20.11.2026) — Voreinstellung wie im Dienst: Wissen statt
+# Protokolle, und nur was die Mindestpunktzahl haelt.
+# ``NEXUS_RECALL_CATEGORIES=""`` schaltet den Kategorienfilter ab.
+MIN_SCORE = _env_float("NEXUS_RECALL_MIN_SCORE", 0.35)
+CATEGORIES = tuple(
+    teil.strip().lower()
+    for teil in (os.getenv("NEXUS_RECALL_CATEGORIES", "fact,rule,preference") or "").split(",")
+    if teil.strip()
+)
+# Zeichenbudget des eingespeisten Blocks (Voreinstellung: drei Eintraege, 800).
+MAX_CONTEXT_CHARS = _env_int("NEXUS_RECALL_BUDGET", 800, minimum=120)
 AGENTS_FILE = Path.home() / ".nexus-memory" / "agents.json"
 
 # Access counting for the shared agent registry. This hook reads Qdrant
@@ -385,6 +404,28 @@ def get_embedding(text: str, input_type: str = "query") -> list:
     # Fallback: no embedding, skip recall
     return None
 
+# ── Auswahlregel (20.11.2026) ──────────────────────────────────────────
+# Dieser Hook sucht DIREKT in Qdrant (nur die Einbettung kommt vom Dienst) und
+# kann das Paket ``nexus_memory`` nicht importieren: er laeuft unter dem
+# System-Python der App. Die Regel steht deshalb hier noch einmal — und ein
+# Test (tests/test_claude_code_recall_policy.py) haelt sie gegen die
+# verbindliche Fassung in ``src/nexus_memory/recall_policy.py``. Eine
+# Doppelung mit Waechter ist besser als zwei Regeln, die auseinanderlaufen.
+def effective_category(payload: dict) -> str:
+    """Kategorie wie im Dienst: Turn = session, ohne Kategorie = fact."""
+    if not isinstance(payload, dict):
+        return "fact"
+    if str(payload.get("type") or "").strip().lower() == "turn":
+        return "session"
+    return str(payload.get("category") or "").strip().lower() or "fact"
+
+
+def passes_categories(payload: dict, categories) -> bool:
+    if not categories:
+        return True
+    return effective_category(payload) in set(categories)
+
+
 def search_qdrant(query_embedding: list, limit: int = 5) -> list:
     """Search Qdrant for relevant memories, filtered by trust level.
 
@@ -405,7 +446,10 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
         "vector": _vector_body(query_embedding),
         "limit": fetch_n,
         "with_payload": True,
-        "score_threshold": 0.3,
+        # Kosinus-Schwelle des Dienstes (20.11.2026). Qdrant vergleicht hier
+        # die Kosinus-Aehnlichkeit — dieselbe Zahl, gegen die auch
+        # ``recall_policy`` prueft, nicht der normalisierte RRF-Rang.
+        "score_threshold": MIN_SCORE,
         "filter": _get_trust_filter()
     }).encode()
     req = urllib.request.Request(
@@ -449,6 +493,10 @@ def search_qdrant(query_embedding: list, limit: int = 5) -> list:
         # Geltungsbereich (15.11.2026): fremde Protokolle bleiben draussen —
         # zweite, unabhaengige Pruefung hinter dem Qdrant-Filter.
         if bundle is not None and not _scope_auto.scope_visible(payload, bundle):
+            continue
+        # Kategorienfilter: derselbe wie im Dienst. Ohne ihn kamen Entities
+        # und halbe Sprachsaetze mit (Anlass vom 20.11.2026).
+        if not passes_categories(payload, CATEGORIES):
             continue
         if allowed_scopes is not None:
             p_scope = (payload.get("scope") or "default").strip().lower() or "default"
@@ -626,13 +674,21 @@ def main():
 
     # Build context block
     memories = []
+    budget_used = 0
     for hit in results:
         payload = hit.get("payload") or {}
         text = point_text(payload)
         category = payload.get("category", "fact")
         score = hit.get("score", 0)
-        if text and score > 0.3:
-            memories.append(f"[{category}] (score: {score:.2f}) {text[:200]}")
+        if not text or score <= MIN_SCORE:
+            continue
+        if not passes_categories(payload, CATEGORIES):
+            continue
+        zeile = f"[{category}] (score: {score:.2f}) {text[:200]}"
+        if budget_used + len(zeile) > MAX_CONTEXT_CHARS:
+            break
+        budget_used += len(zeile) + 2
+        memories.append(zeile)
 
     # Graph-boost: add 1-hop neighbors from top 3 vector hits (max 5 to prevent context bloat)
     # NOTE (Nr 440): graph hops are now scope-filtered like vector hits (same
@@ -643,6 +699,9 @@ def main():
         results, max_boost=3, access_level=trust_level, query_embedding=embedding
     )[:5]
     for gi in graph_items:
+        if budget_used + len(gi) > MAX_CONTEXT_CHARS:
+            break
+        budget_used += len(gi) + 2
         memories.append(gi)
 
     if not memories:

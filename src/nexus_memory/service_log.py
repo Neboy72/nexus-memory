@@ -82,8 +82,19 @@ LOG_DIR_ENV = "NEXUS_LOG_DIR"
 FILE_PREFIX = "service-"
 FILE_SUFFIX = ".jsonl"
 
+#: Lesevorgaenge stehen in einer EIGENEN Tagesdatei (20.11.2026). Eine Suche
+#: ist keine Aenderung; sie gehoert nicht in dieselbe Kette wie "wer hat was
+#: geschrieben", und sie ist um Groessenordnungen haeufiger.
+READ_FILE_PREFIX = "read-"
+
 #: Eine Zeile darf so lang werden — mehr ist kein Protokolleintrag mehr.
 MAX_LINE_CHARS = 400
+#: Lesezeilen tragen die Kennungen der gelieferten Eintraege; eine Grenze von
+#: 20 Treffern mal 36 Zeichen Kennung braucht mehr Platz als eine Schreibzeile.
+READ_MAX_LINE_CHARS = 1200
+#: So viele Kennungen stehen hoechstens in einer Lesezeile (die Ausgabegrenze
+#: des Abrufs ist 20).
+READ_MAX_IDS = 20
 #: Laenge des Themas. Kurz genug, um nichts wiederzugeben.
 TOPIC_MAX_CHARS = 40
 #: Ausnahmetyp und erste Meldungszeile bei ``error``.
@@ -105,6 +116,9 @@ ACTIONS = frozenset({
     # Melden statt Ueberschreiben (15.11.2026): die Meldung haengt am Eintrag,
     # die Entscheidung darueber ebenfalls — beides bekommt eine Zeile.
     "report", "resolve_report",
+    # Lesen (20.11.2026): eigene Tagesdatei, eigene Zeilenform. Bis hierhin
+    # gab es nur einen Zaehler, keine Spur davon, WAS geliefert wurde.
+    "read",
 })
 RESULTS = frozenset({"ok", "refused", "failed"})
 VIAS = frozenset({
@@ -158,12 +172,14 @@ def _today() -> date:
 def _file_day(path: Path) -> Optional[date]:
     """Tag einer Tagesdatei — aus dem Namen, sonst aus der Aenderungszeit."""
     name = path.name
-    if name.startswith(FILE_PREFIX) and name.endswith(FILE_SUFFIX):
-        stem = name[len(FILE_PREFIX):-len(FILE_SUFFIX)]
-        try:
-            return datetime.strptime(stem, "%Y-%m-%d").date()
-        except ValueError:
-            pass
+    for praefix in (FILE_PREFIX, READ_FILE_PREFIX):
+        if name.startswith(praefix) and name.endswith(FILE_SUFFIX):
+            stem = name[len(praefix):-len(FILE_SUFFIX)]
+            try:
+                return datetime.strptime(stem, "%Y-%m-%d").date()
+            except ValueError:
+                pass
+            break
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).date()
     except OSError:
@@ -349,32 +365,45 @@ def _dumps(entry: dict) -> str:
     return json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
 
 
-def _fit(entry: dict) -> str:
-    """Eine Zeile, die ``MAX_LINE_CHARS`` nicht ueberschreitet.
+def _fit(entry: dict, max_chars: int = MAX_LINE_CHARS) -> str:
+    """Eine Zeile, die ``max_chars`` nicht ueberschreitet.
 
     Gekuerzt wird in dieser Reihenfolge: ``detail``, ``reason``, ``topic``,
     ``scope``, ``target_id``, ``actor`` — das Nebensaechlichste zuerst. Die
     Pflichtfelder bleiben unangetastet, damit die Zeile lesbar und gueltiges
     JSON bleibt.
+
+    Lesezeilen tragen statt Text eine Liste von Kennungen; dort wird die
+    LISTE von hinten gekuerzt (die ersten Treffer sind die, die der Agent
+    gesehen hat), nicht ein Textfeld abgeschnitten — eine halbe Kennung waere
+    keine Kennung mehr.
     """
+    if isinstance(entry.get("ids"), list):
+        while len(_dumps(entry)) > max_chars and len(entry["ids"]) > 1:
+            entry["ids"].pop()
+        if len(_dumps(entry)) > max_chars and len(entry["ids"]) == 1:
+            entry["ids"] = []
     line = _dumps(entry)
     for key in ("detail", "reason", "topic", "scope", "target_id", "actor_label",
                 "actor"):
-        if len(line) <= MAX_LINE_CHARS:
+        if len(line) <= max_chars:
             break
         value = entry.get(key)
         if not value:
             continue
-        excess = len(line) - MAX_LINE_CHARS
+        excess = len(line) - max_chars
         keep = max(0, len(str(value)) - excess)
         entry[key] = str(value)[:keep] or None
         line = _dumps(entry)
-    if len(line) > MAX_LINE_CHARS:  # Pflichtfelder allein sind weit darunter
+    if len(line) > max_chars:  # Pflichtfelder allein sind weit darunter
         # ``prev`` und die Pruefsummen gehoeren zur Pflicht: ohne ``prev``
-        # waere die Zeile nicht mehr Teil der Kette.
-        entry = {key: entry.get(key) for key in
-                 ("ts", "actor", "action", "result", "via", "key", "prev",
-                  "before_hash", "after_hash")
+        # waere die Zeile nicht mehr Teil der Kette. ``hits``/``ids`` bleiben
+        # bei einer Lesezeile stehen — ohne sie waere die Zeile inhaltslos.
+        pflicht = ("ts", "actor", "action", "result", "via", "key", "prev",
+                   "before_hash", "after_hash")
+        if entry.get("action") == "read":
+            pflicht += ("actor_label", "hits", "ids", "query_hash")
+        entry = {key: entry.get(key) for key in pflicht
                  if entry.get(key) is not None}
         line = _dumps(entry)
     return line
@@ -389,7 +418,10 @@ def _rotate(directory: Path, today: Optional[date] = None) -> int:
     cutoff = day - timedelta(days=RETENTION_DAYS)
     removed = 0
     try:
+        # Beide Tagesdateien (Aenderungen und Lesen) — dieselbe Frist, kein
+        # eigener Wert fuer das Leseprotokoll.
         candidates = list(directory.glob(f"{FILE_PREFIX}*{FILE_SUFFIX}"))
+        candidates += list(directory.glob(f"{READ_FILE_PREFIX}*{FILE_SUFFIX}"))
     except OSError as exc:
         print(f"nexus service_log: Rotation uebersprungen: {exc}", file=sys.stderr)
         return 0
@@ -448,15 +480,20 @@ def _last_prev(path: Path) -> str:
     return GENESIS
 
 
-def _append(entry: dict) -> str:
-    """Eine fertige Zeile anhaengen — mit ``prev`` aus der Datei davor."""
+def _append(entry: dict, prefix: str = FILE_PREFIX,
+            max_chars: int = MAX_LINE_CHARS) -> str:
+    """Eine fertige Zeile anhaengen — mit ``prev`` aus DER Datei, in die sie geht.
+
+    Die Kette gilt je Datei: Aenderungen und Lesevorgaenge liegen in
+    getrennten Tagesdateien und haben deshalb getrennte Ketten.
+    """
     directory = log_dir()
     with _lock:
         directory.mkdir(parents=True, exist_ok=True)
         _rotate_once_per_day(directory)
-        path = directory / f"{FILE_PREFIX}{_today().isoformat()}{FILE_SUFFIX}"
+        path = directory / f"{prefix}{_today().isoformat()}{FILE_SUFFIX}"
         entry["prev"] = _last_prev(path)
-        line = _fit(entry)
+        line = _fit(entry, max_chars)
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
             handle.flush()
@@ -506,6 +543,59 @@ def record(action: str, result: str = "ok", *, text: Any = "",
         return entry
     except Exception as exc:  # noqa: BLE001 — fail-open ist hier die Regel
         print(f"nexus service_log: Protokoll nicht geschrieben "
+              f"({type(exc).__name__}: {exc})", file=sys.stderr)
+        return None
+
+
+def record_read(*, query: Any = "", hits: Any = 0, ids: Any = None,
+                via: str = "library", actor: Any = None) -> Optional[dict]:
+    """Einen LESE-Vorgang protokollieren — fail-open, wirft nie (20.11.2026).
+
+    Bis hierhin gab es nur einen Zaehler: wie oft gelesen wurde, nicht was
+    geliefert wurde. Damit liess sich weder nachvollziehen, warum ein Agent
+    Unsinn erinnert hat, noch, ob ein Eintrag ueberhaupt je ausgeliefert
+    wurde.
+
+    Die Zeile traegt NUR: ``ts``, ``actor``, ``actor_label``, ``action:
+    "read"``, ``hits`` (Anzahl gelieferter Eintraege), ``ids`` (deren
+    Kennungen), ``via``, ``key`` und ``query_hash`` — die Pruefsumme der
+    Anfrage. Kein Inhalt, kein Klartext der Anfrage: eine Suche ist oft
+    selbst schon die private Angabe ("Rechnung von Dr. X").
+
+    Ein LEERER Abruf schreibt keine Zeile: "nichts gefunden" ist kein
+    Vorgang, und ein Protokoll voller Nullen verdeckt die echten Treffer.
+    """
+    try:
+        if "read" not in ACTIONS:
+            raise ValueError("Aktion 'read' nicht erlaubt")
+        kennungen = []
+        for kennung in (ids or []):
+            text = str(kennung or "").strip()
+            if text:
+                kennungen.append(text)
+        if not kennungen:
+            return None
+        entry: dict = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "actor": _actor(actor, via, "read")[:64],
+        }
+        label = _actor_label(entry["actor"])
+        if label:
+            entry["actor_label"] = label
+        entry["action"] = "read"
+        entry["hits"] = int(hits) if isinstance(hits, (int, float)) else len(kennungen)
+        entry["ids"] = kennungen[:READ_MAX_IDS]
+        anfrage = _WHITESPACE.sub(" ", str(query or "")).strip().lower()
+        if anfrage:
+            entry["query_hash"] = _hash16(anfrage)
+        entry["via"] = via if via in VIAS else "library"
+        key_kind = service_auth.request_key_kind()
+        if key_kind:
+            entry["key"] = key_kind
+        _append(entry, prefix=READ_FILE_PREFIX, max_chars=READ_MAX_LINE_CHARS)
+        return entry
+    except Exception as exc:  # noqa: BLE001 — fail-open ist hier die Regel
+        print(f"nexus service_log: Lesezeile nicht geschrieben "
               f"({type(exc).__name__}: {exc})", file=sys.stderr)
         return None
 

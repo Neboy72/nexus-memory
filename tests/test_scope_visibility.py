@@ -363,6 +363,10 @@ def _prefetch_result(prov) -> str:
 class TestVorauswahl:
     def test_fremdes_protokoll_steht_nicht_im_block(self, monkeypatch):
         monkeypatch.setenv("NEXUS_AGENT_ID", "deepseek-harness")
+        # 20.11.2026: Der Vorlauf laesst Sitzungsprotokolle standardmaessig
+        # draussen. Dieser Test prueft die SICHTBARKEITSREGEL (eigenes
+        # Protokoll ja, fremdes nein) — dafuer muss die Kategorieauswahl aus.
+        monkeypatch.setenv("NEXUS_PREFETCH_CATEGORIES", "")
         prov, _ = _prefetch_provider(monkeypatch, [
             _Point("a", {"content": "gemeinsamer Fakt zur Arbeit", "category": "fact",
                          "scope": _SHARED}),

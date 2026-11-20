@@ -67,7 +67,7 @@
     },
     "maxRecallResults": {
       "label": "Max Recall Results",
-      "placeholder": "10",
+      "placeholder": "3",
       "help": "Maximum memories injected into context per turn",
       "advanced": true
     },
@@ -132,6 +132,24 @@
     "reportIncidents": {
       "label": "Report failed tool calls",
       "help": "Sends failed tool calls (with the error text, no prompt content) to the local Nexus service so its nightly learner can find recurring problems. Turn off to keep this harness out of that journal."
+    },
+    "recallCategories": {
+      "label": "Recall Categories",
+      "placeholder": "fact, rule, preference",
+      "help": "Only these categories are auto-recalled. Leave empty to filter nothing. Session logs and entity labels stay out by default.",
+      "advanced": true
+    },
+    "recallMinScore": {
+      "label": "Minimum Recall Score",
+      "placeholder": "0.35",
+      "help": "Minimum cosine similarity (0..1) for auto-recall. Lower = more, but less relevant. 0 disables the threshold.",
+      "advanced": true
+    },
+    "recallBudgetChars": {
+      "label": "Recall Character Budget",
+      "placeholder": "800",
+      "help": "Character budget of the injected memory block.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -191,7 +209,7 @@
         "type": "number",
         "minimum": 1,
         "maximum": 20,
-        "default": 10
+        "default": 3
       },
       "accessLevel": {
         "type": "string",
@@ -300,6 +318,29 @@
         "type": "boolean",
         "default": true,
         "description": "Report failed tool calls to the Nexus service (POST /events) so the nightly learner sees them. Default true; off means the store learns nothing from this harness."
+      },
+      "recallCategories": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [
+          "fact",
+          "rule",
+          "preference"
+        ]
+      },
+      "recallMinScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "default": 0.35
+      },
+      "recallBudgetChars": {
+        "type": "number",
+        "minimum": 120,
+        "maximum": 12000,
+        "default": 800
       }
     },
     "required": []

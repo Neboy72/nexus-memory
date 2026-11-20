@@ -1362,6 +1362,13 @@ class HybridRetriever:
 
         lex_weight = self._lexical_weight(bm25_hits)
         lex_scores: dict[str, float] = {}
+        # Roh-Punktzahlen der beiden Beine, getrennt vom Fusionswert
+        # (20.11.2026). Der RRF-Wert ist ein Rang und taugt nicht als
+        # Aehnlichkeitsschwelle; die Kosinus-Zahl des Vektorbeins ist ueber
+        # Fragen hinweg vergleichbar und wird deshalb mitgefuehrt, statt in
+        # der Fusion zu verschwinden. Die Auswahlregel (recall_policy) liest
+        # sie dort, wo sie entschieden wird.
+        vector_scores: dict[str, float] = {}
 
         for hit in bm25_hits + vector_hits:
             doc_id = hit["id"]
@@ -1370,6 +1377,10 @@ class HybridRetriever:
             scores[doc_id] += weight / (RRF_K + rank)
             if hit.get("method") == "bm25":
                 lex_scores[doc_id] = max(lex_scores.get(doc_id, 0.0), self._hit_score(hit))
+            else:
+                _vorher = vector_scores.get(doc_id)
+                _wert = self._hit_score(hit)
+                vector_scores[doc_id] = _wert if _vorher is None else max(_vorher, _wert)
             methods[doc_id].add(hit["method"])
             payload = hit.get("payload")
             if isinstance(payload, dict) and doc_id not in hit_payloads:
@@ -1407,6 +1418,12 @@ class HybridRetriever:
                 ts = payload.get("created_at") or payload.get("timestamp")
                 if ts:
                     item["timestamp"] = ts
+            # Roh-Evidenz je Bein (siehe oben): Kosinus bleibt Kosinus, BM25
+            # bleibt BM25 — keine Umrechnung, keine Schein-Aehnlichkeit.
+            if doc_id in vector_scores:
+                item["vector_score"] = vector_scores[doc_id]
+            if doc_id in lex_scores:
+                item["bm25_score"] = lex_scores[doc_id]
             items.append(item)
         return items
 

@@ -56,8 +56,15 @@ export const Config = z.object({
   accessLevel: z.string().description('public | trusted | private; used for reads and writes (default private).'),
   captureCategory: z.string().description('Memory category for captured turns (default session).'),
   recall: z.boolean().description('Enable auto-recall (default true).'),
-  recallLimit: z.number().description('How many memories to inject at most (default 5).'),
-  recallBudgetChars: z.number().description('Character budget of the injected block (default 1600).'),
+  recallLimit: z.number().description('How many memories to inject at most (default 3).'),
+  recallBudgetChars: z.number().description('Character budget of the injected block (default 800).'),
+  recallFilter: z.boolean().description('Apply the recall selection rule (default true: categories + min score).'),
+  recallCategories: z
+    .array(z.string())
+    .description("Categories auto-recall may use (default ['fact','rule','preference']). Empty array = no filter."),
+  recallMinScore: z
+    .number()
+    .description('Minimum relevance (cosine 0..1) for auto-recall (default 0.35). 0 = no threshold.'),
   recallTimeoutMs: z.number().description('Give up on recall after this many milliseconds (default 4000).'),
   recallMinChars: z.number().description('Skip auto-recall when the last human message is shorter than this (default 30).'),
   recallMinWords: z.number().description('Skip auto-recall when the last human message has fewer words than this (default 4).'),
@@ -500,10 +507,20 @@ class HttpStore {
     return response.json().catch(() => ({}))
   }
 
-  async recall(query, limit, signal) {
+  async recall(query, limit, signal, options = {}) {
     const payload = await this.callTool(
       'recall',
-      { query, limit, filter_level: this.accessLevel },
+      {
+        query,
+        limit,
+        filter_level: this.accessLevel,
+        // Auswahlregel im Dienst (20.11.2026). Fehlt der Wert, verhaelt sich
+        // der Dienst wie vorher — die Voreinstellung ist Sache des Plugins.
+        ...(options.categories ? { categories: options.categories } : {}),
+        ...(options.minScore !== null && options.minScore !== undefined
+          ? { min_score: options.minScore }
+          : {}),
+      },
       { signal, timeoutMs: REQUEST_TIMEOUT_MS },
     )
     const results = Array.isArray(payload) ? payload : (payload?.results ?? [])
@@ -511,6 +528,7 @@ class HttpStore {
       id: String(item.id ?? ''),
       text: String(item.text ?? ''),
       score: Number(item.score ?? 0),
+      relevance: item.relevance === null || item.relevance === undefined ? null : Number(item.relevance),
       category: String(item.category ?? ''),
       source: String(item.source ?? ''),
       created_at: String(item.created_at ?? ''),
@@ -662,8 +680,19 @@ class StdioStore {
     return this.request('warmup', {}, { timeoutMs: 120_000, signal })
   }
 
-  async recall(query, limit, signal) {
-    const results = await this.request('recall', { query, limit }, { timeoutMs: REQUEST_TIMEOUT_MS, signal })
+  async recall(query, limit, signal, options = {}) {
+    const results = await this.request(
+      'recall',
+      {
+        query,
+        limit,
+        ...(options.categories ? { categories: options.categories } : {}),
+        ...(options.minScore !== null && options.minScore !== undefined
+          ? { min_score: options.minScore }
+          : {}),
+      },
+      { timeoutMs: REQUEST_TIMEOUT_MS, signal },
+    )
     return Array.isArray(results) ? results : []
   }
 
@@ -785,8 +814,17 @@ export function apply(ctx, config) {
 
   const recallEnabled = config.recall !== false
   const captureEnabled = config.capture !== false
-  const recallLimit = Math.max(1, Math.min(config.recallLimit ?? 5, 20))
-  const recallBudget = Math.max(200, config.recallBudgetChars ?? 1600)
+  // Voreinstellung seit 20.11.2026: drei Eintraege, 800 Zeichen. Gemessen:
+  // fuenf Eintraege brachten im Schnitt zwei bis drei ohne Bezug mit.
+  const recallLimit = Math.max(1, Math.min(config.recallLimit ?? 3, 20))
+  const recallBudget = Math.max(120, config.recallBudgetChars ?? 800)
+  // Die Auswahlregel gilt im Dienst (recall_policy); das Plugin reicht nur
+  // die Schalter durch. `recallFilter: false` schaltet beides ab.
+  const recallFilter = config.recallFilter !== false
+  const recallCategories = recallFilter
+    ? (config.recallCategories ?? ['fact', 'rule', 'preference'])
+    : null
+  const recallMinScore = recallFilter ? (config.recallMinScore ?? 0.35) : null
   const recallTimeout = Math.max(500, config.recallTimeoutMs ?? 4000)
   const recallMinChars = Math.max(4, config.recallMinChars ?? 30)
   const recallMinWords = Math.max(1, config.recallMinWords ?? 4)
@@ -810,7 +848,10 @@ export function apply(ctx, config) {
       let memories
       try {
         memories = await withTimeout(
-          store.recall(query, recallLimit, payload.signal),
+          store.recall(query, recallLimit, payload.signal, {
+            categories: recallCategories,
+            minScore: recallMinScore,
+          }),
           recallTimeout,
           payload.signal,
         )

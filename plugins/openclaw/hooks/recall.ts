@@ -49,6 +49,9 @@ const CATEGORY_TEXT_CAP: Record<string, number> = {
 }
 const DEFAULT_TEXT_CAP = 1200
 const TOTAL_BLOCK_CAP = 12000
+// Zeichenbudget des Memory-Teils (20.11.2026): drei Eintraege, 800 Zeichen.
+// Vorgabe aus config.ts (recallBudgetChars), hier nur der Rueckfall.
+const DEFAULT_MEMORY_BUDGET = 800
 
 function textCapFor(category?: string): number {
   // Object.hasOwn is not the point here: `category` comes from an unvalidated
@@ -59,6 +62,28 @@ function textCapFor(category?: string): number {
   return typeof cap === "number" ? cap : DEFAULT_TEXT_CAP
 }
 
+/**
+ * Auswahlregel des Auto-Recall (20.11.2026) — Spiegel der verbindlichen
+ * Fassung in ``src/nexus_memory/recall_policy.py``. Der Dienst entscheidet;
+ * OpenClaw liest Qdrant direkt und muss dieselbe Regel hier anwenden. Der
+ * Test ``plugins/openclaw/test-recall-policy.mjs`` haelt beide Fassungen
+ * gegen dieselbe Falltabelle.
+ */
+export function effectiveCategory(item: { category?: string; type?: string }): string {
+  if (String(item.type ?? "").toLowerCase() === "turn") return "session"
+  return String(item.category ?? "").trim().toLowerCase() || "fact"
+}
+
+export function passesRecallRule(
+  item: SearchResult,
+  categories: readonly string[],
+  minScore: number,
+): boolean {
+  if (categories.length > 0 && !categories.includes(effectiveCategory(item))) return false
+  if (minScore > 0 && typeof item.score === "number" && item.score < minScore) return false
+  return true
+}
+
 function truncateAtWordBoundary(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text
   let cut = maxLen
@@ -67,7 +92,7 @@ function truncateAtWordBoundary(text: string, maxLen: number): string {
   return text.slice(0, cut) + " [...]"
 }
 
-function formatMemories(results: SearchResult[], maxResults: number): string | null {
+function formatMemories(results: SearchResult[], maxResults: number, memoryBudget = DEFAULT_MEMORY_BUDGET): string | null {
   if (results.length === 0) return null
 
   // Per-memory cap first, applied after neutralizing a stored closing tag.
@@ -99,7 +124,9 @@ function formatMemories(results: SearchResult[], maxResults: number): string | n
 
     const section = `## Relevant Memories (with relevance %)\n${lines.join("\n")}`
     block = `<nexus-context>\n${intro}\n\n${section}\n\n${disclaimer}\n</nexus-context>`
-    if (block.length <= TOTAL_BLOCK_CAP) break
+    // Zwei Deckel: der Memory-Teil haelt das Budget (800), der ganze Block
+    // bleibt unter der harten Obergrenze.
+    if (section.length <= memoryBudget && block.length <= TOTAL_BLOCK_CAP) break
     keep--
   }
 
@@ -329,12 +356,22 @@ export function buildRecallHandler(
           log.warn("scope_auto: prefetch inference failed — fail-open", err)
         }
       }
-      const gated = allowed
+      const scopeGated = allowed
         ? results.filter((r) => {
             const s = (r.scope || "default").trim().toLowerCase() || "default"
             return allowed!.has(s)
           })
         : results
+
+      // Auswahlregel: Kategorien und Mindestpunktzahl. Ohne diesen Schritt
+      // kamen Entities und Sitzungsprotokolle mit in den Kontext.
+      const gated = scopeGated.filter((r) =>
+        passesRecallRule(
+          r,
+          cfg.recallCategories ?? ["fact", "rule", "preference"],
+          cfg.recallMinScore ?? 0.35,
+        ),
+      )
 
       // Graph-boost: add 1-hop neighbors from top 3 vector hits
       const graphItems = (await graphBoost(
@@ -367,7 +404,11 @@ export function buildRecallHandler(
 
       // Budget guard: the cap is cfg.maxRecallResults — NOT plus graphItems,
       // which made the slice a no-op and let graph items exceed the budget.
-      const memoryContext = formatMemories(allItems, cfg.maxRecallResults)
+      const memoryContext = formatMemories(
+        allItems,
+        cfg.maxRecallResults,
+        cfg.recallBudgetChars ?? 800,
+      )
 
       if (!memoryContext) {
         log.info("nexus: no memories to inject")

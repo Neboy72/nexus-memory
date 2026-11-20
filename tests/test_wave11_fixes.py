@@ -351,7 +351,11 @@ class TestH7FailClosed:
         seen = {}
 
         class _Store:
-            async def recall(self, query, agent_level=None, limit=5, as_of=None):
+            # 20.11.2026: die Auswahlregel (Kategorien, Mindestpunktzahl) und
+            # die Protokoll-Angaben kommen als weitere Schluessel dazu; dieser
+            # Test prueft nur die Stufen-Decke, nicht die Auswahl.
+            async def recall(self, query, agent_level=None, limit=5, as_of=None,
+                             **_kwargs):
                 seen["level"] = agent_level
                 return []
 

@@ -787,7 +787,10 @@ class TestReadPaths:
         assert "trusted note" not in block
         assert "legacy note" not in block  # missing level counts as private
 
-    def test_prefetch_in_a_private_room_is_unchanged(self):
+    def test_prefetch_in_a_private_room_is_unchanged(self, monkeypatch):
+        # 20.11.2026: der Vorlauf spielt standardmaessig drei Eintraege ein.
+        # Dieser Test prueft, welche Stufen ankommen — nicht wie viele.
+        monkeypatch.setenv("NEXUS_PREFETCH_RESULTS", "10")
         p = _read_provider(shared=False)
 
         p._do_prefetch("wallbox")
@@ -796,7 +799,10 @@ class TestReadPaths:
         for text in ("public note", "trusted note", "private note", "legacy note"):
             assert text in block
 
-    def test_prefetch_with_an_undetermined_room_is_unchanged(self):
+    def test_prefetch_with_an_undetermined_room_is_unchanged(self, monkeypatch):
+        # 20.11.2026: der Vorlauf spielt standardmaessig drei Eintraege ein.
+        # Dieser Test prueft, welche Stufen ankommen — nicht wie viele.
+        monkeypatch.setenv("NEXUS_PREFETCH_RESULTS", "10")
         p = _read_provider(shared=None)
 
         p._do_prefetch("wallbox")
