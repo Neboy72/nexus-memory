@@ -7,7 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from nexus_memory import dreaming, archive_forgetting
+from nexus_memory import dreaming, archive_forgetting, events
+
+
+@pytest.fixture(autouse=True)
+def _leeres_journal(monkeypatch, tmp_path):
+    """Kein Test liest das echte Ereignis-Journal des Rechners."""
+    monkeypatch.setenv("NEXUS_EVENT_DIR", str(tmp_path / "events"))
+    monkeypatch.delenv("NEXUS_DREAMING_SOURCES", raising=False)
+    monkeypatch.delenv("NEXUS_DREAMING_JOURNAL", raising=False)
 
 
 class FakeStore:
@@ -159,9 +167,148 @@ def test_dream_no_delete_invariant(monkeypatch, tmp_path):
     assert "error" not in out or out["error"] is None
 
 
-def test_hint_regex_finds_lehre():
-    m = dreaming._HINT_RE.search("Das war der Fix: erst Replik, dann Push")
-    assert m is not None
+# ── 0.22.61: Lehren nur aus strukturellen Fehlschlägen ────────────
+# Das alte Träumen suchte Fehlerwörter im Text und legte ein 160-Zeichen-
+# Fenster als "Muster" ab. Diese Tests halten fest, was stattdessen gilt.
+
+def _tool_zeile(exit_code=1, output="", error=None, hint=None, tool="terminal"):
+    inhalt = {"output": output, "exit_code": exit_code, "error": error}
+    if hint:
+        inhalt["hint"] = hint
+    return (tool, json.dumps(inhalt))
+
+
+def _db_mit_sitzungen(tmp_path, eintraege):
+    """eintraege: Liste (session_id, [ (tool, content) ... ])"""
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE sessions (id TEXT, started_at REAL, "
+                 "message_count INT, tool_call_count INT, ended_at REAL)")
+    conn.execute("CREATE TABLE messages (session_id TEXT, role TEXT, "
+                 "tool_name TEXT, content TEXT, timestamp REAL)")
+    now = time.time()
+    for i, (sid, werkzeuge) in enumerate(eintraege):
+        conn.execute("INSERT INTO sessions VALUES (?, ?, 9, 6, ?)",
+                     (sid, now - 7200 - i, now - 3600))
+        for j, (tool, content) in enumerate(werkzeuge):
+            conn.execute("INSERT INTO messages VALUES (?, 'tool', ?, ?, ?)",
+                         (sid, tool, content, now - 3600 + j))
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_fehlerwort_im_erfolg_ist_kein_fall():
+    """Ein Fehlerwort in einer erfolgreichen Ausgabe zählt nicht.
+
+    Genau daran scheiterte die alte Fassung: sie las "error" aus einem
+    Logfile-Auszug und hielt den Fetzen für eine Lehre.
+    """
+    _, inhalt = _tool_zeile(exit_code=0,
+                            output="grep-treffer: ModuleNotFoundError: No module named 'requests'")
+    fehler, _, _ = dreaming._outcome(inhalt)
+    assert fehler is False
+
+
+def test_fehlerklasse_und_signatur():
+    assert dreaming._signatur(
+        "terminal",
+        "Traceback ...\nModuleNotFoundError: No module named 'requests'") == \
+        "terminal:ModuleNotFoundError:requests"
+    assert dreaming._signatur("terminal", "Exit 124: timed out after 300s") == \
+        "terminal:Timeout"
+    # Unbekannte Fehler bekommen keinen Namen und werden nicht gelernt.
+    assert dreaming._signatur("terminal", "irgendwas ist kaputt") is None
+
+
+def test_regelblockade_der_umgebung_ist_keine_lehre():
+    _, inhalt = _tool_zeile(error="THINK-GATE: write blockiert")
+    fehler, text, _ = dreaming._outcome(inhalt)
+    assert fehler is True
+    assert dreaming._signatur("write_file", text) is None
+
+
+def test_einmalig_wird_nicht_gelernt(monkeypatch, tmp_path):
+    """Wiederkehr ist eine Zählung, kein Modellurteil."""
+    db = _db_mit_sitzungen(tmp_path, [
+        ("s1", [_tool_zeile(output="ModuleNotFoundError: No module named 'requests'")]),
+    ])
+    monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
+                       json.dumps([{"type": "hermes", "db": str(db)}]))
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    monkeypatch.setattr(dreaming, "RELEARN_DAYS", 30.0)
+    out = dreaming.dream_once(dry_run=True)
+    assert out["incidents"] == 1 and out["recurring"] == 0
+    assert out["patterns"] == 0 and not out.get("would_store")
+
+
+def test_wiederkehrend_wird_als_lehre_gebaut(monkeypatch, tmp_path):
+    hint = ("Python cannot import 'requests'. Activate the project venv "
+            "or run the script with the venv interpreter.")
+    eintrag = _tool_zeile(output="ModuleNotFoundError: No module named 'requests'",
+                          hint=hint)
+    db = _db_mit_sitzungen(tmp_path, [("s1", [eintrag]), ("s2", [eintrag])])
+    monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
+                       json.dumps([{"type": "hermes", "db": str(db)}]))
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    monkeypatch.setattr(dreaming, "RELEARN_DAYS", 30.0)
+    out = dreaming.dream_once(dry_run=True)
+    assert out["recurring"] == 1
+    lehre = out["would_store"][0]
+    assert "2 Sitzungen" in lehre
+    assert "ModuleNotFoundError" in lehre and "requests" in lehre
+    assert "project venv" in lehre
+    # Kein Rohtext: kein Traceback, kein Dateipfad, kein Zeilenumbruch.
+    assert "Traceback" not in lehre and "\n" not in lehre
+
+
+def test_programmierfehler_ohne_hint_wird_nicht_gelehrt():
+    sig = "execute_code:KeyError:'output'"
+    assert dreaming._ist_lehrreich(sig, "") is False
+    # Mit Hinweis der Umgebung dagegen schon: der erklärt etwas über die Welt.
+    assert dreaming._ist_lehrreich(sig, "Tool-Ergebnisse sind dicts, kein json.loads") is True
+
+
+def test_hint_der_nur_weiterverweist_zaehlt_nicht():
+    """Ein Verweis auf die Fortsetzung erklärt nichts über die Welt."""
+    assert dreaming._ist_lehrreich(
+        "execute_code:KeyError:'x'", "Use offset=81 to continue reading") is False
+    # Timeout ohne Namen ist Rauschen, mit Namen (Paket, Code) ist es eine Lehre.
+    assert dreaming._ist_lehrreich("terminal:Timeout", "") is False
+    assert dreaming._ist_lehrreich("terminal:HTTPError:400", "") is True
+
+
+def test_zweiter_lauf_lernt_dieselbe_stoerung_nicht_nochmal(monkeypatch, tmp_path):
+    eintrag = _tool_zeile(output="ModuleNotFoundError: No module named 'websocket'")
+    db = _db_mit_sitzungen(tmp_path, [("s1", [eintrag]), ("s2", [eintrag])])
+    monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
+                       json.dumps([{"type": "hermes", "db": str(db)}]))
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    monkeypatch.setattr(dreaming, "RELEARN_DAYS", 30.0)
+    monkeypatch.setenv("NEXUS_DREAM_STORE", "0")
+    erst = dreaming.dream_once(dry_run=False)
+    assert erst["patterns"] == 1 and erst["stored"] == 0
+    assert erst.get("store_skipped")
+    (datei,) = (tmp_path / "pb").glob("dream-*.json")
+    assert "websocket" in datei.read_text(encoding="utf-8")
+    # Zweiter Lauf am selben Tag: dieselbe Störung nicht noch einmal.
+    zweit = dreaming.dream_once(dry_run=False)
+    assert zweit["recurring"] == 1 and zweit["patterns"] == 0
+
+
+def test_lange_eingabe_zerfaellt_nicht_in_fenster(monkeypatch, tmp_path):
+    """Der Fehler vom 20.11.: eine lange Cron-Anweisung wurde in
+    Textfenster zerlegt und jedes Fenster als Lehre gespeichert."""
+    lang = "fix " * 400 + " ModuleNotFoundError: No module named 'requests' " + " gotcha " * 300
+    db = _db_mit_sitzungen(tmp_path, [
+        ("s1", [("terminal", json.dumps({"output": lang, "exit_code": 0}))]),
+        ("s2", [("terminal", json.dumps({"output": lang, "exit_code": 0}))]),
+    ])
+    monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
+                       json.dumps([{"type": "hermes", "db": str(db)}]))
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    out = dreaming.dream_once(dry_run=True)
+    assert out["incidents"] == 0 and out["patterns"] == 0
 
 
 # ── archive_forgetting ────────────────────────────────────────────
@@ -314,94 +461,48 @@ def test_archive_real_backup_check_blocks_delete(monkeypatch, tmp_path):
 
 
 def test_dream_writes_playbook_and_commits_marker(monkeypatch, tmp_path):
-    # Review gap: the real product (dream-*.json + marker) was never
-    # exercised — every old test ran dry_run=True.
-    db = tmp_path / "state.db"
-    conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE sessions (id TEXT, started_at REAL, "
-                 "message_count INT, tool_call_count INT, ended_at REAL)")
-    now = time.time()
-    conn.execute("INSERT INTO sessions VALUES ('20260925_150000_fix99', ?, 9, 6, ?)",
-                 (now - 7200, now - 3600))
-    conn.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
-    conn.execute("INSERT INTO messages VALUES ('20260925_150000_fix99', 'Beim nightly deploy gab es wieder denselben timeout im health-check, fix war ein retry und ein gotcha im cron.')")
-    conn.commit()
-    conn.close()
+    """Der echte Lauf: Datei entsteht, Marker wird erst danach gesetzt."""
+    eintrag = ("terminal",
+               json.dumps({"output": "ModuleNotFoundError: No module named 'requests'",
+                           "exit_code": 1, "error": None,
+                           "hint": "Wrong interpreter: use the project venv."}))
+    db = _db_mit_sitzungen(tmp_path, [("s1", [eintrag]), ("s2", [eintrag])])
     monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
                        json.dumps([{"type": "hermes", "db": str(db)}]))
     monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    monkeypatch.setattr(dreaming, "RELEARN_DAYS", 30.0)
+    monkeypatch.setenv("NEXUS_DREAM_STORE", "0")
 
-    def fake_llm(prompt):
-        return "ja: Nachts immer derselbe Fehler, dann Neustart. Aktion: wachen."
-
-    out = dreaming.dream_once(store=None, llm_fn=fake_llm, dry_run=False)
-    # The snippet regex yields two candidates from the message text.
-    assert out["patterns"] == 2 and out["playbooks"] == 1
-    files = list((tmp_path / "pb").glob("dream-*.json"))
-    assert len(files) == 1
-    body = json.loads(files[0].read_text(encoding="utf-8"))
-    assert body[0]["verdict"].startswith("ja:")
-    assert body[0]["session_id"] == "20260925_150000_fix99"
-    # Marker committed after success → second run is silent.
+    out = dreaming.dream_once(store=None, dry_run=False)
+    assert out["patterns"] == 1 and out["stored"] == 0
+    (datei,) = (tmp_path / "pb").glob("dream-*.json")
+    koerper = json.loads(datei.read_text(encoding="utf-8"))
+    assert koerper[0]["signature"] == "terminal:ModuleNotFoundError:requests"
+    assert koerper[0]["sessions"] == 2
+    # Marker nach erfolgreichem Lauf → zweiter Lauf sieht keine neue Sitzung.
     marker = (tmp_path / "pb" / ".dreaming-last-run").read_text(encoding="utf-8")
-    assert "20260925_150000_fix99" in marker
-    out2 = dreaming.dream_once(store=None, llm_fn=fake_llm, dry_run=False)
-    assert out2.get("new_sessions", 0) == 0
+    assert "s1" in marker and "s2" in marker
+    out2 = dreaming.dream_once(store=None, dry_run=False)
+    assert out2["new_sessions"] == 0
 
 
-def test_dream_llm_failure_keeps_sessions_learnable(monkeypatch, tmp_path):
-    # Review fix v0.22.1: LLM down mid-pass → abort WITHOUT marker commit;
-    # sessions must stay learnable for the next pass.
+def test_dream_ohne_messages_tabelle_bricht_nicht_ab(monkeypatch, tmp_path):
+    """Eine Sitzung ohne lesbare Nachrichten darf den Lauf nicht kippen."""
     db = tmp_path / "state.db"
     conn = sqlite3.connect(db)
     conn.execute("CREATE TABLE sessions (id TEXT, started_at REAL, "
                  "message_count INT, tool_call_count INT, ended_at REAL)")
     now = time.time()
-    conn.execute("INSERT INTO sessions VALUES ('20260925_160000_blast', ?, 5, 6, ?)",
+    conn.execute("INSERT INTO sessions VALUES ('s1', ?, 9, 6, ?)",
                  (now - 7200, now - 3600))
-    conn.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
-    conn.execute("INSERT INTO messages VALUES ('20260925_160000_blast', 'Beim nightly deploy gab es wieder denselben timeout im health-check, fix war ein retry und ein gotcha im cron.')")
     conn.commit()
     conn.close()
     monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
                        json.dumps([{"type": "hermes", "db": str(db)}]))
     monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
-
-    def boom(prompt):
-        raise RuntimeError("fuel station closed")
-
-    out = dreaming.dream_once(store=None, llm_fn=boom, dry_run=False)
-    assert "error" in out and out["patterns"] == 0
-    assert not list((tmp_path / "pb").glob("dream-*.json"))
-    marker = tmp_path / "pb" / ".dreaming-last-run"
-    assert not marker.exists()
-    # Next pass (LLM back) must see the session as fresh again.
-    out2 = dreaming.dream_once(store=None, llm_fn=lambda p: "ja: Muster. Aktion: wachen.",
-                               dry_run=False)
-    assert out2.get("new_sessions", 0) == 1 and out2["patterns"] == 2
-
-
-def test_dream_llm_verdict_nein_blocks_pattern(monkeypatch, tmp_path):
-    # Review gap: the ja/nein verdict gate had zero coverage — a typo in the
-    # string check would let everything through unnoticed.
-    db = tmp_path / "state.db"
-    conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE sessions (id TEXT, started_at REAL, "
-                 "message_count INT, tool_call_count INT, ended_at REAL)")
-    now = time.time()
-    conn.execute("INSERT INTO sessions VALUES ('20260925_170000_nein', ?, 3, 6, ?)",
-                 (now - 7200, now - 3600))
-    conn.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
-    conn.execute("INSERT INTO messages VALUES ('20260925_170000_nein', 'Beim nightly deploy gab es wieder denselben timeout im health-check, fix war ein retry und ein gotcha im cron.')")
-    conn.commit()
-    conn.close()
-    monkeypatch.setenv("NEXUS_DREAMING_SOURCES",
-                       json.dumps([{"type": "hermes", "db": str(db)}]))
-    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
-    out = dreaming.dream_once(
-        store=None, llm_fn=lambda p: "nein, kein Muster erkennbar", dry_run=False)
-    assert out["patterns"] == 0
-    assert not list((tmp_path / "pb").glob("dream-*.json"))
+    out = dreaming.dream_once(dry_run=True)
+    assert out["sessions_scanned"] == 1 and out["patterns"] == 0
+    assert "error" not in out
 
 
 def test_archive_never_touches_facts_with_real_fact_present(monkeypatch, tmp_path):
@@ -434,3 +535,100 @@ def test_store_playbook_goes_through_the_write_gate(monkeypatch):
 
     assert dreamer._store_playbook({"pattern": "laeuft noch", "verdict": ""}) is False
     assert aufgerufen["n"] == 0, "ein abgewiesenes Muster darf die Sammlung nicht erreichen"
+
+
+# ── 0.22.61: neutrale Quelle statt Hermes-Datenbank ───────────────
+
+def test_journal_ist_die_quelle_ohne_fremde_datenbank(monkeypatch, tmp_path):
+    """Zwei Meldungen aus zwei Sitzungen = eine Lehre, ohne Hermes."""
+    from nexus_memory import events as journal
+    journal.record(agent="hermes", tool="terminal", ok=False,
+                   error="ModuleNotFoundError: No module named 'requests'",
+                   hint="Falscher Interpreter: venv nutzen.", session="s1")
+    journal.record(agent="dsh", tool="terminal", ok=False,
+                   error="ModuleNotFoundError: No module named 'requests'",
+                   hint="Falscher Interpreter: venv nutzen.", session="s2")
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    out = dreaming.dream_once(dry_run=True)
+    assert out["events_scanned"] == 2
+    assert out["recurring"] == 1
+    assert "2 Sitzungen" in out["would_store"][0]
+
+
+def test_gleiche_sitzung_zweimal_ist_keine_wiederkehr(monkeypatch, tmp_path):
+    from nexus_memory import events as journal
+    for _ in range(3):
+        journal.record(agent="hermes", tool="terminal", ok=False,
+                       error="Exit 124: timed out after 300s", session="s1")
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    out = dreaming.dream_once(dry_run=True)
+    assert out["events_scanned"] == 3 and out["recurring"] == 0
+
+
+def test_meldung_ohne_sitzung_zaehlt_nur_einmal(monkeypatch, tmp_path):
+    """Ohne Sitzungskennung lieber nichts lernen als Wiederkehr erfinden."""
+    from nexus_memory import events as journal
+    for _ in range(2):
+        journal.record(agent="openclaw", tool="terminal", ok=False,
+                       error="ModuleNotFoundError: No module named 'websocket'")
+    monkeypatch.setattr(dreaming, "PLAYBOOK_DIR", tmp_path / "pb")
+    out = dreaming.dream_once(dry_run=True)
+    assert out["events_scanned"] == 2 and out["recurring"] == 0
+
+
+def test_journal_kappt_lange_texte():
+    from nexus_memory import events as journal
+    eintrag = journal.normalisieren({"tool": "terminal", "error": "x" * 9000,
+                                     "hint": "y" * 2000})
+    assert len(eintrag["error"]) == journal.MAX_FEHLERTEXT
+    assert len(eintrag["hint"]) == journal.MAX_HINT
+
+
+def test_journal_ohne_werkzeug_wird_nicht_geschrieben():
+    from nexus_memory import events as journal
+    assert journal.normalisieren({"error": "irgendwas"}) is None
+    assert journal.write_many([{"tool": ""}]) == 0
+
+
+def test_kaputte_journalzeile_bricht_das_lesen_nicht():
+    from nexus_memory import events as journal
+    journal.record(agent="hermes", tool="terminal", ok=False,
+                   error="Exit 124: timed out after 300s")
+    pfad = journal.journal_path()
+    with open(pfad, "a", encoding="utf-8") as fh:
+        fh.write("kein json\n")
+    assert len(list(journal.iter_events())) == 1
+
+
+def test_dublettenpruefung_laeuft_wirklich(monkeypatch):
+    """Der Dedup-Aufruf war jahrelang kaputt: ``_embed`` ist async und nimmt
+    einen Text, nicht eine Liste. Der Coroutine-Aufruf flog im except, die
+    Prüfung lief nie. Dieser Test fährt den echten Pfad."""
+    import asyncio
+
+    class _Embedder:
+        def __init__(self):
+            self.gesehen = []
+
+        async def embed(self, text, is_query=False):
+            self.gesehen.append(text)
+            return [0.1, 0.2]
+
+    class _Store:
+        def __init__(self, score):
+            self.collection = "nexus"
+            self._embedder = _Embedder()
+            self.client = self
+            self._score = score
+
+        def query_points(self, collection_name=None, query=None, limit=1,
+                         using=None, **kw):
+            assert query == [0.1, 0.2], f"Vektor falsch: {query!r}"
+            punkte = [type("H", (), {"score": self._score})]
+            return type("R", (), {"points": punkte})
+
+    store = _Store(0.95)
+    dreamer = dreaming.Dreamer(store=store)
+    assert dreamer._similar_known("irgendein Merksatz") is True
+    assert store._embedder.gesehen == ["irgendein Merksatz"]
+    assert dreaming.Dreamer(store=_Store(0.5))._similar_known("neu") is False
