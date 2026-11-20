@@ -104,3 +104,15 @@ unified memory.
 - **nexus_recall** — Search past memories, facts, and context
 - **nexus_remember** — Store a memory for future recall
 - **nexus_forget** — Delete a memory by ID
+
+## Failed tool calls, reported at session end (0.22.64)
+
+The nightly learning in Nexus reads no harness session store. Instead every
+agent reports its own failed tool calls to `POST /events`, and Nexus decides
+what becomes a lesson. This provider does that at the end of a session: it
+takes the tool results Hermes itself marked as failed (`exit_code != 0` or a
+set `error`), and sends tool name, error text and session id — never the
+conversation.
+
+`NEXUS_REPORT_INCIDENTS=0` turns it off. If the service is not reachable, the
+report is skipped silently; a session end never waits on it.

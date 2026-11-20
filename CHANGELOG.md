@@ -1,3 +1,31 @@
+## [0.22.64] - 2026-11-20
+
+**Alle vier Wege melden jetzt: Claude Code und Hermes schliessen die Luecke.**
+
+0.22.62 hat DSH und OpenClaw angeschlossen, 0.22.63 den Exit-Code eines Befehls
+richtig gelesen. Offen waren die beiden anderen Wege, und damit war "universal"
+noch nicht erreicht: nur die Haelfte der Agenten lieferte Vorfaelle.
+
+- **Hermes:** `on_session_end` meldet die gescheiterten Werkzeugaufrufe der
+  Sitzung (`exit_code != 0` oder gesetzter `error`) an `POST /events`. Neues
+  Modul `plugins/memory/nexus/incident_report.py`, reine Funktion zum Bauen der
+  Zeilen plus Melder. Kein Cron, kein Zeitplan: der Harness meldet ueber sich
+  selbst, am Ende seiner eigenen Sitzung.
+- **Claude Code:** neuer `Stop`-Hook `scripts/report_incidents.py`. Er liest das
+  Transkript der Sitzung und nimmt die Werkzeug-Ergebnisse, die der Harness
+  selbst mit `is_error` markiert hat. Kein Raten aus Text, kein zweiter
+  Zeitplan.
+
+Beide senden Werkzeugname, Fehlertext (gekappt auf 2000 Zeichen), Hinweis der
+Umgebung und die Sitzungskennung; kein Gespraechsinhalt. Beide sind
+abschaltbar (`NEXUS_REPORT_INCIDENTS=0`) und beide scheitern still: eine
+Meldestelle, die schweigt, darf kein Sitzungsende kippen.
+
+Sechs neue Tests: die Umwandlung aus Hermes-Nachrichten und aus einem
+Claude-Code-Transkript, der Schalter, die Hook-Registrierung, und zwei
+Rundlaeufe gegen einen winzigen lokalen Dienst, die Pfad, Schluessel und
+Koerper pruefen. 14 Tests in dieser Datei, die Gesamtsuite bleibt gruen.
+
 ## [0.22.63] - 2026-11-20
 
 **Ein Shell-Befehl mit Exit 1 ist ein Fehlschlag, kein Erfolg.**
