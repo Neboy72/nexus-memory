@@ -914,8 +914,46 @@ def _memory_injection_score(text: str) -> int:
         return 0
 
 # Tool schemas (OpenAI function-calling format)
+# ── Auswahlregel (20.11.2026) ──────────────────────────────────────────
+# Verbindlich ist ``nexus_memory.recall_policy``; der Dienst und alle Wege
+# benutzen dieselbe Funktion. Diese zwei Helfer sind nur die Umgebungs-
+# Auswertung fuer den VORLAUF (Auto-Recall) — ein ausdruecklicher
+# ``nexus_recall`` entscheidet ueber seine Parameter, nicht ueber die Umgebung.
+def _prefetch_recall_rule() -> tuple:
+    """(Kategorien, Mindestpunktzahl) des Auto-Recall-Vorlaufs."""
+    roh = os.environ.get("NEXUS_PREFETCH_CATEGORIES", "fact,rule,preference")
+    cats = tuple(t.strip().lower() for t in roh.split(",") if t.strip())
+    try:
+        mind = float(os.environ.get("NEXUS_PREFETCH_MIN_SCORE", "0.35"))
+    except ValueError:
+        mind = 0.35
+    return cats, max(0.0, min(1.0, mind))
+
+
+def _recall_rule_passes(payload: dict, score, categories, min_score) -> bool:
+    """Wendet die verbindliche Regel auf einen Qdrant-Treffer an (fail-open)."""
+    if not categories and not min_score:
+        return True
+    try:
+        from nexus_memory import recall_policy as _rp
+    except Exception:  # pragma: no cover - Altinstallation ohne das Modul
+        return True
+    item = {
+        "category": (payload or {}).get("category"),
+        "type": (payload or {}).get("type"),
+        "vector_score": score if isinstance(score, (int, float)) else None,
+    }
+    try:
+        return _rp.passes(item, categories=categories or None,
+                          min_score=min_score or None)
+    except _rp.RecallPolicyError:
+        return True
+
+
 RECALL_SCHEMA = {"name": "nexus_recall", "description": "Search Nexus Memory for relevant past memories, facts, or context.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for."}, "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
-                  "as_of": {"type": "string", "description": "Point-in-time: YYYY-MM-DD - only memories created on/before this date.", "default": ""}}, "required": ["query"]}}
+                  "as_of": {"type": "string", "description": "Point-in-time: YYYY-MM-DD - only memories created on/before this date.", "default": ""},
+                  "categories": {"type": "array", "items": {"type": "string"}, "description": "Only these categories (fact, rule, preference, ...). Omit = no category filter.", "default": None},
+                  "min_score": {"type": "number", "description": "Minimum relevance (cosine 0..1). Entries below it are dropped; if nothing passes, the result is empty. Omit = no threshold.", "default": None}}, "required": ["query"]}}
 REMEMBER_SCHEMA = {"name": "nexus_remember", "description": "Store a memory in Nexus Memory for future recall across all agents.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The memory content to store."}, "category": {"type": "string", "description": "Memory category: fact, belief, session, rule, preference, temp.", "default": "fact"}, "access_level": {"type": "string", "description": "Visibility: public, trusted, private.", "default": "private"}, "source": {"type": "string", "description": "Where this memory came from.", "default": ""}, "source_url": {"type": "string", "description": "URL for verification (optional).", "default": ""}, "confidence": {"type": "number", "description": "Confidence score 0.0-1.0.", "default": 0.7}, "salience": {"type": "number", "description": "Importance 0.0-1.0. >= 0.8 is immune to decay. Default: depends on category."}, "rule_proof": {"type": "string", "description": "Only for category 'rule': the token a HUMAN generated with 'rule-confirm \"<text>\"' at a terminal (valid 10 minutes, single use, bound to that text). Without it a rule write is stored as 'fact'.", "default": ""}}, "required": ["text"]}}
 FORGET_SCHEMA = {"name": "nexus_forget", "description": "Delete a memory from Nexus Memory by ID.", "parameters": {"type": "object", "properties": {"memory_id": {"type": "string", "description": "The memory ID to delete."}}, "required": ["memory_id"]}}
 GUARDRAIL_CHECK_SCHEMA = {"name": "nexus_guardrail_check", "description": "Active Guardrails: Check if an action is safe before executing it. Queries Nexus Memory for protection rules. Use before destructive operations (a recursive delete, a table drop, a process kill, an overwrite).", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command string to check (e.g. a recursive delete of a project directory)"}, "tool_name": {"type": "string", "description": "The tool being called (e.g. 'terminal', 'write_file')", "default": ""}, "tool_input": {"type": "object", "description": "Full tool input dict for path-based checks", "default": {}}}, "required": ["command"]}}
@@ -2894,7 +2932,15 @@ class NexusMemoryProvider:
             if getattr(self, "_shutting_down", False):
                 self._clear_prefetch_result()
                 return
-            budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "2400"))
+            # Budget und Auswahlregel des Vorlaufs (20.11.2026): drei
+            # Eintraege, 800 Zeichen, nur fact/rule/preference ueber der
+            # Kosinus-Schwelle. Vorher: 2400 Zeichen ohne Filter.
+            budget = int(os.environ.get("NEXUS_PREFETCH_CHARS", "800"))
+            _p_cats, _p_min = _prefetch_recall_rule()
+            try:
+                _p_max_items = max(1, int(os.environ.get("NEXUS_PREFETCH_RESULTS", "3")))
+            except ValueError:
+                _p_max_items = 3
             # Geltungsbereich (15.11.2026): der eingespielte Block traegt, was
             # gemeinsam ist ('default'), was im EIGENEN Verbund liegt, und den
             # Altbestand ohne ``scope``-Feld. Fremde Protokolle bleiben draussen
@@ -2928,8 +2974,9 @@ class NexusMemoryProvider:
             toks = _query_tokens(query)
             total = 0
             items: List[str] = []
+            kept = 0
             for p in pts:
-                if total >= budget:
+                if total >= budget or kept >= _p_max_items:
                     break
                 pl = p.payload or {}; text = _point_text(pl)
                 # Stub-Filter (10.11.2026): entity/concept-Etiketten wie
@@ -2954,6 +3001,9 @@ class NexusMemoryProvider:
                 # fuer die Stichwortliste (FTS5/BM25), die keinen Filter traegt.
                 if not _scope_visible(pl, bundle):
                     continue
+                # Auswahlregel des Vorlaufs: dieselbe Funktion wie im Dienst.
+                if not _recall_rule_passes(pl, p.score, _p_cats, _p_min):
+                    continue
                 if text:
                     item = f"[{pl.get('category','fact')}] score={p.score or 0:.2f}: " \
                        f"{_fenster(text, toks, 400)}"
@@ -2964,6 +3014,7 @@ class NexusMemoryProvider:
                         item = item[: budget - total].rstrip() + " …"
                     items.append(item)
                     total += len(item)
+                    kept += 1
             # Graph-boost: add 1-hop neighbors from top 3 vector hits
             graph_items = self._graph_boost(pts, max_boost=3, max_depth=2)
             for gi in graph_items:
@@ -3218,7 +3269,8 @@ class NexusMemoryProvider:
         except Exception:
             pass
 
-    def _recall(self, query: str, limit: int = 5, as_of: str = "") -> List[Dict[str, Any]]:
+    def _recall(self, query: str, limit: int = 5, as_of: str = "",
+                categories=None, min_score=None) -> List[Dict[str, Any]]:
         """Roadmap 4.5: as_of='YYYY-MM-DD' limits recall to memories
         created on/before that date (point-in-time view). Empty = no filter."""
         if not self._embedder or not self._qdrant:
@@ -3331,6 +3383,11 @@ class NexusMemoryProvider:
             # Roadmap 4.5: point-in-time - skip memories newer than as_of
             if as_of and (pl.get("created_at") or "")[:10] > as_of:
                 continue
+            # Auswahlregel (20.11.2026): Kategorien und Mindestpunktzahl,
+            # beide opt-in. Angewandt VOR dem Trefferaufbau, damit die
+            # Ausgabegrenze nur zaehlt, was auch durchkommt.
+            if not _recall_rule_passes(pl, p.score, categories, min_score):
+                continue
             pid = pl.get("id") or str(p.id)
             # H209: seen_ids was populated but never read, so duplicate recall
             # results were not actually filtered. Use it for dedup.
@@ -3344,7 +3401,12 @@ class NexusMemoryProvider:
                                  pl.get("access_count", 0) or 0,
                                  (pl.get("lifecycle_status") or "canonical")))
             results.append({"id": pid, "text": _point_text(pl)[:2000],
-                            "score": round(float(p.score or 0.0), 3), "source": pl.get("source"),
+                            "score": round(float(p.score or 0.0), 3),
+                            # Vergleichbare Punktzahl (Kosinus) — die Zahl,
+                            # gegen die eine Mindestpunktzahl prueft.
+                            "relevance": round(float(p.score or 0.0), 3),
+                            "type": pl.get("type"),
+                            "source": pl.get("source"),
                             "source_url": pl.get("source_url"), "access_level": pl.get("access_level"),
                             "category": pl.get("category", "fact"),
                             "confidence": (pl.get("provenance") or {}).get("confidence"),
@@ -3675,7 +3737,9 @@ class NexusMemoryProvider:
         try:
             if tool_name == "nexus_recall":
                 result = self._recall(args.get("query", ""), args.get("limit", 5),
-                                      as_of=args.get("as_of", ""))
+                                      as_of=args.get("as_of", ""),
+                                      categories=args.get("categories"),
+                                      min_score=args.get("min_score"))
             elif tool_name == "nexus_remember":
                 # v0.15 (review fix, CRITICAL): actually pass salience/confidence/
                 # source_url through — the tool schema promises them, and they

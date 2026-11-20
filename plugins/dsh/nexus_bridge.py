@@ -47,7 +47,6 @@ ACCESS_LEVEL = os.environ.get("NEXUS_PLUGIN_ACCESS_LEVEL", "private").strip() or
 CAPTURE_CATEGORY = os.environ.get("NEXUS_PLUGIN_CAPTURE_CATEGORY", "session").strip() or "session"
 CAPTURE_MAX_CHARS = int(os.environ.get("NEXUS_PLUGIN_CAPTURE_MAX_CHARS", "1600"))
 CAPTURE_MIN_CHARS = int(os.environ.get("NEXUS_PLUGIN_CAPTURE_MIN_CHARS", "12"))
-RECALL_MIN_SCORE = float(os.environ.get("NEXUS_PLUGIN_RECALL_MIN_SCORE", "0.35"))
 QDRANT_URL = f"http://{os.environ.get('NEXUS_QDRANT_HOST', '127.0.0.1')}:{os.environ.get('NEXUS_QDRANT_PORT', '6333')}/healthz"
 OLLAMA_URL = os.environ.get("NEXUS_OLLAMA_URL", "http://127.0.0.1:11434") + "/api/tags"
 LOG_DIR = Path(os.environ.get("NEXUS_PLUGIN_LOG_DIR", "") or Path.home() / ".nexus-memory" / "logs")
@@ -166,13 +165,21 @@ class Bridge:
             if len(query) < 2:
                 return []
             limit = max(1, min(int(request.get("limit", 5)), 20))
+            # Auswahlregel (20.11.2026): Kategorien und Mindestpunktzahl
+            # entscheidet der DIENST, nicht der Bridge. Die alte Schwelle
+            # hier (RECALL_MIN_SCORE auf dem auf den Spitzenreiter
+            # normalisierten Wert) konnte nie greifen: der erste Treffer hat
+            # immer 1.0, der fuenfte selten unter 0.35 — sie war Zierde.
             async with self._lock:
-                results = await self.store().recall(query, agent_level=ACCESS_LEVEL, limit=limit)
+                results = await self.store().recall(
+                    query, agent_level=ACCESS_LEVEL, limit=limit,
+                    categories=request.get("categories"),
+                    min_score=request.get("min_score"),
+                    via="plugin", actor=request.get("actor"),
+                )
             memories = []
             for item in results:
                 score = float(item.get("score") or 0.0)
-                if score < RECALL_MIN_SCORE:
-                    continue
                 memories.append(
                     {
                         "id": str(item.get("id", "")),
@@ -183,6 +190,9 @@ class Bridge:
                         "created_at": str(item.get("created_at", "")),
                         "access_level": str(item.get("access_level", "")),
                         "verification": str(item.get("verification", "")),
+                        # Vergleichbare Punktzahl (Kosinus) — die Zahl, gegen
+                        # die eine Mindestpunktzahl prueft.
+                        "relevance": item.get("relevance"),
                     }
                 )
             return memories

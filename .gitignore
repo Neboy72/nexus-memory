@@ -53,3 +53,4 @@ plugins/dsh/node_modules/
 # dasselbe Prinzip wie bei Zugangsdaten.
 benchmarks/messlatte-faelle.json
 benchmarks/paraphrase-faelle.json
+benchmarks/.messdaten/

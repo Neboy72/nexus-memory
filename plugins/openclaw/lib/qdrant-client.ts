@@ -14,6 +14,10 @@ export type SearchResult = {
   created_at: string
   /** Project/agent area label (unreleased). Missing → 'default'. */
   scope?: string
+  /** Punkttyp aus dem Payload ("memory", "turn", "entity", ...). Die
+   *  Auswahlregel braucht ihn: ein Turn ist ein Sitzungsprotokoll, keine
+   *  Tatsache — die Kategorie allein sagt das nicht. */
+  type?: string
 }
 
 /**
@@ -674,6 +678,7 @@ export class QdrantClient {
       source: (r.payload?.source as string) ?? "conversation",
       created_at: (r.payload?.created_at as string) ?? "",
       scope: (r.payload?.scope as string) ?? undefined,
+      type: (r.payload?.type as string) ?? undefined,
     }
   }
 

@@ -57,6 +57,14 @@ export type NexusConfig = {
   reportIncidents: boolean
   thoughtFilter: boolean
   maxRecallResults: number
+  /** Kategorien der Auto-Recall-Auswahl (20.11.2026). Leer = kein Filter.
+   *  Vorgabe: fact, rule, preference — Protokolle und Entities bleiben draussen. */
+  recallCategories: string[]
+  /** Mindestpunktzahl der Auto-Recall-Auswahl (Kosinus, 0..1).
+   *  Vorgabe 0.35; 0 = keine Schwelle. */
+  recallMinScore: number
+  /** Zeichenbudget des eingespeisten Memory-Blocks. Vorgabe 800. */
+  recallBudgetChars: number
   /** OCR-6 (maintainability low, L655): minimum similarity score the forget
    *  tool requires before deleting a query match (deployment-tunable).
    *  Default 0.8. */
@@ -108,6 +116,9 @@ const ALLOWED_KEYS = [
   "reportIncidents",
   "thoughtFilter",
   "maxRecallResults",
+  "recallCategories",
+  "recallMinScore",
+  "recallBudgetChars",
   "forgetMinScore",
   "accessLevel",
   "scope",
@@ -205,6 +216,21 @@ function parsePlanGate(value: unknown): PlanGateConfig {
       3600,
     ),
   }
+}
+
+/** Voreinstellung der Auto-Recall-Auswahl (20.11.2026) — wie im Dienst. */
+export const DEFAULT_RECALL_MIN_SCORE = 0.35
+export const DEFAULT_RECALL_CATEGORIES = ["fact", "rule", "preference"]
+
+/**
+ * Kategorienliste aus der Konfiguration. Nicht gesetzt -> Vorgabe;
+ * ausdruecklich leer -> kein Filter (der Schalter zum Abschalten).
+ */
+function toCategoryList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [...DEFAULT_RECALL_CATEGORIES]
+  return raw
+    .map((teil) => (typeof teil === "string" ? teil.trim().toLowerCase() : ""))
+    .filter((teil) => teil.length > 0)
 }
 
 /** Defaults for the cron-form-gate limits (used when not configured). */
@@ -468,7 +494,16 @@ export function parseConfig(raw: unknown): NexusConfig {
     autoCapture: toBool(cfg.autoCapture, true),
     reportIncidents: toBool(cfg.reportIncidents, true),
     thoughtFilter: toBool(cfg.thoughtFilter, true),
-    maxRecallResults: toClampedInt(cfg.maxRecallResults, 10, 1, 20),
+    maxRecallResults: toClampedInt(cfg.maxRecallResults, 3, 1, 20),
+    // Auswahlregel (20.11.2026): Vorgabe wie im Dienst — drei Eintraege aus
+    // fact/rule/preference ueber der Kosinus-Schwelle. `autoRecallCategories:
+    // []` schaltet den Kategorienfilter ab, `recallMinScore: 0` die Schwelle.
+    recallCategories: toCategoryList(cfg.recallCategories),
+    recallMinScore:
+      typeof cfg.recallMinScore === "number" && Number.isFinite(cfg.recallMinScore)
+        ? Math.min(1, Math.max(0, cfg.recallMinScore))
+        : DEFAULT_RECALL_MIN_SCORE,
+    recallBudgetChars: toClampedInt(cfg.recallBudgetChars, 800, 120, 12000),
     // OCR-6 (maintainability low, L655): forget-tool confidence threshold is
     // deployment-tunable — clamped into [0, 1] like the contract below.
     forgetMinScore:
@@ -508,6 +543,9 @@ export const nexusConfigSchema = {
       reportIncidents: { type: "boolean" },
       thoughtFilter: { type: "boolean" },
       maxRecallResults: { type: "number", minimum: 1, maximum: 20 },
+      recallCategories: { type: "array", items: { type: "string" } },
+      recallMinScore: { type: "number", minimum: 0, maximum: 1 },
+      recallBudgetChars: { type: "number", minimum: 120, maximum: 12000 },
       forgetMinScore: { type: "number", minimum: 0, maximum: 1 },
       accessLevel: { type: "string", enum: VALID_ACCESS_LEVELS },
       scope: { type: "string" },

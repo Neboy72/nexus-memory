@@ -64,8 +64,11 @@ auf einem anderen Rechner anpassen muss.
 | `accessLevel` | `private` | Sichtbarkeit beim Lesen **und** Ablage-Level beim Schreiben |
 | `captureCategory` | `session` | Kategorie der Auto-Captures |
 | `recall` / `capture` | `true` | die beiden Hälften einzeln abschaltbar |
-| `recallLimit` | `5` | maximale Treffer pro Turn |
-| `recallBudgetChars` | `1600` | Zeichenbudget des injizierten Blocks |
+| `recallLimit` | `3` | maximale Treffer pro Turn (vorher 5) |
+| `recallBudgetChars` | `800` | Zeichenbudget des injizierten Blocks (vorher 1600) |
+| `recallFilter` | `true` | Auswahlregel an/aus; `false` hebt Kategorien **und** Mindestpunktzahl auf |
+| `recallCategories` | `fact, rule, preference` | nur diese Kategorien; leere Liste = kein Kategorienfilter |
+| `recallMinScore` | `0.35` | Mindestpunktzahl der Aehnlichkeit (Kosinus 0..1); `0` = keine Schwelle |
 | `recallTimeoutMs` | `4000` | danach ohne Erinnerung weiter |
 | `recallMinChars` | `30` | keine Einblendung, wenn die letzte menschliche Nachricht kürzer ist |
 | `recallMinWords` | `4` | keine Einblendung, wenn sie weniger Wörter hat |
@@ -74,6 +77,14 @@ auf einem anderen Rechner anpassen muss.
 | `reportIncidents` | `true` | Gescheiterte Werkzeugaufrufe an `POST /events` melden, damit das nächtliche Lernen sie sieht (nur HTTP-Transport) |
 | `reportMaxChars` | `2000` | Grenze des Fehlertextes je Meldung |
 | `reportPerSessionMax` | `50` | Höchstzahl der Meldungen je Sitzung |
+
+Die Auswahl selbst trifft der **Dienst** (`src/nexus_memory/recall_policy.py`):
+Kategorien und Mindestpunktzahl sind Werkzeuge desselben `recall`-Aufrufs, den
+auch MCP-Clients benutzen. Das Plugin entscheidet nichts selbst und reicht die
+Schalter nur durch. Die Mindestpunktzahl prüft die **Ähnlichkeit** (Kosinus,
+Feld `relevance`), nicht den RRF-Rang: der normierte Rang gibt dem
+Spitzenreiter immer `1.0` — auch wenn er zur Frage nicht passt. Bleibt nichts
+über der Schwelle, wird **nichts** eingeblendet statt Füllmaterial.
 
 Zwei Installationen am selben Dienst brauchen **keine** verschiedenen Namen: ein
 Eintrag, der schon einen eigenen Schlüssel hat, wird nie übernommen — die zweite

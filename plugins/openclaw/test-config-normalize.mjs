@@ -68,10 +68,10 @@ await t("maxRecallResults: 3.7 → 3 (Fractional truncation Richtung Null)", () 
   assert.strictEqual(parseConfig({ maxRecallResults: 3.7 }).maxRecallResults, 3)
   assert.strictEqual(parseConfig({ maxRecallResults: -3.7 }).maxRecallResults, 1, "negativer Fractional clamped auf minimum")
 })
-await t("maxRecallResults: Infinity → Default 10 (nicht-finite = fehlend), -5 → 1", () => {
+await t("maxRecallResults: Infinity → Default 3 (nicht-finite = fehlend), -5 → 1", () => {
   // Kontrakt (toClampedInt): !Number.isFinite → dflt. Infinity/NaN sind 'fehlend',
   // keine Clamps. Negative finite Zahlen werden auf minimum geclamped.
-  assert.strictEqual(parseConfig({ maxRecallResults: Infinity }).maxRecallResults, 10)
+  assert.strictEqual(parseConfig({ maxRecallResults: Infinity }).maxRecallResults, 3)
   assert.strictEqual(parseConfig({ maxRecallResults: -5 }).maxRecallResults, 1)
 })
 await t("maxRecallResults: whitespace-String → 0-koerziert → clamp auf 1, String '0' → 1", () => {
@@ -80,10 +80,10 @@ await t("maxRecallResults: whitespace-String → 0-koerziert → clamp auf 1, St
   assert.strictEqual(parseConfig({ maxRecallResults: "   " }).maxRecallResults, 1)
   assert.strictEqual(parseConfig({ maxRecallResults: "0" }).maxRecallResults, 1)
 })
-await t("maxRecallResults: nicht-numerisch → Default 10", () => {
-  assert.strictEqual(parseConfig({ maxRecallResults: "abc" }).maxRecallResults, 10)
-  assert.strictEqual(parseConfig({ maxRecallResults: NaN }).maxRecallResults, 10)
-  assert.strictEqual(parseConfig({}).maxRecallResults, 10)
+await t("maxRecallResults: nicht-numerisch → Default 3", () => {
+  assert.strictEqual(parseConfig({ maxRecallResults: "abc" }).maxRecallResults, 3)
+  assert.strictEqual(parseConfig({ maxRecallResults: NaN }).maxRecallResults, 3)
+  assert.strictEqual(parseConfig({}).maxRecallResults, 3)
 })
 
 await t("Schema deklariert minimum 1 / maximum 20", () => {

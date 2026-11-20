@@ -496,7 +496,10 @@ class TestNr496RecallGraphItems:
         src = _read("plugins/openclaw/hooks/recall.ts")
         assert "score: null" in src
         assert "score: 0," not in src
-        assert "formatMemories(allItems, cfg.maxRecallResults)" in src
+        # 20.11.2026: das Format bekommt zusaetzlich das Zeichenbudget;
+        # der Deckel bleibt cfg.maxRecallResults (nicht plus graphItems).
+        assert "formatMemories(" in src and "allItems," in src
+        assert "cfg.maxRecallResults," in src
         assert "cfg.maxRecallResults + graphItems.length" not in src
 
 

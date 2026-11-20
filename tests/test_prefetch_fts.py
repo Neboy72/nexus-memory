@@ -291,5 +291,12 @@ class TestPrefetchOhneJaNeinSortierung:
                             lambda *a, **k: (_ for _ in ()).throw(AssertionError(
                                 "_keyword_boost_order darf nicht mehr laufen")))
 
+        # 20.11.2026: Der Vorlauf filtert seither nach Kategorie (Vorgabe
+        # fact/rule/preference). Dieser Test prueft den Stichwortweg, nicht
+        # die Kategorieauswahl — deshalb hier ohne Kategorienfilter.
+        monkeypatch.setenv("NEXUS_PREFETCH_CATEGORIES", "")
+        # ... und ohne Mindestpunktzahl: der Stichworttreffer hier hat keine
+        # Aehnlichkeit (Testvektoren sind orthogonal), er ist rein woertlich.
+        monkeypatch.setenv("NEXUS_PREFETCH_MIN_SCORE", "0")
         prov._do_prefetch_inner("Heizöl-Lieferant")
         assert "nordlicht" in prov._prefetch_result.lower()
