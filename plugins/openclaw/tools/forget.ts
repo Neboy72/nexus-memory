@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox"
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { Embedder } from "../lib/embedder.ts"
 import type { QdrantClient } from "../lib/qdrant-client.ts"
-import { visibleAccessLevels } from "../lib/qdrant-client.ts"
+import { scopeBundle, scopeVisible, visibleAccessLevels } from "../lib/qdrant-client.ts"
 import type { NexusConfig } from "../lib/config.ts"
 import { limitText, PREVIEW_MAX } from "../lib/text-preview.ts"
 import { toolCallAccessLevel } from "../lib/turn-context.ts"
@@ -140,9 +140,8 @@ export function registerForgetTool(
             // path always constrains via cfg.accessLevel. The point payload
             // carries access_level: fail closed (skip) when the memory's
             // level is not visible to this agent.
-            const memoryLevel = String(
-              (existing.payload as Record<string, unknown> | undefined)?.access_level ?? "",
-            )
+            const existingPayload = existing.payload as Record<string, unknown> | undefined
+            const memoryLevel = String(existingPayload?.access_level ?? "")
             if (!visibleAccessLevels(accessLevel).includes(memoryLevel)) {
               log.warn(
                 `forget tool: delete refused — memory access_level "${memoryLevel}" not visible at agent level "${accessLevel}"`,
@@ -153,6 +152,28 @@ export function registerForgetTool(
                   {
                     type: "text" as const,
                     text: "Delete refused: this memory is outside your access level.",
+                  },
+                ],
+              }
+            }
+
+            // ClawHub audit 20.11.2026 (MCP07): visibility has TWO independent
+            // dimensions, access_level and scope. The query path always carries
+            // a scope filter; this direct-id path checked only the level, so a
+            // caller who knew an id could delete a memory living in another
+            // bundle's scope. Same predicate as the graph tools, same three
+            // cases: shared scope, this bundle, and legacy records with no
+            // scope field.
+            if (!scopeVisible(existingPayload, scopeBundle(cfg))) {
+              log.warn(
+                `forget tool: delete refused — memory scope "${String(existingPayload?.scope)}" not visible for bundle "${scopeBundle(cfg)}"`,
+              )
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Delete refused: this memory is outside your scope.",
                   },
                 ],
               }

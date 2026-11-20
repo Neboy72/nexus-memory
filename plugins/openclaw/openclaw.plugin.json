@@ -120,7 +120,7 @@
     },
     "ownerUserIds": {
       "label": "Owner User IDs",
-      "help": "Identities of the owner (the human), one entry per platform. Used by the room rule to tell the owner apart from a stranger. The plugin never claims an owner itself: this list, or an owner file that already exists (<stateDir>/nexus/owner.json, {\"version\":2,\"owners\":{\"telegram\":\"…\",\"discord\":\"…\"}}), is the only source. Empty and no file = owner unknown, every human message marks its room shared, reads stay public.",
+      "help": "Identities of the owner (the human), one entry per platform. Used by the room rule to tell the owner apart from a stranger. The plugin never claims an owner itself: this list, or an owner file that already exists (<stateDir>/nexus/owner.json, {\"version\":2,\"owners\":{\"telegram\":\"\u2026\",\"discord\":\"\u2026\"}}), is the only source. Empty and no file = owner unknown, every human message marks its room shared, reads stay public.",
       "advanced": true
     },
     "privateRooms": {
@@ -304,5 +304,5 @@
     },
     "required": []
   },
-  "version": "1.22.5"
+  "version": "1.22.7"
 }

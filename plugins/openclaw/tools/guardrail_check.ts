@@ -428,7 +428,7 @@ export async function evaluateGuardrail(
   const directPathField = PATH_CARRYING_TOOLS[checkedToolName]
   const directPath =
     directPathField && typeof toolInput[directPathField] === "string"
-      ? String(toolInput[directPathField])
+      ? String(toolInput[directPathField]).trim()
       : ""
 
   if (!command && !directPath) {
@@ -436,27 +436,34 @@ export async function evaluateGuardrail(
   }
 
   if (directPath) {
-    const direct = resolveTargets(directPath, base)
-    if (direct.targets.length > 0 || direct.unresolved) {
-      const rules = await loadProtectionRules(qdrantClient, base)
-      if (rules === null) {
-        // Fail-closed: rule store unavailable, cannot prove safety.
-        return {
-          verdict: "block",
-          reason: "Destructive action (overwrite) but protection rules unavailable — fail-closed",
-          matches: [],
-        }
+    // ClawHub audit 20.11.2026 (MCP07): a dedicated path argument is a LITERAL
+    // target, not command text. It used to go through extractTargets(), which
+    // only recognises paths with `/`, `~` or a leading `.` — so a bare relative
+    // name like `notes.md` produced NO target, the block was skipped and the
+    // write fell through to "Non-destructive action". Write/Edit/MultiEdit/
+    // NotebookEdit modify the named file by definition, so their path decides
+    // on its own: resolved against the trusted cwd, or "indeterminate" when
+    // there is none (fail-closed, never allow).
+    const relativeTarget = !isAbsolutePath(expandHome(directPath))
+    if (relativeTarget && base === null) {
+      return { verdict: "indeterminate", reason: INDETERMINATE_REASON, matches: [] }
+    }
+    const directTargets = [comparisonPath(directPath, base)]
+    const rules = await loadProtectionRules(qdrantClient, base)
+    if (rules === null) {
+      // Fail-closed: rule store unavailable, cannot prove safety.
+      return {
+        verdict: "block",
+        reason: "Destructive action (overwrite) but protection rules unavailable — fail-closed",
+        matches: [],
       }
-      const matched = collectMatches(direct.targets, rules, "overwrite")
-      if (matched.length > 0) {
-        return {
-          verdict: "block",
-          reason: "Destructive action (overwrite) on protected target",
-          matches: matched,
-        }
-      }
-      if (direct.unresolved) {
-        return { verdict: "indeterminate", reason: INDETERMINATE_REASON, matches: [] }
+    }
+    const matched = collectMatches(directTargets, rules, "overwrite")
+    if (matched.length > 0) {
+      return {
+        verdict: "block",
+        reason: "Destructive action (overwrite) on protected target",
+        matches: matched,
       }
     }
   }
