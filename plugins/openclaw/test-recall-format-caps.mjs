@@ -53,6 +53,15 @@ const mockApi = {
     autoCapture: false,
     accessLevel: "private",
     embedding: { provider: "openai", apiKey: "test" },
+    // Die Abruf-VOREINSTELLUNG wird hier ausdruecklich abgeschaltet (20.11.2026):
+    // seit der Auswahlregel liefert der Abruf drei Eintraege und laesst
+    // session/entity draussen. Dann kaeme die session-Zeile nie in den Block
+    // und der Gesamtdeckel nie zum Zug — der Test prueft aber die KAPPUNG,
+    // nicht die Voreinstellung. Die Voreinstellung selbst bleibt unveraendert
+    // (eigener Test: test-recall-policy.mjs).
+    maxRecallResults: 20,
+    recallExcludeCategories: [],
+    recallBudgetChars: 12000,
   },
 };
 
