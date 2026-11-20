@@ -1454,7 +1454,7 @@ def _keyword_candidate_points(qdrant: Any, collection: str, query: str,
     (BM25). Die Funktion bleibt fuer Messvergleiche und Tests.
 
     Warum (gemessen 10.11.2026): Reine Aehnlichkeit holte den Fakt "Heizöl-Bestellung
-    ... bei Nordlicht" nur auf Platz 58 von 64; die Frage selbst liefert den Gegencheck,
+    ... bei Marsolek" nur auf Platz 58 von 64; die Frage selbst liefert den Gegencheck,
     weil das Wort im Text steht oder nicht.
 
     Warum ein grosser Topf: Die Volltextsuche liefert die Treffer in Kennungsreihenfolge,
@@ -3921,12 +3921,31 @@ class NexusMemoryProvider:
         identify durable facts, then stores them with proper categorization
         and confidence. Runs inline (MemoryManager already provides background
         execution via its single-worker executor for /new and /reset paths).
+
+        0.22.64: davor werden die gescheiterten Werkzeugaufrufe dieser Sitzung
+        an ``POST /events`` gemeldet. Das naechtliche Lernen in Nexus haengt
+        damit an keinem Harness mehr; hier meldet der Harness ueber sich selbst.
         """
         if self._agent_context != "primary":
             return
+        self._report_incidents(messages)
         if not messages:
             return
         self._extract_and_store(list(messages))
+
+    def _report_incidents(self, messages: List[Dict[str, Any]]) -> None:
+        """Fehlschlaege dieser Sitzung an Nexus melden. Wirft nie."""
+        try:
+            try:
+                from .incident_report import incidents_from_messages, report_incidents
+            except Exception:
+                from incident_report import incidents_from_messages, report_incidents  # type: ignore
+            vorfaelle = incidents_from_messages(
+                messages, session=str(getattr(self, "_session_id", "") or ""))
+            if vorfaelle:
+                report_incidents(vorfaelle)
+        except Exception as exc:  # pragma: no cover - darf das Ende nie kippen
+            logger.debug("Incident-Meldung uebersprungen: %s", exc)
 
     def _extract_and_store(self, messages: List[Dict[str, Any]]) -> None:
         """Background extraction: LLM first, heuristic fallback, store in Qdrant.
@@ -4063,7 +4082,7 @@ class NexusMemoryProvider:
         # Suchvarianten (10.11.2026): Der sichtbare Text bleibt, wie er ist; die
         # Wortteile zusammengeschriebener Woerter und Umlautschreibweisen kommen
         # in ``search_terms`` und zusaetzlich in den Einbettungstext. Grund
-        # (gemessen): "organization: Nordlicht (type=Oellieferant)" lag bei der
+        # (gemessen): "organization: Marsolek (type=Oellieferant)" lag bei der
         # Frage "Heizöl-Lieferant" auf 0.579 und damit ausserhalb der 32
         # Kandidaten — "Lieferant" steckt im Wort, nur ohne Fuge.
         terms = ""
@@ -4265,7 +4284,7 @@ def _repair_command() -> str:
     # same revision ``[tool.uv.sources]`` names, not the tag `v0.22.28` that
     # will point at it: a tag can be moved, a sha cannot.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
-            "@14ecbac3c8739cadb3c5aaef54e87633a7e596e5")
+            "@c41d832cd23509d2cedcd55b252795614342f74e")
     # A checkout of THIS repository may be reinstalled in editable mode — handy
     # while developing. It has to prove it is that repository, though: for a
     # catalog-installed plugin `__file__` lives under the Hermes plugin dir and
