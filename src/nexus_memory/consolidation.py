@@ -653,6 +653,24 @@ class Consolidator:
             raise _SkipPointError(
                 "consolidation: guardrail override audit point skipped (never consolidated)")
 
+        # ── Gemeinsames Schreibtor (20.11.2026) ───────────────────────
+        # Der Verdichter war der letzte Weg in die Sammlung, der ohne Tor
+        # schrieb — und zwar genau dort, wo ein Modell aus rohen
+        # Gespraechs-Dumps einen Fakt baut. Ein abgewiesener Fakt wird
+        # uebersprungen, nicht geschrieben; der Grund steht im Protokoll.
+        from nexus.write_gate import prepare as _gate, last_reason as _gate_reason
+        _prepared = _gate(
+            content=fact, category="fact", access_level=access_level,
+            source="nexus-consolidation", source_type="consolidation",
+            provenance={"source_type": "consolidation",
+                        "created_by": "consolidation-v1"},
+        )
+        if _prepared is None:
+            raise _SkipPointError(
+                f"consolidation: write gate refused ({_gate_reason() or 'refused'})")
+        fact = _prepared["content"]
+        access_level = _prepared["access_level"]
+
         vec = self._embed(fact)
         new_id = str(uuid.uuid4())
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

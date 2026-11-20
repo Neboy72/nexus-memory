@@ -44,6 +44,22 @@ Die Regeln:
    traegt ``state_value: True``, bei langen Texten zusaetzlich einen ``hint``
    auf einen eigenen Kurzfakt. Kein Fehler, kein Blockieren, kein zweiter
    Schreibvorgang.
+7. Ein Gespraechsrest wird abgewiesen: ``User:``/``Assistant:`` im Text
+   heisst, ein Modell hat den letzten Satz des Gespraechs mitgeschrieben.
+   Bei einer Entitaet wird der Schwanz abgeschnitten und der Kopf behalten
+   (dort stehen Rolle, Pfad, Preis), in allen anderen Kategorien faellt der
+   Eintrag durch. ``session`` ist die Ausnahme: ein Transkript ist dort die
+   Sache selbst.
+8. Eine Frage ist kein Wissen: endet der ganze Text auf ``?`` (hoechstens
+   zwei Saetze) oder beginnt er mit ``muss ich``/``kannst du`` ..., wird er
+   abgewiesen — auch als ``rule``. Bei ``rule``/``preference`` gilt nur die
+   strenge Form: ein von Hand formulierter Satz soll nicht an einer Wendung
+   mitten im Satz scheitern.
+9. Gruss, Zustimmung und Zustandsmeldung fallen durch: ``Ok``, ``Ja``,
+   ``Danke`` am Anfang eines kurzen Textes, und ``laeuft noch``/``neu
+   gestartet``/``fertig`` als ganze Meldung. Eine Zustandsmeldung ist nach
+   dem naechsten Start falsch; wer sie trotzdem halten will, schreibt sie
+   als ``temp`` (7 Tage), dann geht sie durch.
 """
 
 from __future__ import annotations
@@ -126,6 +142,103 @@ _CATEGORY_PREFIXES = frozenset({
     "organization", "organisation", "project", "projekt", "tool", "geraet",
     "gerät", "event", "ereignis", "fakt", "fact",
 })
+
+# ── Gespraechsreste (20.11.2026) ─────────────────────────────────────
+# Befund aus der Bestandsdurchsicht: von 303 belegten Muell-Eintraegen waren
+# 99 reine Zustandsmeldungen ("laeuft noch", "neu gestartet"), 157 ein
+# abgeschnittener Gespraechsrest ("User: das Problem ist ...") und 25
+# als Regel gespeicherte Rohsaetze ("Okay, was muss ich jetzt machen"). Ein
+# Modell schreibt beim Sitzungsende gern den letzten Satz mit; das ist keine
+# Aussage ueber die Welt, sondern ein Rest des Gespraechs.
+
+#: Der ganze Text ist eine Frage — dann ist er kein Wissen.
+_QUESTION_END = re.compile(r"\?\s*$")
+#: Hoechstens so viele Saetze. Ein Protokoll, das mit einer Frage endet, ist
+#: keine reine Frage; ein Zweizeiler schon.
+_MAX_QUESTION_SENTENCES = 2
+
+#: Wendungen, mit denen ein Gespraechsrest beginnt (erste/zweite Person).
+_ASK_STARTS = (
+    "muss ich", "soll ich", "sollte ich", "kann ich", "kannst du",
+    "machst du", "mache ich", "hast du", "bist du", "weisst du", "weißt du",
+    "darf ich", "brauche ich", "was muss ich", "wie mache ich",
+    "wo finde ich", "wo muss ich", "wie kann ich", "sag mir",
+    "verstehst du", "meinst du",
+)
+#: Dieselben Wendungen mitten im Satz. Nur fuer Kategorien, die ein Modell
+#: automatisch fuellt: eine von Hand formulierte Regel ("Wenn etwas fehlt,
+#: soll ich nachfragen") ist keine Frage und darf nicht daran scheitern.
+_ASK_MARKERS = ("muss ich", "soll ich", "machst du", "kann ich", "kannst du")
+#: Laenger als das ist es kein abgeschnittener Satz mehr, sondern ein Text.
+_MAX_ASK_CHARS = 120
+#: Ein Satz, der mit einer Konjunktion beginnt, ist gefuegt und kein
+#: abgeschnittener Gedanke: "Wenn etwas fehlt, soll ich nachfragen" ist eine
+#: Aussage ueber das Verhalten, keine Frage.
+_SUBORDINATE_STARTS = (
+    "wenn", "falls", "sobald", "solange", "bevor", "damit", "weil", "obwohl",
+    "nachdem", "seitdem", "während", "waehrend", "sofern",
+)
+
+#: Erste Woerter eines Grusses oder einer Zustimmung — kein Wissen.
+_FRAGMENT_STARTS = frozenset({
+    "ok", "okay", "okey", "ja", "nein", "doch", "danke", "genau", "passt",
+    "super", "perfekt", "hallo", "hi", "moin", "servus", "guten",
+    "alles", "vielen", "gerne", "bitte",
+})
+_MAX_FRAGMENT_CHARS = 80
+
+#: Zustandsmeldungen: sagen, dass etwas laeuft, startet oder fertig ist.
+_STATUS_PHRASES = (
+    "läuft noch", "laeuft noch", "läuft weiter", "laeuft weiter",
+    "läuft wieder", "laeuft wieder", "läuft jetzt", "laeuft jetzt",
+    "noch am laufen", "neu gestartet", "gerade gestartet", "neu starten",
+    "ist fertig", "jetzt fertig", "bin fertig", "schon fertig",
+    # Offene Punkte (20.11.2026, Gegentest): "steht noch aus", "noch offen",
+    # "ausstehend" sind Zustand und waren der zweitgroesste Rest im Altbestand.
+    "steht noch aus", "steht noch offen", "steht aus", "ausstehend",
+    "noch offen", "ist noch offen", "nicht erledigt",
+    "bleibt offen", "noch ausstehend", "offener punkt", "steht noch",
+)
+#: Erste Woerter einer Erledigt-Meldung — auch in einem langen Satz.
+#: "Erledigt 👍 Sauber. Läuft auf dem neuesten Stand durch. <Signatur>" war
+#: 78 Zeichen lang und rutschte deshalb an der Laengengrenze vorbei.
+_COMPLETION_WORDS = frozenset({
+    "erledigt", "fertig", "geschafft", "done", "abgeschlossen", "erledigt.",
+})
+#: Ein einziges Wort als ganze Meldung.
+_STATUS_WORDS = frozenset({
+    "ok", "okay", "fertig", "erledigt", "abgeschlossen", "done", "passt",
+    "läuft", "laeuft", "alles gut", "super", "danke", "ja", "nein",
+})
+#: Laenger als das ist eine Meldung kein Schnipsel mehr.
+_MAX_STATUS_CHARS = 140
+
+#: Reste eines Gespraechs im Text. ``session`` ist die Ausnahme: dort ist
+#: ein Transkript die Sache selbst.
+_PLACEHOLDER_RE = re.compile(
+    # Kontextfenster-Reste und Prompt-Boilerplate. Sie sind lang und damit
+    # unsichtbar fuer die Laengengrenzen; im Altbestand waren 12 Eintraege
+    # woertlich "Last conversation: [System: Your previous response was
+    # truncated by the output length limit. Continue exactly where you ...]".
+    r"^\s*(?:last conversation|review the conversation above)\b"
+    r"|your previous response was truncated"
+    r"|continue exactly where you left off",
+    re.IGNORECASE,
+)
+_CONVERSATION_RE = re.compile(
+    # Nur echte Rollenmarken: am Textanfang oder hinter einem Gedankenstrich,
+    # gross geschrieben und mit Leerzeichen nach dem Doppelpunkt. Gemessen am
+    # 20.11.2026 an sechs Fehlalarmen im Altbestand: "assistant:write" ist ein
+    # OAuth-Scope, "`user:`" ein Beispiel fuer ein Praefix, "(user: paperless)"
+    # ein Datenbankbenutzer und "DB-User:" ein Kontoname.
+    r"^[ \t]*(?:User|Assistant|Human)\s*:\s"
+    r"|[—–][ \t]*(?:User|Assistant|Human)\s*:\s"
+    r"|\[role:\s*user\]"
+    r"|\[user:end\]"
+    r"|\[assistant:end\]"
+)
+#: Trennzeichen, die nach dem Abschneiden hinten uebrig bleiben.
+_TRAILING_SEPARATORS = " \t-–—,;:·|"
 
 #: Zitatmerkmale im Inhalt einer behaupteten Regel.
 _QUOTE_STARTS = ('"', "„", "“", "”", "»", "«", "‘", "‚")
@@ -240,6 +353,125 @@ def looks_document_quoted(text: str) -> bool:
     if any(phrase in lowered for phrase in _QUOTE_PHRASES):
         return True
     return _sentence_count(text) > _MAX_RULE_SENTENCES
+
+
+def _first_word(text: str) -> str:
+    match = re.match(r"\s*([^\s,.;:!?]+)", text or "")
+    return match.group(1).lower() if match else ""
+
+
+def is_question(text: str, category: str = "") -> bool:
+    """Ist der ganze Text eine Frage?
+
+    Zwei Formen, beide eng: der Text endet auf ``?`` und hat hoechstens zwei
+    Saetze, oder er beginnt mit einer Wendung der ersten/zweiten Person
+    (``muss ich``, ``kannst du`` ...). Die Wendungen mitten im Satz gelten nur
+    fuer Kategorien, die ein Modell automatisch fuellt — eine von Hand
+    formulierte ``rule``/``preference`` wird nicht daran gemessen.
+
+    Ein laengeres Protokoll, das mit einer Frage endet, ist keine Frage: mehr
+    als zwei Saetze heisst, es steht etwas davor.
+    """
+    value = (text or "").strip()
+    if not value:
+        return False
+    if _QUESTION_END.search(value) and _sentence_count(value) <= _MAX_QUESTION_SENTENCES:
+        return True
+    lowered = value.lower()
+    if lowered.startswith(_ASK_STARTS):
+        return True
+    if category in ("rule", "preference"):
+        return False
+    if len(value) > _MAX_ASK_CHARS or _sentence_count(value) > 1:
+        return False
+    if lowered.startswith(_SUBORDINATE_STARTS):
+        return False
+    return any(marker in lowered for marker in _ASK_MARKERS)
+
+
+def is_fragment(text: str, strict: bool = False) -> bool:
+    """Gruss, Zustimmung oder Flickwort statt einer Aussage.
+
+    Nur kurz und nur am Anfang: "Ja, der Verteiler steht im Flur" ist ein
+    Satz und geht durch, "Okay, ich verstehe nur Bahnhof" nicht.
+
+    ``strict`` hebt die Laengengrenze auf — fuer ``rule`` und ``preference``.
+    Eine von Hand formulierte Regel beginnt nicht mit "Ja, aber ..."; ein
+    Satz, der so anfaengt, ist ein zitiertes Gespraech (Gegentest 20.11.2026:
+    sechs der 83 Reste waren genau das).
+    """
+    value = (text or "").strip()
+    if not value:
+        return False
+    if not strict and len(value) > _MAX_FRAGMENT_CHARS:
+        return False
+    return _first_word(value) in _FRAGMENT_STARTS
+
+
+def _lowercase_scrap(text: str, category: str) -> bool:
+    """Ein langer Satz, der klein anfaengt, ist ein abgetippter Gespraechssatz.
+
+    Nur bei ``rule``/``preference``: ein Mensch formuliert eine Regel gross,
+    ein Modell schreibt beim Mitschneiden ab, was im Chat stand ("es kam nur
+    kurz deine stimme abgehackt dann habe ich dir nochmal gesprochen").
+    Ausgenommen bleibt, was nach Konfiguration aussieht (Doppelpunkt, Backtick).
+    """
+    if category not in ("rule", "preference"):
+        return False
+    value = (text or "").strip()
+    if len(value) <= 25 or ":" in value or value.startswith(("`", "~", "/")):
+        return False
+    # Ein Dateiname am Anfang ist kein abgetippter Satz: "hermes-config.md
+    # enthaelt eine Summary-Tabelle" beginnt klein, ist aber Wissen.
+    erstes = value.split(" ", 1)[0]
+    if "." in erstes or "_" in erstes or "/" in erstes:
+        return False
+    return value[:1].islower()
+
+
+def is_status_snippet(text: str) -> bool:
+    """Reine Zustandsmeldung: laeuft noch, neu gestartet, fertig.
+
+    Sagt, wie etwas gerade steht, nicht was gilt. Eine solche Meldung ist
+    nach dem naechsten Start falsch — sie gehoert, wenn ueberhaupt, in
+    ``temp`` (7 Tage), nie in einen dauerhaften ``fact``.
+    """
+    value = (text or "").strip().lower()
+    if not value:
+        return False
+    if _first_word(value) in _COMPLETION_WORDS:
+        # Ohne Laengengrenze: eine Erledigt-Meldung mit Modellnamen und
+        # Fuchs-Signatur ist 80 bis 130 Zeichen lang und war damit bisher
+        # unsichtbar fuer die Laengengrenze.
+        return True
+    if len(value) > _MAX_STATUS_CHARS:
+        return False
+    if value.strip(" .!:") in _STATUS_WORDS:
+        return True
+    # Wortgrenzen sind Pflicht: "besteht aus" enthaelt "steht aus" und
+    # "versteht noch" enthaelt "steht noch" — ein Substring-Vergleich hat am
+    # 20.11.2026 einen echten Fakt abgewiesen ("Das System besteht aus den
+    # Komponenten ...").
+    return any(
+        re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", value)
+        for p in _STATUS_PHRASES
+    )
+
+
+def conversation_rest(text: str) -> Optional[str]:
+    """Schneidet einen Gespraechsrest ab; ``None``, wenn keiner drin ist.
+
+    ``concept: helper (role=Monitoring-Agent) — User: das Problem ist
+    ...`` wird zu ``concept: helper (role=Monitoring-Agent)``. Der Kopf ist
+    Wissen (Rolle, Pfad, Preis), der Schwanz ist der letzte Satz eines
+    Gespraechs. Bei einem Fakt gibt es keinen Kopf, der bleiben kann — dort
+    weist das Tor ab (siehe ``prepare``).
+    """
+    match = _CONVERSATION_RE.search(text or "")
+    if not match:
+        return None
+    head = (text or "")[:match.start()].rstrip(_TRAILING_SEPARATORS)
+    return head
 
 
 def _origin_text(source: Any, source_type: Any,
@@ -372,6 +604,50 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
         return _refuse("empty content", category, source)
 
     cat = _normalize_category(category)
+
+    # ── Gespraechsrest (20.11.2026) ────────────────────────────────────
+    # Steckt ein abgeschnittener Satz aus dem Gespraech im Text, bleibt bei
+    # einer Entitaet nur der Kopf stehen (dort steht das Wissen: Rolle, Pfad,
+    # Preis); ein Fakt hat keinen Kopf, der ohne den Rest noch etwas sagt.
+    if _CONVERSATION_RE.search(text):
+        rest = conversation_rest(text)
+        if cat == "entity":
+            if not rest or len(rest) < 8:
+                return _refuse("conversation rest without a usable head", cat, source)
+            text = rest
+        elif cat != "session":
+            # ``session`` ist ein Transkript — dort gehoert der Rest hin.
+            return _refuse("conversation rest (User:/Assistant: in the text)", cat, source)
+
+    # ── Frage statt Aussage ────────────────────────────────────────────
+    # Eine Frage ist kein Wissen. Ein Transkript (``session``) darf Fragen
+    # enthalten: dort ist der Verlauf die Sache selbst.
+    if cat != "session":
+        if is_question(text, cat):
+            if cat in ("rule", "preference"):
+                return _refuse("a rule/preference must be a statement, not a question", cat, source)
+            return _refuse("question, not a statement", cat, source)
+        if is_fragment(text, strict=cat in ("rule", "preference")):
+            return _refuse("chat fragment (greeting/acknowledgement), not a statement", cat, source)
+        if _lowercase_scrap(text, cat):
+            return _refuse("dictated chat line (starts lowercase), not a statement", cat, source)
+
+    # ── Zustandsmeldung ────────────────────────────────────────────────
+    # "laeuft noch", "neu gestartet", "fertig" sagt, wie etwas gerade steht.
+    # In ``temp`` (7 Tage) ist das richtig aufgehoben, als ``fact`` wird es
+    # nie wahr — deshalb dort abweisen und den Weg nach ``temp`` nennen.
+    if cat != "temp" and is_status_snippet(text):
+        return _refuse(
+            "status message, not knowledge (use category 'temp' if it must be kept)",
+            cat, source,
+        )
+
+    # ── Reste des Kontextfensters ──────────────────────────────────────
+    # "Last conversation: [System: ... truncated ...]" ist kein Inhalt, egal
+    # in welcher Kategorie und egal wie lang.
+    if _PLACEHOLDER_RE.search(text):
+        return _refuse("placeholder from the context window, not knowledge", cat, source)
+
     war_regel = cat == "rule"
 
     prov_input = provenance if isinstance(provenance, dict) else {}
@@ -386,6 +662,14 @@ def prepare(content: Any, category: str = "fact", access_level: Any = "",
             prov_input["rule_confirmed_at"] = _now_iso()
         else:
             cat = "fact"
+
+    # Wendungen mitten im Satz ("Jetzt muss ich das Muster verstehen") gelten
+    # erst hier: eine Regel, die ein Mensch am Terminal bestaetigt hat, wird
+    # nicht an einer Formulierung gemessen. Eine herabgestufte Regel ist ein
+    # ``fact`` und faellt damit doch durch — sie ist ein abgeschnittener
+    # Gedanke, den niemand bestaetigt hat.
+    if cat not in ("rule", "preference", "session") and is_question(text, "fact"):
+        return _refuse("question, not a statement", cat, source)
 
     # Eine herabgestufte Regel wird nicht zusaetzlich als Etikett abgewiesen:
     # der Inhalt soll erhalten bleiben, auch wenn seine Form schwach ist.

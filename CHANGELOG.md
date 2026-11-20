@@ -1,3 +1,65 @@
+## [0.22.60] - 2026-11-20
+
+**Nichts, was ein Modell beim Mitschreiben wegwirft, wird noch dauerhaftes Wissen.**
+
+Gemessen an 300 Eintraegen, die von Hand als Muell eingestuft und aus dem Bestand
+zurueckgezogen wurden (vier Monate Betrieb, 50.700 Punkte):
+
+| Art | Anzahl |
+|---|---|
+| abgeschnittene Gespraechsreste ("User: …", "Assistant: …") | 130 |
+| Zustandsmeldungen ("laeuft noch", "steht noch aus", "neu gestartet") | 99 |
+| Rohsaetze, als Regel gespeichert ("Okay, was muss ich jetzt machen") | 25 |
+| Gruss- und Zustimmungsfetzen des Assistenten | 24 |
+| Platzhalter aus dem Kontextfenster ("Last conversation: [System: … truncated …]") | 22 |
+
+Das Schreibtor (`nexus/write_gate.py`) kennt dafuer jetzt drei weitere Regeln, jede
+mit Ablehnungsgrund in der Antwort:
+
+- **Gespraechsrest:** eine Rollenmarke am Textanfang oder hinter einem Gedankenstrich.
+  Bei einer Entitaet wird der Schwanz abgeschnitten und der Kopf behalten (dort stehen
+  Rolle, Pfad, Preis); sonst faellt der Eintrag durch. `session` ist ausgenommen, weil
+  dort ein Transkript die Sache selbst ist.
+- **Frage und Fetzen:** ein Text, der ganz eine Frage ist, oder mit "Ok/Ja/Nein/Danke"
+  beginnt, ist kein Wissen. Bei `rule`/`preference` gilt die strenge Form ohne Laengengrenze,
+  damit eine handformulierte Regel nicht an einer Wendung mitten im Satz scheitert.
+- **Zustandsmeldung:** "laeuft noch", "steht noch", "ausstehend", "erledigt" am Satzanfang
+  ohne Laengengrenze. Wer eine solche Meldung halten will, schreibt sie als `temp`
+  (sieben Tage), dann geht sie durch.
+- Dazu die Platzhalter des Kontextfensters, die als laengster Text an jeder Laengengrenze
+  vorbeigelaufen sind.
+
+Gegentest in beide Richtungen, wie es sich fuer jede Regel gehoert:
+
+| | Ergebnis |
+|---|---|
+| von 302 bekannten Muell-Eintraegen abgewiesen | 249 (83 %) |
+| davon Entitaeten, bereinigt statt verworfen | 17 |
+| von 13.955 behaltenen Eintraegen faelschlich getroffen | 25 (0,18 %) |
+
+Die verbleibenden 34 sind lange Assistenten-Antworten und Vorfallberichte ueber rund
+200 Zeichen in Kategorie `fact`. Jede Regel, die sie faengt, trifft auch echtes Wissen:
+gemessen zwoelf Vorschlaege, darunter zwei aus einer Fremdberatung, kosten zwischen
+0,85 und 2,95 Prozent des behaltenen Bestands. Sie sind deshalb nicht eingebaut;
+`benchmarks/tor-schatten.py` misst jede kuenftige Regel gegen beide Seiten.
+
+**Drei Wege schrieben bisher am Tor vorbei** und laufen jetzt durch dasselbe:
+
+- `consolidation._store_fact` — der Verdichter baut Fakten aus rohen Gespraechs-Dumps,
+  also genau dort, wo ein Modell Muell erzeugt. Ein abgewiesener Fakt wird uebersprungen.
+- `dreaming._store_playbook` — gilt, sobald das Traeumen wieder anschreibt
+  (`NEXUS_DREAM_STORE` ist derzeit 0).
+- Der MCP-Weg gab eine Abweisung als `KeyError('id')` aus, weil das Tor kein `id` liefert.
+  Jetzt kommt `{"status": "rejected", "reason": …}` beim Aufrufer an.
+
+Zwei eigene Regel-Fehler hat die Messung ebenfalls gefunden und behoben: ein
+Substring-Vergleich (`besteht aus` enthaelt `steht aus`) und eine Rollenmarke, die auch
+`assistant:write` (OAuth-Scope) und `(user: paperless)` (Datenbankbenutzer) traf.
+
+Dazu die Einblendung des DSH-Plugins: unter 30 Zeichen und vier Woertern wird nicht
+nachgeschlagen — gemessen brachte "app neu gestartet" Treffer mit 1,0 und 0,80, eine
+Scoreschwelle haette davon nichts gefiltert.
+
 ## [0.22.59] - 2026-11-19
 
 **Zwei stille Ausfaelle in der Extraktion: der Schluessel `env:NAME` ging woertlich raus, und
