@@ -1,3 +1,61 @@
+## [0.22.61] - 2026-11-20
+
+**Das naechtliche Lernen haengt an keinem Harness mehr und legt keine Textfetzen ab.**
+
+Bis 0.22.60 las das Traeumen die Sitzungsdatenbank von Hermes. Damit hing das
+Langzeitgedaechtnis an einem bestimmten Agenten, und jede andere Installation hatte
+dieses Lernen gar nicht. Dazu kam ein zweiter Fehler: es nahm jedes Vorkommen von
+"fix", "fehler" oder "timeout" im Text, schnitt ein Fenster von 140 Zeichen heraus,
+auch mitten im Satz einer langen Cron-Anweisung, und fragte ein Modell, ob das ein
+wiederkehrendes Muster sei. Gespeichert wurde danach der Rohtext. Ergebnis im Bestand:
+"Gelernt: must be recorded as failed, put [CRON_FAILURE] on the first line by itself
+…", 24 solcher Eintraege in einer Nacht, alle spaeter zurueckgezogen.
+
+Die Richtung ist jetzt umgedreht:
+
+- **Neue Quelle `POST /events`:** jeder Agent meldet, was bei ihm gescheitert ist
+  (`tool`, `ok`, `error`, `hint`, `session`, `agent`). Nexus liest keine fremde
+  Sitzungsablage. Hermes, OpenClaw, Claude Code und DSH sind gleichberechtigte
+  Zulieferer; wer nichts meldet, fehlt einfach.
+- **Ablage ist Text:** `~/.nexus-memory/events/ereignisse.jsonl`, eine Zeile je
+  Vorfall, gekappt auf 2000 Zeichen Fehlertext und 600 Zeichen Hinweis, Rotation bei
+  20 MB. Kein Qdrant, kein Schema-Umbau.
+- **Wiederkehr wird gezaehlt, nicht geschaetzt:** eine Stoerung zaehlt nur, wenn sie
+  strukturell als Fehlschlag vorliegt (`exit_code != 0` oder gesetzter `error`) und in
+  mindestens zwei verschiedenen Sitzungen auftritt. Kein Modell entscheidet mehr
+  darueber. `llm_fn` wird nicht mehr befragt.
+- **Gelernt wird nur mit Beleg:** der `hint` der Umgebung, oder eine benannte
+  Umgebungsursache (fehlendes Paket, fehlendes Programm, HTTP-Code, Rechte). Ein
+  Fehlerwort in einer erfolgreichen Ausgabe zaehlt nicht; ein namenloses "Timeout"
+  auch nicht. Programmierfehler des Agenten (TypeError, KeyError, SyntaxError) sind
+  kein Wissen.
+- **Der Satz wird gebaut, nicht formuliert:** "Wiederkehrende Stoerung, 11 Sitzungen
+  bis 20.11.2026: terminal scheitert mit ModuleNotFoundError (requests). Abhilfe laut
+  Umgebung: …" Er geht durch dasselbe Schreibtor wie jeder Agent. Dieselbe Stoerung
+  wird 30 Tage lang nicht erneut gelernt.
+- **Optionale Zulieferer statt Kopplung:** `scripts/ereignisse-aus-hermes.py` liest
+  eine Hermes-Ablage und meldet die Fehlschlaege per HTTP oder in die lokale Ablage.
+  Wer ihn nicht aufruft, dessen Traum kennt nur die eigenen Meldungen.
+
+Gemessen an 3300 gescheiterten Werkzeugaufrufen aus 30 Tagen Betrieb:
+
+| | Ergebnis |
+|---|---|
+| Vorfaele im Journal | 3300 |
+| erkannte Stoerungen mit Namen | 39 |
+| wiederkehrend in mindestens zwei Sitzungen | 6 |
+| davon als Lehre gespeichert (Beleg vorhanden) | 3 |
+
+Nebenbei repariert: die Dublettenpruefung des Traeumens lief nie. Sie rief
+`MemoryStore._embed` als synchrone Methode mit einer Liste auf, bekam ein
+Coroutine-Objekt und warf im naechsten Schritt; der `except` verschluckte es, im
+Dienst stand nur eine RuntimeWarning. Jetzt derselbe Einbettungsweg wie beim
+Schreiben, mit Test.
+
+`NEXUS_DREAM_STORE` bleibt im Code standardmaessig aus: wer das Lernen in den
+Speicher lassen will, schaltet es bewusst ein. Die JSON-Datei unter
+`learned-playbooks/` entsteht immer.
+
 ## [0.22.60] - 2026-11-20
 
 **Nichts, was ein Modell beim Mitschreiben wegwirft, wird noch dauerhaftes Wissen.**

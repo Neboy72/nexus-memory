@@ -5066,12 +5066,48 @@ def build_serve_app():
                 status_code=400)
         return JSONResponse(result)
 
+    async def events(request):
+        """POST /events — neutrale Vorfall-Meldung für das nächtliche Lernen.
+
+        Jeder Harness darf hier melden, was bei ihm gescheitert ist. Nexus
+        liest dafür keine fremde Sitzungsdatenbank: die Richtung ist umgedreht,
+        damit das Gedächtnis ohne Hermes, OpenClaw, Claude Code oder DSH läuft.
+
+        Request:  {"tool": "terminal", "ok": false, "error": "...",
+                   "hint": "...", "session": "...", "agent": "...", "ts": 0}
+                  oder eine Liste solcher Objekte (höchstens 500).
+                  ``agent`` fehlt meist: dann gilt der Schlüssel, mit dem
+                  geschrieben wurde.
+        Response: 200 {"stored": n, "received": m} — nichts wird bewertet,
+                  klassifiziert wird erst beim Lernen.
+        """
+        from nexus_memory import events as ereignisse
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+        eintraege = payload if isinstance(payload, list) else [payload]
+        if not eintraege:
+            return JSONResponse({"error": "send 1 to 500 events"},
+                                status_code=400)
+        if len(eintraege) > 500:
+            return JSONResponse({"error": "at most 500 events per request"},
+                                status_code=413)
+        absender = _request_agent_id()
+        for eintrag in eintraege:
+            if isinstance(eintrag, dict) and not eintrag.get("agent") and absender:
+                eintrag["agent"] = absender
+        geschrieben = await asyncio.to_thread(ereignisse.write_many, eintraege)
+        return JSONResponse({"stored": geschrieben, "received": len(eintraege)})
+
     return Starlette(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
             Route("/enroll", enroll_endpoint, methods=["POST"]),
             Route("/embed", embed, methods=["POST"]),
             Route("/write", write, methods=["POST"]),
+            Route("/events", events, methods=["POST"]),
             # Mount("/") not Mount("/mcp"): a mount at a subpath makes
             # Starlette 307-redirect the exact "/mcp" path to "/mcp/", and
             # real MCP clients POST to "/mcp" without following redirects.
