@@ -10,8 +10,17 @@
         captureCategory: session
 
         # --- Auto-Recall ---
+        # Drei Eintraege statt fuenf (Messung 20.11.2026 an 25 echten Fragen:
+        # fuenf Eintraege brachten 2,96 unpassende je Nachricht, drei 1,76).
+        # Diese Datei ueberschreibt die Vorgabe im Code, deshalb steht die Zahl
+        # hier und nicht nur in index.js. Ausschluss statt Erlaubnisliste:
+        # Protokolle (session) und Etiketten (entity) bleiben draussen, Wissen
+        # wie lesson/pattern/procedure kommt durch. Mindestpunktzahl bleibt aus.
         recall: true
-        recallLimit: 5
+        recallLimit: 3
+        recallExcludeCategories:
+          - session
+          - entity
         recallBudgetChars: 1600
         recallTimeoutMs: 4000
 
