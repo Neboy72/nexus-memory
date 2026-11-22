@@ -94,7 +94,10 @@ def kein_health_audit_daemon():
     original_start = threading.Thread.start
 
     def _guarded_start(self):
-        if self.name == "nexus-health-audit":
+        # Der Backup-Thread gehoert zur selben Klasse Problem: er schreibt 60 s
+        # nach dem Start einen Vollabzug — also nach dem Test, der ihn gestartet
+        # hat, gegen eine Attrappe, und vor dem Fix in den ECHTEN Heimatordner.
+        if self.name in {"nexus-health-audit", "nexus-backup"}:
             return
         return original_start(self)
 
@@ -103,6 +106,51 @@ def kein_health_audit_daemon():
         yield
     finally:
         threading.Thread.start = original_start
+
+
+def _sicherungs_namen(ordner: Path) -> set:
+    """Die Namen der Voll-Sicherungen in ``ordner``; leer, wenn es ihn nicht gibt."""
+    try:
+        return {n for n in os.listdir(ordner) if n.startswith("nexus-backup-")}
+    except OSError:
+        return set()
+
+
+@pytest.fixture(autouse=True)
+def kein_auto_backup(monkeypatch):
+    """Der Hintergrund-Backup darf im Test nicht laufen (22.11.2026).
+
+    Jeder ``MemoryStore`` und jeder Hermes-Provider startet beim Bau einen
+    Thread, der nach 60 s ein Vollbackup schreibt. Gegen eine Attrappe
+    scheitert er (``Auto-backup failed: not enough values to unpack``), und der
+    Pfad war bis 22.11.2026 fest auf ``~/.nexus-memory/backups`` verdrahtet —
+    sieben 55-MB-Dateien aus einem Testabend lagen im echten Ordner.
+
+    Der Ordner folgt jetzt ``NEXUS_BACKUP_DIR``/``NEXUS_DATA_DIR``; dieser
+    Schalter haelt den Thread zusaetzlich ganz aus dem Lauf. Wer das Verhalten
+    pruefen will, setzt ihn zurueck (``tests/test_backup_isolation.py``).
+    """
+    monkeypatch.setenv("NEXUS_AUTO_BACKUP", "0")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def kein_echtes_backup():
+    """Keine neue Sicherung im ECHTEN Heimatordner waehrend des Testlaufs.
+
+    Der direkte Beweis fuer den Fix: der Ordner wird vor und nach der Sitzung
+    gelesen. Eine neue ``nexus-backup-*``-Datei laesst den Lauf mit einem Fehler
+    enden, statt still 55 MB abzulegen. Vorhandene Dateien — auch alte
+    Test-Reste — werden nicht angefasst und nicht gezaehlt.
+    """
+    echt = Path(os.path.expanduser("~")) / ".nexus-memory" / "backups"
+    vorher = _sicherungs_namen(echt)
+    yield
+    neu = sorted(_sicherungs_namen(echt) - vorher)
+    assert not neu, (
+        f"der Testlauf hat Sicherungen im ECHTEN Ordner {echt} angelegt: {neu}. "
+        "Der Sicherungsordner muss NEXUS_BACKUP_DIR bzw. NEXUS_DATA_DIR folgen, "
+        "und NEXUS_AUTO_BACKUP=0 muss den Thread ausschalten."
+    )
 
 
 @pytest.fixture(autouse=True)

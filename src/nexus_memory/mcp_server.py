@@ -999,6 +999,42 @@ def _count_memory_access(read: bool = False, write: bool = False) -> None:
         logging.debug("Agent access count skipped: %s", exc)
 
 
+def _auto_backup_enabled() -> bool:
+    """Is the background full backup on? ``NEXUS_AUTO_BACKUP=0`` switches it off.
+
+    Production default: on. Tests switch it off, because a ``MemoryStore`` is
+    built by dozens of them and the thread fires 60 s after the start — long
+    after the test that built it, against a client that is a stand-in or
+    already gone (22.11.2026: seven 55 MB dumps from one test evening).
+    """
+    value = os.environ.get("NEXUS_AUTO_BACKUP", "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+#: Wie viele Voll-Sicherungen bleiben? 4 = ein Tag beim 6-Stunden-Takt.
+#: Jede Datei enthaelt die ganze Sammlung (54,9 MB bei 51.979 Punkten, nur
+#: Payloads), 7 waeren 385 MB fuer 42 Stunden - mehr Historie als ein Tag,
+#: aber nicht genug fuer eine Woche. Vier ist ein Tag und 220 MB.
+BACKUP_KEEP = 4
+
+
+def _backup_dir() -> str:
+    """Where a full backup goes: ``NEXUS_BACKUP_DIR``, else ``<data dir>/backups``.
+
+    The data dir is ``$NEXUS_DATA_DIR`` when set, else ``~/.nexus-memory`` — the
+    rule every other state file already follows (``self_report.data_dir``).
+    Until 22.11.2026 the path was hardcoded to the real home, so a redirected
+    data dir still wrote there, and a test run left backups in the developer's
+    folder.
+    """
+    explicit = os.environ.get("NEXUS_BACKUP_DIR", "").strip()
+    if explicit:
+        return os.path.expanduser(explicit)
+    from nexus_memory.self_report import data_dir
+
+    return str(data_dir() / "backups")
+
+
 class MemoryStore:
 
     # Regel B: named vector of the bound collection, set in __init__ once the
@@ -1135,8 +1171,16 @@ class MemoryStore:
             self._update_check_time = time.time()
 
     def _start_auto_backup(self):
-        """Start automatic daily backup of all memories."""
+        """Start the automatic full backup: first run 60 s after the start, then every 6 h.
+
+        ``NEXUS_AUTO_BACKUP=0`` keeps the thread out of the process entirely
+        (tests use it — see ``_auto_backup_enabled``).
+        """
         import threading, time
+        if not _auto_backup_enabled():
+            logging.debug("Auto-backup disabled by NEXUS_AUTO_BACKUP")
+            return
+
         def _backup_loop():
             time.sleep(60)  # Wait 60s after startup
             while True:
@@ -1153,7 +1197,7 @@ class MemoryStore:
         import os, time
         from datetime import datetime
 
-        backup_dir = os.path.expanduser("~/.nexus-memory/backups")
+        backup_dir = _backup_dir()
         # 0o700: backups contain EVERY memory including access_level="private"
         # payloads — the directory must never be readable by other users,
         # even if the process umask is lax (e.g. 0o022).
@@ -1217,12 +1261,12 @@ class MemoryStore:
         self._last_backup_time = time.time()
         self._last_backup_path = backup_path
 
-        # Keep only last 7 backups
+        # Keep only the newest BACKUP_KEEP backups (4 = one day at 6h).
         backups = sorted(
             [f for f in os.listdir(backup_dir) if f.startswith("nexus-backup-")],
             reverse=True
         )
-        for old in backups[7:]:
+        for old in backups[BACKUP_KEEP:]:
             try: os.remove(os.path.join(backup_dir, old))
             except OSError: pass
 
@@ -3078,8 +3122,11 @@ async def handle_list_tools(role: Optional[str] = None) -> list[types.Tool]:
             name="backup",
             description=(
                 "Create a full backup of all memories as JSON file. "
-                "Includes payloads + vectors. Saved to ~/.nexus-memory/backups/. "
-                "Runs automatically every 24h - use this for manual backup on demand."
+                "Payloads only - the collection stores NAMED vectors, so a dump "
+                "carries no vectors and a restore re-embeds from the text "
+                "(restore with reembed=true). Saved to <data dir>/backups/. "
+                "The service backs up automatically every 6 hours - use this for "
+                "a manual backup on demand."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),

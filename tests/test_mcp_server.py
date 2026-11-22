@@ -1602,11 +1602,9 @@ class TestAutoBackupPermissions:
     ):
         fake_home = tmp_path / "home"
         fake_home.mkdir()
-        monkeypatch.setattr(
-            mcp.os.path,
-            "expanduser",
-            lambda p: str(fake_home / p[2:]) if p.startswith("~/") else p,
-        )
+        # Seit 22.11.2026 folgt der Sicherungsordner dem Datenverzeichnis; der
+        # frueher gepatchte ``expanduser`` allein wuerde nichts mehr treffen.
+        monkeypatch.setenv("NEXUS_DATA_DIR", str(fake_home / ".nexus-memory"))
 
         store = self._bare_store()
 
@@ -1629,11 +1627,9 @@ class TestAutoBackupPermissions:
     ):
         fake_home = tmp_path / "home2"
         (fake_home / ".nexus-memory" / "backups").mkdir(parents=True)
-        monkeypatch.setattr(
-            mcp.os.path,
-            "expanduser",
-            lambda p: str(fake_home / p[2:]) if p.startswith("~/") else p,
-        )
+        # Seit 22.11.2026 folgt der Sicherungsordner dem Datenverzeichnis; der
+        # frueher gepatchte ``expanduser`` allein wuerde nichts mehr treffen.
+        monkeypatch.setenv("NEXUS_DATA_DIR", str(fake_home / ".nexus-memory"))
         # A previous backup with lax permissions (e.g. created by an older
         # version): the next run must fix the mode of the reused timestamp
         # path only if it collides — instead assert our fresh file is tight

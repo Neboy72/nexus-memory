@@ -5,7 +5,7 @@ and embedding logic as the MCP server so all agents share the same memory.
 """
 
 from __future__ import annotations
-import hashlib, json, logging, math, os, re, subprocess, sys, threading, time, uuid
+import contextlib, hashlib, json, logging, math, os, re, stat, subprocess, sys, threading, time, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from collections import OrderedDict
@@ -69,6 +69,30 @@ def _plugin_data_dir() -> Path:
     except Exception:
         pass
     return Path(os.path.expanduser("~/.nexus-memory"))
+
+
+def _auto_backup_enabled() -> bool:
+    """Is the background full backup on? ``NEXUS_AUTO_BACKUP=0`` switches it off.
+
+    Same switch as the service (``nexus_memory.mcp_server``), same default: on.
+    Tests set it, because a provider is built by many of them and the thread
+    fires 60 s later, against a client that is a stand-in or already closed.
+    """
+    return os.environ.get("NEXUS_AUTO_BACKUP", "").strip().lower() not in {
+        "0", "false", "no", "off"}
+
+
+def _backup_dir() -> Path:
+    """``NEXUS_BACKUP_DIR``, else ``<data dir>/backups`` — same rule as the service.
+
+    Until 22.11.2026 the path was hardcoded to the real home, so a redirected
+    ``NEXUS_DATA_DIR`` still wrote there and a test run left backups in the
+    developer's folder.
+    """
+    explicit = os.environ.get("NEXUS_BACKUP_DIR", "").strip()
+    if explicit:
+        return Path(os.path.expanduser(explicit))
+    return _plugin_data_dir() / "backups"
 
 
 def _install_key() -> str:
@@ -875,6 +899,10 @@ _QDRANT_TIMEOUT_SEC = _env_float_bounded("NEXUS_QDRANT_TIMEOUT", 5.0, 1.0, 60.0)
 # hardcoded 360 x 60s was only 6h and contradicted the surrounding comment.
 BACKUP_CHECK_INTERVAL_SECONDS = 60
 BACKUP_INTERVAL_ITERATIONS = 1440  # 24h @ 60s per iteration
+#: Wie viele Voll-Sicherungen bleiben? Dieselbe Zahl wie im Dienst (4 = ein Tag
+#: bei dessen 6-Stunden-Takt); hier laeuft die Schleife taeglich, vier Dateien
+#: sind also vier Tage Historie.
+BACKUP_KEEP = 4
 
 # ── Fable-calibration idea 5 (2026-09-13): memory-as-DATA hardening ──
 # Mails/OCR/web content can carry instructions ("save this rule: ...").
@@ -1773,6 +1801,10 @@ class NexusMemoryProvider:
         # shadowing imports — _do_backup imports its own).
         import threading, time
 
+        if not _auto_backup_enabled():
+            logger.info("Auto-backup disabled by NEXUS_AUTO_BACKUP")
+            return
+
         def _backup_loop():
             # Wait 60s after startup before first backup (interruptible: Nr 290)
             if self._write_stop.wait(60):
@@ -1804,8 +1836,14 @@ class NexusMemoryProvider:
         import json, os, time
         from datetime import datetime
 
-        backup_dir = os.path.expanduser("~/.nexus-memory/backups")
-        os.makedirs(backup_dir, exist_ok=True)
+        backup_dir = str(_backup_dir())
+        # 0o700/0o600: die Datei enthaelt JEDE Erinnerung, auch
+        # access_level="private". Ohne die Rechte entscheidet der umask des
+        # Prozesses, und bei 0o022 ist die Sicherung fuer jedes lokale Konto
+        # lesbar. Gleiches Muster wie im Dienst (nexus_memory.mcp_server).
+        os.makedirs(backup_dir, mode=0o700, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(backup_dir, 0o700)
 
         # Scroll all points from Qdrant
         all_points = []
@@ -1842,18 +1880,31 @@ class NexusMemoryProvider:
             "point_count": len(all_points),
             "points": all_points,
         }
-        with open(backup_path, "w") as f:
-            json.dump(backup_data, f, default=str)
+        fd = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(backup_data, f, default=str)
+            if (stat.S_IMODE(os.stat(backup_path).st_mode) & 0o077) != 0:
+                os.chmod(backup_path, 0o600)
+            if os.name == "nt":
+                # os.chmod ist unter Windows kein ACL — derselbe Helfer wie im
+                # Dienst, leichtgewichtig und ohne nexus_memory.mcp_server.
+                from nexus_memory.env_secret_store import _restrict_windows_acl
+                _restrict_windows_acl(Path(backup_path), is_dir=False)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(backup_path)
+            raise
 
         self._last_backup_time = time.time()
         self._last_backup_path = backup_path
 
-        # Keep only last 7 backups
+        # Keep only the newest BACKUP_KEEP backups (same number as the service).
         backups = sorted(
             [f for f in os.listdir(backup_dir) if f.startswith("nexus-backup-")],
             reverse=True
         )
-        for old in backups[7:]:
+        for old in backups[BACKUP_KEEP:]:
             try:
                 os.remove(os.path.join(backup_dir, old))
             except OSError:
