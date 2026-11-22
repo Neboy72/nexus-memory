@@ -61,6 +61,9 @@ plus the matching key.
 ### Files this plugin writes
 
 - `~/.nexus-memory/` — memory state, backups, toggle files, spend records.
+- `~/.nexus-memory/logs/` — the service log and, per day, `read-YYYY-MM-DD.jsonl`:
+  one line per recall with the ids of the entries served and a checksum of the
+  query, never its text (90-day rotation).
 
 ## Opt-In Network Calls
 
@@ -98,6 +101,17 @@ This plugin and the Nexus Memory MCP server share the **same Qdrant
 collection**. Everything written by the plugin is visible to the MCP server,
 and vice versa. Claude Code, Cursor, and Hermes Agent all operate on one
 unified memory.
+
+## Who wrote a memory (`agent`)
+
+Every stored memory names its author in the payload field `agent` — resolved from
+the context of the call (the plugin's own `NEXUS_AGENT_ID`, or the agent key the
+service names), never from a field a caller can invent. Since 22.11.2026 the field
+is mandatory: a write without an identity is refused instead of storing a point
+nobody owns. The maintenance passes that write directly (consolidation, dreaming)
+carry `writer: consolidation` / `writer: dreaming` instead and leave `agent` empty,
+because a consolidation merges several agents' statements whose originals are
+deleted; older points without either field stay as they are — no migration.
 
 ## Exposed Tools
 
