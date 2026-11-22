@@ -1,3 +1,41 @@
+## [0.22.67] - 2026-11-22
+
+**Ein Testlauf schreibt keine Sicherungen mehr ins echte Zuhause — und eine Sicherung ist fuer andere Konten unlesbar.**
+
+Der Befund aus dem Veroeffentlichungslauf von 0.22.66: `~/.nexus-memory/backups`
+fuellte sich waehrend der Testsuite mit sieben Dateien a 54,9 MB, und im Protokoll
+standen 16 Zeilen `Auto-backup failed: not enough values to unpack (expected 2, got
+0)` — ohne einen roten Test.
+
+- **Ursache:** jeder `MemoryStore` und jeder Hermes-Provider startet beim Bau einen
+  Thread, der 60 s spaeter die ganze Sammlung abzieht. Der Ablageort stand fest auf
+  `~/.nexus-memory/backups`; `NEXUS_DATA_DIR` wurde ignoriert. Gegen Attrappen
+  scheiterte der Scroll, die Schleife fing ihn und schrieb nur eine Warnung.
+- **Der Ordner folgt der Umgebung:** `NEXUS_BACKUP_DIR`, sonst
+  `<Datenverzeichnis>/backups`. Ohne Umgebungsvariablen derselbe Pfad wie vorher.
+- **Schalter:** `NEXUS_AUTO_BACKUP=0` haelt den Thread ganz aus dem Prozess. In
+  Tests ist er aus; im Betrieb bleibt die Vorgabe an, und eine wirklich gescheiterte
+  Sicherung meldet sich weiter als Warnung.
+- **Aufbewahrung 7 -> 4:** ein Tag beim 6-Stunden-Takt des Dienstes, 220 statt
+  385 MB. Die zwei alten Handabzuege im Ordner zaehlt sie nicht, die bleiben liegen.
+- **Rechte der Plugin-Sicherung:** sie entstand mit `open(..., "w")` und damit mit
+  dem umask des Prozesses — bei 0o022 konnte jedes lokale Konto jede private
+  Erinnerung lesen. Jetzt wie der Dienst: Ordner 0o700, Datei 0o600, Nachpruefung
+  per `stat`, unter Windows der ACL-Helfer.
+- **Werkzeugbeschreibung:** `backup` sagte "Includes payloads + vectors" und "every
+  24h". Richtig ist: nur Payloads (die Sammlung hat benannte Vektoren, ein Abzug
+  traegt also keine, und Wiederherstellen bettet neu ein) und alle sechs Stunden.
+- **Waechter:** eine Sitzungswache vergleicht den ECHTEN Ordner vor und nach dem
+  Testlauf und laesst den Lauf scheitern, wenn eine neue Sicherung dazukommt;
+  `tests/test_backup_isolation.py` deckt Pfad, Schalter, Aufbewahrung, Rechte und
+  die bleibende Warnung in elf Faellen ab.
+
+Python: 3404 Tests gruen, 1 bekannter roter
+(`tests/test_claude_code_write_path.py::test_leseweg_funktioniert`), 11
+uebersprungen — vorher 3394 gruen, derselbe rote, 10 uebersprungen. Der eine
+Uebersprungene mehr ist der Erreichbarkeitstest der Pin-Kette: der Pin zeigt auf
+einen Commit, den noch kein entferntes Ref enthaelt.
+
 ## [0.22.66] - 2026-11-22
 
 **Jede Erinnerung nennt ihren Verfasser — oder sie wird nicht abgelegt.**
