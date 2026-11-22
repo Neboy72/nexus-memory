@@ -15,11 +15,17 @@ Geprueft wird hier:
 - ein Test, der beide Sicherungen wirklich schreibt, laesst den echten Ordner
   unveraendert. Die Sitzungswache
   (``tests/conftest.py::kein_echtes_backup``) prueft dasselbe fuer den ganzen
-  Lauf.
+  Lauf,
+- die Sicherung ist fuer andere Konten nicht lesbar — auf POSIX ueber die
+  Modusbits 0600/0700, auf Windows ueber die ACL (``icacls``). Windows meldet
+  ``os.stat().st_mode`` immer als 0o666/0o777, deshalb prueft dort die ACL und
+  nicht das Bit.
 """
 import importlib.util
+import getpass
 import os
 import stat
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -224,21 +230,88 @@ def test_aufbewahrung_behaelt_vier_im_plugin(monkeypatch):
     assert modul.BACKUP_KEEP == 4
 
 
-# ── Rechte der Plugin-Sicherung ─────────────────────────────────────────────
+# ── Rechte der Sicherungen: Modusbits auf POSIX, ACLs auf Windows ────────────
+
+# Windows kennt keine POSIX-Modusbits: ``os.chmod`` schaltet dort nur das
+# Read-only-Attribut, und ``os.stat().st_mode`` meldet immer 0o666 (Datei) bzw.
+# 0o777 (Ordner) — die Zusicherung "fuer andere Konten nicht lesbar" haengt dort
+# an der ACL, die ``_restrict_windows_acl`` per ``icacls`` setzt (Konto + SYSTEM,
+# keine breiten Prinzipale). Geprueft wird deshalb plattformgerecht: auf POSIX
+# die Bits, auf Windows die ACL. Ein pauschaler ``skipif`` waere falsch — die
+# Zusicherung gilt auf beiden Seiten, nur die Messstelle ist eine andere.
+_POSIX_MODUSBITS = os.name != "nt"
+
+# Muessen auf Windows aus der ACL verschwunden sein (GitHub-Runner ist en-US);
+# zusaetzlich ueber die SIDs, weil die Namen lokalisiert sein koennen.
+_WEITE_TRUSTEES = ("everyone", "builtin\\users", "authenticated users")
+_WEITE_TRUSTEE_SIDS = ("s-1-1-0", "s-1-5-32-545", "s-1-5-11")
+
+
+def _icacls(pfad: Path) -> str:
+    """Die ACL-Zeilen von ``icacls`` (nur Windows)."""
+    proc = subprocess.run(
+        ["icacls", str(pfad)], capture_output=True, text=True,
+        encoding="oem", errors="replace", timeout=30,
+    )
+    assert proc.returncode == 0, f"icacls {pfad} schlug fehl: {proc.stderr}"
+    # Der Pfad steht selbst in der Ausgabe — sonst wuerde ein Ordner namens
+    # "Users" als Prinzipal durchgehen.
+    return proc.stdout.replace(str(pfad), "").lower()
+
+
+def _assert_privat(pfad: Path, *, ist_ordner: bool = False) -> None:
+    """Nur das aktuelle Konto (und SYSTEM) kommt an *pfad* heran."""
+    if _POSIX_MODUSBITS:
+        modus = stat.S_IMODE(os.stat(pfad).st_mode)
+        erwartet = 0o700 if ist_ordner else 0o600
+        assert modus & 0o077 == 0, f"{pfad} ist {oct(modus)} statt {oct(erwartet)}"
+        return
+
+    acl = _icacls(pfad)
+    for trustee in _WEITE_TRUSTEES:
+        assert trustee not in acl, f"{trustee} hat weiter Zugriff auf {pfad}:\n{acl}"
+    for sid in _WEITE_TRUSTEE_SIDS:
+        assert sid not in acl, f"{sid} hat weiter Zugriff auf {pfad}:\n{acl}"
+    assert getpass.getuser().lower() in acl, f"Eigentuemer fehlt in der ACL von {pfad}:\n{acl}"
+    assert "system" in acl, f"SYSTEM fehlt in der ACL von {pfad}:\n{acl}"
+
+
+def _ohne_umask():
+    """POSIX: umask 0 ist der schlimmste Fall — der umask nimmt nichts weg."""
+    return os.umask(0) if _POSIX_MODUSBITS else None
+
 
 def test_plugin_sicherung_ist_fuer_andere_unlesbar(monkeypatch):
-    """Private Erinnerungen: die Datei ist 0o600, der Ordner 0o700 — auch bei umask 0."""
+    """Private Erinnerungen: Datei 0600 bzw. nur Eigentuemer+SYSTEM — auch bei umask 0."""
     monkeypatch.delenv("NEXUS_BACKUP_DIR", raising=False)
-    alt = os.umask(0)  # schlimmster Fall: der umask nimmt nichts weg
+    alt = _ohne_umask()
     try:
         pfad = Path(_freier_provider(_plugin_modul())._do_backup())
     finally:
-        os.umask(alt)
+        if alt is not None:
+            os.umask(alt)
 
-    datei = stat.S_IMODE(os.stat(pfad).st_mode)
-    ordner = stat.S_IMODE(os.stat(pfad.parent).st_mode)
-    assert datei & 0o077 == 0, f"Datei ist {oct(datei)} statt 0o600"
-    assert ordner & 0o077 == 0, f"Ordner ist {oct(ordner)} statt 0o700"
+    _assert_privat(pfad)
+    if _POSIX_MODUSBITS:
+        # Den Ordner schraenkt das Plugin nur auf POSIX selbst ein. Auf Windows
+        # erbt er die ACL des Datenverzeichnisses: ``fix_dir_permissions`` setzt
+        # sie mit (OI)(CI), also fuer jedes Kind mit — deshalb prueft der Test
+        # dort die Datei, nicht eine Ordner-ACL, die das Plugin nie setzt.
+        _assert_privat(pfad.parent, ist_ordner=True)
+
+
+def test_dienst_sicherung_ist_fuer_andere_unlesbar(monkeypatch):
+    """Der Dienst schraenkt Ordner UND Datei ein (auf Windows beide per icacls)."""
+    monkeypatch.delenv("NEXUS_BACKUP_DIR", raising=False)
+    alt = _ohne_umask()
+    try:
+        pfad = Path(_leerer_store()._do_backup())
+    finally:
+        if alt is not None:
+            os.umask(alt)
+
+    _assert_privat(pfad.parent, ist_ordner=True)
+    _assert_privat(pfad)
 
 
 # ── Die Werkzeugbeschreibung nennt das echte Verhalten ──────────────────────
