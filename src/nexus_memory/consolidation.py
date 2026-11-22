@@ -693,6 +693,12 @@ class Consolidator:
                          "access_level": access_level,
                          "scope": fact_scope,
                          "source": "nexus-consolidation", "created_at": now,
+                         # Welches VERFAHREN den Punkt angelegt hat. ``agent``
+                         # bleibt hier leer: eine Konsolidierung fasst
+                         # Aussagen mehrerer Agenten zusammen, eine Zuschreibung
+                         # waere geraten. Abfragen koennen so
+                         # Konsolidierungspunkte ausfiltern (writer-Feld).
+                         "writer": "consolidation",
                          "lifecycle_status": "canonical", "confidence": 0.8,
                          "consolidated_from": source_point_id,
                          "provenance": {"source_type": "consolidation",

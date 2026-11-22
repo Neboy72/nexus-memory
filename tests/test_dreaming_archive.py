@@ -537,6 +537,46 @@ def test_store_playbook_goes_through_the_write_gate(monkeypatch):
     assert aufgerufen["n"] == 0, "ein abgewiesenes Muster darf die Sammlung nicht erreichen"
 
 
+def test_store_playbook_marks_the_writer(monkeypatch):
+    """Ein getraeumter Punkt nennt das Verfahren (``writer``), keinen Agenten.
+
+    Wie bei der Konsolidierung: der Traum fasst Sitzungen mehrerer Agenten
+    zusammen, ``agent`` bleibt deshalb leer.
+    """
+    from unittest.mock import MagicMock
+
+    class _Embedder:
+        async def embed(self, text, is_query=False):
+            return [0.1] * 8
+
+    class _Store:
+        def __init__(self):
+            self.client = MagicMock()
+            self.vector_name = None
+            self.collection = "test-collection"
+            self._embedder = _Embedder()
+
+    dreamer = dreaming.Dreamer(store=_Store())
+    punkte: list = []
+    # ``_store_playbook`` importiert ``upsert_named`` lokal aus
+    # ``collection_vectors`` — dort wird es ersetzt, nicht im Modul.
+    import nexus_memory.collection_vectors as collection_vectors
+
+    monkeypatch.setattr(
+        collection_vectors, "upsert_named",
+        lambda _client, _collection, pts, _vector: punkte.extend(pts),
+    )
+
+    assert dreamer._store_playbook({
+        "pattern": "Nach einem Import-Fehler zuerst den Interpreter pruefen",
+        "verdict": "hat geholfen",
+    }) is True
+
+    payload = punkte[0].payload
+    assert payload["writer"] == "dreaming"
+    assert "agent" not in payload, "kein geratener Verfasser an einem Traumpunkt"
+
+
 # ── 0.22.61: neutrale Quelle statt Hermes-Datenbank ───────────────
 
 def test_journal_ist_die_quelle_ohne_fremde_datenbank(monkeypatch, tmp_path):

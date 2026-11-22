@@ -577,6 +577,9 @@ class Dreamer:
             payload={"content": text, "text": text, "category": "procedure",
                      "access_level": "private", "scope": "default",
                      "source": "nexus-dreaming", "created_at": now,
+                     # Verfahren statt Verfasser: der Traum fasst Sitzungen
+                     # mehrerer Agenten zusammen (siehe consolidation.py).
+                     "writer": "dreaming",
                      "lifecycle_status": "canonical", "confidence": 0.6,
                      "provenance": {"source_type": "dreaming",
                                     "created_by": "dreaming-v2",

@@ -217,3 +217,26 @@ def test_ohne_dienstschluessel_kein_schreibweg(monkeypatch, written):
 
     assert r.status_code == 401
     assert written == []
+
+def test_agent_kommt_aus_dem_schluessel_nicht_aus_einem_feld(monkeypatch, written):
+    """Wer schreibt, wird aus dem Agentenschluessel benannt (22.11.2026).
+
+    Die Kennung ist kein Feld, das ein Aufrufer behaupten kann: zwei
+    verschiedene Schluessel ergeben zwei verschiedene Verfasser im Punkt.
+    """
+    from nexus_memory import service_auth
+
+    def _schreibe(agent_id: str):
+        headers = {service_auth.AUTH_HEADER: service_auth.issue_key(agent_id, agent_id)}
+        return _client(monkeypatch).post(
+            "/write",
+            json={"content": FAKT, "category": "fact", "source": "openclaw_tool",
+                  "source_type": "chat"},
+            headers=headers,
+        )
+
+    assert _schreibe("hermes").status_code == 200
+    assert _schreibe("cn4f8r").status_code == 200
+
+    assert written[0].payload["agent"] == "hermes"
+    assert written[1].payload["agent"] == "cn4f8r"

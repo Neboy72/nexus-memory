@@ -249,3 +249,14 @@ class TestPrefetchScopeGating:
         with prov._prefetch_lock:
             result = prov._prefetch_result
         assert "old memory without scope field" in result
+
+
+@pytest.fixture(autouse=True)
+def _writer_identity(monkeypatch):
+    """Seit 22.11.2026 ist ``agent`` beim Schreiben Pflicht.
+
+    Diese Tests pruefen Scope, Supersession und Temporalitaet, nicht die
+    Identitaet. Sie schreiben darum als bekannter Agent — anonyme Schreib-
+    versuche weist ``MemoryStore.remember`` ab (siehe test_memory_agent_stamp).
+    """
+    monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")

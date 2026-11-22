@@ -1,3 +1,65 @@
+## [0.22.66] - 2026-11-22
+
+**Jede Erinnerung nennt ihren Verfasser — oder sie wird nicht abgelegt.**
+
+Bisher konnte ein Schreibvorgang ohne Agentenkennung durchgehen: der Punkt landete
+mit dem Platzhalter `unidentified` oder ohne brauchbares Feld in der Sammlung, und
+spaeter liess sich nicht mehr feststellen, wer ihn abgelegt hat. Im Bestand von
+51.875 Punkten tragen 2.711 ueberhaupt ein `agent`-Feld (5,2 %), und davon sind
+nur 4 Memories — 21.094 der 27.979 Memories (75,4 %) sind keinem Agenten
+zuzuordnen. Genau diese Luecke schliesst die Aenderung an der Schreibstelle; der
+Altbestand bleibt, wie er ist.
+
+- **Die Kennung kommt aus dem Kontext, nicht aus einem Parameter.** `agent_detect.require_agent_id()`
+  loest sie in dieser Reihenfolge auf: Agentenschluessel der Anfrage (MCP `x-nexus-agent-id`
+  bzw. `actor` des Dienstes) → `actor`, den der Dienst durchreicht → `NEXUS_AGENT_ID`
+  des Plugins. Ein Feld, das der Aufrufer behaupten kann, zaehlt nicht. Geprueft
+  wird **vor** dem Einbetten — es entsteht kein halber Punkt.
+- **Ohne Kennung wird abgewiesen, nicht still gespeichert.** `require_agent_id()`
+  wirft `MissingAgentIdError`; die Wege antworten: MCP `{"status": "rejected",
+  "reason": "No agent identity: …"}` plus eine `denied`-Zeile im Bewegungsprotokoll,
+  HTTP `POST /write` mit `422` und demselben Grund, die DSH-Bruecke mit
+  `{"stored": false, "reason": "no-agent-id"}` — der Turn des Menschen laeuft weiter.
+  Lesen und Zaehlen verhalten sich unveraendert; `resolve_agent_id()` bleibt dort,
+  wo der Platzhalter genuegt.
+- **Ein eigenes Feld `writer` fuer die Verfahren.** Konsolidierung und Traeumen
+  schreiben per direktem Upsert, nicht ueber `remember()`, und fuehren Aussagen
+  mehrerer Agenten zusammen, deren Originale geloescht sind — jede Zuschreibung
+  waere geraten. Ein konsolidierter Fakt traegt deshalb `writer: "consolidation"`,
+  eine gelernte Lehre `writer: "dreaming"`, und `agent` bleibt dort leer. Abfragen
+  koennen solche Punkte mit einem Payload-Filter ausschliessen, statt sie am Text
+  zu erkennen. `agent` bleibt damit ein Personenschluessel, ohne Prozessnamen darin.
+- **Altdaten werden nicht angefasst.** Keine Migration, kein `set_payload`, kein
+  Nachtragen: 75,4 % der Memories waeren nicht belegbar zuzuordnen, und ein
+  Sammelwert auf 21.000 Punkten ist ein Etikett ohne Wert. Punkte ohne `agent` und
+  ohne `writer` sind normal und lesen sich wie bisher.
+
+**Mit diesem Release ausgeliefert, nicht Teil dieser Aenderung.** Vier Commits
+lagen schon vor heute auf `main` und landen mit 0.22.66 zum ersten Mal in einer
+Fassung — sie stehen hier, damit niemand sie fuer neu haelt:
+
+- **Vertrauensgrenze im eingebetteten Block** (`fd42257`, `a5ed519`): der
+  Erinnerungsblock besteht aus gespeicherten Texten — Sitzungen, Dokumente,
+  fremde Werkzeugausgaben — und eine Zeile darin kann eine Anweisung sein, die
+  ein Mensch nie an diesen Agenten gerichtet hat. Hermes und Claude Code setzen
+  jetzt dieselbe Kennzeichnung, die gespeicherte Texte als Daten markiert, bevor
+  das Modell den ersten Eintrag liest (ClawHub-Befund "Persistent Prompt
+  Injection Through Automatically Recalled Memories"). Sie zaehlt nicht gegen
+  das Zeichenbudget: das Budget regelt Inhalte, nicht die Warnung davor.
+- **DSH-Buendel von fuenf auf drei Eintraege** (`13865d2`): dieselbe Messung wie
+  0.22.65 (fuenf Eintraege brachten 2,96 unpassende je Nachricht, drei 1,76),
+  jetzt auch in der Buendel-Vorgabe des DSH-Plugins, mit Ausschluss von
+  `session` und `entity` statt einer Erlaubnisliste. Die Mindestpunktzahl bleibt
+  aus.
+- **Claude-Code-Rueckfallversion auf 1.2.8** (`dd18878`): die Versionsangabe im
+  Quelltext der Selbstauskunft lief der Manifest-Version hinterher.
+
+Python auf der veroeffentlichten Linie: 3393 Tests gruen, 1 bekannter roter
+(`tests/test_claude_code_write_path.py::test_leseweg_funktioniert`), 11
+uebersprungen — vorher 3388 gruen, derselbe rote, 10 uebersprungen. Der eine
+Uebersprungene mehr ist der Erreichbarkeitstest der Pin-Kette: der Pin zeigt auf
+einen Commit, den noch kein entferntes Ref enthaelt.
+
 ## [0.22.65] - 2026-11-20
 
 **Der Abruf liefert weniger, aber das Richtige, und jeder Lesezugriff steht im Protokoll.**

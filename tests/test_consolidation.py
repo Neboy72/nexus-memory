@@ -200,6 +200,21 @@ class TestRun:
         marked = [ps for ps in q.payload_sets if ps[1].get("consolidated_by")]
         assert marked and marked[0][1]["consolidated_by"] == "consolidation-v1"
 
+    def test_writer_field_names_the_procedure_not_an_agent(self):
+        """Ein Konsolidierungspunkt nennt das Verfahren, keinen Agenten.
+
+        ``agent`` heisst weiter "wer hat es abgelegt". Eine Konsolidierung
+        fasst Aussagen mehrerer Agenten zusammen, und die Originale sind
+        geloescht — jede Zuschreibung waere geraten. Deshalb ``writer``.
+        """
+        q = FakeQdrant([_raw_point("raw-1")], similar_points=[])
+        c, _ = _make(q, ['{"facts": ["The user uses Mac Mini M4 16GB"]}'])
+        c.run(batch_size=1)
+
+        payload = q.upserts[-1][1][0].payload
+        assert payload["writer"] == "consolidation"
+        assert "agent" not in payload, "kein geratener Verfasser an einem Konsolidierungspunkt"
+
     def test_no_facts_still_marks(self):
         q = FakeQdrant(self._raw_batch(1), similar_points=[])
         c, prompts = _make(q, ['{"facts": []}'])

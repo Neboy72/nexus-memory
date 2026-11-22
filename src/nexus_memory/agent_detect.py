@@ -927,6 +927,34 @@ def resolve_former_name(name: str) -> str:
     return _resolve_former_name_in(registry, wanted)
 
 
+class MissingAgentIdError(RuntimeError):
+    """A write was refused because no agent identity could be established.
+
+    Raised by :func:`require_agent_id` — the write paths call it instead of
+    :func:`resolve_agent_id`, so an unnamed caller learns why nothing was
+    stored instead of leaving a point behind that nobody owns.
+    """
+
+
+def require_agent_id(explicit: Optional[str] = None) -> str:
+    """Like :func:`resolve_agent_id`, but a missing identity is an error.
+
+    Writes use this: a stored memory names its author, so refusing is the
+    honest answer when nobody can be named. The identity still comes from the
+    CONTEXT of the call — the agent key of the request, the plugin's own
+    ``NEXUS_AGENT_ID`` — never from a field the caller may invent.
+    """
+    ident = resolve_agent_id(explicit)
+    if ident == UNIDENTIFIED_AGENT_ID:
+        raise MissingAgentIdError(
+            "No agent identity: this memory would have no author, so nothing "
+            "was stored. Send the request with an agent key (MCP/HTTP) or set "
+            "NEXUS_AGENT_ID for the plugin. Old points without the field stay "
+            "as they are."
+        )
+    return ident
+
+
 def resolve_agent_id(explicit: Optional[str] = None) -> str:
     """Return the id an access is attributed to — never empty.
 
@@ -935,6 +963,9 @@ def resolve_agent_id(explicit: Optional[str] = None) -> str:
     Nothing is guessed from hostnames, install paths or which agents happen
     to be installed on this machine: an id is only ever what the caller or
     the environment declares.
+
+    Writes do not use this function directly but :func:`require_agent_id`:
+    the placeholder is fine for reading and counting, never for storing.
 
     A declared name that is a former name of a renamed agent is reported
     under that agent's CURRENT id (``resolve_former_name``): the caller keeps

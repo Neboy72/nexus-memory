@@ -483,6 +483,27 @@ class TestCallToolRemember:
         assert body["status"] == "ok"
         assert body["category"] == "belief"
 
+    async def test_write_without_agent_identity_is_refused(
+        self, mcp_store, mock_qdrant_client, monkeypatch
+    ):
+        """Ohne Verfasser schreibt das Werkzeug nichts (22.11.2026).
+
+        Der Aufrufer bekommt eine Abweisung mit Grund; die Sammlung sieht
+        keinen Punkt. Die Kennung kommt aus dem Kontext (Schluessel bzw.
+        ``NEXUS_AGENT_ID``) und ist kein Feld, das der Aufrufer setzt.
+        """
+        monkeypatch.delenv("NEXUS_AGENT_ID", raising=False)
+
+        out = await mcp.handle_call_tool(
+            "remember", {"text": "Ein Fakt ohne Verfasser"}
+        )
+        body = _decode(out[0].text)
+
+        assert body["status"] == "rejected"
+        assert "No agent identity" in body["reason"]
+        assert mock_qdrant_client.upsert.call_count == 0, \
+            "ohne Verfasser darf kein Punkt entstehen"
+
     async def test_rule_without_proof_is_stored_as_fact(self, mcp_store, mock_qdrant_client):
         """Eine Regel entsteht nur mit dem Token aus ``rule-confirm``."""
         out = await mcp.handle_call_tool("remember", {"text": "x", "category": "rule"})

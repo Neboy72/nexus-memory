@@ -60,7 +60,12 @@ from nexus import MemoryCategory, __version__ as nexus_version
 
 # Who stored a memory (explicit → NEXUS_AGENT_ID → UNIDENTIFIED_AGENT_ID).
 # Distinct from ``source``, which says where the INFORMATION came from.
-from nexus_memory.agent_detect import resolve_agent_id, resolve_instance_id
+from nexus_memory.agent_detect import (
+    MissingAgentIdError,
+    require_agent_id,
+    resolve_agent_id,
+    resolve_instance_id,
+)
 
 # Bewegungsprotokoll (wer hat wann was getan) — eine Zeile je Vorgang, ohne
 # Inhalt. Fail-open: ein Protokollfehler verhindert keinen Vorgang.
@@ -1364,7 +1369,21 @@ class MemoryStore:
         Bewegungsprotokoll (``nexus_memory.service_log``) — eine Zeile je
         Vorgang, ohne Inhalt. Beide sind Zusaetze: der Vorgabewert beschreibt
         den Bibliotheksaufruf, die beiden Dienstwege nennen sich selbst.
+
+        Agent identity is REQUIRED (22.11.2026): every stored point names its
+        author. It is resolved from the context of the call — the agent key of
+        the request, the ``actor`` the service passes, the plugin's own
+        ``NEXUS_AGENT_ID`` — never from a field a caller could invent. Without
+        an identity nothing is written: ``MissingAgentIdError`` is raised
+        instead of storing a point nobody owns. Old points without the field
+        stay as they are (no migration, no backfill).
         """
+        # Agent-Pflicht: erst der Verfasser, dann alles andere. Der Aufruf
+        # scheitert damit vor dem Einbetten — es entsteht kein halber Punkt.
+        author = require_agent_id(
+            actor if isinstance(actor, str) and actor.strip() else _request_agent_id()
+        )
+
         # Universal access counting: one write per remember() — every client
         # path lands here (fail-open, see _count_memory_access).
         _count_memory_access(write=True)
@@ -1545,11 +1564,10 @@ class MemoryStore:
             # Who stored this memory. ``source`` above says where the
             # information came from (mail, web, consolidation) — this says
             # which agent put it here. Never derived from the caller's
-            # ``source`` argument; old points simply lack the field (None).
-            # A client that declared itself over HTTP (``x-nexus-agent-id``)
-            # wins over this process's own NEXUS_AGENT_ID; without the header
-            # the call is exactly what it always was.
-            "agent": resolve_agent_id(_request_agent_id()),
+            # ``source`` argument, and never empty: ``author`` above was
+            # required before the write started. Old points simply lack the
+            # field (None); there is no backfill.
+            "agent": author,
             # Which INSTALLATION of that agent — two Hermes seats on two
             # machines share the agent id but never the instance id.
             "instance": resolve_instance_id(),
@@ -3404,14 +3422,32 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
             guardrails = _check_content_guardrails(text)
 
-            result = await store.remember(
-                text, access_level, category, source, source_url, confidence,
-                effective_from=effective_from,
-                scope=arguments.get("scope", "default"),
-                rule_proof=arguments.get("rule_proof", ""),
-                via="mcp",
-                actor=_request_agent_id(),
-            )
+            try:
+                result = await store.remember(
+                    text, access_level, category, source, source_url, confidence,
+                    effective_from=effective_from,
+                    scope=arguments.get("scope", "default"),
+                    rule_proof=arguments.get("rule_proof", ""),
+                    via="mcp",
+                    actor=_request_agent_id(),
+                )
+            except MissingAgentIdError as fehler:
+                # Kein Verfasser, kein Punkt. Die Antwort nennt den Grund und
+                # den Weg zur Kennung; geschrieben wurde nichts.
+                service_log.record(
+                    "denied", "refused", text=text,
+                    access_level=access_level, category=category,
+                    scope=arguments.get("scope", "default"),
+                    reason=str(fehler), via="mcp",
+                    actor=_request_agent_id(),
+                )
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "rejected",
+                        "reason": str(fehler),
+                    }),
+                )]
 
             # Fire-and-forget: dispatch "memory.remember" to any subscribers.
             # The dispatcher swallows every error so a broken subscriber
@@ -5114,24 +5150,29 @@ def build_serve_app():
 
         try:
             store = await asyncio.to_thread(get_store)
-            result = await store.remember(
-                content,
-                access_level=_text_field("access_level") or ACCESS_PRIVATE,
-                category=_text_field("category") or "fact",
-                source=_text_field("source"),
-                source_url=_text_field("source_url"),
-                confidence=float(confidence) if confidence is not None else None,
-                scope=_text_field("scope") or "default",
-                memory_id=memory_id,
-                source_type=_text_field("source_type"),
-                # Ein bewusster Werkzeugaufruf setzt ``explicit``. Eine Regel
-                # entsteht trotzdem nur mit ``rule_proof`` — dem Token, das ein
-                # Mensch am Terminal mit ``rule-confirm`` erzeugt hat.
-                explicit=payload.get("explicit") is True,
-                rule_proof=_text_field("rule_proof"),
-                via=via,
-                actor=_request_agent_id(),
-            )
+            try:
+                result = await store.remember(
+                    content,
+                    access_level=_text_field("access_level") or ACCESS_PRIVATE,
+                    category=_text_field("category") or "fact",
+                    source=_text_field("source"),
+                    source_url=_text_field("source_url"),
+                    confidence=float(confidence) if confidence is not None else None,
+                    scope=_text_field("scope") or "default",
+                    memory_id=memory_id,
+                    source_type=_text_field("source_type"),
+                    # Ein bewusster Werkzeugaufruf setzt ``explicit``. Eine Regel
+                    # entsteht trotzdem nur mit ``rule_proof`` — dem Token, das ein
+                    # Mensch am Terminal mit ``rule-confirm`` erzeugt hat.
+                    explicit=payload.get("explicit") is True,
+                    rule_proof=_text_field("rule_proof"),
+                    via=via,
+                    actor=_request_agent_id(),
+                )
+            except MissingAgentIdError as fehler:
+                # 422 wie jede andere Abweisung des Schreibtors: der Grund
+                # steht im Rumpf, geschrieben wurde nichts.
+                return _deny("no agent identity", 422, str(fehler))
         except Exception as exc:
             logging.exception("write endpoint failed")
             service_log.record_error(

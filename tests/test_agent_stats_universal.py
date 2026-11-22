@@ -135,8 +135,11 @@ def test_core_recall_counts_exactly_one_read(isolated_agents_registry):
     assert entry["writes"] == 0
 
 
-def test_core_remember_counts_exactly_one_write(isolated_agents_registry):
+def test_core_remember_counts_exactly_one_write(isolated_agents_registry,
+                                                monkeypatch):
     reg = isolated_agents_registry
+    # Ein Schreibvorgang braucht seit 22.11.2026 einen Verfasser.
+    monkeypatch.setenv("NEXUS_AGENT_ID", "core-caller")
     store = _make_store()
 
     asyncio.run(store.remember(
@@ -167,6 +170,9 @@ def test_mcp_remember_tool_does_not_double_count(isolated_agents_registry,
                                                  monkeypatch):
     reg = isolated_agents_registry
     store = _make_store()
+    # Ein Schreibvorgang braucht seit 22.11.2026 einen Verfasser; die Kennung
+    # kommt hier aus der Umgebung (derselbe Weg wie beim stdio-MCP).
+    monkeypatch.setenv("NEXUS_AGENT_ID", "mcp-caller")
     monkeypatch.setattr(mcp, "get_store", lambda: store)
     monkeypatch.setattr(mcp.handle_call_tool, "_skip_stats", False,
                         raising=False)
@@ -177,7 +183,7 @@ def test_mcp_remember_tool_does_not_double_count(isolated_agents_registry,
          "scope": "test-scope"},
     ))
 
-    assert _counts(reg, ad.UNIDENTIFIED_AGENT_ID) == (0, 1)
+    assert _counts(reg, "mcp-caller") == (0, 1), "one remember() == exactly one write"
 
 
 # ---------------------------------------------------------------------------
@@ -274,8 +280,10 @@ def test_corrupt_registry_never_breaks_recall(isolated_agents_registry):
     )
 
 
-def test_corrupt_registry_never_breaks_remember(isolated_agents_registry):
+def test_corrupt_registry_never_breaks_remember(isolated_agents_registry,
+                                                monkeypatch):
     isolated_agents_registry.write_text("{kaputtes json", encoding="utf-8")
+    monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")
     store = _make_store()
 
     result = asyncio.run(store.remember(

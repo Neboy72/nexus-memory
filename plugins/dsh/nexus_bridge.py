@@ -153,6 +153,10 @@ class Bridge:
         return self._store
 
     async def handle(self, request: dict) -> dict:
+        # Spaet importiert wie alles aus Nexus (braucht env + Qdrant) — die
+        # Ausnahme wird in den Schreibzweigen unten gefangen.
+        from nexus_memory.agent_detect import MissingAgentIdError
+
         op = request.get("op")
         if op == "health":
             return {"status": "ok", "accessLevel": ACCESS_LEVEL, "category": CAPTURE_CATEGORY}
@@ -204,14 +208,20 @@ class Bridge:
                 return {"stored": False, "reason": "too-short"}
             text = build_capture_text(user, assistant, str(request.get("session", "")), int(request.get("turn", 0)))
             async with self._lock:
-                result = await self.store().remember(
-                    text=text,
-                    category=CAPTURE_CATEGORY,
-                    access_level=ACCESS_LEVEL,
-                    source="dsh-plugin",
-                    source_type="session",
-                    explicit=False,
-                )
+                try:
+                    result = await self.store().remember(
+                        text=text,
+                        category=CAPTURE_CATEGORY,
+                        access_level=ACCESS_LEVEL,
+                        source="dsh-plugin",
+                        source_type="session",
+                        explicit=False,
+                    )
+                except MissingAgentIdError as fehler:
+                    # Ohne Verfasser wird nichts gespeichert. Der Turn des
+                    # Menschen laeuft weiter; die Antwort nennt den Grund.
+                    LOG.warning("capture refused: %s", fehler)
+                    return {"stored": False, "reason": "no-agent-id", "error": str(fehler)}
             return {
                 "stored": isinstance(result, dict) and result.get("status") == "ok",
                 "id": (result or {}).get("id", "") if isinstance(result, dict) else "",
@@ -221,14 +231,18 @@ class Bridge:
             if not text:
                 return {"stored": False, "reason": "empty"}
             async with self._lock:
-                result = await self.store().remember(
-                    text=text,
-                    category=str(request.get("category", "fact")),
-                    access_level=ACCESS_LEVEL,
-                    source="dsh-plugin",
-                    source_type="manual",
-                    explicit=True,
-                )
+                try:
+                    result = await self.store().remember(
+                        text=text,
+                        category=str(request.get("category", "fact")),
+                        access_level=ACCESS_LEVEL,
+                        source="dsh-plugin",
+                        source_type="manual",
+                        explicit=True,
+                    )
+                except MissingAgentIdError as fehler:
+                    LOG.warning("remember refused: %s", fehler)
+                    return {"stored": False, "reason": "no-agent-id", "error": str(fehler)}
             return {"stored": isinstance(result, dict) and result.get("status") == "ok", "id": (result or {}).get("id", "")}
         raise ValueError(f"unknown op {op!r}")
 

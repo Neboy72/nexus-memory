@@ -269,3 +269,14 @@ class TestAutoSupersession:
                     payload = points[0].payload if hasattr(points[0], 'payload') else points[0].get("payload", {})
                     assert "supersedes" in payload
                     assert old_id in payload["supersedes"]
+
+
+@pytest.fixture(autouse=True)
+def _writer_identity(monkeypatch):
+    """Seit 22.11.2026 ist ``agent`` beim Schreiben Pflicht.
+
+    Diese Tests pruefen Scope, Supersession und Temporalitaet, nicht die
+    Identitaet. Sie schreiben darum als bekannter Agent — anonyme Schreib-
+    versuche weist ``MemoryStore.remember`` ab (siehe test_memory_agent_stamp).
+    """
+    monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")

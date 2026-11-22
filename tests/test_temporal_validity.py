@@ -751,3 +751,14 @@ class TestTemporalToolSchemas:
         ))
         payload = mock_qdrant_client.upsert.call_args.kwargs["points"][0].payload
         assert payload["valid_from"] == "2026-08-15T09:30:00+00:00"
+
+
+@pytest.fixture(autouse=True)
+def _writer_identity(monkeypatch):
+    """Seit 22.11.2026 ist ``agent`` beim Schreiben Pflicht.
+
+    Diese Tests pruefen Scope, Supersession und Temporalitaet, nicht die
+    Identitaet. Sie schreiben darum als bekannter Agent — anonyme Schreib-
+    versuche weist ``MemoryStore.remember`` ab (siehe test_memory_agent_stamp).
+    """
+    monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")

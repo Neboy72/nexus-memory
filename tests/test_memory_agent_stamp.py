@@ -2,17 +2,21 @@
 
 Every memory must record WHICH agent stored it and from WHICH installation,
 next to ``source`` (which says where the INFORMATION came from: mail, web,
-consolidation). ``agent`` comes from ``agent_detect.resolve_agent_id()``
-(explicit → ``NEXUS_AGENT_ID`` → ``UNIDENTIFIED_AGENT_ID``); ``instance`` from
-``resolve_instance_id()`` (``NEXUS_INSTANCE_ID`` → this home's own
-``instance-<seed hash>.json`` in the Nexus home, seeded on first use by
-``HERMES_HOME``/``NEXUS_HOME``). Old points simply have no field (None); there
-is no migration and no backfill.
+consolidation). ``agent`` is resolved from the context of the call
+(``agent_detect.require_agent_id``: the request's agent key, the ``actor`` the
+service passes, ``NEXUS_AGENT_ID``) and is REQUIRED since 22.11.2026: without
+an identity the write is refused instead of storing a point nobody owns.
+``instance`` comes from ``resolve_instance_id()`` (``NEXUS_INSTANCE_ID`` → this
+home's own ``instance-<seed hash>.json`` in the Nexus home, seeded on first use
+by ``HERMES_HOME``/``NEXUS_HOME``). Old points simply have no field (None);
+there is no migration and no backfill.
 
 No Qdrant server needed: the client is replaced by a small fake, the same
 pattern ``tests/test_scope.py`` and ``tests/test_scope_auto.py`` use.
 """
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,10 +24,11 @@ import pytest
 
 from conftest import redirect_home
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))
 
 from nexus_memory.agent_detect import (  # noqa: E402
-    UNIDENTIFIED_AGENT_ID,
+    MissingAgentIdError,
     resolve_instance_id,
 )
 from nexus_memory.scope_auto import ScopeCentroids  # noqa: E402
@@ -99,15 +104,51 @@ class TestAgentStamp:
         assert captured["payload"]["agent"] == "openclaw"
 
     @pytest.mark.asyncio
-    async def test_placeholder_without_env(self, monkeypatch):
-        """(b) Without the variable the unidentified placeholder is stored."""
+    async def test_write_without_agent_is_refused(self, monkeypatch):
+        """(b) Ohne Kennung wird nicht geschrieben — der Platzhalter reicht nicht.
+
+        Seit 22.11.2026 ist ``agent`` beim Schreiben Pflicht: ein Punkt ohne
+        Verfasser waere ein Eintrag, den niemand verantwortet. Der Aufruf
+        endet mit ``MissingAgentIdError``, die Sammlung sieht nichts.
+        """
         monkeypatch.delenv("NEXUS_AGENT_ID", raising=False)
+        from nexus_memory import mcp_server as mcp
+
+        # Keine Kennung aus der Anfrage (kein Agentenschluessel).
+        token = mcp._REQUEST_AGENT_ID.set(None)
+        try:
+            captured: dict = {}
+            store = _store_capturing(monkeypatch, captured)
+
+            with pytest.raises(MissingAgentIdError) as fehler:
+                await store.remember("A fact worth remembering", "public", "fact")
+        finally:
+            mcp._REQUEST_AGENT_ID.reset(token)
+
+        assert "No agent identity" in str(fehler.value)
+        assert "NEXUS_AGENT_ID" in str(fehler.value)
+        assert captured == {}, "ohne Verfasser darf kein Punkt entstehen"
+
+    @pytest.mark.asyncio
+    async def test_agent_comes_from_the_request_context(self, monkeypatch):
+        """(b) Die Kennung der Anfrage (Agentenschluessel) gewinnt — nicht der Aufrufer.
+
+        Der Dienst setzt die Kennung aus dem Schluessel des Clients; sie ist
+        kein Feld, das ein Aufrufer behaupten kann. ``NEXUS_AGENT_ID`` der
+        Umgebung darf sie nicht ueberstimmen.
+        """
+        monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")
+        from nexus_memory import mcp_server as mcp
+
         captured: dict = {}
         store = _store_capturing(monkeypatch, captured)
+        token = mcp._REQUEST_AGENT_ID.set("cn4f8r")
+        try:
+            await store.remember("A fact worth remembering", "public", "fact")
+        finally:
+            mcp._REQUEST_AGENT_ID.reset(token)
 
-        await store.remember("A fact worth remembering", "public", "fact")
-
-        assert captured["payload"]["agent"] == UNIDENTIFIED_AGENT_ID
+        assert captured["payload"]["agent"] == "cn4f8r"
 
     @pytest.mark.asyncio
     async def test_source_stays_untouched(self, monkeypatch):
@@ -130,6 +171,9 @@ class TestInstanceStamp:
     async def test_instance_comes_from_env(self, monkeypatch):
         """(c) NEXUS_INSTANCE_ID wins when set."""
         monkeypatch.setenv("NEXUS_INSTANCE_ID", "  abc123def4567890  ")
+        # Ein Verfasser gehoert seit 22.11.2026 zu jedem Schreibvorgang; hier
+        # geht es nur um die Instanz-Kennung.
+        monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")
         captured: dict = {}
         store = _store_capturing(monkeypatch, captured)
 
@@ -160,6 +204,7 @@ class TestInstanceStamp:
         """(d) Two stores in one installation stamp the SAME instance id."""
         home = tmp_path / "nexus-home"
         monkeypatch.setenv("NEXUS_HOME", str(home))
+        monkeypatch.setenv("NEXUS_AGENT_ID", "hermes")
         first: dict = {}
         second: dict = {}
 
@@ -432,3 +477,67 @@ class TestPluginStamp:
         assert result["status"] == "ok"
         assert captured["payload"]["agent"] is None
         assert captured["payload"]["instance"] is None
+
+
+class TestDshBridge:
+    """Der Schreibweg des DSH-Plugins antwortet, statt am fehlenden Verfasser zu kippen.
+
+    Die Bruecke (``plugins/dsh/nexus_bridge.py``) spricht mit dem Harness ueber
+    Zeilen-JSON; ein geworfener Fehler waere dort ein abgebrochener Turn. Sie
+    faengt ``MissingAgentIdError`` deshalb und antwortet mit ``no-agent-id`` —
+    derselbe Grund wie auf den anderen Wegen, nur in der Form, die dieses
+    Protokoll kennt.
+    """
+
+    def test_bridge_answers_no_agent_id_instead_of_crashing(self, tmp_path):
+        """``capture`` und ``remember`` liefern ``stored: false`` plus Grund.
+
+        Eigener Prozess: das Modul biegt beim Import stdout um (das Protokoll
+        gehoert dem Plugin), das darf der Testlauf nicht erben. Der Store ist
+        eine Attrappe, die wie der echte ohne Kennung abweist.
+        """
+        lauf = tmp_path / "lauf.py"
+        ziel = tmp_path / "ergebnis.json"
+        lauf.write_text(
+            "import asyncio, importlib.util, json\n"
+            f"SPEC = {str(REPO / 'plugins' / 'dsh' / 'nexus_bridge.py')!r}\n"
+            f"ZIEL = {str(ziel)!r}\n"
+            "spec = importlib.util.spec_from_file_location('nexus_bridge', SPEC)\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "from nexus_memory.agent_detect import MissingAgentIdError\n"
+            "class Refusing:\n"
+            "    async def remember(self, **kwargs):\n"
+            "        raise MissingAgentIdError('No agent identity: nothing was stored.')\n"
+            "bridge = mod.Bridge()\n"
+            "bridge._store = Refusing()\n"
+            "anfragen = [\n"
+            "    {'op': 'capture', 'session': 'sitzung-1', 'turn': 1,\n"
+            "     'user': 'Wie misst man das?', 'assistant': 'Mit einer Attrappe.'},\n"
+            "    {'op': 'remember', 'text': 'Ein Fakt mit Inhalt.', 'category': 'fact'},\n"
+            "]\n"
+            "async def main():\n"
+            "    ergebnis = {}\n"
+            "    for anfrage in anfragen:\n"
+            "        ergebnis[anfrage['op']] = await bridge.handle(anfrage)\n"
+            "    return ergebnis\n"
+            "with open(ZIEL, 'w', encoding='utf-8') as fh:\n"
+            "    json.dump(asyncio.run(main()), fh)\n",
+            encoding="utf-8",
+        )
+        umgebung = dict(os.environ)
+        umgebung["PYTHONPATH"] = os.pathsep.join(
+            [str(REPO / "src")]
+            + ([umgebung["PYTHONPATH"]] if umgebung.get("PYTHONPATH") else [])
+        )
+        ergebnis = subprocess.run(
+            [sys.executable, str(lauf)],
+            capture_output=True, text=True, env=umgebung, timeout=120,
+        )
+        assert ergebnis.returncode == 0, ergebnis.stderr[-2000:]
+
+        antworten = json.loads(ziel.read_text(encoding="utf-8"))
+        for op in ("capture", "remember"):
+            assert antworten[op]["stored"] is False, antworten[op]
+            assert antworten[op]["reason"] == "no-agent-id", antworten[op]
+            assert "No agent identity" in antworten[op]["error"], antworten[op]

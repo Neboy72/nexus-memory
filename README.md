@@ -22,7 +22,7 @@ Every agent community runs into the same wall: the notes file. It works — unti
 [![License](https://img.shields.io/github/license/Neboy72/nexus-memory?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Qdrant](https://img.shields.io/badge/qdrant-v1.12+-purple?style=flat-square)](https://qdrant.tech/)
-[![Version](https://img.shields.io/badge/version-0.22.65-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
+[![Version](https://img.shields.io/badge/version-0.22.66-brightgreen?style=flat-square)](https://github.com/Neboy72/nexus-memory/releases)
 [![Tests](https://img.shields.io/badge/tests-green-brightgreen?style=flat-square)](tests/)
 [![MCP](https://img.shields.io/badge/MCP-native-orange?style=flat-square)](https://modelcontextprotocol.io)
 
@@ -58,6 +58,16 @@ curl http://127.0.0.1:9122/healthz      # → {"status":"ok","qdrant":true}
 - **Self-healing**: with `RunAtLoad` + `KeepAlive` it survives reboots and crashes.
 - **Consolidation leader election**: when several instances run (daemon + agent), an advisory `flock` elects one leader — the consolidation daemon runs once, followers take over on failover.
 - Existing installs are **not** migrated or reconfigured — the service install is safe to re-run.
+
+### Who wrote a memory (`agent`) and which procedure (`writer`)
+
+Every stored memory names its author in the payload field `agent` — next to `source`, which says where the *information* came from (mail, web, consolidation). The id is resolved from the context of the call: the agent key of the request (MCP/HTTP) or the plugin's own `NEXUS_AGENT_ID`. It is never taken from a field the caller could invent.
+
+Since 22.11.2026 the field is **mandatory**: a write without an identity is refused instead of storing a point nobody owns — `MissingAgentIdError`, HTTP `422` with `status: rejected` and the reason, MCP answers `{"status": "rejected", "reason": ...}`.
+
+`writer` answers a different question: which **procedure** created the point. Maintenance passes write directly, not through `remember()`, and claim no author — a consolidated fact carries `writer: consolidation`, a learned playbook `writer: dreaming`, and `agent` stays empty. A consolidation merges statements from several agents and its originals are deleted, so any author would be a guess; a query can exclude those points with a payload filter on `writer` instead of recognising them by their text.
+
+Older points without either field are normal and stay exactly as they are: no migration, no backfill.
 
 ---
 
@@ -305,6 +315,7 @@ Whichever you pick, **one collection belongs to one model**: the engine stores t
 
 | Version | Date | Highlight |
 |---------|------|-----------|
+| **v0.22.66** | 2026-11-22 | Every stored memory now names its author, or it is not stored. The write paths resolve the identity from the context of the call — the agent key of the request, the `actor` the service passes, the plugin's `NEXUS_AGENT_ID` — and never from a field the caller could invent; without one the write is refused before embedding, so no half-written point is left behind: `MissingAgentIdError`, HTTP `422` with `status: rejected`, MCP `{"status": "rejected", "reason": …}`, and the DSH bridge answers `{"stored": false, "reason": "no-agent-id"}` while the human's turn keeps running. Maintenance passes that write directly and merge statements of several agents (whose originals are deleted) claim no author and carry a new `writer` field instead — `consolidation`, `dreaming` — with `agent` left empty, so a payload filter can exclude those points instead of recognising them by their text. Older points without either field stay exactly as they are: no migration, no backfill |
 | **v0.22.65** | 2026-11-20 | The automatic recall decides in one place (`recall_policy.py`): three entries by default, `session` and entities excluded, no minimum score. Measured on 25 real questions: 2.96 → 1.76 off-topic entries per message, the gain coming from the smaller block; 0.35 filtered nothing and 0.45 cost matching hits. `relevance` now reports the cosine instead of the always-1.0 normalised RRF rank. New read log (`record_read()`, one line per recall, ids only, 90-day rotation) and write-gate rule 10, which files dictated fragments as `session` instead of `rule` (dry run: 10 of 2466, no false alarms) |
 | **v0.22.64** | 2026-11-20 | All four ways now report. The Hermes provider sends the failed tool calls of a session at `on_session_end` (new `incident_report.py`), and Claude Code gets a `Stop` hook (`scripts/report_incidents.py`) that reads the `is_error` marks of the transcript. No cron and no second schedule on either side: the harness reports about itself. Both send tool name, capped error text, environment hint and session id, no conversation content, both switch off with `NEXUS_REPORT_INCIDENTS=0`, and both fail silently so a session end never waits on a quiet service. Six new tests, including two round trips against a local test service that check path, key and body |
 | **v0.22.63** | 2026-11-20 | A shell command that exits 1 is a failure, not a success. The DSH reporter of 0.22.62 only sent what the harness marked as a tool error (`isError`, `error`), and a command that runs and fails is a successful tool call from the harness's point of view — measured after a restart: one failed command line, zero reports. The reporter now reads the harness's own verdict at the end of the result, `[exit code: N]`: 0 is no failure, `null` (no code, e.g. killed) is not guessed. Four test cases, plus one that pins the marker in the source tree. The OpenClaw package needs no new version: its `exec` result carries `exitCode` as a field, which the reporter already reads |
@@ -394,4 +405,4 @@ MIT: use it, modify it, ship it.
 
 ☕️ [Buy me a Ko-fi](https://ko-fi.com/nexusmemory) · ❤️ [GitHub Sponsors](https://github.com/sponsors/Neboy72)
 
-<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.65 · One memory for all your agents</sub>
+<sub>Built by [Nebo](https://github.com/Neboy72) · continuously developed · v0.22.66 · One memory for all your agents</sub>
