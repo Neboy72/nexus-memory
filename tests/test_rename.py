@@ -71,7 +71,7 @@ def written(monkeypatch):
     points: list = []
     monkeypatch.setattr(
         collection_vectors, "upsert_named",
-        lambda _client, _collection, pts, _vector_name: points.extend(pts),
+        lambda _client, _collection, pts, _vector_name, **_kw: points.extend(pts),
     )
     monkeypatch.setattr(mcp, "_index_written_point", lambda _payload: None)
 

@@ -662,6 +662,8 @@ class GuardrailEngine:
             upsert_named(
                 self.client, upsert_kwargs["collection_name"],
                 upsert_kwargs["points"], self.vector_name,
+                # Frische Kennung (uuid4): kein Ueberschreiben, kein Lesezugriff.
+                existing={},
             )
             logger.info(f"Guardrail override recorded: {override_id[:8]} by {agent_id}")
         except Exception as e:

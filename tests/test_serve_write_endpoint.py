@@ -30,6 +30,16 @@ class _FakeQdrant:
     def query_points(self, **_kwargs):
         raise AssertionError("ein abgewiesener Eintrag darf keine Aehnlichkeitssuche starten")
 
+    def retrieve(self, **_kwargs):
+        """Leere Sammlung: eine gelieferte Kennung ist hier immer ein NEUER Punkt.
+
+        ``remember`` liest den vorhandenen Punkt (Eigentumsfrage und
+        Zusammenfuehren). Ohne diese Methode gaelte der Punkt als "nicht
+        lesbar" und wuerde fuer ``know`` abgelehnt — das waere ein Fehler des
+        Fakes, nicht des Codes.
+        """
+        return []
+
 
 @pytest.fixture(autouse=True)
 def _service_key(monkeypatch):
@@ -46,7 +56,7 @@ def written(monkeypatch):
     monkeypatch.setattr(
         collection_vectors,
         "upsert_named",
-        lambda _client, _collection, pts, _vector_name: points.extend(pts),
+        lambda _client, _collection, pts, _vector_name, **_kw: points.extend(pts),
     )
     # Der Stichwortindex ist eine Zugabe und hat mit dieser Frage nichts zu tun.
     monkeypatch.setattr(mcp, "_index_written_point", lambda _payload: None)

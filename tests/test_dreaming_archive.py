@@ -564,7 +564,7 @@ def test_store_playbook_marks_the_writer(monkeypatch):
 
     monkeypatch.setattr(
         collection_vectors, "upsert_named",
-        lambda _client, _collection, pts, _vector: punkte.extend(pts),
+        lambda _client, _collection, pts, _vector, **_kw: punkte.extend(pts),
     )
 
     assert dreamer._store_playbook({

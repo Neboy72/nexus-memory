@@ -112,7 +112,7 @@ def store(monkeypatch):
     monkeypatch.setattr(
         collection_vectors,
         "upsert_named",
-        lambda _client, _collection, pts, _vector_name: points.extend(pts),
+        lambda _client, _collection, pts, _vector_name, **_kw: points.extend(pts),
     )
     monkeypatch.setattr(mcp, "_index_written_point", lambda _payload: None)
 
@@ -648,7 +648,7 @@ def test_hermes_plugin_pfad_erzeugt_genau_eine_zeile(monkeypatch):
     written: list = []
     monkeypatch.setattr(
         collection_vectors, "upsert_named",
-        lambda _client, _collection, pts, _vector_name: written.extend(pts),
+        lambda _client, _collection, pts, _vector_name, **_kw: written.extend(pts),
     )
 
     result = provider._upsert(
@@ -692,7 +692,7 @@ def test_hermes_plugin_entity_pfad_erzeugt_genau_eine_zeile(monkeypatch):
     written: list = []
     monkeypatch.setattr(
         collection_vectors, "upsert_named",
-        lambda _client, _collection, pts, _vector_name: written.extend(pts),
+        lambda _client, _collection, pts, _vector_name, **_kw: written.extend(pts),
     )
 
     entity = SimpleNamespace(
@@ -1147,7 +1147,7 @@ def test_sica_schreibt_genau_eine_zeile(monkeypatch):
     written: list = []
     monkeypatch.setattr(
         collection_vectors, "upsert_named",
-        lambda _client, _collection, pts, _vector_name: written.extend(pts),
+        lambda _client, _collection, pts, _vector_name, **_kw: written.extend(pts),
     )
 
     class _Client:

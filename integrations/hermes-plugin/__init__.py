@@ -564,10 +564,13 @@ class NexusMemoryProvider:
                     "provenance": {"source_type": "hermes-plugin", "created_by": "nexus-memory-provider",
                                    "timestamp": ts, "confidence": confidence}}
         from nexus_memory.collection_vectors import upsert_named as _upsert_named
+        # Frische Kennung (uuid4): kein Ueberschreiben, also kein Lesezugriff.
+        # Das Zusammenfuehren selbst macht ``upsert_named`` (24.11.2026).
         _upsert_named(
             self._qdrant, self._collection,
             [qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
             getattr(self, "vector_name", None),
+            existing={},
         )
         return {"status": "ok", "id": eid, "category": category}
 

@@ -593,7 +593,9 @@ class Dreamer:
             log.warning("dreaming: Sammlungsname unbekannt — Eintrag nicht geschrieben")
             return False
         upsert_named(self._store.client, sammlung, [point],
-                     getattr(self._store, "vector_name", None))
+                     getattr(self._store, "vector_name", None),
+                     # Frische Kennung (uuid4): kein Ueberschreiben, kein Read.
+                     existing={})
         return True
 
     def dream(self, dry_run: bool = False) -> Dict[str, Any]:

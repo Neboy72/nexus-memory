@@ -712,6 +712,8 @@ class Consolidator:
         upsert_named(
             self._store.client, upsert_kwargs["collection_name"],
             upsert_kwargs["points"], vector_name,
+            # Frische Kennung (uuid4): kein Ueberschreiben, kein Lesezugriff.
+            existing={},
         )
         # Bewegungsprotokoll (Nachtrag 15.11.2026): die Konsolidierung legte
         # distilled facts an, ohne dass eine Zeile sie nannte — bei einem

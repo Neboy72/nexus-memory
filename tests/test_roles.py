@@ -335,7 +335,7 @@ class TestEigentum:
         written: list = []
         monkeypatch.setattr(
             collection_vectors, "upsert_named",
-            lambda _client, _collection, pts, _vector_name: written.extend(pts),
+            lambda _client, _collection, pts, _vector_name, **_kw: written.extend(pts),
         )
         backup = tmp_path / "sicherung.json"
         backup.write_text(json.dumps({"points": [{

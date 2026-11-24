@@ -862,6 +862,8 @@ def _store_sica_session(
         upsert_named(
             client, upsert_kwargs["collection_name"],
             upsert_kwargs["points"], vector_name,
+            # Frische Kennung: kein Ueberschreiben, kein Lesezugriff.
+            existing={},
         )
         # Bewegungsprotokoll (Nachtrag 15.11.2026): SICA legte ihren
         # Sitzungspunkt bisher ohne Zeile an. Die Zeile ist bei ``private``

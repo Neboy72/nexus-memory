@@ -8,6 +8,7 @@ embedding provider. It NEVER writes user config / JSON files.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from qdrant_client import QdrantClient
@@ -444,11 +445,124 @@ def _normalize_text_content(payload: dict) -> dict:
     return payload
 
 
+def _trail_entry(payload: dict, timestamp: str) -> dict:
+    """Der Protokolleintrag dieses Schreibvorgangs — aus der Payload abgeleitet.
+
+    Caller, die frueher selbst ``payload_merge.finalize_*`` gerufen haben,
+    uebergaben diesen Eintrag von Hand. Im zentralen Schreibweg stehen die
+    noetigen Angaben schon in der Payload (Verfasser, Quelle, Herkunftsart).
+    """
+    prov = payload.get("provenance")
+    prov = prov if isinstance(prov, dict) else {}
+    return {
+        "action": "overwrite",
+        "timestamp": timestamp,
+        "agent": payload.get("agent"),
+        "instance": payload.get("instance"),
+        "source": payload.get("source"),
+        "source_type": prov.get("source_type", ""),
+        "confidence": prov.get("confidence"),
+        "category": payload.get("category"),
+    }
+
+
+def _is_entity_payload(payload: dict) -> bool:
+    """Ein Entity-Punkt traegt ``category == 'entity'`` (und ``entity_type``)."""
+    return payload.get("category") == "entity" or "entity_type" in payload
+
+
+def _finalize_payload(payload: dict, old: dict, timestamp: str) -> dict:
+    """Die Regeln aus ``payload_merge`` auf einen Schreibvorgang anwenden.
+
+    Ohne ``old`` (neuer Punkt) wird nur ``provenance_origin`` gesetzt; mit
+    ``old`` wird der vorhandene Punkt die Basis und nur die Felder dieses
+    Schreibvorgangs ersetzen.
+    """
+    from nexus_memory.payload_merge import (
+        finalize_written_entity_payload,
+        finalize_written_payload,
+    )
+
+    finalize = (
+        finalize_written_entity_payload if _is_entity_payload(payload)
+        else finalize_written_payload
+    )
+    return finalize(
+        payload, old, now_iso=timestamp,
+        trail_entry=_trail_entry(payload, timestamp),
+    )
+
+
+def _read_existing_payloads(client: Any, collection_name: str,
+                           point_ids: list) -> dict:
+    """Die vorhandenen Payloads EINER Schreibvorgangs-Menge lesen (ein Zugriff).
+
+    Ein Lesefehler darf das Schreiben nicht verhindern: dann steht die Menge
+    leer, es wird geschrieben wie bisher, und die Warnung nennt den Grund.
+    """
+    try:
+        records = client.retrieve(
+            collection_name=collection_name,
+            ids=point_ids,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — Lesen ist keine Bedingung zum Schreiben
+        logger.warning(
+            "upsert_named: vorhandene Punkte nicht lesbar — Felder koennen "
+            "beim Ueberschreiben zurueckfallen: %s", exc)
+        return {}
+    found = {}
+    for record in records or []:
+        found[str(getattr(record, "id", ""))] = dict(
+            getattr(record, "payload", None) or {})
+    return found
+
+
+def _merge_before_write(client: Any, collection_name: str, points: list,
+                        existing: Optional[dict]) -> None:
+    """Den vorhandenen Punkt als Basis nehmen, bevor geschrieben wird.
+
+    ``existing`` ist die Zuordnung Kennung → Payload, die der Aufrufer schon
+    gelesen hat. Fehlt sie (``None``), wird hier gelesen — ein neuer Punkt
+    kostet dann einen Zugriff. Wer die Kennung gerade erzeugt hat, sagt das
+    mit ``existing={}`` und spart sich den Zugriff.
+    """
+    bekannte = (
+        _read_existing_payloads(
+            client, collection_name,
+            [str(getattr(p, "id", "")) for p in points
+             if isinstance(getattr(p, "payload", None), dict)],
+        )
+        if existing is None else existing
+    )
+    for point in points:
+        payload = getattr(point, "payload", None)
+        if not isinstance(payload, dict):
+            continue
+        old = bekannte.get(str(getattr(point, "id", ""))) or {}
+        prov = payload.get("provenance")
+        timestamp = (
+            payload.get("created_at")
+            or (prov.get("timestamp") if isinstance(prov, dict) else None)
+            or datetime.now(timezone.utc).isoformat()
+        )
+        merged = _finalize_payload(payload, old, str(timestamp))
+        # In-place: der Aufrufer haelt dieselbe Payload in der Hand und sieht
+        # (z. B. fuer den Stichwortindex) das Ergebnis des Zusammenfuehrens.
+        payload.clear()
+        payload.update(merged)
+        point.payload = payload
+
+
 def upsert_named(
     client: Any,
     collection_name: str,
     points: list,
     vector_name: Optional[str],
+    *,
+    existing: Optional[dict] = None,
+    merge: bool = True,
 ) -> Any:
     """Write ``points`` into a (possibly named-vector) collection.
 
@@ -461,7 +575,29 @@ def upsert_named(
 
     Also normalizes ``text`` / ``content`` so every point carries both fields
     when at least one is present — readers can then use either key.
+
+    **Zusammenfuehren ist Teil des Schreibens (24.11.2026).** ``upsert_named``
+    ERSETZT in Qdrant die ganze Payload. Ohne Zusammenfuehren fielen
+    ``created_at``, ``use_count``, ``salience``, ``scope``, ``state_value``,
+    ``expiry_policy`` und die Kanten auf Vorgabewerte zurueck, sobald eine
+    Kennung ein zweites Mal geschrieben wird. Deshalb macht dieser Weg es
+    selbst — ein Aufrufer kann es nicht mehr vergessen:
+
+    * ``merge=True`` (Vorgabe): den vorhandenen Punkt lesen und mit
+      :mod:`nexus_memory.payload_merge` zusammenfuehren, bevor geschrieben
+      wird. Gilt fuer Erinnerungen und Entity-Punkte.
+    * ``existing``: Zuordnung Kennung → Payload, die der Aufrufer **schon**
+      gelesen hat (etwa fuer die Eigentumsfrage). Dann entfaellt der zweite
+      Zugriff. ``existing={}`` heisst: alle Kennungen sind neu (der Aufrufer
+      hat sie gerade erzeugt) — kein Lesezugriff, kein Zusammenfuehren noetig.
+    * ``merge=False``: roh schreiben, ohne Lesen. Nur fuer einen Vorgang, der
+      bewusst ersetzen soll (Wiederherstellung aus einer Sicherung).
+
+    Der Vorgabewert ist der sichere: wer nichts angibt, bekommt das
+    Zusammenfuehren und zahlt einen Lesezugriff.
     """
+    if merge:
+        _merge_before_write(client, collection_name, points, existing)
     if vector_name:
         for p in points:
             vec = getattr(p, "vector", None)

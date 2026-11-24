@@ -62,6 +62,7 @@ from nexus import MemoryCategory, __version__ as nexus_version
 # Distinct from ``source``, which says where the INFORMATION came from.
 from nexus_memory.agent_detect import (
     MissingAgentIdError,
+    agent_role,
     require_agent_id,
     resolve_agent_id,
     resolve_instance_id,
@@ -1421,16 +1422,21 @@ class MemoryStore:
         an identity nothing is written: ``MissingAgentIdError`` is raised
         instead of storing a point nobody owns. Old points without the field
         stay as they are (no migration, no backfill).
+
+        Ownership (24.11.2026): a write carrying ``memory_id`` REPLACES that
+        point, so it passes the same ``roles.is_owner`` check as ``update``
+        before anything is counted or written. A foreign caller gets
+        ``{"status": "denied"}`` (the ``/write`` endpoint answers 403) and the
+        point stays untouched. A point without an ``agent`` field belongs to
+        nobody the rule could ask, so ``know`` may not overwrite it. Creating a
+        NEW point with a fresh id is not an overwrite and stays allowed for
+        every role.
         """
         # Agent-Pflicht: erst der Verfasser, dann alles andere. Der Aufruf
         # scheitert damit vor dem Einbetten — es entsteht kein halber Punkt.
         author = require_agent_id(
             actor if isinstance(actor, str) and actor.strip() else _request_agent_id()
         )
-
-        # Universal access counting: one write per remember() — every client
-        # path lands here (fail-open, see _count_memory_access).
-        _count_memory_access(write=True)
 
         # Validate category against MemoryCategory
         valid_categories = [c.value for c in MemoryCategory]
@@ -1444,7 +1450,69 @@ class MemoryStore:
         scope = _normalize_scope(scope)
         explicit_scope = scope != SHARED_SCOPE
 
-        entry_id = _valid_memory_id(memory_id) or str(uuid.uuid4())
+        # Eigentum beim Ueberschreiben (24.11.2026): eine gueltige
+        # ``memory_id`` heisst "ersetze DIESEN Punkt" — und damit
+        # moeglicherweise einen fremden. Geprueft wird mit DERSELBEN Regel wie
+        # im ``update``-Weg (``roles.is_owner``), und zwar VOR dem
+        # Zugriffszähler und vor jedem Schreibzugriff: eine Ablehnung
+        # hinterlaesst weder einen halb geschriebenen Punkt noch eine
+        # Protokollzeile, die einen Schreibvorgang behauptet. Ein NEUER Punkt
+        # (Kennung noch nicht vorhanden) ist kein Ueberschreiben und bleibt
+        # fuer jede Stufe erlaubt.
+        _requested_id = _valid_memory_id(memory_id)
+        entry_id = _requested_id or str(uuid.uuid4())
+
+        # Der vorhandene Punkt wird hier EINMAL gelesen: die Eigentumsfrage
+        # braucht seinen Verfasser, das Zusammenfuehren (unten) seine Felder
+        # und Kanten. Ein normaler Schreibvorgang mit frischer Kennung zahlt
+        # keinen zusaetzlichen Read.
+        _old_payload: dict = {}
+        _existing_found = False
+        _existing_unreadable = False
+        if _requested_id:
+            try:
+                _existing_point = self.client.retrieve(
+                    collection_name=COLLECTION_NAME,
+                    ids=[entry_id],
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                if _existing_point:
+                    _existing_found = True
+                    _old_payload = dict(_existing_point[0].payload or {})
+            except Exception as exc:  # noqa: BLE001 — Lesefehler heisst: unbekannt
+                _existing_unreadable = True
+                logging.warning(
+                    f"Punkt {entry_id[:8]} nicht lesbar — Eigentum nicht "
+                    f"pruefbar (fuer 'know' wird abgelehnt): {exc}"
+                )
+
+            # Der Aufrufer kommt aus dem Request (Agentenschluessel), nie aus
+            # einem Feld. Ein Bibliotheksaufruf ohne Request-Kontext nimmt den
+            # Verfasser, den ``require_agent_id`` gerade festgelegt hat.
+            _owner_caller = resolve_agent_id(_request_agent_id() or author)
+            _owner_role = agent_role(_owner_caller)
+            _is_new_point = not _existing_found and not _existing_unreadable
+            if not _is_new_point and not roles.is_owner(
+                    _old_payload, _owner_caller, _owner_role):
+                service_log.record(
+                    "denied", "refused", target_id=entry_id,
+                    reason="not owner", via=via, actor=_owner_caller,
+                )
+                logging.warning(
+                    f"Write refused: {_owner_caller} [{_owner_role}] may not "
+                    f"overwrite {entry_id[:8]}"
+                )
+                return {
+                    "status": "denied",
+                    "error": "not owner",
+                    "role": _owner_role,
+                }
+
+        # Universal access counting: one write per remember() — every client
+        # path lands here (fail-open, see _count_memory_access).
+        _count_memory_access(write=True)
+
         created_at = datetime.now(timezone.utc).isoformat()
 
         # Build provenance (v2.8.0 feature) — before the gate, which fills in
@@ -1647,12 +1715,21 @@ class MemoryStore:
         if prepared.get("state_value"):
             payload["state_value"] = True
 
+        # Zusammenfuehren statt ersetzen (24.11.2026): das passiert seit dem
+        # Umbau IM zentralen Schreibweg ``upsert_named`` — fuer jeden
+        # Schreiber, nicht nur fuer diesen. Hier wird nur noch die Payload
+        # durchgereicht, die die Eigentumsfrage oben ohnehin schon gelesen hat
+        # (``existing``): kein zweiter Lesezugriff, und die Regel kann nicht
+        # vergessen werden. Ein frischer Punkt (``_requested_id`` leer) sagt
+        # ``existing={}`` — er ist neu, es gibt nichts zu lesen.
+
         # Writes carry the vector NAME inside each point (``using`` is read-only).
         from nexus_memory.collection_vectors import upsert_named
         upsert_named(
             self.client, COLLECTION_NAME,
             [qmodels.PointStruct(id=entry_id, vector=vector, payload=payload)],
             self.vector_name,
+            existing={entry_id: _old_payload} if _requested_id else {},
         )
         logging.info(f"Stored memory {entry_id[:8]} [{access_level}] cat={category}")
 
@@ -3506,12 +3583,18 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             # not knowledge". Gemessen 20.11.2026 am MCP-Weg.
             # Die Protokollzeile schreibt ``MemoryStore.remember`` selbst;
             # eine zweite hier waere doppelt (siehe /write).
-            if not isinstance(result, dict) or result.get("status") == "rejected":
-                grund = result.get("reason") if isinstance(result, dict) else ""
+            if not isinstance(result, dict) or result.get("status") in ("rejected", "denied"):
+                abgelehnt = (
+                    isinstance(result, dict)
+                    and result.get("status") == "denied"
+                )
+                grund = ""
+                if isinstance(result, dict):
+                    grund = result.get("reason") or result.get("error") or ""
                 return [types.TextContent(
                     type="text",
                     text=json.dumps({
-                        "status": "rejected",
+                        "status": "denied" if abgelehnt else "rejected",
                         "reason": grund or "rejected",
                     }),
                 )]
@@ -4348,10 +4431,14 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                         continue
 
                 from nexus_memory.collection_vectors import upsert_named
+                # Wiederherstellung: der Stand der Sicherung IST das Ziel.
+                # Bewusst kein Zusammenfuehren — sonst blieben Felder eines
+                # neueren, zu ersetzenden Punktes stehen.
                 upsert_named(
                     store.client, COLLECTION_NAME,
                     [qmodels.PointStruct(id=pid, vector=vec, payload=payload)],
                     getattr(store, "vector_name", None),
+                    merge=False,
                 )
                 restored += 1
 
@@ -5144,6 +5231,8 @@ def build_serve_app():
                   stored as ``fact``.
         Response: 200 with the stored memory, or 422 with
                   {"status": "rejected", "reason": "..."} — nothing written.
+                  A supplied ``id`` that names a point of ANOTHER agent answers
+                  403 {"error": "not owner"}; the point is not modified.
         """
         # Ein abgewiesener Schreibversuch steht als ``denied`` im
         # Bewegungsprotokoll — Fehlversuche zeigen spaeter, wo etwas
@@ -5231,6 +5320,14 @@ def build_serve_app():
                 {"error": f"write failed: {type(exc).__name__}"},
                 status_code=500)
 
+        if result.get("status") == "denied":
+            # Fremder Punkt (24.11.2026): 403, der Punkt bleibt unveraendert.
+            # Die Protokollzeile hat ``MemoryStore.remember`` schon geschrieben
+            # — genau eine, als ``denied``/``refused``, nicht als Schreibvorgang.
+            return JSONResponse(
+                {"error": result.get("error") or "not owner"},
+                status_code=403,
+            )
         if result.get("status") == "rejected":
             return JSONResponse(result, status_code=422)
         return JSONResponse(result)

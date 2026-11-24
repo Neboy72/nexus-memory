@@ -263,7 +263,7 @@ def _write_store(monkeypatch, captured: dict):
     store._embed = _embed
     monkeypatch.setattr(
         collection_vectors, "upsert_named",
-        lambda _client, _collection, pts, _vector_name: captured.update(pts[0].payload),
+        lambda _client, _collection, pts, _vector_name, **_kw: captured.update(pts[0].payload),
     )
     monkeypatch.setattr(mcp, "_index_written_point", lambda _payload: None)
     monkeypatch.setattr(mcp, "_count_memory_access", lambda **_kw: None)
@@ -409,7 +409,7 @@ class TestVorauswahl:
 
         captured: dict = {}
 
-        def _capture(_client, _collection, pts, _vector_name):
+        def _capture(_client, _collection, pts, _vector_name, **_kwargs):
             captured.update(pts[0].payload)
 
         import nexus_memory.collection_vectors as collection_vectors

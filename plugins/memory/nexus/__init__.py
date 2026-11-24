@@ -3291,10 +3291,16 @@ class NexusMemoryProvider:
             payload["state_value"] = True
         # Writes carry the vector NAME inside each point (``using`` is read-only).
         from nexus_memory.collection_vectors import upsert_named as _upsert_named
+        # Zusammenfuehren macht der zentrale Schreibweg (24.11.2026). Eine
+        # frische Kennung (uuid4) ist kein Ueberschreiben: ``existing={}``
+        # spart den Lesezugriff. Mit ``dedup_key`` ist die Kennung dagegen
+        # deterministisch — derselbe Fakt landet auf demselben Punkt, also
+        # muss der vorhandene Stand die Basis sein (kein ``existing``).
         _upsert_named(
             self._qdrant, self._collection,
             [qmodels.PointStruct(id=eid, vector=vector, payload=payload)],
             getattr(self, "vector_name", None),
+            existing=None if dedup_key else {},
         )
         # Erst nach erfolgreichem Schreiben: der Punkt ist jetzt auffindbar.
         _index_written_point(payload, self._collection)

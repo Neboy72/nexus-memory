@@ -550,7 +550,7 @@ def _provider(monkeypatch):
 
     import nexus_memory.collection_vectors as collection_vectors
 
-    def _upsert_named(client, collection, points, vector_name):
+    def _upsert_named(client, collection, points, vector_name, **_kwargs):
         gespeichert.extend(points)
 
     monkeypatch.setattr(collection_vectors, "upsert_named", _upsert_named)
