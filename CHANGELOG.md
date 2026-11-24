@@ -1,3 +1,16 @@
+## [0.22.68] - 2026-11-24
+
+**Ein Eintrag, der neu geschrieben wird, verliert seine Felder nicht mehr, das Zusammenfuehren kann kein Schreiber mehr vergessen, fremde Eintraege lassen sich nicht mehr ueberschreiben — und die Antwort sagt, wo der Eintrag wirklich liegt.**
+
+Vier Befunde aus dem Betrieb.
+
+- **Beim Ueberschreiben fielen Felder zurueck.** Wer eine Erinnerung mit derselben Kennung neu schrieb, sah danach Vorgabewerte: `created_at`, `valid_from`, `use_count`, `salience`, `state_value`, `expiry_policy`, der Bereich und die Kanten standen wieder auf Anfang. Ursache war der Schreibvorgang selbst — die Sammlung ersetzt die ganze Payload. Jetzt ist der vorhandene Eintrag die Basis; ueberschrieben werden nur Inhalt, Einordnung, Verfasser, die strengere Zugriffsstufe, `provenance` und `updated_at`. Der Ursprung steht zusaetzlich in `provenance_origin` und bleibt dort, auch wenn er nach zwanzig Vorversionen aus dem Trail faellt; der Trail selbst ist auf zwanzig Eintraege gedeckelt, daneben steht die Gesamtzahl.
+- **Das Zusammenfuehren hing an drei Aufrufstellen.** Wer eine vierte baute, konnte es vergessen — und ein neuer Schreiber haette demselben Eintrag wieder die Felder geloescht. Es sitzt jetzt in `upsert_named`, der einzigen Stelle, die in eine Sammlung mit benannten Vektoren schreibt. Ein neuer Punkt kostet dabei keinen zusaetzlichen Lesezugriff; wer die Payload schon gelesen hat, reicht sie durch; nur die Wiederherstellung aus einer Sicherung ersetzt bewusst roh.
+- **Ein fremder Eintrag liess sich ueberschreiben.** Der HTTP-Schreibweg der Plugins (`POST /write`) landete in `remember` und pruefte den Eigentuemer nicht: ein Agent mit der Rolle `know` konnte mit fremder Kennung einen fremden Punkt ueberschreiben, und der Punkt trug danach seinen Namen. Jetzt gilt dort dieselbe Pruefung wie im Aenderungsweg (`roles.is_owner`, aufgeloest aus dem Agentenschluessel, nie aus einem Feld). Ein fremder Schreiber bekommt eine Absage mit Grund, der Punkt bleibt Zeichen fuer Zeichen unveraendert, und im Bewegungsprotokoll steht genau eine Zeile mit der Absage — keine, die einen Schreibvorgang behauptet. `work` und `admin` duerfen weiterhin fremde Eintraege aendern; ein neuer Punkt mit frischer Kennung bleibt fuer jede Stufe erlaubt.
+- **Die Antwort nannte den falschen Bereich.** Ein Punkt im Bereich `hermes`, ohne Bereichsangabe neu geschrieben, antwortete mit `scope: "default"` — im Punkt stand weiter `hermes`, weil das Zusammenfuehren den alten Wert behaelt. Falsch war die Auskunft: Antwort und Bewegungsprotokoll behaupteten einen Bereich, in dem der Eintrag nicht lag. Beide nennen jetzt den gespeicherten Wert.
+
+Die Regeln stehen an einer Stelle (`payload_merge.py`) statt an jeder Aufrufstelle, und die Tests decken die Schreibwege ab: `test_overwrite_erhaelt_felder.py`, `test_upsert_named_zusammenfuehren.py`, `test_write_eigentum.py`, `test_restore_eigentum.py`, `test_scope_antwort.py`.
+
 ## [0.22.67] - 2026-11-22
 
 **Ein Testlauf schreibt keine Sicherungen mehr ins echte Zuhause — und eine Sicherung ist fuer andere Konten unlesbar.**

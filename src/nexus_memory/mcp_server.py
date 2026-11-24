@@ -1731,6 +1731,37 @@ class MemoryStore:
             self.vector_name,
             existing={entry_id: _old_payload} if _requested_id else {},
         )
+
+        # Geltungsbereich (24.11.2026): ``scope`` oben ist der ANGEFRAGTE Wert.
+        # Beim Ueberschreiben bleibt im Punkt aber der alte stehen — das
+        # Zusammenfuehren nimmt den vorhandenen Punkt als Basis, und ``scope``
+        # gehoert zu den Feldern, die bleiben. Ohne diese Zeile behaupteten
+        # Antwort und Bewegungsprotokoll einen Bereich, in dem der Punkt gar
+        # nicht liegt. Gelesen wird der Wert, der WIRKLICH im Punkt steht: die
+        # Payload des Aufrufers ist nicht dieselbe, die ``upsert_named``
+        # zusammenfuehrt (``PointStruct`` legt eine Kopie an), also hilft kein
+        # Blick auf das lokale Dict. Der Lesezugriff faellt nur beim
+        # Ueberschreiben mit gelieferter Kennung an — ein neuer Punkt zahlt
+        # weiterhin keinen.
+        if _requested_id:
+            _wirklich = None
+            try:
+                _geschrieben = self.client.retrieve(
+                    collection_name=COLLECTION_NAME, ids=[entry_id],
+                    with_payload=True, with_vectors=False,
+                )
+                if _geschrieben:
+                    _wirklich = (_geschrieben[0].payload or {}).get("scope")
+            except Exception as _scope_fehler:  # noqa: BLE001 — fail-open
+                logging.warning(
+                    f"scope nach dem Schreiben nicht lesbar: {_scope_fehler}")
+            if isinstance(_wirklich, str) and _wirklich.strip():
+                scope = _wirklich
+            elif isinstance(_old_payload.get("scope"), str) \
+                    and _old_payload["scope"].strip():
+                # Altbestand ohne scope oder Lesefehler: der vorher gelesene
+                # Wert ist die beste Auskunft, die es noch gibt.
+                scope = _old_payload["scope"]
         logging.info(f"Stored memory {entry_id[:8]} [{access_level}] cat={category}")
 
         # ── Stichwortindex: den Punkt nach erfolgreichem Schreiben nachziehen.
