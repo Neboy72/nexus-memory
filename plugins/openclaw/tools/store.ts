@@ -158,9 +158,9 @@ export function registerStoreTool(
                 type: "text" as const,
                 text:
                   `Memory store rejected: this session runs in a shared room, ` +
-                  `where the highest access_level is "public"; ` +
+                  `where the highest access level is "public"; ` +
                   `"${requestedLevel}" was not stored and nothing was written. ` +
-                  `Call again with access_level "public" if this note may be ` +
+                  `Call again with access level "public" if this note may be ` +
                   `visible to everyone in the room, or write it in your own ` +
                   `chat, where "${requestedLevel}" applies. ` +
                   `(code: shared-room-write-rejected, reason: shared_room, ` +

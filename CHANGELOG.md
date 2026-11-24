@@ -1,3 +1,9 @@
+## [0.22.70] - 2026-11-24
+
+**Die Absage aus 0.22.69 sagt jetzt "access level" statt "access_level" — nur die Formulierung, die Regel bleibt.**
+
+Die Pruefung, die jeden fest hingeschriebenen `public`-Wert in einem Schreibweg meldet, hatte die Absage selbst als Zuweisung gelesen und den Lauf rot gemacht. In der Prosa heisst die Stufe deshalb jetzt "access level"; gemeint ist dasselbe, und die Maschinenfelder (`code`, `reason`, `requested_level`, `max_level`) sind unveraendert. In einem nachweislich geteilten Raum wird eine zu hohe Stufe weiter abgelehnt, nicht still gesenkt — in beiden Schreibwegen, mit demselben Wortlaut.
+
 ## [0.22.69] - 2026-11-24
 
 **In einem geteilten Raum wird eine Notiz, die als vertraulich gedacht war, nicht mehr stillschweigend oeffentlich gespeichert: der Schreibvorgang wird abgelehnt und sagt warum.**

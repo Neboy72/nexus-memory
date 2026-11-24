@@ -1371,9 +1371,9 @@ def _shared_room_rejection(requested_level: Any) -> Dict[str, Any]:
     level = str(requested_level)
     text = (
         "Memory store rejected: this session runs in a shared room, where the "
-        'highest access_level is "public"; '
+        'highest access level is "public"; '
         f'"{level}" was not stored and nothing was written. '
-        'Call again with access_level "public" if this note may be visible to '
+        'Call again with access level "public" if this note may be visible to '
         'everyone in the room, or write it in your own chat, where '
         f'"{level}" applies. '
         "(code: shared-room-write-rejected, reason: shared_room, "
