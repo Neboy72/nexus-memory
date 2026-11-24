@@ -1,32 +1,45 @@
-"""Raum-Deckel fuer SCHREIBVorgaenge (13.11.2026).
+"""Raum-Deckel fuer SCHREIBVorgaenge (13.11.2026, verschaerft 24.11.2026).
 
-Die Regel in einem Satz: kommt ein Lese- ODER Schreibvorgang aus einem
-GETEILTEN Raum, ist die hoechste erlaubte Stufe ``public``. Ist der Raum nicht
-geteilt (Einzelchat, eigener Kanal ohne Fremde, Cron, CLI, Subagent), bleibt
-alles exakt wie vorher. Es wird NIE ein Schreibvorgang abgelehnt — nur die Stufe
-gedeckelt.
+Die Regel in einem Satz: kommt ein Lesevorgang aus einem GETEILTEN Raum, ist die
+hoechste erlaubte Stufe ``public``. Fuer einen SCHREIBvorgang gilt seit
+24.11.2026: verlangt er in einem nachweislich geteilten Raum mehr als
+``public``, wird er ABGELEHNT — die Stufe wird nicht mehr still gesenkt. Ist der
+Raum nicht geteilt (Einzelchat, eigener Kanal ohne Fremde, Cron, CLI, Subagent),
+bleibt alles exakt wie vorher.
+
+Warum die Verschaerfung: bis 0.22.68 schrieb der Store-Weg die gesenkte Stufe
+und antwortete trotzdem "Stored: …". Der Aufrufer bekam damit einen
+oeffentlicheren Eintrag, als er verlangt hatte, und erfuhr es nicht — ClawHub
+las das als Absenkung der Vertraulichkeit. Ein Schreibvorgang, der offener
+landet als verlangt, ist eine Offenlegung, die niemand freigegeben hat; deshalb
+jetzt Absage mit ``isError: true`` statt stiller Aenderung.
 
 Der Unterschied zwischen Lesen und Schreiben: die Leseregel ist fail-closed
 (kein frischer Marker -> ``public``), weil Gezeigtes nicht zurueckholbar ist.
-Ein Schreibvorgang deckelt nur bei ``shared === true`` — ein unbekannter Raum
-darf einen privaten Eintrag nicht oeffentlich machen, sonst veraendert der
-Deckel die Ablage des Nutzers statt ihn zu schuetzen.
+Ein Schreibvorgang lehnt nur bei ``shared === true`` ab — ein unbekannter Raum
+darf weder einen privaten Eintrag oeffentlich machen noch ihn grundlos
+zurueckweisen.
 
-Vier Stellen, vier Pruefungen (statische Quellpruefung, wie in
-``test_wave26_fixes.py``; kein Qdrant, kein Netz, kein Embedder):
+Geprueft wird (statische Quellpruefung, wie in ``test_wave26_fixes.py``; kein
+Qdrant, kein Netz, kein Embedder):
 
 1. ``plugins/openclaw/hooks/pre-tool-gate.ts`` — die Vorab-Erinnerung sucht mit
    der fuer den RAUM aufgeloesten Stufe, nicht mehr mit ``cfg.accessLevel``.
    Ihre Treffer landen in ``blockReason``, also im Klartext.
-2. ``plugins/openclaw/tools/store.ts`` und ``hooks/capture.ts`` — die zu
-   speichernde Stufe ist durch die Raumstufe gedeckelt.
-3. ``plugins/memory/nexus/__init__.py`` — ``nexus_remember`` und ``sync_turn``
-   deckeln auf ``public``, wenn ``_chat_is_shared() is True``.
-4. Keine dieser Stellen wirft oder lehnt ab: der Deckel-Zweig senkt nur eine
-   Stufe (kein ``throw``/``block``/``isError``/``raise``).
+2. ``plugins/openclaw/tools/store.ts`` lehnt ab, statt zu senken;
+   ``hooks/capture.ts`` deckelt weiter die KONFIGURIERTE Stufe (dort gibt es
+   keine angeforderte Stufe, also auch nichts abzulehnen).
+3. ``plugins/memory/nexus/__init__.py`` — ``nexus_remember`` lehnt eine zu hohe
+   Stufe im geteilten Raum ab (gleiche Kennung und Felder wie der TS-Weg), und
+   ``sync_turn`` schreibt in einem geteilten Raum gar kein Sitzungsprotokoll
+   mehr, statt es auf ``public`` zu senken.
+4. Der Lesedeckel und der Capture-Deckel werfen nicht und lehnen nicht ab; beide
+   Schreibwege lehnen ab, bevor etwas eingebettet oder geschrieben wird.
 
-Die Tests pruefen Quelltext, weil alle vier Stellen TS-Hooks bzw. ein
-Hermes-Plugin sind: ein echter Aufruf braeuchte Gateway, Qdrant und Embedder.
+Die Tests pruefen Quelltext, weil alle Stellen TS-Hooks bzw. ein Hermes-Plugin
+sind: ein echter Aufruf braeuchte Gateway, Qdrant und Embedder. Das Verhalten
+des Store-Wegs prueft ``plugins/openclaw/test-store-room-rejection.mjs`` mit
+einem echten Aufruf.
 """
 from __future__ import annotations
 
@@ -151,48 +164,59 @@ class TestReadPathUsesTheRoomLevel:
         )
 
 
-class TestWritePathsAreCapped:
-    """2. store.ts und capture.ts: die Raumstufe ist die Obergrenze."""
+class TestWritePathRejectsInASharedRoom:
+    """2. store.ts lehnt ab; capture.ts deckelt weiter (ohne Anfrage)."""
 
-    def test_the_store_tool_caps_the_requested_level(self):
+    def test_the_store_tool_rejects_a_requested_level_above_public(self):
         src = _read(STORE)
 
         assert "const requestedLevel = (params.access_level ?? cfg.accessLevel) as string" in src, (
             "store.ts muss die angeforderte Stufe weiterhin aus dem Aufruf lesen "
-            "(dann aber deckeln, nicht ungeprueft schreiben)."
+            "(dann aber pruefen, nicht ungeprueft schreiben)."
         )
 
-        cap = _slice(src, "// Write-side room cap", "// Scope normalization", rel=STORE)
-        assert "toolCallWriteAccessLevel(requestedLevel, toolCallId)" in cap, (
-            "store.ts hat keinen ctx: die Raumstufe kommt aus der Markierung in "
-            "lib/turn-context.ts — aber ueber toolCallWriteAccessLevel, gebunden "
-            "an die call-id dieses Aufrufs, nicht ueber die Leseregel."
+        rule = _slice(src, "// Write-side room rule", "// Scope normalization", rel=STORE)
+        assert "toolCallWriteRoomShared(toolCallId)" in rule, (
+            "store.ts hat keinen ctx: das Raumurteil kommt aus der Markierung in "
+            "lib/turn-context.ts — ueber toolCallWriteRoomShared, gebunden an die "
+            "call-id dieses Aufrufs."
         )
-        assert "toolAccessLevel(" not in cap, (
+        assert "toolAccessLevel(" not in rule, (
             "store.ts darf fuer Schreibvorgaenge nicht toolAccessLevel nutzen: das "
             "liefert ohne frischen Marker 'public' und wuerde einen privaten "
             "Eintrag oeffentlich schreiben, sobald der Turn aelter als die TTL "
             "ist (langer Arbeitsturn, Cron, Werkzeugkette)."
         )
-        # Die Obergrenze: die angeforderte Stufe wird auf die Raumstufe
-        # heruntergezogen, nie darueber gehoben.
-        assert "levelOrder.indexOf(requestedLevel) > levelOrder.indexOf(roomLevel)" in cap, (
-            "der Deckel muss min(angefordert, Raumstufe) sein — hoechstens die "
-            "Raumstufe, nie mehr."
+        # Die Absage, nicht die Senkung: isError traegt den Fehlervertrag der
+        # Datei, und die Stufe wird unveraendert weitergereicht.
+        assert "isError: true" in rule, (
+            "der Schreibweg muss in einem geteilten Raum ablehnen (isError: true), "
+            "nicht still eine niedrigere Stufe speichern."
         )
-        assert cap.index("toolCallWriteAccessLevel(requestedLevel, toolCallId)") < cap.index("const accessLevel ="), (
-            "die Raumstufe muss VOR dem Schreiben berechnet werden."
+        assert "const accessLevel = requestedLevel" in rule, (
+            "die angeforderte Stufe darf nicht mehr auf ein Raum-Level "
+            "heruntergezogen werden; abgelehnt wird ganz, sonst gilt die Anfrage."
+        )
+        assert "indexOf(requestedLevel) > levelOrder.indexOf(roomLevel)" not in src, (
+            "die stille Absenkung (min(angefordert, Raum)) muss weg sein."
+        )
+        assert rule.index("toolCallWriteRoomShared(toolCallId)") < rule.index("const accessLevel ="), (
+            "das Raumurteil muss vor der Stufe feststehen."
         )
 
-        # Geschrieben wird die gedeckelte Stufe — nicht die angeforderte.
-        # Schreibtransport seit 10.11.2026: writer.upsert (WriteGateClient),
-        # nicht mehr qdrantClient.upsert. Die Zusicherung bleibt dieselbe.
+        # Geschrieben wird die angeforderte Stufe — nur wenn der Raum sie zulaesst.
         payload = _slice(src, "const payload = {", "await writer.upsert", rel=STORE)
         assert "access_level: accessLevel," in payload, (
-            "der Payload muss die gedeckelte Stufe tragen."
+            "der Payload muss die geprüfte Stufe tragen."
         )
         assert "access_level: requestedLevel" not in src, (
-            "die ungeprueft angeforderte Stufe darf nicht mehr in den Payload."
+            "die ungeprueft angeforderte Stufe darf nicht in den Payload."
+        )
+        # Die Absage kommt VOR Einbettung und Schreibvorgang: nichts wird
+        # vorbereitet, was dann doch nicht gespeichert wird.
+        assert src.index("shared-room-write-rejected") < src.index("await embedder.embed("), (
+            "die Absage muss vor der Einbettung stehen (kein Schreibvorgang, "
+            "nicht einmal Vorarbeit)."
         )
 
     def test_capture_caps_the_configured_level_in_a_shared_room(self):
@@ -211,40 +235,46 @@ class TestWritePathsAreCapped:
             "die Raumstufe muss VOR dem Payload berechnet werden."
         )
 
-    def test_only_a_shared_room_caps(self):
-        """Der Deckel haengt an ``roomShared === true`` — nicht am Zweifel."""
-        for rel, marker in ((STORE, "toolCallWriteAccessLevel(requestedLevel, toolCallId)"),
+    def test_only_a_proven_shared_room_rejects(self):
+        """Die Absage haengt an ``roomShared === true`` — nicht am Zweifel."""
+        for rel, marker in ((STORE, "toolCallWriteRoomShared(toolCallId)"),
                             (CAPTURE, "roomShared === true")):
             src = _read(rel)
-            assert marker in src, f"{rel}: Deckel nicht gefunden"
+            assert marker in src, f"{rel}: Raumurteil nicht gefunden"
 
         # capture.ts: ausdruecklich nur bei beobachtetem Fremden.
         assert 'access_level: roomShared === true ? "public" : cfg.accessLevel,' in _read(CAPTURE)
-        # store.ts: toolCallWriteAccessLevel ist die eine Schreibregel aus
-        # lib/turn-context.ts (nur ein nachweislich geteilter Raum -> public).
+        # store.ts: toolCallWriteRoomShared ist die eine Schreibregel aus
+        # lib/turn-context.ts (nur ein nachweislich geteilter Raum lehnt ab).
         turn = _read("plugins/openclaw/lib/turn-context.ts")
-        assert "if (turn.shared !== true) return requested" in turn
-        assert 'return "public"' in turn
+        assert "return turn !== null && turn.shared === true" in turn
 
-    def test_write_level_does_not_cap_without_a_fresh_marker(self):
-        """Ohne Marker oder mit altem Marker bleibt die angeforderte Stufe.
+    def test_a_write_without_a_fresh_marker_is_never_rejected(self):
+        """Ohne Marker oder mit altem Marker bleibt der Aufruf unberuehrt.
 
         Die Gegenprobe zur Leseregel: ``toolAccessLevel`` ist bei fehlendem
         Marker absichtlich fail-closed ("public"). Fuer einen SCHREIBVORGANG
         waere das eine Verschlechterung — der Eintrag des Nutzers wuerde
-        oeffentlich, sobald der Turn die TTL ueberschreitet. ``writeAccessLevel``
-        darf deshalb nur bei ``shared === true`` deckeln.
+        oeffentlich, sobald der Turn die TTL ueberschreitet. Ausserdem darf
+        Unbekanntes keinen Schreibvorgang zurueckweisen. ``writeRoomShared``
+        meldet deshalb nur bei ``shared === true`` einen geteilten Raum und
+        veraendert sonst nichts.
         """
         turn = _read("plugins/openclaw/lib/turn-context.ts")
-        body = _slice(turn, "export function writeAccessLevel(", "/** Test seam", rel="lib/turn-context.ts")
+        body = _slice(turn, "export function writeRoomShared(", "/** Test seam", rel="lib/turn-context.ts")
 
         # (a) kein Marker bzw. alter Marker -> getTurnContext liefert null
-        #     -> die angeforderte Stufe kommt unveraendert zurueck.
+        #     -> kein geteilter Raum, also keine Absage.
         assert "const turn = getTurnContext(sessionKey, now)" in body, (
-            "writeAccessLevel muss denselben Marker lesen wie die Leseregel."
+            "writeRoomShared muss denselben Marker lesen wie die Leseregel."
         )
-        assert "if (turn === null) return requested" in body, (
-            "ohne (frischen) Marker darf writeAccessLevel NICHT deckeln."
+        assert "return turn !== null && turn.shared === true" in body, (
+            "ohne (frischen) Marker darf writeRoomShared keinen geteilten Raum "
+            "melden — sonst wuerde ein privater Eintrag grundlos abgelehnt."
+        )
+        assert '"public"' not in body, (
+            "writeRoomShared darf keine Stufe zurueckgeben oder setzen; es "
+            "beantwortet nur die Frage 'ist der Raum geteilt?'."
         )
         # (b) getTurnContext verwirft alte Marker — damit greift (a) auch fuer
         #     einen Turn, der laenger als die TTL zurueckliegt.
@@ -256,57 +286,120 @@ class TestWritePathsAreCapped:
         assert "markers.delete(key)" in getter and "return null" in getter, (
             "der abgelaufene Marker muss verworfen werden und als fehlend gelten."
         )
-        # (c) unbekanntes Raumurteil (null) deckelt ebenfalls nicht.
-        assert "if (turn.shared !== true) return requested" in body, (
-            "nur ein nachweislich geteilter Raum darf deckeln — Unbekanntes "
-            "darf einen privaten Eintrag nicht oeffentlich machen."
-        )
-        # (d) und der Deckel selbst ist genau "public".
-        assert 'return "public"' in body, (
-            "bei shared === true ist public die Obergrenze."
+        # (c) unbekanntes Raumurteil (null) meldet ebenfalls keinen geteilten
+        #     Raum (shared === true ist die einzige wahre Bedingung).
+        assert "turn.shared === true" in body, (
+            "nur ein nachweislich geteilter Raum darf ablehnen — Unbekanntes "
+            "darf einen privaten Eintrag nicht verhindern."
         )
 
 
-class TestHermesPluginCapsWrites:
-    """3. Hermes-Plugin: nexus_remember und sync_turn deckeln auf public."""
+class TestHermesPluginRejectsInASharedRoom:
+    """3. Hermes-Plugin: nexus_remember und sync_turn lehnen im geteilten Raum ab.
 
-    def test_nexus_remember_is_capped_in_a_shared_room(self):
+    Beide Schreibwege muessen dieselbe Antwort geben wie der OpenClaw-Weg
+    (``plugins/openclaw/tools/store.ts``), sonst bekommen Hermes-Nutzer weiter
+    die stille Absenkung, die ClawHub beanstandet.
+    """
+
+    def test_nexus_remember_rejects_in_a_shared_room(self):
         src = _read(HERMES)
         branch = _slice(src, 'elif tool_name == "nexus_remember":',
                         'elif tool_name == "nexus_forget":', rel=HERMES)
 
-        assert 'self._chat_is_shared() is True' in branch, (
-            "der Deckel muss hinter `_chat_is_shared() is True` stehen — ein "
-            "Raum, der nicht geteilt ist, bleibt unveraendert."
+        assert "self._chat_is_shared() is True and _level_above_public(" in branch, (
+            "die Absage muss hinter `_chat_is_shared() is True` UND einer "
+            "Pruefung der verlangten Stufe stehen — ein Raum, der nicht geteilt "
+            "ist, bleibt unveraendert."
         )
-        assert '_write_level = "public"' in branch, (
-            "in einem geteilten Raum ist public die Obergrenze."
+        assert "result = _shared_room_rejection(_requested_level)" in branch, (
+            "im geteilten Raum muss nexus_remember die Absage zurueckgeben, "
+            "nicht eine gesenkte Stufe schreiben."
         )
-        assert "access_level=_write_level" in branch, (
-            "die gedeckelte Stufe muss an _upsert gehen."
+        assert "access_level=_requested_level" in branch, (
+            "sonst (kein geteilter Raum) geht die verlangte Stufe unveraendert "
+            "an _upsert."
         )
-        assert 'access_level=args.get("access_level", "private")' not in branch, (
-            "die angeforderte Stufe darf nicht mehr ungedeckelt durchgereicht werden."
+        assert '_write_level = "public"' not in branch, (
+            "die stille Absenkung auf public muss aus nexus_remember weg sein."
+        )
+        # Abgelehnt heisst: kein Schreibvorgang und keine zweite Ablage. Die
+        # Anreicherung darf nur im Schreibzweig stehen, nicht danach fuer beide.
+        write_branch = branch[branch.index("else:"):]
+        before_else = branch[:branch.index("else:")]
+        assert "_upsert(" in write_branch, "der Schreibvorgang gehoert in den else-Zweig."
+        assert "_upsert(" not in before_else, (
+            "im Absage-Zweig darf _upsert nicht vorkommen — sonst wird trotz "
+            "Absage geschrieben."
+        )
+        assert "_enqueue_entity_extraction(" in write_branch, (
+            "die Anreicherung darf nur nach einem Schreibvorgang laufen; nach "
+            "einer Absage wuerde sie eine zweite Ablage erzeugen."
         )
 
-    def test_sync_turn_is_capped_in_a_shared_room(self):
+    def test_sync_turn_does_not_write_in_a_shared_room(self):
         src = _read(HERMES)
         body = _slice(src, "def sync_turn(", "def _write_loop(", rel=HERMES)
 
-        assert '_turn_level = "public" if self._chat_is_shared() is True else "private"' in body, (
-            "Turn-Eintraege muessen in einem geteilten Raum public sein und sonst "
-            "private wie bisher."
+        assert "if self._chat_is_shared() is True:" in body, (
+            "der geteilte Raum muss vor dem Einreihen des Sitzungsprotokolls "
+            "erkannt werden; sonst wird es mit gesenkter Stufe geschrieben."
         )
-        assert '"access_level": _turn_level,' in body, (
-            "der Warteschlangen-Eintrag muss die gedeckelte Stufe tragen."
+        assert '"access_level": "private",' in body, (
+            "Turn-Eintraege tragen ausserhalb eines geteilten Raums weiter "
+            "private."
         )
-        assert '"access_level": "private",' not in body, (
-            "der feste private-Wert in sync_turn ist der ungedeckelte alte Pfad."
+        assert '_turn_level = "public"' not in body, (
+            "die stille Absenkung des Sitzungsprotokolls auf public muss weg sein."
+        )
+        assert '"access_level": _turn_level' not in body
+        assert "shared-room-write-rejected" in body, (
+            "die Absage muss dieselbe Kennung nennen wie der TS-Weg."
+        )
+
+    def test_both_harnesses_say_the_same_thing(self):
+        """Beide Schreibwege: gleiche Kennung, gleiche Felder, keine Senkung."""
+        store = _read(STORE)
+        hermes = _read(HERMES)
+
+        for name, src in (("store.ts", store), ("__init__.py", hermes)):
+            assert "shared-room-write-rejected" in src, (
+                f"{name}: die Kennung fehlt — beide Harnesse muessen dieselbe nennen."
+            )
+            assert (
+                "reason: shared_room" in src
+                or '"reason": "shared_room"' in src
+            ), f"{name}: das Feld reason: shared_room fehlt."
+            assert "max_level" in src and "public" in src, (
+                f"{name}: die Obergrenze muss in der Antwort stehen."
+            )
+            assert "requested_level" in src, (
+                f"{name}: die angeforderte Stufe muss in der Antwort stehen."
+            )
+
+        # Und keine der beiden Stellen senkt mehr still.
+        for name, marker in (("store.ts", "levelOrder.indexOf(requestedLevel) > levelOrder.indexOf(roomLevel)"),
+                             ("__init__.py", '_write_level = "public"'),
+                             ("__init__.py", '_turn_level = "public"')):
+            assert marker not in (store if name == "store.ts" else hermes), (
+                f"{name}: stille Absenkung gefunden: {marker!r}"
+            )
+
+    def test_shared_room_rejection_names_room_ceiling_and_way_out(self):
+        src = _read(HERMES)
+        helper = _slice(src, "def _shared_room_rejection(", "def _log_movement(", rel=HERMES)
+
+        assert "shared room" in helper, "die Absage muss den Raum als Grund nennen."
+        assert 'max_level: public' in helper, "die Obergrenze muss im Text stehen."
+        assert "nothing was written" in helper, "die Absage muss sagen, dass nichts gespeichert wurde."
+        assert "write it in your own chat" in helper, "der Ausweg muss genannt sein."
+        assert '"status": "rejected"' in helper and '"is_error": True' in helper, (
+            "die Absage traegt den Fehlervertrag dieses Plugins."
         )
 
 
-class TestNothingIsRejected:
-    """4. Der Deckel senkt nur eine Stufe — er wirft nicht und lehnt nicht ab."""
+class TestReadCapsAndCaptureDoNotReject:
+    """4. Lesedeckel und Capture-Deckel senken nur; beide Schreibwege lehnen ab."""
 
     def test_the_read_cap_has_no_block_or_throw(self):
         src = _read(PRE_TOOL_GATE)
@@ -317,25 +410,28 @@ class TestNothingIsRejected:
         assert "block: true" not in cap
         assert "isError" not in cap
 
-    def test_the_write_caps_have_no_rejection(self):
-        store_cap = _slice(_read(STORE), "// Write-side room cap", "// Scope normalization",
-                           rel=STORE)
+    def test_the_store_rejects_but_the_capture_cap_does_not(self):
+        store_rule = _slice(_read(STORE), "// Write-side room rule", "// Scope normalization",
+                            rel=STORE)
         capture_cap = _slice(_read(CAPTURE), "// Write-side room cap", "lifecycle_status:",
                              rel=CAPTURE)
 
-        for name, cap in (("store.ts", store_cap), ("capture.ts", capture_cap)):
+        # Der Store-Weg lehnt ab — mit dem Fehlervertrag der Datei, vor jeder
+        # Vorarbeit.
+        assert "isError: true" in store_rule, "store.ts muss ablehnen, nicht senken."
+        assert "throw" not in store_rule, "die Absage ist eine Antwort, kein Wurf."
+
+        # Der Capture-Deckel schreibt die KONFIGURIERTE Stufe gedeckelt; dort
+        # gibt es keine angeforderte Stufe, also auch nichts abzulehnen.
+        for name, cap in (("capture.ts", capture_cap),):
             assert "throw" not in cap, f"{name}: der Deckel darf nicht werfen."
-            assert "isError" not in cap, f"{name}: der Deckel darf nichts ablehnen."
+            assert "isError" not in cap, f"{name}: der Deckel lehnt nichts ab."
             assert "return {" not in cap, f"{name}: der Deckel ist keine Fehlerantwort."
 
-    def test_the_hermes_caps_have_no_raise_or_error(self):
+    def test_the_hermes_rejection_is_an_answer_not_an_exception(self):
+        """Die Absage im Hermes-Weg ist ein Ergebnis, kein Wurf."""
         src = _read(HERMES)
-        remember = _slice(src, 'elif tool_name == "nexus_remember":',
-                          'elif tool_name == "nexus_forget":', rel=HERMES)
-        sync = _slice(src, "def sync_turn(", "def _write_loop(", rel=HERMES)
-        sync_cap = _slice(sync, "Room cap (13.11.2026)", "_turn_level = ", rel=HERMES)
+        helper = _slice(src, "def _shared_room_rejection(", "def _log_movement(", rel=HERMES)
 
-        for name, chunk in (("nexus_remember", remember), ("sync_turn", sync_cap)):
-            assert "raise" not in chunk, f"{name}: der Deckel darf nicht werfen."
-            assert '"status": "error"' not in chunk, f"{name}: der Deckel lehnt nichts ab."
-            assert "return {" not in chunk, f"{name}: der Deckel ist keine Fehlerantwort."
+        assert "raise" not in helper, "die Absage darf nicht werfen."
+        assert "return {" in helper, "die Absage ist eine Ergebnisantwort."

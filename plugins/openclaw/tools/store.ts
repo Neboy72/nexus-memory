@@ -7,7 +7,7 @@ import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache } from "../lib/scope-auto.ts"
 import { SHARED_SCOPE, scopeBundle } from "../lib/qdrant-client.ts"
 import { limitText } from "../lib/text-preview.ts"
-import { toolCallWriteAccessLevel } from "../lib/turn-context.ts"
+import { toolCallWriteRoomShared } from "../lib/turn-context.ts"
 import { log } from "../logger.ts"
 import { NEXUS_STORE_TOOL } from "../runtime.ts"
 
@@ -133,21 +133,43 @@ export function registerStoreTool(
           }
         }
 
-        // Write-side room cap (13.11.2026): the level a WRITE may carry is
-        // capped by the turn's room — in a shared room "public" is the ceiling,
-        // even when the call asks for "private". A registered tool gets no
-        // inbound context from the host, so the room verdict comes from the
-        // session this very call was bound to by `before_tool_call`
-        // (`toolCallWriteAccessLevel`, see lib/turn-context.ts). Never a
-        // rejection: only the level is lowered. The requested level itself is
-        // the baseline, NOT cfg.accessLevel: only a provably shared room caps,
-        // so an unbound call or a stale marker leaves the level untouched.
-        const roomLevel = toolCallWriteAccessLevel(requestedLevel, toolCallId)
+        // Write-side room rule (revised 24.11.2026, ClawHub audit): in a room
+        // PROVEN shared, "public" is the highest level a write may carry. A
+        // call that asks for "trusted" or "private" there is REJECTED — the
+        // level is never lowered on its behalf. The 13.11.2026 cap wrote the
+        // lowered level and answered "Stored: …", so a caller that asked for
+        // "private" got a public entry without being told; that is a silent
+        // downgrade of confidentiality, not a courtesy.
+        //
+        // Rejected means: nothing embedded, nothing stored, no second copy. The
+        // answer carries the file's error contract (`isError: true`) and names
+        // the room, the ceiling and the two ways out. Only a proven-shared room
+        // rejects: an unbound call, an unknown session and a stale marker are
+        // left exactly as before (see `toolCallWriteRoomShared`, which never
+        // decides on doubt). The read side is untouched.
         const levelOrder = ACCESS_LEVELS as readonly string[]
-        const accessLevel =
-          levelOrder.indexOf(requestedLevel) > levelOrder.indexOf(roomLevel)
-            ? roomLevel
-            : requestedLevel
+        const requestedAboveCeiling =
+          levelOrder.indexOf(requestedLevel) > levelOrder.indexOf("public")
+        if (requestedAboveCeiling && toolCallWriteRoomShared(toolCallId)) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Memory store rejected: this session runs in a shared room, ` +
+                  `where the highest access_level is "public"; ` +
+                  `"${requestedLevel}" was not stored and nothing was written. ` +
+                  `Call again with access_level "public" if this note may be ` +
+                  `visible to everyone in the room, or write it in your own ` +
+                  `chat, where "${requestedLevel}" applies. ` +
+                  `(code: shared-room-write-rejected, reason: shared_room, ` +
+                  `requested_level: ${requestedLevel}, max_level: public)`,
+              },
+            ],
+          }
+        }
+        const accessLevel = requestedLevel
 
         // Scope normalization ([a-z0-9-], max 40; same regex as lib/config.ts,
         // lib/scope-auto.ts and the server).

@@ -215,7 +215,7 @@ export function resolveReadLevel(
  * Without a session key, without a marker for it, and in a group turn whose
  * room is not released, this is always "public": too little is better than a
  * leak. That fail-closed stance is right for reads (the content is shown to
- * someone) but wrong for writes; see `writeAccessLevel` below, which is the
+ * someone) but wrong for writes; see `writeRoomShared` below, which is the
  * only helper a write may use.
  */
 export function toolAccessLevel(
@@ -248,40 +248,37 @@ export function toolCallAccessLevel(
 }
 
 /**
- * The level a WRITE may carry — the counterpart of `toolAccessLevel`.
+ * Whether the room of THIS session is PROVEN shared — the write-side verdict.
  *
- * A write is capped only when the room is PROVEN shared (`turn.shared === true`).
- * With no marker, a stale marker, or a room whose verdict is unknown, the
- * requested level comes back UNCHANGED. The room RELEASE is deliberately not
- * consulted: it governs delivery (reads), not what the owner may archive.
+ * This replaces the old `writeAccessLevel`, which returned a LOWERED level and
+ * let the caller write it. ClawHub read that as a silent downgrade of
+ * confidentiality, and it was right: a write that lands more openly than the
+ * caller asked for is a disclosure the caller never approved. Since
+ * 24.11.2026 the write path therefore asks this question and REJECTS the call
+ * when the answer is `true` and the requested level is above "public"; it never
+ * rewrites the level.
  *
- * Why not fail-closed like reads: capping a write changes what is stored in the
- * user's own store. An unknown room would silently turn a private note into a
- * public one — that harms the user's archive instead of protecting it, and it
- * would hit every long work turn, cron run and tool chain that writes more than
- * `TURN_MARKER_TTL_MS` after the last user message. Reads can be narrowed
- * afterwards; a record that was written too openly cannot be un-leaked. So:
- * cap only on evidence, never on doubt. Like the read cap this never rejects —
- * it only lowers the level.
+ * `true` only on evidence: the marker must exist, be fresh, and carry a room
+ * observed as shared (`shared === true`). No marker, a stale marker, or a room
+ * whose verdict is unknown yields `false`, so that call is left exactly as it
+ * would have been — the cap never fires on doubt.
+ *
+ * Why not fail-closed here like reads: reads show content to someone and can be
+ * narrowed afterwards; a record written too openly cannot be un-leaked, but a
+ * record refused by mistake also cannot be recovered. Doubt is no grounds for
+ * changing what the user's own archive keeps.
+ *
+ * The room RELEASE is deliberately not consulted: it governs delivery (reads),
+ * not what the owner may archive.
  */
-export function writeAccessLevel(
-  requested: string,
-  sessionKey?: string,
-  now: number = Date.now(),
-): string {
+export function writeRoomShared(sessionKey?: string, now: number = Date.now()): boolean {
   const turn = getTurnContext(sessionKey, now)
-  if (turn === null) return requested
-  if (turn.shared !== true) return requested
-  return "public"
+  return turn !== null && turn.shared === true
 }
 
-/** `writeAccessLevel` for a TOOL call, bound through its call id. */
-export function toolCallWriteAccessLevel(
-  requested: string,
-  toolCallId: unknown,
-  now: number = Date.now(),
-): string {
-  return writeAccessLevel(requested, sessionKeyForToolCall(toolCallId, now), now)
+/** `writeRoomShared` for a TOOL call, bound through its call id. */
+export function toolCallWriteRoomShared(toolCallId: unknown, now: number = Date.now()): boolean {
+  return writeRoomShared(sessionKeyForToolCall(toolCallId, now), now)
 }
 
 /** Test seam: drop every recorded marker and tool binding. */

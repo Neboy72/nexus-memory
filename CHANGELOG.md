@@ -1,3 +1,16 @@
+## [0.22.69] - 2026-11-24
+
+**In einem geteilten Raum wird eine Notiz, die als vertraulich gedacht war, nicht mehr stillschweigend oeffentlich gespeichert: der Schreibvorgang wird abgelehnt und sagt warum.**
+
+Ein Befund aus der Pruefung des ClawHub-Pakets 1.22.68.
+
+- **Die Stufe fiel still.** Wer in einem Raum schrieb, in dem Fremde mitschreiben, und dabei `trusted` oder `private` verlangte, bekam `public` gespeichert — und die Antwort meldete "Stored: … (access_level: public)", als waere das so bestellt gewesen. Der Aufrufer erfuhr nicht, dass seine Notiz fuer alle lesbar lag. Die Regel war seit dem 13.11. als Datenschutz-Korrektur gedacht, wirkte aber in die andere Richtung: sie aenderte die Ablage, ohne zu fragen.
+- **Jetzt wird abgelehnt.** In einem nachweislich geteilten Raum ist `public` die Obergrenze. Verlangt ein Schreibvorgang mehr, kommt eine Absage mit Grund (der Raum), mit der Obergrenze und mit zwei Wegen: bewusst `public` verlangen, wenn alle es lesen duerfen, oder in einem eigenen Chat schreiben, wo die verlangte Stufe gilt. Gespeichert wird dann nichts, auch nicht teilweise, und es wird nichts vorbereitet.
+- **Beide Schreibwege sagen dasselbe.** Die Regel sitzt im OpenClaw-Plugin (Werkzeug zum Speichern) und im Hermes-Plugin; beide nennen dieselbe Kennung (`shared-room-write-rejected`) und dieselben Felder, damit ein Agent die Antwort unabhaengig vom Wirt lesen kann. Im Hermes-Weg wird zusaetzlich das automatische Sitzungsprotokoll in einem geteilten Raum gar nicht mehr geschrieben, statt es oeffentlich abzulegen — es gibt dort niemanden, der eine niedrigere Stufe freigeben koennte.
+- **Nur bei Beweis.** Ein Aufruf ohne Raum, mit unbekanntem Raum oder mit veraltetem Merkmal bleibt wie bisher unberuehrt. Die Leseseite ist unveraendert: geteilte Raeume liefern weiter nur `public`; die automatische Sitzungsablage deckelt weiter die eingestellte Stufe, weil dort niemand eine Stufe verlangt.
+
+Geprueft mit echten Aufrufen beider Wege (`plugins/openclaw/test-store-room-rejection.mjs`, sechs Faelle, und die Python-Aufrufe in der Pruefung) und mit der Quellpruefung `tests/test_raum_deckel_schreiben.py`, die beide Dateien abdeckt.
+
 ## [0.22.68] - 2026-11-24
 
 **Ein Eintrag, der neu geschrieben wird, verliert seine Felder nicht mehr, das Zusammenfuehren kann kein Schreiber mehr vergessen, fremde Eintraege lassen sich nicht mehr ueberschreiben — und die Antwort sagt, wo der Eintrag wirklich liegt.**

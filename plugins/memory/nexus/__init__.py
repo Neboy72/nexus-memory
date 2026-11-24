@@ -1338,6 +1338,58 @@ def _gate_rejection() -> Dict[str, Any]:
     return {"status": "rejected", "reason": reason}
 
 
+# Schreibstufen in aufsteigender Ordnung — dieselbe Liste wie im OpenClaw-Weg
+# (plugins/openclaw/tools/store.ts: ACCESS_LEVELS).
+_WRITE_LEVELS = ("public", "trusted", "private")
+
+
+def _level_above_public(level: Any) -> bool:
+    """Liegt die verlangte Stufe ueber ``public``?
+
+    Nur bekannte Stufen zaehlen. Eine unbekannte Stufe bleibt unberuehrt: sie
+    wird nicht hier abgewiesen, sondern vom Schreibtor geprueft (fail-closed),
+    genau wie vorher.
+    """
+    try:
+        return _WRITE_LEVELS.index(str(level)) > _WRITE_LEVELS.index("public")
+    except ValueError:
+        return False
+
+
+def _shared_room_rejection(requested_level: Any) -> Dict[str, Any]:
+    """Absage fuer einen Schreibvorgang in einem nachweislich geteilten Raum.
+
+    Gleicher Wortlaut, gleiche Kennung und gleiche Felder wie im OpenClaw-Weg
+    (``plugins/openclaw/tools/store.ts``): beide Harnesse sagen dasselbe, damit
+    ein Agent die Antwort unabhaengig vom Wirt lesen kann. Nichts wird
+    geschrieben, nichts vorbereitet, keine zweite Ablage.
+
+    ``status``/``reason`` folgen dem Vertrag dieses Plugins (siehe
+    ``_gate_rejection``); ``is_error`` macht die Absage zusaetzlich so lesbar
+    wie das ``isError: true`` der TS-Seite.
+    """
+    level = str(requested_level)
+    text = (
+        "Memory store rejected: this session runs in a shared room, where the "
+        'highest access_level is "public"; '
+        f'"{level}" was not stored and nothing was written. '
+        'Call again with access_level "public" if this note may be visible to '
+        'everyone in the room, or write it in your own chat, where '
+        f'"{level}" applies. '
+        "(code: shared-room-write-rejected, reason: shared_room, "
+        f"requested_level: {level}, max_level: public)"
+    )
+    return {
+        "status": "rejected",
+        "is_error": True,
+        "error": text,
+        "reason": "shared_room",
+        "code": "shared-room-write-rejected",
+        "requested_level": level,
+        "max_level": "public",
+    }
+
+
 def _log_movement(action: str, result: str, *, text: str = "",
                   access_level: Any = "", target_id: Any = None,
                   category: Any = None, scope: Any = None,
@@ -3131,15 +3183,24 @@ class NexusMemoryProvider:
             # un-ringing a bell is not. Narrowing the level per agent is a one-line
             # change when a new agent arrives; exposure is not.
             #
-            # Room cap (13.11.2026): the ONE exception is a shared room. What is
-            # said there is not private by any reading, and storing it as
-            # "private" would hide where it came from — so "public" is the
-            # ceiling. A room that is not shared (or not determinable) writes
-            # "private" exactly as before. This lowers a level; it never rejects.
-            _turn_level = "public" if self._chat_is_shared() is True else "private"
-            self._write_queue.append({"text": f"User: {user_content}\nAssistant: {assistant_content}",
-                                       "category": "session", "access_level": _turn_level,
-                                       "source": "hermes-plugin", "confidence": 0.5})
+            # Room rule (13.11.2026, verschaerft 24.11.2026): the ONE exception
+            # is a shared room. What is said there is not private by any
+            # reading — but the session log wants "private", and the ceiling
+            # there is "public". Rather than store it more openly than intended
+            # (the silent downgrade ClawHub flagged), a shared room is not
+            # written at all: nothing queued, nothing replaced, no second
+            # copy — the same rule and the same code as the OpenClaw store
+            # tool. A room that is not shared (or not determinable) writes
+            # "private" exactly as before.
+            if self._chat_is_shared() is True:
+                logger.info("sync_turn: Sitzungsprotokoll nicht gespeichert — "
+                            "geteilter Raum (shared-room-write-rejected, "
+                            "reason: shared_room, requested_level: private, "
+                            "max_level: public)")
+            else:
+                self._write_queue.append({"text": f"User: {user_content}\nAssistant: {assistant_content}",
+                                          "category": "session", "access_level": "private",
+                                          "source": "hermes-plugin", "confidence": 0.5})
 
         # Auto entity detection (2026-08-30): store hardware facts as an entity
         # right away, not only at session_end. Pattern: "ich habe X" / "ich nutze X" / "ich habe X per Y"
@@ -3808,29 +3869,38 @@ class NexusMemoryProvider:
                 # source_url through — the tool schema promises them, and they
                 # were previously ignored silently.
                 #
-                # Room cap (13.11.2026): in a SHARED room "public" is the ceiling
-                # for a write — the call may ask for "private", it just does not
-                # get it. A room that is not shared (or not determinable) keeps
-                # today's behaviour exactly; nothing is ever rejected, only the
-                # level is lowered.
-                _write_level = "public" if self._chat_is_shared() is True \
-                    else args.get("access_level", "private")
-                result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
-                                      access_level=_write_level,
-                                      source=args.get("source", ""),
-                                      confidence=args.get("confidence", 0.7),
-                                      salience=args.get("salience"),
-                                      source_url=args.get("source_url", ""),
-                                      # Ausdruecklicher Werkzeugaufruf. Eine
-                                      # Regel braucht zusaetzlich ``rule_proof``
-                                      # (Token von ``rule-confirm`` am Terminal).
-                                      explicit=True,
-                                      rule_proof=args.get("rule_proof", ""))
-                # Roadmap 1.1/4.1: auto-enrich with entities + edges (async, fail-open)
-                try:
-                    self._enqueue_entity_extraction(args.get("text", ""))
-                except Exception as exc:
-                    logger.warning("Auto entity enrichment skipped: %s", exc)
+                # Room rule (13.11.2026, verschaerft 24.11.2026): in a SHARED
+                # room "public" is the ceiling for a write. A call that asks
+                # for "trusted" or "private" there is REJECTED — the level is
+                # never lowered on its behalf, because a note that lands more
+                # openly than asked is a disclosure nobody approved. Same
+                # wording, code and fields as the OpenClaw store tool
+                # (plugins/openclaw/tools/store.ts), so both harnesses say the
+                # same thing. A room that is not shared (or not determinable)
+                # keeps today's behaviour exactly: the requested level stands.
+                _requested_level = args.get("access_level", "private")
+                if self._chat_is_shared() is True and _level_above_public(_requested_level):
+                    logger.info("nexus_remember rejected: geteilter Raum, "
+                                "verlangt %s (shared-room-write-rejected)",
+                                _requested_level)
+                    result = _shared_room_rejection(_requested_level)
+                else:
+                    result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
+                                          access_level=_requested_level,
+                                          source=args.get("source", ""),
+                                          confidence=args.get("confidence", 0.7),
+                                          salience=args.get("salience"),
+                                          source_url=args.get("source_url", ""),
+                                          # Ausdruecklicher Werkzeugaufruf. Eine
+                                          # Regel braucht zusaetzlich ``rule_proof``
+                                          # (Token von ``rule-confirm`` am Terminal).
+                                          explicit=True,
+                                          rule_proof=args.get("rule_proof", ""))
+                    # Roadmap 1.1/4.1: auto-enrich with entities + edges (async, fail-open)
+                    try:
+                        self._enqueue_entity_extraction(args.get("text", ""))
+                    except Exception as exc:
+                        logger.warning("Auto entity enrichment skipped: %s", exc)
             elif tool_name == "nexus_forget":
                 result = self._forget(args.get("memory_id", ""))
             elif tool_name == "nexus_guardrail_check":
