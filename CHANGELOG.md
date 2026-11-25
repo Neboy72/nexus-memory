@@ -1,3 +1,9 @@
+## [0.22.72] - 2026-11-25
+
+**Der Windows-Prueflauf war rot, weil ein neuer Test die Pfadform nicht beruecksichtigt hat — er traegt jetzt dieselbe Ausnahme wie seine Nachbarn.**
+
+Der Test zum Installer prueft, ob die Startdatei auf die Umgebung des eigenen Checkouts zeigt. Unter Windows laeuft dieser Zweig in der Git-Bash, die Pfade in einer anderen Form schreibt als Python sie vergleicht; der Test ist deshalb dort uebersprungen, genau wie die drei Tests derselben Klasse, die dasselbe pruefen. Am Verhalten aendert sich nichts.
+
 ## [0.22.71] - 2026-11-25
 
 **Ein Schreibvorgang in einem Raum, dessen Lage niemand belegen kann, wird nicht mehr durchgelassen; der Graph-Zusatz bringt nur noch Erinnerungen und keine Etiketten mehr; Nexus Memory liest seine eigene Konfiguration zuerst, und ein Testlauf fasst die echte Agentenliste nicht mehr an.**

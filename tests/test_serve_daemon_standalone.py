@@ -197,6 +197,7 @@ class TestInstallServeScript:
         assert r.returncode != 0
         assert "entrypoint not found" in (r.stdout + r.stderr)
 
+    @_POSIX_LAUNCHD_PLIST
     def test_checkout_venv_wins_and_no_agent_venv_is_consulted(self, tmp_path):
         """Standalone: the checkout's own environment is the default.
 
