@@ -24,8 +24,8 @@
 #
 # Env overrides:
 #   NEXUS_SERVE_PORT      HTTP port of `nexus-memory serve` (default 9122)
-#   NEXUS_PYTHON          python interpreter to use (default: venv next to
-#                         the nexus-memory entrypoint, else python3)
+#   NEXUS_PYTHON          python interpreter to use (default: the checkout's
+#                         own .venv, else python3 on PATH from 3.11 up)
 #   NEXUS_SERVE_BIN       explicit nexus-memory entrypoint path
 #
 set -euo pipefail
@@ -87,16 +87,29 @@ resolve_python() {
         echo "$NEXUS_PYTHON"
         return 0
     fi
-    # The hermes venv layout: ~/nexus-memory repo + venv console script.
-    if [ -x "${HOME}/.hermes/hermes-agent/venv/bin/nexus-memory" ]; then
-        echo "${HOME}/.hermes/hermes-agent/venv/bin/python"
-        return 0
+    # Standalone means standalone: this product runs in its own environment
+    # inside the checkout. Another agent's venv is never consulted here — a
+    # "standalone" install that quietly borrowed the Hermes venv was exactly
+    # the dependency this product must not have (25.11.2026).
+    local own
+    for own in "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/venv/bin/python"; do
+        if [ -x "$own" ]; then
+            echo "$own"
+            return 0
+        fi
+    done
+    # Otherwise any python3 on PATH, but only from 3.11 up — below that the
+    # package cannot install, and saying so here is better than failing later
+    # inside pip with a version error nobody expects.
+    local py
+    if py="$(command -v python3 2>/dev/null)" && [ -n "$py" ]; then
+        if "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+            echo "$py"
+            return 0
+        fi
+        fail "python3 ($py) is $("$py" -V 2>&1) and nexus-memory needs Python 3.11 or newer. Create the checkout's own environment with a newer Python (for example python3.12 -m venv \"${REPO_DIR}/.venv\" && \"${REPO_DIR}/.venv/bin/pip install -e \"${REPO_DIR}\"), or point NEXUS_PYTHON at a suitable interpreter."
     fi
-    if command -v python3 >/dev/null 2>&1; then
-        echo "python3"
-    else
-        echo "python"
-    fi
+    fail "no python3 on PATH and no venv in ${REPO_DIR}. Create one: python3.11 -m venv \"${REPO_DIR}/.venv\" && \"${REPO_DIR}/.venv/bin/pip install -e \"${REPO_DIR}\""
 }
 
 # Effective OS for all `case` branches: forced override wins; a forced OS that

@@ -20,8 +20,9 @@
  *   b) public in geteiltem Raum → geht durch
  *   c) private ohne Raum → geht durch
  *   d) trusted in geteiltem Raum → Absage
- *   e) veraltetes Merkmal → geht durch (unveraendert wie bisher)
- *   f) unbekannter Raum (shared === null) → geht durch
+ *   e) veraltetes Merkmal → Absage (Raum nicht belegbar, room_unknown)
+ *   f) unbekannter Raum (shared === null) → Absage (room_unknown)
+ *   g) beobachteter eigener Raum (shared === false) → geht durch
  */
 import assert from "node:assert"
 import { register } from "node:module"
@@ -137,7 +138,7 @@ await t("d) trusted im geteilten Raum: Absage", async () => {
 
 // ── e) veraltetes Merkmal ──────────────────────────────────────────────────
 
-await t("e) veraltetes Merkmal: keine Absage (wie bisher unberuehrt)", async () => {
+await t("e) veraltetes Merkmal: Absage (Raum nicht belegbar)", async () => {
   resetTurnContext()
   const alt = Date.now() - TURN_MARKER_TTL_MS - 1000
   setTurnContext(true, "alt", alt, true, false, true)
@@ -146,19 +147,35 @@ await t("e) veraltetes Merkmal: keine Absage (wie bisher unberuehrt)", async () 
   const { tool, touched } = makeStoreTool()
   const res = await tool.execute("aufruf-e", { text: TEXT, access_level: "private" })
 
-  assert.notStrictEqual(res?.isError, true, `unerwartete Absage: ${answerText(res)}`)
-  assert.strictEqual(touched.payload?.access_level, "private")
+  assert.strictEqual(res?.isError, true, "ohne frisches Merkmal darf ein privater Schreibvorgang nicht durch")
+  assert.match(answerText(res), /room_unknown/, "der Grund muss als room_unknown benannt sein")
+  assert.strictEqual(touched.upsert, 0)
 })
 
 // ── f) unbekannter Raum ────────────────────────────────────────────────────
 
-await t("f) unbekannter Raum (shared === null): keine Absage", async () => {
+await t("f) unbekannter Raum (shared === null): Absage", async () => {
   resetTurnContext()
   setTurnContext(false, "unbekannt", Date.now(), null, false, true)
   bindToolSession("aufruf-f", "unbekannt")
 
   const { tool, touched } = makeStoreTool()
   const res = await tool.execute("aufruf-f", { text: TEXT, access_level: "private" })
+
+  assert.strictEqual(res?.isError, true, "ohne frisches Merkmal darf ein privater Schreibvorgang nicht durch")
+  assert.match(answerText(res), /room_unknown/, "der Grund muss als room_unknown benannt sein")
+  assert.strictEqual(touched.upsert, 0)
+})
+
+// ── g) beobachteter eigener Raum ───────────────────────────────────────────
+
+await t("g) beobachteter eigener Raum (shared === false): geht durch", async () => {
+  resetTurnContext()
+  setTurnContext(false, "eigen", Date.now(), false, false, true)
+  bindToolSession("aufruf-g", "eigen")
+
+  const { tool, touched } = makeStoreTool()
+  const res = await tool.execute("aufruf-g", { text: TEXT, access_level: "private" })
 
   assert.notStrictEqual(res?.isError, true, `unerwartete Absage: ${answerText(res)}`)
   assert.strictEqual(touched.payload?.access_level, "private")

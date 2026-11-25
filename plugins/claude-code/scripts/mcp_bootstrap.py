@@ -14,8 +14,18 @@ import sys
 import shutil
 import subprocess
 
+# Standalone means standalone: the interpreter comes from this product's own
+# environment, never from another agent's venv. The Hermes venv used to be
+# first here, which is how a "standalone" plugin ended up depending on an
+# agent install (25.11.2026).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
+
 CANDIDATE_VENVS = [
-    os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python3"),
+    # The checkout the plugin ships in, and the conventional checkout path.
+    os.path.join(_REPO_ROOT, ".venv", "bin", "python"),
+    os.path.expanduser("~/nexus-memory/.venv/bin/python"),
+    # Older/conventional locations stay as fallbacks.
     os.path.expanduser("~/nexus-memory-venv/bin/python3"),
     os.path.expanduser("~/.venv/bin/python3"),
     "/opt/homebrew/bin/python3",

@@ -22,6 +22,8 @@ const AGENT_LOGOS = {
   'crush': '/assets/agent-logos/crush.png',
   'deepseek-harness': '/assets/agent-logos/dsh.svg',
   'dsh': '/assets/agent-logos/dsh.svg',
+  'paperless-sync': '/assets/agent-logos/paperless.svg',
+  'paperless': '/assets/agent-logos/paperless.svg',
   'ds-bot': '/assets/agent-logos/ds-bot.png',
   'ds bot': '/assets/agent-logos/ds-bot.png',
   'dsbot': '/assets/agent-logos/ds-bot.png',
@@ -61,6 +63,10 @@ function getAgentLogo(agentOrId, fallbackIcon) {
   const candidates = [
     agent.id,
     agent.type,
+    // ``harness`` names the program behind the entry ("dsh", "paperless-sync").
+    // Without it a card whose old name was never recorded (e.g. "DSH (Mac mini)")
+    // falls through to the letter avatar although its logo is in the table.
+    agent.harness,
     ...(Array.isArray(agent.formerly) ? agent.formerly : []),
     agent.name,
     String(agent.name || '').toLowerCase(),
@@ -315,9 +321,16 @@ async function loadAgents() {
       Boolean(String(agent.config_dir || '').trim())
     );
   };
-  const connectedAgents = registry.agents.filter(isConnectedAgent);
+  // A service is a background job that holds its own Nexus key (the
+  // paperless import, for example). It is registered like an agent but has no
+  // session, no role and no trust level to set — so it gets its own section
+  // instead of a card that forever reads 0 reads / 0 writes (23.11.2026).
+  const isServiceEntry = a => String(a.kind || '').trim().toLowerCase() === 'service';
+  const allConnected = registry.agents.filter(isConnectedAgent);
+  const serviceEntries = allConnected.filter(isServiceEntry);
+  const connectedAgents = allConnected.filter(a => !isServiceEntry(a));
 
-  // The tile counts what the list shows — connected, not registered.
+  // The tile counts what the list shows — connected AGENTS, not services.
   document.getElementById('stat-agents').textContent = connectedAgents.length;
 
   // Connected agents
@@ -499,6 +512,46 @@ async function loadAgents() {
       }).join('');
     } else {
       availSection.style.display = 'none';
+    }
+  }
+
+  // ── Services ────────────────────────────────────────────────────────
+  // Rendered as a compact line, not as a card: a service has nothing to
+  // choose (no access level, no role) and will never show reads or writes of
+  // its own — the paperless import, for instance, only asks this machine for
+  // embeddings and writes straight into the store. Showing it next to the
+  // agents made it look like a broken agent (Nebo, 23.11.2026).
+  const serviceSection = document.getElementById('services-section');
+  const serviceList = document.getElementById('services-list');
+  if (serviceSection && serviceList) {
+    if (serviceEntries.length === 0) {
+      serviceSection.style.display = 'none';
+      serviceList.innerHTML = '';
+    } else {
+      serviceSection.style.display = 'block';
+      const fmt = n => Number(n || 0).toLocaleString('en-US');
+      serviceList.innerHTML = serviceEntries.map(agent => {
+        const logo = getAgentLogo(agent, agent.icon);
+        const lastSeen = agent.last_seen ? timeAgo(agent.last_seen) : 'never';
+        const task = (agent.service_note || '').trim();
+        return `
+          <div class="service-row" title="${esc(task || agent.name)}">
+            ${logo}
+            <span class="service-name">${esc(agent.name)}</span>
+            ${seatBadge(agent, (agent.host_label || '').trim())}
+            ${agent.has_own_key ? '<span class="service-key">own key</span>' : '<span class="service-key missing">no own key</span>'}
+            ${task ? `<span class="service-task">${esc(task)}</span>` : ''}
+            ${(agent.reads || agent.writes)
+              ? `<span class="service-figures">${fmt(agent.reads)} reads · ${fmt(agent.writes)} writes</span>`
+              : ''}
+            <span class="service-seen">last contact ${esc(lastSeen)}</span>
+            <span class="agent-status ${(() => {
+              const min = agent.last_seen ? (Date.now() - new Date(agent.last_seen).getTime()) / 60000 : Infinity;
+              return min <= 15 ? 'online' : min <= 120 ? 'idle' : 'offline';
+            })()}"></span>
+          </div>
+        `;
+      }).join('');
     }
   }
 }

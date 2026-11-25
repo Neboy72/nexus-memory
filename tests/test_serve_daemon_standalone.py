@@ -85,6 +85,10 @@ def _fake_env(home: Path, port: str = "9122", skip: bool = True,
         "HOME": str(home),
         "PATH": f"{home}/bin:/usr/bin:/bin",
         "NEXUS_SERVE_PORT": port,
+        # Pin the interpreter explicitly: without it the script would use the
+        # checkout's own .venv (correct for a real install, but it would make
+        # these tests depend on what happens to be lying in the working tree).
+        "NEXUS_PYTHON": f"{home}/bin/python",
     }
     if skip:
         env["NEXUS_SERVE_SKIP_LAUNCHD"] = "1"
@@ -192,6 +196,38 @@ class TestInstallServeScript:
                            timeout=60, env=env, cwd=str(_REPO_ROOT))
         assert r.returncode != 0
         assert "entrypoint not found" in (r.stdout + r.stderr)
+
+    def test_checkout_venv_wins_and_no_agent_venv_is_consulted(self, tmp_path):
+        """Standalone: the checkout's own environment is the default.
+
+        Nexus Memory must never borrow another agent's interpreter — that is
+        how a "standalone" install ended up inside the Hermes venv. This test
+        builds a throwaway checkout with its own .venv and proves the service
+        file points at it, while the script knows no agent layout at all.
+        """
+        repo = tmp_path / "repo"
+        (repo / "scripts").mkdir(parents=True)
+        script = repo / "scripts" / "install_serve.sh"
+        script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+        venv_bin = repo / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        for name in ("python", "nexus-memory"):
+            exe = venv_bin / name
+            exe.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+            exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+
+        env = _fake_env(tmp_path, force_os="darwin")
+        env.pop("NEXUS_PYTHON", None)
+        r = subprocess.run([BASH, str(script)], capture_output=True, text=True,
+                           timeout=60, env=env, cwd=str(repo))
+        assert r.returncode == 0, r.stderr
+        content = (tmp_path / "Library" / "LaunchAgents" / f"{sd.LAUNCHD_LABEL}.plist").read_text(encoding="utf-8")
+        assert f"<string>{venv_bin}/nexus-memory</string>" in content
+        assert str(tmp_path / "bin" / "nexus-memory") not in content
+        # No agent venv anywhere in the interpreter resolution.
+        resolve = script.read_text(encoding="utf-8").split("resolve_python()")[1].split("\n}")[0]
+        for agent in (".hermes", "openclaw", "ds-bot", "dsh"):
+            assert agent not in resolve
 
     def test_port_override_reaches_plist(self, tmp_path):
         _fake_entrypoint(tmp_path)

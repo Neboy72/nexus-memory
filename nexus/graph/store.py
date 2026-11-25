@@ -78,6 +78,25 @@ class InvalidRelationError(EdgeStoreError, ValueError):
     """Raised for invalid relation strings."""
 
 
+def point_id_for_filter(value: Any) -> Any:
+    """A point id the way Qdrant accepts it in a filter.
+
+    Qdrant takes a UUID string or an UNSIGNED INTEGER. A decimal string such as
+    ``"642541819651052"`` (legacy numeric point ids, still in the collection)
+    is neither: the server answers ``400 Format error in JSON body`` and the
+    whole batch counts as "invisible" (measured 25.11.2026: 11 of 20 graph reads
+    failed because of one such neighbour). Digit-only ids therefore travel as
+    numbers; everything else stays the way it was, untouched.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit() and len(text) <= 20:
+            number = int(text)
+            if number < 2 ** 64:
+                return number
+    return value
+
+
 class EdgeStore:
     """Qdrant-Payload-persisted edge store — the single Source of Truth.
 
@@ -226,7 +245,7 @@ class EdgeStore:
             with_payload=True,
             with_vectors=False,
             scroll_filter=models.Filter(
-                must=[models.HasIdCondition(has_id=[point_id])],
+                must=[models.HasIdCondition(has_id=[point_id_for_filter(point_id)])],
             ),
         )
         if points:

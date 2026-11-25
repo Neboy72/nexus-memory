@@ -12,7 +12,10 @@ vector search and graph-boost, re-ranking the top-N pool of candidates.
 Design constraints:
 - Fail-open: any error returns the original (vector-ranked) results.
 - Lazy model/API init: nothing is loaded or called until rerank is enabled.
-- Config-driven: ``~/.hermes/config.yaml`` -> ``nexus-memory.rerank``.
+- Config-driven: eigene Konfiguration zuerst (``~/.nexus-memory/config.json``,
+  Block ``rerank``), Hermes nur als EINE moegliche weitere Quelle
+  (``nexus-memory.rerank`` in ``~/.hermes/config.yaml``). Nexus Memory ist
+  eigenstaendig; ohne Hermes laeuft alles normal weiter.
 """
 
 from __future__ import annotations
@@ -65,6 +68,49 @@ def _resolve_api_key(value: Optional[str]) -> Optional[str]:
     return os.environ.get(name)
 
 
+
+#: Eigene Konfiguration von Nexus Memory — unabhaengig von jedem Agenten.
+NEXUS_CONFIG_NAME = "config.json"
+
+
+def nexus_config_path() -> str:
+    """Pfad der eigenen Konfiguration (``NEXUS_CONFIG`` gewinnt)."""
+    explicit = (os.environ.get("NEXUS_CONFIG") or "").strip()
+    if explicit:
+        return os.path.expanduser(explicit)
+    return os.path.expanduser(os.path.join("~", ".nexus-memory", NEXUS_CONFIG_NAME))
+
+
+def read_nexus_config() -> Dict[str, Any]:
+    """Die eigene Konfiguration lesen; fehlt sie, ist sie leer. Nie werfen."""
+    try:
+        path = nexus_config_path()
+        if not os.path.exists(path):
+            return {}
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:  # kaputte Datei ist "nicht konfiguriert"
+        logger.debug("rerank: own config unreadable: %s", type(exc).__name__)
+        return {}
+
+
+def _own_llm_block(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Der LLM-Block der eigenen Konfiguration, flach oder unter ``rerank.llm``."""
+    block = cfg.get("rerank") if isinstance(cfg.get("rerank"), dict) else {}
+    llm = block.get("llm") if isinstance(block.get("llm"), dict) else {}
+    merged: Dict[str, Any] = dict(llm)
+    for flat, key in (("llm_base_url", "base_url"), ("llm_api_key", "api_key"),
+                      ("llm_model", "model")):
+        if cfg.get(flat):
+            merged.setdefault(key, cfg[flat])
+    return merged
+
+
+def hermes_config_path(config_path: Optional[str] = None) -> str:
+    return config_path or os.path.expanduser(os.path.join("~", ".hermes", "config.yaml"))
+
+
 def resolve_llm_endpoint(
     config_path: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
@@ -73,7 +119,10 @@ def resolve_llm_endpoint(
     Priority:
     1. Environment variables ``NEXUS_RERANK_LLM_BASE_URL``,
        ``NEXUS_RERANK_LLM_API_KEY``, ``NEXUS_RERANK_LLM_MODEL``.
-    2. ``~/.hermes/config.yaml`` (or *config_path*): ``model.default``,
+    2. Eigene Konfiguration ``~/.nexus-memory/config.json`` (``NEXUS_CONFIG``):
+       ``rerank.llm.base_url``/``api_key``/``model`` oder flach
+       ``llm_base_url``/``llm_api_key``/``llm_model``.
+    3. ``~/.hermes/config.yaml`` (or *config_path*): ``model.default``,
        ``model.provider`` -> ``providers.<provider>.base_url`` and
        ``providers.<provider>.api_key``.  ``api_key`` may be ``env:NAME``,
        which is resolved via ``os.environ["NAME"]``.
@@ -94,8 +143,24 @@ def resolve_llm_endpoint(
         logger.debug("rerank llm endpoint from env: model=%s host=%s", model, _host_of(base_url))
         return base_url, api_key, model, True
 
-    # --- Source 2: Hermes config.yaml ---------------------------------------------
-    cfg_path = config_path or os.path.expanduser(os.path.join("~", ".hermes", "config.yaml"))
+    # --- Source 2: eigene Konfiguration (Nexus Memory steht fuer sich) -----------
+    own = _own_llm_block(read_nexus_config())
+    own_base = (own.get("base_url") or "").strip()
+    own_key = _resolve_api_key(own.get("api_key"))
+    own_model = (own.get("model") or "").strip()
+    if not model:
+        model = own_model or None
+    if not base_url:
+        base_url = own_base or None
+    if not api_key:
+        api_key = own_key
+    if base_url and api_key and model:
+        logger.debug("rerank llm endpoint from nexus config: model=%s host=%s",
+                     model, _host_of(base_url))
+        return base_url, api_key, model, True
+
+    # --- Source 3: Hermes config.yaml (eine moegliche weitere Quelle) -----------
+    cfg_path = hermes_config_path(config_path)
     try:
         import yaml
         with open(cfg_path) as f:
@@ -133,7 +198,7 @@ def resolve_llm_endpoint(
         # line, which may be a credential line.
         logger.debug("rerank llm config read skipped: %s", type(exc).__name__)
 
-    # --- Source 3: no built-in fallback model; endpoint is only configured if all
+    # --- Source 4: no built-in fallback model; endpoint is only configured if all
     # three pieces (base_url, api_key, model) are known. Otherwise the reranker is
     # deliberately skipped and the original vector order is preserved.
     configured = bool(base_url and api_key and model)
@@ -154,7 +219,7 @@ def _host_of(base_url: Optional[str]) -> str:
 
 
 def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """Read rerank settings from ``~/.hermes/config.yaml`` (nexus-memory block).
+    """Read rerank settings — eigene Konfiguration zuerst, Hermes ergaenzend.
 
     Returns a dict with keys: ``enabled`` (bool), ``reranker`` (str),
     ``pool_k`` (int), ``llm_base_url`` (Optional[str]), ``llm_model`` (Optional[str]),
@@ -173,20 +238,31 @@ def load_rerank_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         "llm_configured": False,
     }
     try:
-        import os as _os
+        # Eigene Konfiguration zuerst: Nexus Memory darf nicht voraussetzen,
+        # dass ein Agent installiert ist. Hermes ist eine moegliche weitere
+        # Quelle, nicht die Voraussetzung.
+        own = read_nexus_config()
+        own_block = own.get("rerank") if isinstance(own.get("rerank"), dict) else {}
+        if own_block:
+            if "enabled" in own_block:
+                cfg["enabled"] = bool(own_block.get("enabled"))
+            if own_block.get("reranker"):
+                cfg["reranker"] = str(own_block.get("reranker"))
+            if own_block.get("pool_k") is not None:
+                cfg["pool_k"] = int(own_block.get("pool_k"))
 
-        path = config_path or _os.path.expanduser(
-            os.path.join("~", ".hermes", "config.yaml")
-        )
+        path = hermes_config_path(config_path)
         if os.path.exists(path):
             import yaml
 
             with open(path) as f:
                 full = yaml.safe_load(f) or {}
             block = full.get("nexus-memory", {}) or {}
-            cfg["enabled"] = bool(block.get("rerank", False))
-            cfg["reranker"] = str(block.get("reranker", DEFAULT_RERANKER))
-            cfg["pool_k"] = int(block.get("rerank_pool", DEFAULT_POOL_K))
+            # Hermes fuellt nur, was die eigene Konfiguration nicht gesetzt hat.
+            if not own_block:
+                cfg["enabled"] = bool(block.get("rerank", False))
+                cfg["reranker"] = str(block.get("reranker", DEFAULT_RERANKER))
+                cfg["pool_k"] = int(block.get("rerank_pool", DEFAULT_POOL_K))
 
     except Exception as exc:  # fail-open: defaults stand
         logger.debug("rerank config read skipped: %s", exc)

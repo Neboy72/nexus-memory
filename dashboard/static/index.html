@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#050810">
 <title>Nexus Memory Dashboard</title>
-<link rel="stylesheet" href="/static/dashboard.css?v=0.22.69">
+<link rel="stylesheet" href="/static/dashboard.css?v=0.22.71">
 <link rel="icon" type="image/png" href="/assets/brand/nexus-icon.png">
 </head>
 <body>
@@ -86,6 +86,14 @@
         <h2 style="margin-top:24px;">Available Agents</h2>
         <div id="available-list" class="agents-grid"></div>
       </div>
+
+      <!-- Services: background jobs that hold their own Nexus key and have no
+           session to manage. Kept apart from the agents on purpose. -->
+      <div id="services-section" style="display:none;">
+        <h2 style="margin-top:32px;">Services</h2>
+        <p class="section-hint">Background jobs that hold their own Nexus key. No session, no role &mdash; nothing to set here.</p>
+        <div id="services-list" class="services-list"></div>
+      </div>
     </section>
   </div>
 
@@ -133,6 +141,6 @@
 </div>
 
 <script src="/static/webui-js/inspector.js?v=20260907"></script>
-<script src="/static/dashboard.js?v=0.22.69"></script>
+<script src="/static/dashboard.js?v=0.22.71"></script>
 </body>
 </html>

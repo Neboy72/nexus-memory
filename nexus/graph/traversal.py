@@ -217,11 +217,17 @@ class GraphTraversal:
         if not point_ids:
             return {}
         try:
+            from nexus.graph.store import point_id_for_filter
+
             client = self._graph.store.client
             collection = self._graph.store._collection
+            # Numerische Alt-Kennungen als Zahl, nicht als Text: als Text
+            # antwortet Qdrant mit 400 und der ganze Stapel gilt als unsichtbar
+            # (gemessen 25.11.2026, 11 von 20 Graph-Abrufen).
             points, _ = client.scroll(
                 collection_name=collection,
-                scroll_filter=qm.Filter(must=[qm.HasIdCondition(has_id=point_ids)]),
+                scroll_filter=qm.Filter(must=[qm.HasIdCondition(
+                    has_id=[point_id_for_filter(pid) for pid in point_ids])]),
                 limit=len(point_ids),
                 with_payload=True,
                 with_vectors=False,

@@ -537,7 +537,7 @@ h2 {
   border: 1px solid rgba(255, 255, 255, 0.14);
   white-space: nowrap;
   /* Bei sehr schmalen Karten den Text stauchen MIT Auslassungspunkten —
-     nie Buchstaben wegflexen (Nebo: "Mac M von Nebo"-Falle). */
+     nie Buchstaben wegflexen (Beispiel: "Mac M von …" statt "Mac M"). */
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 160px;
@@ -1197,3 +1197,87 @@ h2 {
 /* Toast variants */
 .toast.warn { border-color: #fdcb6e; color: #fdcb6e; }
 .toast.ok { border-color: #00b894; color: #00b894; }
+
+/* ── Services (23.11.2026) ─────────────────────────────────────────────
+   A service is a background job with its own Nexus key: no session, no
+   role, no access level to choose. It gets a separator and a compact line
+   instead of a card, so it never looks like an agent that stopped working. */
+#services-section {
+  border-top: 1px solid #1a1a2e;
+  margin-top: 32px;
+  padding-top: 8px;
+}
+
+.section-hint {
+  color: #7a7a8c;
+  font-size: 12px;
+  margin: -8px 0 12px;
+}
+
+.services-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.service-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #0e0e18;
+  border: 1px solid #1a1a2e;
+  border-left: 3px solid #4d6bfe;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #b9b9c9;
+}
+
+.service-row .agent-logo,
+.service-row .agent-avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  flex: 0 0 22px;
+}
+
+.service-name {
+  color: #F5F0FF;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.service-key {
+  border: 1px solid #2a2a44;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: #8f8fa6;
+  font-size: 11px;
+}
+
+.service-key.missing {
+  border-color: #6b2d2d;
+  color: #e08b8b;
+}
+
+.service-task {
+  color: #7a7a8c;
+  font-size: 11px;
+}
+
+.service-figures {
+  margin-left: auto;
+  color: #7a7a8c;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.service-seen {
+  color: #636e72;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .service-row { flex-wrap: wrap; }
+  .service-figures { margin-left: 0; }
+}

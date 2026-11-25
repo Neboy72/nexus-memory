@@ -173,14 +173,45 @@ Return ONLY one of:
 _NO_MODEL_LOGGED = False
 
 
+def _own_consolidation_model() -> str:
+    """Modell aus der eigenen Konfiguration — Nexus Memory steht fuer sich.
+
+    ``NEXUS_CONFIG`` oder ``~/.nexus-memory/config.json``; akzeptiert
+    ``consolidation_model`` flach oder ``consolidation.model``. Fehlt die
+    Datei oder ist sie kaputt, gibt es hier nichts — der Aufrufer faellt auf
+    die weiteren Quellen zurueck. Nie werfen, nie still abschalten.
+    """
+    try:
+        explicit = (os.environ.get("NEXUS_CONFIG") or "").strip()
+        path = os.path.expanduser(explicit) if explicit else os.path.expanduser(
+            os.path.join("~", ".nexus-memory", "config.json"))
+        if not os.path.exists(path):
+            return ""
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            return ""
+        flat = cfg.get("consolidation_model")
+        if isinstance(flat, str) and flat.strip():
+            return flat.strip()
+        block = cfg.get("consolidation")
+        if isinstance(block, dict):
+            name = block.get("model")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    except Exception as exc:
+        log.debug("consolidation: own config unreadable: %s", type(exc).__name__)
+    return ""
+
+
 def _no_model_configured() -> None:
     """Warn exactly once per process that no consolidation model is set."""
     global _NO_MODEL_LOGGED
     if not _NO_MODEL_LOGGED:
         log.warning(
             "consolidation: no model configured (NEXUS_CONSOLIDATION_MODEL, "
-            "nexus-memory.consolidation_model or model.default in "
-            "~/.hermes/config.yaml) - consolidation stays idle")
+            "~/.nexus-memory/config.json, nexus-memory.consolidation_model or "
+            "model.default in ~/.hermes/config.yaml) - consolidation stays idle")
         _NO_MODEL_LOGGED = True
 
 
@@ -189,8 +220,11 @@ def resolve_consolidation_model(config_path: Optional[str] = None) -> str:
 
     Priority:
     1. ``NEXUS_CONSOLIDATION_MODEL`` (unchanged).
-    2. ``~/.hermes/config.yaml`` (or *config_path*):
-       ``nexus-memory.consolidation_model``, then ``model.default``.
+    2. Eigene Konfiguration ``~/.nexus-memory/config.json`` (``NEXUS_CONFIG``):
+       ``consolidation_model`` oder ``consolidation.model``.
+    3. ``~/.hermes/config.yaml`` (or *config_path*) — eine moegliche weitere
+       Quelle, nie Voraussetzung: ``nexus-memory.consolidation_model``, dann
+       ``model.default``.
 
     Returns "" when nothing is configured — there is deliberately no built-in
     fallback model. The caller must then skip the run instead of calling a
@@ -200,6 +234,10 @@ def resolve_consolidation_model(config_path: Optional[str] = None) -> str:
     env_model = (os.environ.get("NEXUS_CONSOLIDATION_MODEL") or "").strip()
     if env_model:
         return env_model
+
+    own = _own_consolidation_model()
+    if own:
+        return own
 
     path = config_path or os.path.expanduser(
         os.path.join("~", ".hermes", "config.yaml"))

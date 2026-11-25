@@ -176,10 +176,14 @@ class TestWritePathRejectsInASharedRoom:
         )
 
         rule = _slice(src, "// Write-side room rule", "// Scope normalization", rel=STORE)
-        assert "toolCallWriteRoomShared(toolCallId)" in rule, (
+        assert "writeRoomVerdictForToolCall(toolCallId)" in rule, (
             "store.ts hat keinen ctx: das Raumurteil kommt aus der Markierung in "
-            "lib/turn-context.ts — ueber toolCallWriteRoomShared, gebunden an die "
-            "call-id dieses Aufrufs."
+            "lib/turn-context.ts — ueber writeRoomVerdictForToolCall, gebunden an "
+            "die call-id dieses Aufrufs."
+        )
+        assert 'roomVerdict === "shared" || roomVerdict === "unknown"' in rule, (
+            "abgelehnt wird nicht nur bei nachweislich geteiltem Raum, sondern "
+            "auch bei unklarem Raum (Fail-open geschlossen, 25.11.2026)."
         )
         assert "toolAccessLevel(" not in rule, (
             "store.ts darf fuer Schreibvorgaenge nicht toolAccessLevel nutzen: das "
@@ -200,7 +204,10 @@ class TestWritePathRejectsInASharedRoom:
         assert "indexOf(requestedLevel) > levelOrder.indexOf(roomLevel)" not in src, (
             "die stille Absenkung (min(angefordert, Raum)) muss weg sein."
         )
-        assert rule.index("toolCallWriteRoomShared(toolCallId)") < rule.index("const accessLevel ="), (
+        assert "room_unknown" in rule, (
+            "der unklare Raum braucht seinen eigenen, maschinenlesbaren Grund."
+        )
+        assert rule.index("writeRoomVerdictForToolCall(toolCallId)") < rule.index("const accessLevel ="), (
             "das Raumurteil muss vor der Stufe feststehen."
         )
 
@@ -236,8 +243,8 @@ class TestWritePathRejectsInASharedRoom:
         )
 
     def test_only_a_proven_shared_room_rejects(self):
-        """Die Absage haengt an ``roomShared === true`` — nicht am Zweifel."""
-        for rel, marker in ((STORE, "toolCallWriteRoomShared(toolCallId)"),
+        """Die Absage haengt an ``shared`` ODER ``unknown`` — nie an ``private``."""
+        for rel, marker in ((STORE, "writeRoomVerdictForToolCall(toolCallId)"),
                             (CAPTURE, "roomShared === true")):
             src = _read(rel)
             assert marker in src, f"{rel}: Raumurteil nicht gefunden"
@@ -247,10 +254,11 @@ class TestWritePathRejectsInASharedRoom:
         # store.ts: toolCallWriteRoomShared ist die eine Schreibregel aus
         # lib/turn-context.ts (nur ein nachweislich geteilter Raum lehnt ab).
         turn = _read("plugins/openclaw/lib/turn-context.ts")
-        assert "return turn !== null && turn.shared === true" in turn
+        assert 'if (turn === null) return "unknown"' in turn
+        assert 'if (!binding) return "none"' in turn
 
-    def test_a_write_without_a_fresh_marker_is_never_rejected(self):
-        """Ohne Marker oder mit altem Marker bleibt der Aufruf unberuehrt.
+    def test_a_write_without_a_fresh_marker_is_rejected_unless_there_is_no_room(self):
+        """Ohne Raum gilt ``private``; mit Raum und ohne frisches Urteil nicht.
 
         Die Gegenprobe zur Leseregel: ``toolAccessLevel`` ist bei fehlendem
         Marker absichtlich fail-closed ("public"). Fuer einen SCHREIBVORGANG
@@ -261,20 +269,23 @@ class TestWritePathRejectsInASharedRoom:
         veraendert sonst nichts.
         """
         turn = _read("plugins/openclaw/lib/turn-context.ts")
-        body = _slice(turn, "export function writeRoomShared(", "/** Test seam", rel="lib/turn-context.ts")
+        body = _slice(turn, "export function writeRoomVerdict(", "/** Test seam", rel="lib/turn-context.ts")
 
-        # (a) kein Marker bzw. alter Marker -> getTurnContext liefert null
-        #     -> kein geteilter Raum, also keine Absage.
-        assert "const turn = getTurnContext(sessionKey, now)" in body, (
-            "writeRoomShared muss denselben Marker lesen wie die Leseregel."
+        # (a) kein Sitzungsschluessel -> "none" (reiner MCP-Aufrufer, bleibt erlaubt)
+        assert 'if (!key) return "none"' in body, (
+            "ohne Sitzungsschluessel gibt es keinen Raum — dieser Fall darf "
+            "nicht abgewiesen werden."
         )
-        assert "return turn !== null && turn.shared === true" in body, (
-            "ohne (frischen) Marker darf writeRoomShared keinen geteilten Raum "
-            "melden — sonst wuerde ein privater Eintrag grundlos abgelehnt."
+        # (b) Schluessel da, Marker fehlt/alt -> "unknown" (Absage)
+        assert "const turn = getTurnContext(key, now)" in body, (
+            "writeRoomVerdict muss denselben Marker lesen wie die Leseregel."
+        )
+        assert 'if (turn === null) return "unknown"' in body, (
+            "ein Raumkontext ohne frisches Urteil muss als unknown gelten."
         )
         assert '"public"' not in body, (
-            "writeRoomShared darf keine Stufe zurueckgeben oder setzen; es "
-            "beantwortet nur die Frage 'ist der Raum geteilt?'."
+            "die Funktion darf keine Stufe zurueckgeben oder setzen; sie "
+            "beantwortet nur, was der Raum ist."
         )
         # (b) getTurnContext verwirft alte Marker — damit greift (a) auch fuer
         #     einen Turn, der laenger als die TTL zurueckliegt.
@@ -288,9 +299,9 @@ class TestWritePathRejectsInASharedRoom:
         )
         # (c) unbekanntes Raumurteil (null) meldet ebenfalls keinen geteilten
         #     Raum (shared === true ist die einzige wahre Bedingung).
-        assert "turn.shared === true" in body, (
-            "nur ein nachweislich geteilter Raum darf ablehnen — Unbekanntes "
-            "darf einen privaten Eintrag nicht verhindern."
+        assert 'if (turn.shared === true) return "shared"' in body
+        assert 'if (turn.shared === false) return "private"' in body, (
+            "nur ein als eigen beobachteter Raum laesst die Stufe stehen."
         )
 
 
@@ -307,12 +318,15 @@ class TestHermesPluginRejectsInASharedRoom:
         branch = _slice(src, 'elif tool_name == "nexus_remember":',
                         'elif tool_name == "nexus_forget":', rel=HERMES)
 
-        assert "self._chat_is_shared() is True and _level_above_public(" in branch, (
-            "die Absage muss hinter `_chat_is_shared() is True` UND einer "
-            "Pruefung der verlangten Stufe stehen — ein Raum, der nicht geteilt "
-            "ist, bleibt unveraendert."
+        assert "_level_above_public(_requested_level) and (_room_shared is True or _room_unknown)" in branch, (
+            "die Absage muss bei geteiltem UND bei unklarem Raum greifen; ein "
+            "eigener Raum bleibt unveraendert, ein Aufruf ohne Raum ebenso."
         )
-        assert "result = _shared_room_rejection(_requested_level)" in branch, (
+        assert "_has_room_context()" in branch, (
+            "der unklare Raum muss als Raumkontext erkannt werden — sonst "
+            "bleibt der Fail-open offen."
+        )
+        assert "result = _shared_room_rejection(_requested_level, _reason)" in branch, (
             "im geteilten Raum muss nexus_remember die Absage zurueckgeben, "
             "nicht eine gesenkte Stufe schreiben."
         )
@@ -341,9 +355,8 @@ class TestHermesPluginRejectsInASharedRoom:
         src = _read(HERMES)
         body = _slice(src, "def sync_turn(", "def _write_loop(", rel=HERMES)
 
-        assert "if self._chat_is_shared() is True:" in body, (
-            "der geteilte Raum muss vor dem Einreihen des Sitzungsprotokolls "
-            "erkannt werden; sonst wird es mit gesenkter Stufe geschrieben."
+        assert "_sync_room is True or (_sync_room is None and self._has_room_context())" in body, (
+            "geteilter ODER unklarer Raum muss vor dem Einreihen erkannt werden."
         )
         assert '"access_level": "private",' in body, (
             "Turn-Eintraege tragen ausserhalb eines geteilten Raums weiter "
@@ -366,10 +379,9 @@ class TestHermesPluginRejectsInASharedRoom:
             assert "shared-room-write-rejected" in src, (
                 f"{name}: die Kennung fehlt — beide Harnesse muessen dieselbe nennen."
             )
-            assert (
-                "reason: shared_room" in src
-                or '"reason": "shared_room"' in src
-            ), f"{name}: das Feld reason: shared_room fehlt."
+            assert "shared_room" in src and "room_unknown" in src, (
+                f"{name}: die beiden Gruende shared_room und room_unknown fehlen."
+            )
             assert "max_level" in src and "public" in src, (
                 f"{name}: die Obergrenze muss in der Antwort stehen."
             )

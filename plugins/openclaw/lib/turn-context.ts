@@ -215,8 +215,7 @@ export function resolveReadLevel(
  * Without a session key, without a marker for it, and in a group turn whose
  * room is not released, this is always "public": too little is better than a
  * leak. That fail-closed stance is right for reads (the content is shown to
- * someone) but wrong for writes; see `writeRoomShared` below, which is the
- * only helper a write may use.
+ * someone) but wrong for writes; see `writeRoomVerdict` below, the only helper a write may use.
  */
 export function toolAccessLevel(
   cfgAccessLevel: string,
@@ -248,37 +247,53 @@ export function toolCallAccessLevel(
 }
 
 /**
- * Whether the room of THIS session is PROVEN shared — the write-side verdict.
+ * The write-side room verdict for THIS session — three answers, not two.
  *
- * This replaces the old `writeAccessLevel`, which returned a LOWERED level and
- * let the caller write it. ClawHub read that as a silent downgrade of
- * confidentiality, and it was right: a write that lands more openly than the
- * caller asked for is a disclosure the caller never approved. Since
- * 24.11.2026 the write path therefore asks this question and REJECTS the call
- * when the answer is `true` and the requested level is above "public"; it never
- * rewrites the level.
+ * Since 25.11.2026 (ClawHub: "possible fail-open memory authorization flaw …
+ * when room observation is missing") a write needs BOTH a fresh observation
+ * and the observed fact that the room is private. The old helper only asked
+ * "is it proven shared?" — a room whose verdict was unknown therefore let
+ * every level through, which is the fail-open hole.
  *
- * `true` only on evidence: the marker must exist, be fresh, and carry a room
- * observed as shared (`shared === true`). No marker, a stale marker, or a room
- * whose verdict is unknown yields `false`, so that call is left exactly as it
- * would have been — the cap never fires on doubt.
- *
- * Why not fail-closed here like reads: reads show content to someone and can be
- * narrowed afterwards; a record written too openly cannot be un-leaked, but a
- * record refused by mistake also cannot be recovered. Doubt is no grounds for
- * changing what the user's own archive keeps.
- *
- * The room RELEASE is deliberately not consulted: it governs delivery (reads),
- * not what the owner may archive.
+ *   "none"     no room context at all: the call never belonged to a session
+ *              (a pure MCP caller — DS Bot, Hermes, Claude Code, DSH). It keeps
+ *              writing "private"; this case must NOT be rejected.
+ *   "unknown"  a room context exists but its verdict cannot be proven: the
+ *              marker is missing or stale, the call's binding expired, or the
+ *              room was never observed. This is the case that must reject.
+ *   "private"  observed as a room of the owner's own — the request stands.
+ *   "shared"   observed as shared — "public" is the ceiling.
  */
-export function writeRoomShared(sessionKey?: string, now: number = Date.now()): boolean {
-  const turn = getTurnContext(sessionKey, now)
-  return turn !== null && turn.shared === true
+export type WriteRoomVerdict = "none" | "unknown" | "private" | "shared"
+
+export function writeRoomVerdict(sessionKey?: string, now: number = Date.now()): WriteRoomVerdict {
+  const key = normalizeKey(sessionKey)
+  if (!key) return "none"
+  const turn = getTurnContext(key, now)
+  if (turn === null) return "unknown"
+  if (turn.shared === true) return "shared"
+  if (turn.shared === false) return "private"
+  return "unknown"
 }
 
-/** `writeRoomShared` for a TOOL call, bound through its call id. */
-export function toolCallWriteRoomShared(toolCallId: unknown, now: number = Date.now()): boolean {
-  return writeRoomShared(sessionKeyForToolCall(toolCallId, now), now)
+/**
+ * `writeRoomVerdict` for a TOOL call, bound through its call id.
+ *
+ * An unbound call id means "no room" — that is the pure MCP caller and stays
+ * allowed. A binding that has EXPIRED is not "no room": the call did belong to
+ * a session, the verdict is merely stale, so it counts as "unknown" and must
+ * not slip through.
+ */
+export function writeRoomVerdictForToolCall(
+  toolCallId: unknown,
+  now: number = Date.now(),
+): WriteRoomVerdict {
+  const callId = normalizeKey(toolCallId)
+  if (!callId) return "none"
+  const binding = toolSessions.get(callId)
+  if (!binding) return "none"
+  if (!(now - binding.at < TURN_MARKER_TTL_MS)) return "unknown"
+  return writeRoomVerdict(binding.sessionKey, now)
 }
 
 /** Test seam: drop every recorded marker and tool binding. */

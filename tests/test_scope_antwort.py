@@ -65,7 +65,7 @@ def welt(monkeypatch, embedded_qdrant):
 
 
 @pytest.fixture
-def rolle():
+def rolle(isolated_nexus_data_dir):
     from nexus_memory import agent_detect, service_auth
 
     def _rolle(agent_id: str, role: str = "know") -> dict:

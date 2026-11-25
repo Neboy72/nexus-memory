@@ -73,7 +73,7 @@ def welt(monkeypatch, embedded_qdrant):
 
 
 @pytest.fixture
-def rolle(monkeypatch):
+def rolle(monkeypatch, isolated_nexus_data_dir):
     """Gibt einem Agenten eine Rolle und einen eigenen Schluessel (HTTP)."""
     from nexus_memory import agent_detect, service_auth
 

@@ -7,7 +7,7 @@ import type { NexusConfig } from "../lib/config.ts"
 import { ScopeCentroidCache } from "../lib/scope-auto.ts"
 import { SHARED_SCOPE, scopeBundle } from "../lib/qdrant-client.ts"
 import { limitText } from "../lib/text-preview.ts"
-import { toolCallWriteRoomShared } from "../lib/turn-context.ts"
+import { writeRoomVerdictForToolCall } from "../lib/turn-context.ts"
 import { log } from "../logger.ts"
 import { NEXUS_STORE_TOOL } from "../runtime.ts"
 
@@ -133,37 +133,45 @@ export function registerStoreTool(
           }
         }
 
-        // Write-side room rule (revised 24.11.2026, ClawHub audit): in a room
-        // PROVEN shared, "public" is the highest level a write may carry. A
-        // call that asks for "trusted" or "private" there is REJECTED — the
-        // level is never lowered on its behalf. The 13.11.2026 cap wrote the
-        // lowered level and answered "Stored: …", so a caller that asked for
-        // "private" got a public entry without being told; that is a silent
-        // downgrade of confidentiality, not a courtesy.
+        // Write-side room rule (25.11.2026, ClawHub: possible fail-open when
+        // room observation is missing): in a room PROVEN shared, "public" is
+        // the highest level; a room whose status CANNOT BE PROVEN is treated
+        // the same way and the call is REJECTED. The level is never lowered
+        // silently, and it is never let through on doubt.
+        //
+        // The one case that stays untouched: no room context at all — a pure
+        // MCP caller (DS Bot, Hermes, Claude Code, DSH) has no session and no
+        // room, so it keeps writing "private" exactly as before. See
+        // `writeRoomVerdictForToolCall`: "none" is no room, "unknown" is a room
+        // we cannot prove (missing or stale observation) and rejects.
         //
         // Rejected means: nothing embedded, nothing stored, no second copy. The
         // answer carries the file's error contract (`isError: true`) and names
-        // the room, the ceiling and the two ways out. Only a proven-shared room
-        // rejects: an unbound call, an unknown session and a stale marker are
-        // left exactly as before (see `toolCallWriteRoomShared`, which never
-        // decides on doubt). The read side is untouched.
+        // the room, the ceiling and the two ways out.
         const levelOrder = ACCESS_LEVELS as readonly string[]
         const requestedAboveCeiling =
           levelOrder.indexOf(requestedLevel) > levelOrder.indexOf("public")
-        if (requestedAboveCeiling && toolCallWriteRoomShared(toolCallId)) {
+        const roomVerdict = writeRoomVerdictForToolCall(toolCallId)
+        if (requestedAboveCeiling && (roomVerdict === "shared" || roomVerdict === "unknown")) {
+          const roomUnknown = roomVerdict === "unknown"
+          const situation = roomUnknown
+            ? `this session runs in a room whose status cannot be determined ` +
+              `(no fresh observation), so the highest access level is "public"`
+            : `this session runs in a shared room, where the highest access ` +
+              `level is "public"`
           return {
             isError: true,
             content: [
               {
                 type: "text" as const,
                 text:
-                  `Memory store rejected: this session runs in a shared room, ` +
-                  `where the highest access level is "public"; ` +
+                  `Memory store rejected: ${situation}; ` +
                   `"${requestedLevel}" was not stored and nothing was written. ` +
-                  `Call again with access level "public" if this note may be ` +
+                  `Call again with access_level "public" if this note may be ` +
                   `visible to everyone in the room, or write it in your own ` +
                   `chat, where "${requestedLevel}" applies. ` +
-                  `(code: shared-room-write-rejected, reason: shared_room, ` +
+                  `(code: shared-room-write-rejected, ` +
+                  `reason: ${roomUnknown ? "room_unknown" : "shared_room"}, ` +
                   `requested_level: ${requestedLevel}, max_level: public)`,
               },
             ],

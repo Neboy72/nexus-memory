@@ -1356,34 +1356,48 @@ def _level_above_public(level: Any) -> bool:
         return False
 
 
-def _shared_room_rejection(requested_level: Any) -> Dict[str, Any]:
-    """Absage fuer einen Schreibvorgang in einem nachweislich geteilten Raum.
+def _shared_room_rejection(requested_level: Any, reason: str = "shared_room") -> Dict[str, Any]:
+    """Absage fuer einen Schreibvorgang, der eine zu hohe Stufe verlangt.
+
+    Zwei Faelle, ein Vertrag (25.11.2026, ClawHub: „possible fail-open memory
+    authorization flaw … when room observation is missing"):
+
+    ``shared_room``  der Raum ist nachweislich geteilt — ``public`` ist die
+                     Obergrenze.
+    ``room_unknown`` ein Raumkontext ist vorhanden, sein Urteil aber nicht
+                     belegbar (fehlende oder veraltete Beobachtung) — es wird
+                     nicht auf Verdacht durchgelassen.
 
     Gleicher Wortlaut, gleiche Kennung und gleiche Felder wie im OpenClaw-Weg
-    (``plugins/openclaw/tools/store.ts``): beide Harnesse sagen dasselbe, damit
-    ein Agent die Antwort unabhaengig vom Wirt lesen kann. Nichts wird
-    geschrieben, nichts vorbereitet, keine zweite Ablage.
+    (``plugins/openclaw/tools/store.ts``). Ein Aufruf OHNE jeden Raum (reiner
+    MCP-Aufrufer) kommt hier gar nicht an — der darf ``private`` schreiben.
 
     ``status``/``reason`` folgen dem Vertrag dieses Plugins (siehe
     ``_gate_rejection``); ``is_error`` macht die Absage zusaetzlich so lesbar
     wie das ``isError: true`` der TS-Seite.
     """
     level = str(requested_level)
+    if reason == "room_unknown":
+        situation = ('this session runs in a room whose status cannot be '
+                     'determined (no fresh observation), so the highest access '
+                     'level is "public"')
+    else:
+        situation = ('this session runs in a shared room, where the highest '
+                     'access level is "public"')
     text = (
-        "Memory store rejected: this session runs in a shared room, where the "
-        'highest access level is "public"; '
-        f'"{level}" was not stored and nothing was written. '
-        'Call again with access level "public" if this note may be visible to '
-        'everyone in the room, or write it in your own chat, where '
-        f'"{level}" applies. '
-        "(code: shared-room-write-rejected, reason: shared_room, "
-        f"requested_level: {level}, max_level: public)"
+        "Memory store rejected: %s; " % situation
+        + '"%s" was not stored and nothing was written. ' % level
+        + 'Call again with access level "public" if this note may be visible to '
+        + 'everyone in the room, or write it in your own chat, where '
+        + '"%s" applies. ' % level
+        + "(code: shared-room-write-rejected, reason: %s, requested_level: %s, "
+          "max_level: public)" % (reason, level)
     )
     return {
         "status": "rejected",
         "is_error": True,
         "error": text,
-        "reason": "shared_room",
+        "reason": reason,
         "code": "shared-room-write-rejected",
         "requested_level": level,
         "max_level": "public",
@@ -2405,6 +2419,21 @@ class NexusMemoryProvider:
         self._chat_shared_cache = _UNSET
         self._chat_sharing_state = None
 
+    def _has_room_context(self) -> bool:
+        """Steht dieser Aufruf ueberhaupt in einem Raum?
+
+        Der Unterschied, auf den es seit 25.11.2026 ankommt: ein reiner
+        MCP-Aufrufer (DS Bot, Hermes, Claude Code, DSH) hat keinen Raum — kein
+        ``chat_id``, kein ``chat_type``, kein Autor. Fuer ihn bleibt ``private``
+        erlaubt. Erst wenn der Wirt einen Raum gemeldet hat, ist ein fehlendes
+        oder veraltetes Urteil ein Fail-open-Fall und wird abgewiesen.
+        """
+        signals = getattr(self, "_turn_signals", None)
+        if not isinstance(signals, dict):
+            return False
+        return bool(signals.get("chat_id") or signals.get("chat_type")
+                    or signals.get("author_id"))
+
     def _chat_is_shared(self) -> Optional[bool]:
         """Is this room readable by anyone but the owner? — the one decision.
 
@@ -2843,6 +2872,23 @@ class NexusMemoryProvider:
             from nexus.graph.traversal import GraphTraversal
             sg = self._get_skill_graph()
             gt = GraphTraversal(sg, access_level=self._agent_level())
+            # Schaerfung 25.11.2026 (Messung ueber 20 echte Fragen): der Zusatz
+            # bestand zu 87 % aus Entitaets-Etiketten ("service: Gateway (…)").
+            # Die Einspielregel des Schreibwegs gilt auch hier: nur echte
+            # Erinnerungen kommen in den Block, keine `entity`-Labels. Und der
+            # Weg laeuft ueber die SELTENEN Entitaeten — der Grad eines Knotens
+            # im Graphen ist der Hebel: ein universell verknuepftes Label fuehrt
+            # zu allem und damit zu nichts.
+            _g = getattr(sg, "_graph", None)
+
+            def _rarity(node_id: str) -> int:
+                try:
+                    if _g is not None and _g.has_node(node_id):
+                        return int(_g.degree(node_id))
+                except Exception:
+                    pass
+                return 10 ** 6
+
             seen_ids: set = set()
             budget_boost = 6  # hard cap: depth>1 adds fan-out, keep prefetch budget sane
             for p in top_points[:max_boost]:
@@ -2852,13 +2898,18 @@ class NexusMemoryProvider:
 
                 paths = []
                 if max_depth <= 1:
-                    paths = [(n.get("fact_id", ""), n.get("relation", "related"), 1)
+                    paths = [(n.get("fact_id", ""), n.get("relation", "related"), 1, pid)
                              for n in gt.get_related(pid)]
                 else:
                     for step in gt.traverse(pid, max_depth=max_depth):
-                        paths.append((step["fact_id"], step.get("relation", "related"), step["depth"]))
+                        hop = (step.get("path") or [step["fact_id"]])[0]
+                        paths.append((step["fact_id"], step.get("relation", "related"),
+                                      step["depth"], hop))
+                # Selten zuerst: wenige Kanten am ersten Sprung = spezifischer
+                # Weg. Direkte Nachbarn (depth 1) bleiben vor den zweiten.
+                paths.sort(key=lambda t: (t[2], _rarity(t[3])))
 
-                for nid, rel, depth in paths:
+                for nid, rel, depth, hop in paths:
                     if not nid or nid in seen_ids: continue
                     seen_ids.add(nid)
                     if len(boosted) >= budget_boost: break
@@ -2867,6 +2918,11 @@ class NexusMemoryProvider:
                     pt_payload = pt.get("payload") or {}
                     # 4.6: deprecated neighbors never surface as graph-boost
                     if (pt_payload.get("lifecycle_status") or "canonical") in ("deprecated", "rolled_back"):
+                        continue
+                    # Einspielregel (25.11.2026): keine Entitaets-Labels. Ein
+                    # Etikett beantwortet keine Frage; es zaehlt nur, was eine
+                    # Erinnerung ist.
+                    if str(pt_payload.get("category") or "") == "entity":
                         continue
                     # Access gate — without it a graph neighbour was boosted
                     # regardless of its level, so a PRIVATE memory reached an agent
@@ -3192,11 +3248,13 @@ class NexusMemoryProvider:
             # copy — the same rule and the same code as the OpenClaw store
             # tool. A room that is not shared (or not determinable) writes
             # "private" exactly as before.
-            if self._chat_is_shared() is True:
+            _sync_room = self._chat_is_shared()
+            if _sync_room is True or (_sync_room is None and self._has_room_context()):
                 logger.info("sync_turn: Sitzungsprotokoll nicht gespeichert — "
-                            "geteilter Raum (shared-room-write-rejected, "
-                            "reason: shared_room, requested_level: private, "
-                            "max_level: public)")
+                            "%s (shared-room-write-rejected, reason: %s, "
+                            "requested_level: private, max_level: public)",
+                            "Raum nicht belegbar" if _sync_room is None else "geteilter Raum",
+                            "room_unknown" if _sync_room is None else "shared_room")
             else:
                 self._write_queue.append({"text": f"User: {user_content}\nAssistant: {assistant_content}",
                                           "category": "session", "access_level": "private",
@@ -3878,12 +3936,18 @@ class NexusMemoryProvider:
                 # (plugins/openclaw/tools/store.ts), so both harnesses say the
                 # same thing. A room that is not shared (or not determinable)
                 # keeps today's behaviour exactly: the requested level stands.
+                # Fail-open geschlossen (25.11.2026): abgelehnt wird nicht nur
+                # bei nachweislich geteiltem Raum, sondern auch dann, wenn ein
+                # Raumkontext da ist und sein Urteil fehlt oder veraltet ist.
+                # Ohne jeden Raum (reiner MCP-Aufruf) bleibt "private" erlaubt.
                 _requested_level = args.get("access_level", "private")
-                if self._chat_is_shared() is True and _level_above_public(_requested_level):
-                    logger.info("nexus_remember rejected: geteilter Raum, "
-                                "verlangt %s (shared-room-write-rejected)",
-                                _requested_level)
-                    result = _shared_room_rejection(_requested_level)
+                _room_shared = self._chat_is_shared()
+                _room_unknown = _room_shared is None and self._has_room_context()
+                if _level_above_public(_requested_level) and (_room_shared is True or _room_unknown):
+                    _reason = "room_unknown" if _room_unknown and _room_shared is not True else "shared_room"
+                    logger.info("nexus_remember rejected: %s, verlangt %s "
+                                "(shared-room-write-rejected)", _reason, _requested_level)
+                    result = _shared_room_rejection(_requested_level, _reason)
                 else:
                     result = self._upsert(text=args.get("text", ""), category=args.get("category", "fact"),
                                           access_level=_requested_level,

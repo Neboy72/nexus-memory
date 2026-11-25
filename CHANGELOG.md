@@ -1,3 +1,14 @@
+## [0.22.71] - 2026-11-25
+
+**Ein Schreibvorgang in einem Raum, dessen Lage niemand belegen kann, wird nicht mehr durchgelassen; der Graph-Zusatz bringt nur noch Erinnerungen und keine Etiketten mehr; Nexus Memory liest seine eigene Konfiguration zuerst, und ein Testlauf fasst die echte Agentenliste nicht mehr an.**
+
+Vier Befunde vom 24./25.11.2026.
+
+- **Die Absage griff nur bei Beweis.** Bisher wurde eine zu hohe Stufe nur dann abgelehnt, wenn der Raum nachweislich geteilt war. War die Lage unklar — Beobachtung fehlte oder war veraltet — ging der Schreibvorgang durch. Das ist die Luecke, die der Sicherheitsscan als „possible fail-open" gemeldet hat. Jetzt gilt: ein Aufruf **ohne jeden Raum** (DS Bot, Hermes, Claude Code, DSH schreiben so) darf weiter `private` schreiben; ein Aufruf **in einem Raum**, dessen Lage nicht belegbar ist, wird abgelehnt — mit derselben Kennung wie bei 0.22.69 und dem Grund `room_unknown`. Beide Wege, OpenClaw und Hermes, sagen dasselbe.
+- **Der Graph-Zusatz brachte Etiketten statt Erinnerungen.** Gemessen ueber 20 echte Fragen bestanden 87 % der Zusaetze aus Entitaets-Etiketten („service: Gateway (launchd_label=…)"); nur 24 % trafen das Thema, waehrend die naechsten normalen Vektortreffer 56 % erreichten. Jetzt kommen nur noch echte Erinnerungen in den Zusatz (dieselbe Einspielregel wie im Schreibweg), und der Weg laeuft ueber die **seltenen** Entitaeten zuerst — ein universell verknuepftes Etikett fuehrt zu allem und damit zu nichts. Nach der Aenderung: 27 von 49 Zusaetzen passend (55 %). Ausserdem versteht der Graph-Abruf jetzt die alten numerischen Kennungen im Bestand: als Text quittierte die Sammlung den Stapel mit einem Fehler, und der Zusatz fiel in mehr als der Haelfte der Abrufe ganz aus.
+- **Nexus Memory hing an Hermes.** Reranker und Konsolidierung lasen ihre Einstellungen standardmaessig aus `~/.hermes/config.yaml`. Wer keinen Agenten installiert hat, bekam dort nichts — und das sah wie „abgeschaltet" aus. Jetzt gilt die eigene Datei `~/.nexus-memory/config.json` zuerst, Hermes ist eine moegliche weitere Quelle; ohne Hermes laeuft beides normal weiter.
+- **Ein Testlauf legte einen echten Agenten an.** Zwei Testdateien benutzten die Testfigur `eigner-bot`, aber nicht die abgeschottete Datenumgebung — am 24.11. um 07:31 entstand dadurch ein echter Eintrag in `~/.nexus-memory/agents.json`. Beide Dateien laufen jetzt in der abgeschotteten Umgebung; die echte Liste bleibt unberuehrt.
+
 ## [0.22.70] - 2026-11-24
 
 **Die Absage aus 0.22.69 sagt jetzt "access level" statt "access_level" — nur die Formulierung, die Regel bleibt.**
