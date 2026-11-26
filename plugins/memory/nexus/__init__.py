@@ -4911,7 +4911,7 @@ def _repair_command() -> str:
     # same revision ``[tool.uv.sources]`` names, not the tag `v0.22.28` that
     # will point at it: a tag can be moved, a sha cannot.
     _SRC = ("nexus-memory @ git+https://github.com/Neboy72/nexus-memory.git"
-            "@03597068ecd64cf4fd112613495625a5de20b4c7")
+            "@a46ff10f199c5f37b6094a65c1d34217176f0ff7")
     # A checkout of THIS repository may be reinstalled in editable mode — handy
     # while developing. It has to prove it is that repository, though: for a
     # catalog-installed plugin `__file__` lives under the Hermes plugin dir and
