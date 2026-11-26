@@ -1,3 +1,16 @@
+## [0.22.77] - 2026-11-26
+
+**Ein gescheiterter `/embed` nennt jetzt seinen Grund — und der Dienst schreibt hin, warum er abgelehnt oder nicht geantwortet hat.**
+
+Befund aus dem Betrieb, 14:48:45: vier POSTs in 0,13 s, `/healthz` antwortete, und der Agent bekam nur „answers /healthz but returned no vector after 2 attempt(s)". Warum der Abruf scheiterte, war nicht feststellbar, weil `_post_embed` jede Ausnahme mit `except Exception: return None, None` wegwarf.
+
+- **Der Grund wird festgehalten** (`_post_embed`, thread-lokal): die Ausnahmeart, ein HTTP-Status mit der Fehlerzeile des Dienstes, bei einem Zeitfehler die tatsaechlich gewartete Zeit neben der Frist, bei 200 ohne Vektor die Schluessel der Antwort. Kein Anfragetext, kein Schluessel — die Zeile ist protokoll- und antworttauglich. Die Wiederholungszeile und die Meldung an den Agenten tragen sie.
+- **Der Dienst schweigt nicht mehr.** `/embed` protokolliert, wenn der Store nicht gebaut werden kann (die 503, die von aussen wie ein toter Dienst aussieht) und wenn der Provider scheitert; ein abgewiesener Schluessel nennt seine Art (Installationsschluessel oder unbekannter Schluessel) und den User-Agent des Aufrufers.
+- **Der 14:48-Fall, eingeordnet (nicht geloest).** Der Dienstprozess lief seit 14:19:45 durch (PID 19114), `/healthz` antwortete, im Zugriffsprotokoll steht keine einzige 5xx auf `/embed`, und das Dienstprotokoll wurde seit 14:43 nicht mehr beschrieben. Die vier POSTs haben den Handler also nicht mit einem Fehlerstatus erreicht: entweder eine 200, deren Antwort der Plugin-Pfad nicht verwerten konnte, oder ein Verbindungsfehler. Beides benennt der neue Grund beim naechsten Mal. Ausgehungert hat der Hintergrundlauf den Vordergrund **nicht**: unter sechs CPU-Brennern antwortete der echte Dienst mit 1024 Dimensionen in 0,09 s (ohne Last 0,09 s warm, 0,47 s kalt); ein Zeitfehler haette 15 s gedauert, ein Ausgehungerter waere langsam, nicht in Millisekunden fertig.
+- **Die 772 x 401 im Zugriffsprotokoll.** 761 davon liegen vor dem 44.686. erfolgreichen `/embed` — laut dem Zaehler im Commit `d9d919b` (16.11.2026 01:02) der Stand, als die Agentenschluessel eingefuehrt und der Installationsschluessel auf `/enroll` beschraenkt wurde. Das ist das Rollout-Fenster: Aufrufer, die noch den Installationsschluessel schickten, bekamen „plugin update required"; dieser Rueckfall ist in solchen Skripten dokumentiert (z. B. `paperless_nexus_common.get_service_key`, eigener Schluessel erst seit 22.11.). Die restlichen 11 sind fuenf kleine Serien (drei bis vier 401, eine 400, dann 200) **ohne** anschliessendes `/enroll` — also keine Anmeldung eines Plugins, sondern eine Pruefung des Auth-Gates. Den Prozess konnte ich nicht zuordnen: das Zugriffsprotokoll traegt keine Zeitstempel, und die Verbindungen leben Millisekunden. Ab jetzt nennt der Dienst die Schluesselart und den User-Agent.
+
+Neue Pruefungen in `tests/test_embed_grund.py` (8) und `tests/test_serve_embed_endpoint.py` (4) — am Stand `7b7c234b` sind alle 12 rot.
+
 ## [0.22.76] - 2026-11-26
 
 **Eine Sicherung sagt jetzt, welcher Prozess sie geschrieben hat — der Testlauf zaehlt nur noch seine eigenen, und nach einem Start entsteht hoechstens eine Sicherung pro Tag.**

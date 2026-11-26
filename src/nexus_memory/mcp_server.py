@@ -5165,6 +5165,14 @@ def build_serve_app():
                 agent_id, is_legacy = service_auth.verify_key(
                     provided.decode("utf-8", "replace"))
             except service_auth.ServiceAuthError:
+                # 26.11.2026: 772 x "POST /embed 401" in the access log, and
+                # nobody could say which kind of key or which caller. The key
+                # itself is never logged; the KIND (own key of an unknown
+                # agent) and the caller's user-agent are what identify it.
+                logging.warning(
+                    "service-auth: %s rejected (unknown key, user-agent=%r)",
+                    path, (headers.get(b"user-agent") or b"").decode(
+                        "utf-8", "replace")[:80])
                 body = json.dumps({"error": "unauthorized"}).encode("utf-8")
                 await send({
                     "type": "http.response.start",
@@ -5180,6 +5188,11 @@ def build_serve_app():
                 # The installation key no longer reads or writes data. It
                 # enrols (POST /enroll) and gets a key of its own; until then
                 # every data endpoint answers 401 with the reason.
+                logging.warning(
+                    "service-auth: %s rejected (installation key — the plugin "
+                    "must enrol, user-agent=%r)",
+                    path, (headers.get(b"user-agent") or b"").decode(
+                        "utf-8", "replace")[:80])
                 body = json.dumps({
                     "error": "plugin update required",
                     "hint": "this plugin still uses the installation key; "
@@ -5266,7 +5279,13 @@ def build_serve_app():
         try:
             store = await asyncio.to_thread(get_store)
             embedder = store._embedder
-        except Exception:
+        except Exception as exc:
+            # 26.11.2026: this answered a bare 503 and logged NOTHING, while
+            # /healthz (a Qdrant ping) kept answering 200. A plugin could then
+            # only report "answers /healthz but returned no vector" — the real
+            # reason (the store could not be built) was invisible to everyone.
+            logging.warning(
+                "embed: store unavailable: %s: %s", type(exc).__name__, exc)
             embedder = None
         if embedder is None or not getattr(embedder, "available", False):
             return JSONResponse({
@@ -5276,6 +5295,8 @@ def build_serve_app():
         try:
             vector = await embedder.embed(text, is_query)
         except Exception as exc:
+            logging.warning(
+                "embed: provider failed: %s: %s", type(exc).__name__, exc)
             return JSONResponse(
                 {"error": f"embedding failed: {type(exc).__name__}"}, status_code=500)
         return JSONResponse({

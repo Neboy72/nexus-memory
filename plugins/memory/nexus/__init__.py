@@ -431,29 +431,91 @@ def _wait_for_embed_service() -> bool:
     return False
 
 
-def _post_embed(url: str, body: bytes, key: str) -> "Tuple[Optional[Dict[str, Any]], Optional[int]]":
-    """One ``POST /embed``: ``(payload, None)``, ``(None, http_status)``, or ``(None, None)``."""
+# Why the LAST ``_embed_via_service`` call of this thread failed. The reason
+# used to be swallowed (``except Exception: return None, None``), so the one
+# message the operator saw said only "answers /healthz but returned no vector"
+# and nobody could say whether it was a timeout, a reset, an HTTP 503 with a
+# clear error line, or an answer without a vector. 26.11.2026, 14:48:45: four
+# POSTs failed in 0.13 s and the cause was unknowable. Thread-local, because a
+# prefetch run has its own thread and must not overwrite the turn's reason.
+_EMBED_FAILURE = threading.local()
+
+
+def _remember_embed_failure(reason: str) -> None:
+    _EMBED_FAILURE.reason = reason
+
+
+def _embed_failure_note() -> str:
+    """Why the last ``/embed`` call in THIS thread failed ("" when none did)."""
+    return str(getattr(_EMBED_FAILURE, "reason", "") or "")
+
+
+def _post_embed(url: str, body: bytes, key: str):
+    """One ``POST /embed``: ``(payload, None, "")`` or ``(None, status, reason)``.
+
+    ``reason`` is the diagnosis this call used to throw away: the exception
+    kind, the HTTP status together with the service's own error line, or — for
+    a timeout — how long the call actually waited next to its limit. It carries
+    no request text and no key, so it is safe in a log line and in the answer
+    the model reads.
+    """
+    import socket
+    import time as _time
     import urllib.error
     import urllib.request
+
+    started = _time.monotonic()
+
+    def _waited() -> float:
+        return _time.monotonic() - started
+
     try:
         req = urllib.request.Request(
             url, data=body,
             headers={"Content-Type": "application/json",
                      _SERVICE_AUTH_HEADER: key})
         with urllib.request.urlopen(req, timeout=_EMBED_SERVICE_TIMEOUT_SEC) as resp:
-            payload = json.loads(resp.read().decode("utf-8", "replace"))
+            raw = resp.read()
     except urllib.error.HTTPError as exc:
-        return None, int(exc.code)
-    except Exception:
-        return None, None
-    vector = payload.get("embedding")
+        # The service answered and refused. Its own error line names why — the
+        # 503 "this service has no embedding provider available" is exactly the
+        # answer that used to look like a dead service from this side.
+        detail = ""
+        try:
+            refused = exc.read().decode("utf-8", "replace").strip()
+            if refused:
+                detail = ": " + " ".join(refused.split())[:200]
+        except Exception:
+            pass
+        return None, int(exc.code), f"HTTP {exc.code}{detail} (after {_waited():.2f}s)"
+    except Exception as exc:
+        cause = getattr(exc, "reason", exc)
+        if isinstance(cause, (socket.timeout, TimeoutError)) or isinstance(
+                exc, (socket.timeout, TimeoutError)):
+            return None, None, (
+                f"timeout after {_waited():.2f}s "
+                f"(limit {_EMBED_SERVICE_TIMEOUT_SEC:.1f}s)")
+        text = " ".join(str(cause).split())[:160]
+        if isinstance(cause, ConnectionRefusedError):
+            text = "connection refused (nothing listening)"
+        elif isinstance(cause, ConnectionResetError):
+            text = "connection reset by the service"
+        return None, None, (
+            f"{type(cause).__name__}: {text} (after {_waited():.2f}s)")
+    try:
+        payload = json.loads(raw.decode("utf-8", "replace"))
+    except Exception as exc:
+        return None, None, (
+            f"unreadable answer ({type(exc).__name__}) after {_waited():.2f}s")
+    vector = payload.get("embedding") if isinstance(payload, dict) else None
     if not isinstance(vector, list) or not vector:
-        return None, None
+        keys = ",".join(sorted(payload)[:6]) if isinstance(payload, dict) else type(payload).__name__
+        return None, None, f"answer without vector (keys={keys})"
     return {
         "embedding": vector,
         "model": str(payload.get("model", "")),
         "dim": int(payload.get("dim") or len(vector)),
-    }, None
+    }, None, ""
 
 
 def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, Any]]":
@@ -472,6 +534,7 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
     """
     url = _embed_service_base() + "/embed"
     body = json.dumps({"text": text, "is_query": bool(is_query)}).encode("utf-8")
+    failures: "List[str]" = []
     for round_no in range(max(1, int(_EMBED_SERVICE_RETRY_ROUNDS))):
         for attempt in (0, 1):
             key = _service_auth_key()
@@ -482,10 +545,14 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
                     "service-auth: no agent key for %s/embed — enrolment needs "
                     "NEXUS_SERVICE_AUTH_KEY or a readable %s/%s",
                     _embed_service_base(), _plugin_data_dir(), _SERVICE_AUTH_KEY_FILE)
+                _remember_embed_failure("no agent key (enrolment did not deliver one)")
                 return None
-            payload, status = _post_embed(url, body, key)
+            payload, status, reason = _post_embed(url, body, key)
             if payload is not None:
+                _remember_embed_failure("")
                 return payload
+            if reason:
+                failures.append(reason)
             if status == 401 and attempt == 0:
                 _forget_agent_key()
                 continue
@@ -493,8 +560,14 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
         if round_no + 1 >= max(1, int(_EMBED_SERVICE_RETRY_ROUNDS)):
             break
         if not _wait_for_embed_service():
+            failures.append("/healthz did not answer")
             break
-        logger.info("Embed request failed but /healthz answers — retrying once")
+        logger.info(
+            "Embed request failed but /healthz answers — retrying once (reason: %s)",
+            failures[-1] if failures else "unknown")
+    # One line, unique in order, no key and no request text: the next failure
+    # names its cause instead of leaving "returned no vector" as the only fact.
+    _remember_embed_failure("; ".join(dict.fromkeys(failures)))
     return None
 
 
@@ -1217,21 +1290,26 @@ class _Embedder:
                 st = embedder_status()
                 reachable = st.get("status") == "ok"
                 self._service_ok = reachable
+                why = _embed_failure_note()
                 if reachable:
                     # The service ANSWERS — the request failed (busy, timeout,
                     # 5xx). Calling that "local embedder unavailable" was wrong
                     # and unreadable: the note even said the service answers on
-                    # this address. Report the request instead, and stay
-                    # "available" so the next attempt simply tries again.
+                    # this address. Report the request instead, with the reason
+                    # the POST itself gave (26.11.2026), and stay "available" so
+                    # the next attempt simply tries again.
                     raise RuntimeError(
                         f"Nexus embed request failed: the service at "
                         f"{_embed_service_base()} answers /healthz but returned "
                         f"no vector after {max(1, int(_EMBED_SERVICE_RETRY_ROUNDS))} "
-                        f"attempt(s); fix: {st.get('repair', '')}"
+                        f"attempt(s)"
+                        + (f"; last failure: {why}" if why else "")
+                        + f"; fix: {st.get('repair', '')}"
                     )
                 raise RuntimeError(
-                    f"{_EMBEDDER_NOTE_PREFIX}: {st.get('detail', '')}; "
-                    f"fix: {st.get('repair', '')}"
+                    f"{_EMBEDDER_NOTE_PREFIX}: {st.get('detail', '')}"
+                    + (f" (last failure: {why})" if why else "")
+                    + f"; fix: {st.get('repair', '')}"
                 )
             self._service_ok = True
             self._service_model = resp["model"]

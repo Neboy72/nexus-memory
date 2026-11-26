@@ -179,3 +179,65 @@ def test_invalid_utf8_service_key_header_is_401(monkeypatch):
     )
     assert r.status_code == 401
     assert embedder.calls == [], "a rejected request must never reach the model"
+
+
+# ── Ein Fehlschlag nennt seinen Grund im Dienstprotokoll (26.11.2026) ───────
+#
+# Befund: /healthz (ein Qdrant-Ping) antwortete 200, /embed antwortete in
+# Millisekunden mit 503 — und der Dienst schrieb dazu KEINE Zeile. Von aussen
+# blieb nur „answers /healthz but returned no vector". Diese zwei Pruefungen
+# halten fest, dass der Dienst seinen eigenen Grund nennt.
+
+def test_store_failure_names_its_reason_in_the_service_log(monkeypatch, caplog):
+    from starlette.testclient import TestClient
+    import nexus_memory.mcp_server as mcp
+
+    def _boom():
+        raise RuntimeError("qdrant is gone")
+
+    monkeypatch.setattr(mcp, "get_store", _boom)
+    caplog.set_level("WARNING")
+    r = TestClient(mcp.build_serve_app(), base_url="http://127.0.0.1:9122").post(
+        "/embed", json={"text": "hello"}, headers=_auth_headers())
+
+    assert r.status_code == 503
+    assert "embed: store unavailable" in caplog.text, caplog.text
+    assert "qdrant is gone" in caplog.text, (
+        "der Grund des Dienstes muss im Protokoll stehen: " + caplog.text)
+
+
+def test_provider_failure_names_its_reason_in_the_service_log(monkeypatch, caplog):
+    client, _ = _client(monkeypatch, _FakeEmbedder(fail=True))
+    caplog.set_level("WARNING")
+    r = client.post("/embed", json={"text": "hello"}, headers=_auth_headers())
+
+    assert r.status_code == 500
+    assert "embed: provider failed" in caplog.text, caplog.text
+    assert "backend exploded" in caplog.text, caplog.text
+
+
+def test_rejected_installation_key_is_named_as_such(monkeypatch, caplog):
+    """Die 772 x 401 im Zugriffsprotokoll: die ART des Schluessels wird benannt."""
+    from nexus_memory import service_auth
+    client, embedder = _client(monkeypatch, _FakeEmbedder())
+    caplog.set_level("WARNING")
+
+    r = client.post("/embed", json={"text": "hello"},
+                    headers={service_auth.AUTH_HEADER: "test-service-key"})
+
+    assert r.status_code == 401
+    assert "installation key" in caplog.text, caplog.text
+    assert embedder.calls == []
+
+
+def test_rejected_unknown_key_is_named_as_such(monkeypatch, caplog):
+    from nexus_memory import service_auth
+    client, embedder = _client(monkeypatch, _FakeEmbedder())
+    caplog.set_level("WARNING")
+
+    r = client.post("/embed", json={"text": "hello"},
+                    headers={service_auth.AUTH_HEADER: "not-a-known-key"})
+
+    assert r.status_code == 401
+    assert "unknown key" in caplog.text, caplog.text
+    assert embedder.calls == []
