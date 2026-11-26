@@ -116,6 +116,31 @@ def _sicherungs_namen(ordner: Path) -> set:
         return set()
 
 
+def _aus_diesem_prozess(namen: list, ordner: Path) -> list:
+    """Die neuen Sicherungen, fuer die DIESER Prozess verantwortlich ist.
+
+    Eine fremde PID ist der laufende Dienst (er sichert beim Start in denselben
+    Ordner) und geht den Test nichts an. Fehlt die PID, bleibt es bei einem
+    Fund: die Herkunft ist dann unbekannt, und unbekannt heisst melden.
+    """
+    return [n for n in namen if _sicherung_pid(ordner / n) in (None, os.getpid())]
+
+
+def _sicherung_pid(datei: Path):
+    """Die PID, die eine Sicherung geschrieben hat, oder None.
+
+    Die Datei ist ein 124-MB-JSON; die PID steht neben den Kopfzeilen. Deshalb
+    wird nur der Anfang gelesen, nicht die ganze Datei.
+    """
+    try:
+        with open(datei, "r", encoding="utf-8", errors="replace") as handle:
+            kopf = handle.read(4096)
+        import json as _json
+        return _json.loads(kopf.split('"points"')[0].rstrip().rstrip(",") + "}").get("pid")
+    except Exception:
+        return None
+
+
 @pytest.fixture(autouse=True)
 def kein_auto_backup(monkeypatch):
     """Der Hintergrund-Backup darf im Test nicht laufen (22.11.2026).
@@ -146,8 +171,14 @@ def kein_echtes_backup():
     vorher = _sicherungs_namen(echt)
     yield
     neu = sorted(_sicherungs_namen(echt) - vorher)
-    assert not neu, (
-        f"der Testlauf hat Sicherungen im ECHTEN Ordner {echt} angelegt: {neu}. "
+    # Der Ordner ist geteilt: der laufende Dienst legt dort ebenfalls ab (er
+    # sichert beim Start). Eine Datei nennt ihren Schreiber seit 0.22.75 im
+    # Feld ``pid``; nur die eigene PID ist ein Fund, eine fremde PID ist der
+    # Dienst und geht den Test nichts an. Fehlt das Feld, wird weiter
+    # gemeldet (aeltere Fassung, Herkunft unbekannt).
+    eigene = _aus_diesem_prozess(neu, echt)
+    assert not eigene, (
+        f"der Testlauf hat Sicherungen im ECHTEN Ordner {echt} angelegt: {eigene}. "
         "Der Sicherungsordner muss NEXUS_BACKUP_DIR bzw. NEXUS_DATA_DIR folgen, "
         "und NEXUS_AUTO_BACKUP=0 muss den Thread ausschalten."
     )

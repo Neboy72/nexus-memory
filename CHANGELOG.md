@@ -1,3 +1,16 @@
+## [0.22.76] - 2026-11-26
+
+**Eine Sicherung sagt jetzt, welcher Prozess sie geschrieben hat — der Testlauf zaehlt nur noch seine eigenen, und nach einem Start entsteht hoechstens eine Sicherung pro Tag.**
+
+Ein Fehler im Testlauf vom 26.11.2026.
+
+- **Der Waechter beschuldigte den falschen.** Der Testlauf prueft am Ende, ob er Sicherungen im echten Ordner `~/.nexus-memory/backups` hinterlassen hat. Waehrend eines Laufs startete der Dienst neu und legte beim Start zwei Sicherungen von je 124 MB dort ab (13:56:50 und 13:56:52, Kennung `0.22.75`) — der Waechter meldete das als Fehler des Testlaufs, obwohl der Test nichts geschrieben hatte. Jetzt nennt jede Sicherung ihren Schreiber im Feld `pid`; der Waechter zaehlt nur Dateien der eigenen Prozess-Kennung und meldet weiter, wenn die Angabe fehlt (Herkunft unbekannt). Die Regel selbst ist geprueft (`test_waechter_zaehlt_nur_die_eigenen_sicherungen`).
+- **Der Installer-Test kippte unter Last.** `test_ensure_runs_script_and_reports_installed` startete dafuer wirklich `bash`; schlug der Start unter Last fehl, wurde der Test rot, ohne den Grund zu zeigen. Geprueft wird die Entscheidung (Skript laeuft, Ausgabe kommt an, Warteschleife ist begrenzt), und die ist jetzt ohne echten Prozessstart geprueft; die Ausgabe des Skripts selbst decken die uebrigen Tests der Datei ab.
+- **Die Sicherung nannte eine erfundene Fassung.** Das Plugin schrieb `"version": "0.4.0"` in jede Sicherung, der Dienst die echte. Beide nennen jetzt ihre eigene Fassung.
+- **Hoechstens eine Sicherung pro Tag nach einem Start.** Der Dienst sichert 60 Sekunden nach jedem Start. Vier Neustarts an einem Tag (13:53:28, 13:54:09, 13:56:50, 13:56:52) legten deshalb vier Dateien zu je 124 MB ab — kein Timer, sondern vier Start-Sicherungen. Die Start-Sicherung fragt jetzt, ob fuer heute schon eine Sicherung existiert (Kriterium: das Datum im Dateinamen, den dieser Code selbst schreibt), und legt dann keine zweite an. Der Takt danach bleibt unangetastet: der Dienst sichert weiter alle 6 Stunden, das Plugin taeglich, und ein Tageswechsel loest die naechste Sicherung aus — ein uebersprungener Start haelt den Takt nicht an. Bestehende Sicherungen werden nicht geloescht, es gibt keine Aufraeumroutine.
+
+Am alten Stand (`f605cf4`) sind 6 der 8 neuen Pruefungen rot (beide Helfer, je Start-Sicherung und je Takt), die zwei Tageswechsel-Pruefungen sind gruen und bleiben Gruen-Waechter; `test_waechter_zaehlt_nur_die_eigenen_sicherungen` ist ebenfalls rot, und der Installer-Test ist so geschrieben, dass ein fehlgeschlagener Prozessstart ihn nicht mehr ohne Begruendung kippt.
+
 ## [0.22.75] - 2026-11-26
 
 **Ein einzelner fehlgeschlagener Abruf beim Einbetter galt als „Dienst weg" — jetzt wird kurz gewartet, einmal wiederholt, und nur ein wirklich unerreichbarer Dienst gemeldet; ein Lauf, der die Frist ueberschreitet, darf sein Ergebnis nachliefern.**

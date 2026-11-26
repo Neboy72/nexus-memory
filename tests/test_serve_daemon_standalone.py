@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -364,6 +365,17 @@ class TestSetupWizardWiring:
 
     @_ENSURE_SCRIPT_ONLY
     def test_ensure_runs_script_and_reports_installed(self, daemon_engine, tmp_path, monkeypatch):
+        """The DECISION logic: run the script, take its output, report installed.
+
+        The script start is the only step of ``ensure_serve_daemon`` that
+        touches the environment (fork/exec of ``bash``). Everything else is
+        already faked here, and when that spawn failed transiently the test
+        went red for a reason it did not print (twice in full runs on
+        26.11.2026, never once in isolation). The decision under test is the
+        status/detail/poll logic — running REAL install_serve.sh is covered by
+        the script tests in this file — so the spawn is faked too, and the
+        assertion carries the returned dict so a failure names its cause.
+        """
         script = tmp_path / "install_serve.sh"
         script.write_text("#!/bin/bash\necho ' ✅ fake install ok'\n", encoding="utf-8")
         script.chmod(0o755)
@@ -378,10 +390,23 @@ class TestSetupWizardWiring:
         sleeps = {"n": 0}
         monkeypatch.setattr(sd.time, "sleep", lambda s: sleeps.__setitem__("n", sleeps["n"] + 1) or states.update({"up": True}))
 
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=" ✅ fake install ok\n", stderr="")
+
+        monkeypatch.setattr(
+            sd, "subprocess",
+            SimpleNamespace(run=fake_run,
+                            TimeoutExpired=subprocess.TimeoutExpired))
+
         res = sd.ensure_serve_daemon()
-        assert res["status"] == "installed"
-        assert "fake install ok" in (res.get("detail") or "")
-        assert sleeps["n"] <= 20  # bounded poll, not an infinite wait
+        assert calls == [["bash", str(script)]], f"script not run: {calls}"
+        assert res["status"] == "installed", res
+        assert "fake install ok" in (res.get("detail") or ""), res
+        assert sleeps["n"] <= 20, res  # bounded poll, not an infinite wait
 
     @_ENSURE_SCRIPT_ONLY
     def test_ensure_script_failure_is_returned_not_raised(self, daemon_engine, tmp_path, monkeypatch):

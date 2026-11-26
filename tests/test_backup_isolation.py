@@ -156,6 +156,32 @@ class TestAutoBackupSwitch:
         assert gestartet == ["nexus-backup"]
 
 
+# ── Der Waechter unterscheidet Test und Dienst (26.11.2026) ──────────────────
+
+def test_waechter_zaehlt_nur_die_eigenen_sicherungen(tmp_path):
+    """Beleg fuer die Regel: fremde PID = Dienst, eigene/fehlende = Fund.
+
+    Der Sicherungsordner ist geteilt: der Dienst sichert beim Start hinein. Am
+    26.11.2026 schrieb ein neustartender Dienst zwei 124-MB-Dateien waehrend
+    der Suite, und der Waechter machte daraus einen Fehler im Testlauf. Seit
+    die Datei ihren Schreiber im Feld ``pid`` nennt, zaehlt nur noch die eigene
+    Prozess-Kennung — und eine Datei ohne Angabe bleibt ein Fund.
+    """
+    import json
+    import os
+    from conftest import _aus_diesem_prozess
+
+    eigene = tmp_path / "nexus-backup-eigene.json"
+    eigene.write_text(json.dumps({"pid": os.getpid(), "points": []}), encoding="utf-8")
+    fremde = tmp_path / "nexus-backup-fremde.json"
+    fremde.write_text(json.dumps({"pid": 999999, "points": []}), encoding="utf-8")
+    ohne = tmp_path / "nexus-backup-ohne.json"
+    ohne.write_text(json.dumps({"points": []}), encoding="utf-8")
+
+    namen = [eigene.name, fremde.name, ohne.name]
+    assert _aus_diesem_prozess(namen, tmp_path) == [eigene.name, ohne.name]
+
+
 # ── Der direkte Beweis: der echte Ordner bleibt unberuehrt ───────────────────
 
 def test_beide_sicherungen_lassen_den_echten_ordner_unberuehrt(monkeypatch):
@@ -326,3 +352,207 @@ def test_werkzeugbeschreibung_nennt_das_echte_verhalten():
     assert "every 6 hours" in beschreibung
     assert "every 24h" not in beschreibung
     assert "Includes payloads + vectors" not in beschreibung
+
+
+# ── Die Start-Sicherung fragt, ob heute schon gesichert wurde (26.11.2026) ───
+#
+# Nebos Befund: an einem Tag mit vier Neustarts lagen vier Dateien zu je 124 MB
+# im Ordner (13:53:28, 13:54:09, 13:56:50, 13:56:52) — jeder Start schrieb seine
+# eigene "Start-Sicherung". Seit 0.22.76 fragt die Start-Sicherung, ob fuer
+# heute schon eine Datei liegt; der Takt danach (6 h im Dienst, 24 h im Plugin)
+# laeuft weiter und schreibt, wenn der Tag wechselt.
+#
+# Geprueft wird die echte Schleife, nicht nur der Helfer: das Ziel des
+# Backup-Fadens wird abgefangen und einmal ausgefuehrt, ``time.sleep`` bricht
+# die Endlosschleife mit ``_Fertig`` ab. Dass der Abbruch ueberhaupt kommt,
+# beweist, dass die Schleife nach dem (uebersprungenen) Start weitergelaufen
+# ist und nicht zurueckgekehrt ist.
+
+class _Fertig(BaseException):
+    """Bricht die Endlosschleife ab, ohne als Fehler gefangen zu werden."""
+
+
+class _NieGestoppt:
+    """``_write_stop``-Ersatz des Plugins: nicht gesetzt, kein echtes Warten."""
+
+    def wait(self, *args, **kwargs):
+        return False
+
+    def is_set(self):
+        return False
+
+
+def _fange_schleife(monkeypatch, starten):
+    """Startet den Backup-Thread nicht, sondern gibt seine Schleife zurueck."""
+    import threading as _threading
+
+    gefangen = []
+
+    def _fake_thread(**kwargs):
+        gefangen.append(kwargs.get("target"))
+        return SimpleNamespace(start=lambda: None)
+
+    monkeypatch.setattr(_threading, "Thread", _fake_thread)
+    starten()
+    assert len(gefangen) == 1, gefangen
+    return gefangen[0]
+
+
+def _schlafe_bis_abbruch(monkeypatch, modul, erlaubte_schlaefer):
+    """``time.sleep`` laesst die ersten Aufrufe durch, dann bricht es ab."""
+    zaehler = {"n": 0}
+
+    def _schlaf(sekunden):
+        zaehler["n"] += 1
+        if zaehler["n"] > erlaubte_schlaefer:
+            raise _Fertig
+
+    monkeypatch.setattr(modul.time, "sleep", _schlaf)
+    return zaehler
+
+
+def _heutiger_name() -> str:
+    from datetime import datetime
+    return f"nexus-backup-{datetime.now().strftime('%Y-%m-%d')}_08-00-00.json"
+
+
+def test_dienst_helfer_erkennt_nur_heute(tmp_path):
+    """Kriterium: das Datum im Dateinamen — heute ja, gestern nein."""
+    (tmp_path / _heutiger_name()).write_text("{}", encoding="utf-8")
+    (tmp_path / "nexus-backup-2020-01-01_00-00-00.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "irgendwas.json").write_text("{}", encoding="utf-8")
+
+    assert mcp._backup_for_today_exists(str(tmp_path)) is True
+
+    leer = tmp_path / "leer"
+    leer.mkdir()
+    assert mcp._backup_for_today_exists(str(leer)) is False
+    assert mcp._backup_for_today_exists(str(tmp_path / "gibt-es-nicht")) is False
+
+
+def test_plugin_helfer_erkennt_nur_heute(tmp_path):
+    modul = _plugin_modul()
+    (tmp_path / _heutiger_name()).write_text("{}", encoding="utf-8")
+    (tmp_path / "nexus-backup-2020-01-01_00-00-00.json").write_text("{}", encoding="utf-8")
+
+    assert modul._backup_for_today_exists(tmp_path) is True
+    (tmp_path / _heutiger_name()).unlink()
+    assert modul._backup_for_today_exists(tmp_path) is False
+
+
+def test_dienst_start_sicherung_legt_pro_tag_nur_eine_an(monkeypatch, tmp_path):
+    """Heute liegt schon eine Sicherung: der Start schreibt keine zweite."""
+    monkeypatch.setenv("NEXUS_AUTO_BACKUP", "1")
+    monkeypatch.setattr(mcp, "_backup_dir", lambda: str(tmp_path))
+    (tmp_path / _heutiger_name()).write_text("{}", encoding="utf-8")
+
+    store = object.__new__(mcp.MemoryStore)
+    aufrufe = []
+    monkeypatch.setattr(store, "_do_backup", lambda: aufrufe.append(1))
+    ziel = _fange_schleife(monkeypatch, store._start_auto_backup)
+    _schlafe_bis_abbruch(monkeypatch, mcp, 1)
+
+    with pytest.raises(_Fertig):  # die Schleife lief weiter (kein Rueckweg)
+        ziel()
+
+    assert aufrufe == [], "Start hat trotz vorhandener Sicherung geschrieben"
+
+
+def test_dienst_start_sicherung_schreibt_nach_tageswechsel(monkeypatch, tmp_path):
+    """Nur gestern gesichert: der Start sichert heute (der Tag ist gewechselt)."""
+    monkeypatch.setenv("NEXUS_AUTO_BACKUP", "1")
+    monkeypatch.setattr(mcp, "_backup_dir", lambda: str(tmp_path))
+    (tmp_path / "nexus-backup-2020-01-01_00-00-00.json").write_text("{}", encoding="utf-8")
+
+    store = object.__new__(mcp.MemoryStore)
+    aufrufe = []
+    monkeypatch.setattr(store, "_do_backup", lambda: aufrufe.append(1))
+    ziel = _fange_schleife(monkeypatch, store._start_auto_backup)
+    _schlafe_bis_abbruch(monkeypatch, mcp, 1)
+
+    with pytest.raises(_Fertig):
+        ziel()
+
+    assert aufrufe == [1]
+
+
+def test_dienst_sechsstunden_takt_laeuft_nach_uebersprungenem_start(monkeypatch, tmp_path):
+    """Ein uebersprungener Start haelt den 6-Stunden-Takt nicht an."""
+    monkeypatch.setenv("NEXUS_AUTO_BACKUP", "1")
+    monkeypatch.setattr(mcp, "_backup_dir", lambda: str(tmp_path))
+    (tmp_path / _heutiger_name()).write_text("{}", encoding="utf-8")
+
+    store = object.__new__(mcp.MemoryStore)
+    aufrufe = []
+    monkeypatch.setattr(store, "_do_backup", lambda: aufrufe.append(1))
+    ziel = _fange_schleife(monkeypatch, store._start_auto_backup)
+    # 1 Schlaf vor dem Start + 360 des ersten 6h-Blocks; danach kommt der
+    # zweite Durchlauf, der wieder sichern darf.
+    _schlafe_bis_abbruch(monkeypatch, mcp, 1 + 360)
+
+    with pytest.raises(_Fertig):
+        ziel()
+
+    assert aufrufe == [1], (
+        "erwartet: Start uebersprungen und der 6-Stunden-Takt hat einmal "
+        f"geschrieben — bekommen: {aufrufe}")
+
+
+def test_plugin_start_sicherung_legt_pro_tag_nur_eine_an(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUS_AUTO_BACKUP", "1")
+    monkeypatch.setenv("NEXUS_BACKUP_DIR", str(tmp_path))
+    (tmp_path / _heutiger_name()).write_text("{}", encoding="utf-8")
+
+    modul = _plugin_modul()
+    provider = object.__new__(modul.NexusMemoryProvider)
+    provider._write_stop = _NieGestoppt()
+    aufrufe = []
+    monkeypatch.setattr(provider, "_do_backup", lambda: aufrufe.append(1))
+    ziel = _fange_schleife(monkeypatch, provider._start_auto_backup)
+    _schlafe_bis_abbruch(monkeypatch, modul, 1)
+
+    with pytest.raises(_Fertig):
+        ziel()
+
+    assert aufrufe == [], "Start hat trotz vorhandener Sicherung geschrieben"
+
+
+def test_plugin_start_sicherung_schreibt_nach_tageswechsel(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUS_AUTO_BACKUP", "1")
+    monkeypatch.setenv("NEXUS_BACKUP_DIR", str(tmp_path))
+    (tmp_path / "nexus-backup-2020-01-01_00-00-00.json").write_text("{}", encoding="utf-8")
+
+    modul = _plugin_modul()
+    provider = object.__new__(modul.NexusMemoryProvider)
+    provider._write_stop = _NieGestoppt()
+    aufrufe = []
+    monkeypatch.setattr(provider, "_do_backup", lambda: aufrufe.append(1))
+    ziel = _fange_schleife(monkeypatch, provider._start_auto_backup)
+    _schlafe_bis_abbruch(monkeypatch, modul, 1)
+
+    with pytest.raises(_Fertig):
+        ziel()
+
+    assert aufrufe == [1]
+
+
+def test_plugin_tages_takt_laeuft_nach_uebersprungenem_start(monkeypatch, tmp_path):
+    """Die taegliche Sicherung laeuft weiter, auch wenn der Start uebersprungen wurde."""
+    monkeypatch.setenv("NEXUS_AUTO_BACKUP", "1")
+    monkeypatch.setenv("NEXUS_BACKUP_DIR", str(tmp_path))
+    (tmp_path / _heutiger_name()).write_text("{}", encoding="utf-8")
+
+    modul = _plugin_modul()
+    provider = object.__new__(modul.NexusMemoryProvider)
+    provider._write_stop = _NieGestoppt()
+    aufrufe = []
+    monkeypatch.setattr(provider, "_do_backup", lambda: aufrufe.append(1))
+    ziel = _fange_schleife(monkeypatch, provider._start_auto_backup)
+    _schlafe_bis_abbruch(monkeypatch, modul, modul.BACKUP_INTERVAL_ITERATIONS)
+
+    with pytest.raises(_Fertig):
+        ziel()
+
+    assert aufrufe == [1], (
+        "erwartet: Start uebersprungen und die taegliche Sicherung hat einmal "
+        f"geschrieben — bekommen: {aufrufe}")

@@ -95,6 +95,35 @@ def _backup_dir() -> Path:
     return _plugin_data_dir() / "backups"
 
 
+def _backup_for_today_exists(backup_dir: Path) -> bool:
+    """Does ``backup_dir`` already hold a backup written today?
+
+    The folder is shared with the service, and both write the same name scheme
+    (``nexus-backup-<YYYY-MM-DD>_<HH-MM-SS>.json``). 26.11.2026: four restarts
+    of the service on one day left four 124 MB dumps, because every start wrote
+    its own "start backup". The start backup therefore asks whether today is
+    already covered; the daily cadence below is NOT affected — it writes every
+    24 h regardless, so a skipped start never stops the schedule.
+
+    Criterion is the date in the file name (the same rule as the service, see
+    ``nexus_memory.mcp_server._backup_for_today_exists``): cheap to read, while
+    the file itself holds 124 MB of JSON. An incomplete dump whose name says
+    today counts too — that keeps the rule simple and leaves the decision
+    about a broken file to the operator.
+    """
+    from datetime import datetime
+
+    day = datetime.now().strftime("%Y-%m-%d")
+    prefix = f"nexus-backup-{day}_"
+    try:
+        return any(
+            name.startswith(prefix) and name.endswith(".json")
+            for name in os.listdir(backup_dir)
+        )
+    except OSError:
+        return False
+
+
 def _install_key() -> str:
     """The per-installation key — used for ONE thing: ``POST /enroll``.
 
@@ -2070,11 +2099,22 @@ class NexusMemoryProvider:
             # Wait 60s after startup before first backup (interruptible: Nr 290)
             if self._write_stop.wait(60):
                 return
+            # The first run is the "start backup": it only writes when today
+            # has no dump yet (26.11.2026: four restarts of the service, four
+            # 124 MB files). The daily runs below always write, so a skipped
+            # start must not stop the schedule — including the day change.
+            start_backup = True
             while not self._write_stop.is_set():
                 try:
-                    self._do_backup()
+                    if start_backup and _backup_for_today_exists(_backup_dir()):
+                        logger.info(
+                            "Start backup skipped: %s already holds a backup "
+                            "from today", _backup_dir())
+                    else:
+                        self._do_backup()
                 except Exception as e:
                     logger.warning("Auto-backup failed: %s", e)
+                start_backup = False
                 # Sleep 24h (check stop flag every 60s for responsive shutdown)
                 for _ in range(BACKUP_INTERVAL_ITERATIONS):
                     if self._write_stop.is_set():
@@ -2135,9 +2175,15 @@ class NexusMemoryProvider:
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_path = os.path.join(backup_dir, f"nexus-backup-{ts}.json")
         backup_data = {
-            "version": "0.4.0",
+            "version": _plugin_version(),
             "collection": self._collection,
             "created_at": datetime.now().isoformat(),
+            # Who wrote it: a live service and a test run share this folder, so
+            # a file must say which process produced it. The suite's
+            # "no real backup" guard uses this to ignore another process's
+            # dumps (26.11.2026: two 124 MB dumps from the restarted service
+            # made the guard blame the test run).
+            "pid": os.getpid(),
             "point_count": len(all_points),
             "points": all_points,
         }

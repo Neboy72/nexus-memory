@@ -1036,6 +1036,33 @@ def _backup_dir() -> str:
     return str(data_dir() / "backups")
 
 
+def _backup_for_today_exists(backup_dir: str) -> bool:
+    """Does ``backup_dir`` already hold a backup written today?
+
+    26.11.2026: four restarts of the service on one day left four 124 MB
+    dumps (13:53:28, 13:54:09, 13:56:50, 13:56:52) — every start wrote its own
+    "start backup". The start backup therefore asks whether today is already
+    covered and leaves the folder alone if it is. The 6-hourly cadence is NOT
+    affected: only the first run after a start asks.
+
+    Criterion is the date in the file name, which this code writes itself
+    (``nexus-backup-<YYYY-MM-DD>_<HH-MM-SS>.json``) and which is cheap to
+    read, while the file holds 124 MB of JSON. A dump cut off half-way is
+    counted as today's backup too — deliberately: the alternative is to open
+    a foreign 124 MB file and hope it parses. A file that only *starts* today
+    but is incomplete still exists; the operator sees it and decides.
+    """
+    day = datetime.now().strftime("%Y-%m-%d")
+    prefix = f"nexus-backup-{day}_"
+    try:
+        return any(
+            name.startswith(prefix) and name.endswith(".json")
+            for name in os.listdir(backup_dir)
+        )
+    except OSError:
+        return False
+
+
 class MemoryStore:
 
     # Regel B: named vector of the bound collection, set in __init__ once the
@@ -1184,11 +1211,23 @@ class MemoryStore:
 
         def _backup_loop():
             time.sleep(60)  # Wait 60s after startup
+            # The first run is the "start backup": it only writes when today
+            # has no dump yet (26.11.2026: four restarts, four 124 MB files).
+            # Every later run is the 6-hourly cadence and always writes — a
+            # skipped start must not stop the schedule.
+            start_backup = True
             while True:
                 try:
-                    self._do_backup()
+                    backup_dir = _backup_dir()
+                    if start_backup and _backup_for_today_exists(backup_dir):
+                        logging.info(
+                            "Start backup skipped: %s already holds a backup "
+                            "from today", backup_dir)
+                    else:
+                        self._do_backup()
                 except Exception as e:
                     logging.warning(f"Auto-backup failed: {e}")
+                start_backup = False
                 for _ in range(360):  # 6h, check every 60s
                     time.sleep(60)
         threading.Thread(target=_backup_loop, name="nexus-backup", daemon=True).start()
@@ -1232,6 +1271,10 @@ class MemoryStore:
             "version": nexus_version,
             "collection": COLLECTION_NAME,
             "created_at": datetime.now().isoformat(),
+            # Who wrote it: the folder is shared with the Hermes plugin and with
+            # test runs, so a dump must name its writer (see the plugin's
+            # equivalent field).
+            "pid": os.getpid(),
             "point_count": len(all_points),
             "points": all_points,
         }
