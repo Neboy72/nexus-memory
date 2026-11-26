@@ -22,7 +22,7 @@ Ein Fehler im Testlauf vom 26.11.2026.
 - **Die Sicherung nannte eine erfundene Fassung.** Das Plugin schrieb `"version": "0.4.0"` in jede Sicherung, der Dienst die echte. Beide nennen jetzt ihre eigene Fassung.
 - **Hoechstens eine Sicherung pro Tag nach einem Start.** Der Dienst sichert 60 Sekunden nach jedem Start. Vier Neustarts an einem Tag (13:53:28, 13:54:09, 13:56:50, 13:56:52) legten deshalb vier Dateien zu je 124 MB ab — kein Timer, sondern vier Start-Sicherungen. Die Start-Sicherung fragt jetzt, ob fuer heute schon eine Sicherung existiert (Kriterium: das Datum im Dateinamen, den dieser Code selbst schreibt), und legt dann keine zweite an. Der Takt danach bleibt unangetastet: der Dienst sichert weiter alle 6 Stunden, das Plugin taeglich, und ein Tageswechsel loest die naechste Sicherung aus — ein uebersprungener Start haelt den Takt nicht an. Bestehende Sicherungen werden nicht geloescht, es gibt keine Aufraeumroutine.
 
-Am alten Stand (`f605cf4`) sind 6 der 8 neuen Pruefungen rot (beide Helfer, je Start-Sicherung und je Takt), die zwei Tageswechsel-Pruefungen sind gruen und bleiben Gruen-Waechter; `test_waechter_zaehlt_nur_die_eigenen_sicherungen` ist ebenfalls rot, und der Installer-Test ist so geschrieben, dass ein fehlgeschlagener Prozessstart ihn nicht mehr ohne Begruendung kippt.
+Am alten Stand (`f605cf4`) scheitern alle neun neuen Pruefungen in `tests/test_backup_isolation.py`, weil die Helfer dort noch nicht existieren; inhaltlich haetten die beiden Tageswechsel-Pruefungen das alte Verhalten bereits erfuellt — sie belegen also, dass der Takt erhalten bleibt, nicht den Fix. Der Installer-Test ist so geschrieben, dass ein fehlgeschlagener Prozessstart ihn nicht mehr ohne Begruendung kippt.
 
 ## [0.22.75] - 2026-11-26
 
