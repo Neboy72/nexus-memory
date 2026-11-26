@@ -312,6 +312,14 @@ _try_import_qdrant()
 #   base  : NEXUS_EMBED_SERVICE_URL, else http://127.0.0.1:<NEXUS_SERVE_PORT>
 #   reply : {"embedding": [float...], "model": "<str>", "dim": <int>}
 _EMBED_SERVICE_TIMEOUT_SEC = 15.0
+# One retry round for /embed. Measured 26.11.2026: at the top of the hour
+# (cron processes starting, the service busy or just restarted) a single POST
+# ran into its 15 s timeout while /healthz answered the whole time — and the
+# plugin reported "local embedder unavailable … service answers on …". A short
+# wait plus one more attempt turns that into a normal first result.
+_EMBED_SERVICE_RETRY_ROUNDS = 2
+_EMBED_SERVICE_RETRY_STEPS = 4
+_EMBED_SERVICE_RETRY_INTERVAL = 0.25
 
 # Cold-start budget of the local embedder service, in the pieces it is made of.
 # `_ensure_embed_service` polls the service for the poll window, and the
@@ -377,6 +385,48 @@ def _embed_service_healthz(timeout: float = 2.0) -> bool:
         return False
 
 
+def _wait_for_embed_service() -> bool:
+    """Wait briefly for ``/healthz``; True as soon as the service answers.
+
+    Used BEFORE declaring the embedder gone and BEFORE repeating a failed
+    ``/embed``. A service that was just restarted (launchd, first request after
+    a reboot) or is busy (backup at the top of the hour) answers ``/healthz``
+    long before it can serve a vector, and a single 15 s timeout is not proof
+    that it is unreachable. Bounded: at most a few healthz probes, never a
+    minute.
+    """
+    for _ in range(max(1, int(_EMBED_SERVICE_RETRY_STEPS))):
+        if _embed_service_healthz(timeout=1.0):
+            return True
+        time.sleep(_EMBED_SERVICE_RETRY_INTERVAL)
+    return False
+
+
+def _post_embed(url: str, body: bytes, key: str) -> "Tuple[Optional[Dict[str, Any]], Optional[int]]":
+    """One ``POST /embed``: ``(payload, None)``, ``(None, http_status)``, or ``(None, None)``."""
+    import urllib.error
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type": "application/json",
+                     _SERVICE_AUTH_HEADER: key})
+        with urllib.request.urlopen(req, timeout=_EMBED_SERVICE_TIMEOUT_SEC) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        return None, int(exc.code)
+    except Exception:
+        return None, None
+    vector = payload.get("embedding")
+    if not isinstance(vector, list) or not vector:
+        return None, None
+    return {
+        "embedding": vector,
+        "model": str(payload.get("model", "")),
+        "dim": int(payload.get("dim") or len(vector)),
+    }, None
+
+
 def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, Any]]":
     """POST /embed. Returns ``{"embedding","model","dim"}`` or None (never raises).
 
@@ -384,43 +434,38 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
     as the engine does internally. Only this plugin's own key is sent; a 401
     means the key was revoked or replaced, so the plugin enrols once more and
     repeats the call once.
+
+    A failed request is repeated ONCE after a short healthz-confirmed wait
+    (26.11.2026): at the top of the hour the service answered ``/healthz`` the
+    whole time but a single POST ran into its 15 s timeout, and the plugin
+    reported the service as unavailable instead of taking the vector it could
+    still deliver.
     """
-    import urllib.error
-    import urllib.request
     url = _embed_service_base() + "/embed"
     body = json.dumps({"text": text, "is_query": bool(is_query)}).encode("utf-8")
-    for attempt in (0, 1):
-        key = _service_auth_key()
-        if not key:
-            # Missing key is a configuration problem, not "the service is gone".
-            # Fail soft (None) but loud so the status note points at the real cause.
-            logger.warning(
-                "service-auth: no agent key for %s/embed — enrolment needs "
-                "NEXUS_SERVICE_AUTH_KEY or a readable %s/%s",
-                _embed_service_base(), _plugin_data_dir(), _SERVICE_AUTH_KEY_FILE)
-            return None
-        try:
-            req = urllib.request.Request(
-                url, data=body,
-                headers={"Content-Type": "application/json",
-                         _SERVICE_AUTH_HEADER: key})
-            with urllib.request.urlopen(req, timeout=_EMBED_SERVICE_TIMEOUT_SEC) as resp:
-                payload = json.loads(resp.read().decode("utf-8", "replace"))
-        except urllib.error.HTTPError as exc:
-            if exc.code == 401 and attempt == 0:
+    for round_no in range(max(1, int(_EMBED_SERVICE_RETRY_ROUNDS))):
+        for attempt in (0, 1):
+            key = _service_auth_key()
+            if not key:
+                # Missing key is a configuration problem, not "the service is gone".
+                # Fail soft (None) but loud so the status note points at the real cause.
+                logger.warning(
+                    "service-auth: no agent key for %s/embed — enrolment needs "
+                    "NEXUS_SERVICE_AUTH_KEY or a readable %s/%s",
+                    _embed_service_base(), _plugin_data_dir(), _SERVICE_AUTH_KEY_FILE)
+                return None
+            payload, status = _post_embed(url, body, key)
+            if payload is not None:
+                return payload
+            if status == 401 and attempt == 0:
                 _forget_agent_key()
                 continue
-            return None
-        except Exception:
-            return None
-        vector = payload.get("embedding")
-        if not isinstance(vector, list) or not vector:
-            return None
-        return {
-            "embedding": vector,
-            "model": str(payload.get("model", "")),
-            "dim": int(payload.get("dim") or len(vector)),
-        }
+            break
+        if round_no + 1 >= max(1, int(_EMBED_SERVICE_RETRY_ROUNDS)):
+            break
+        if not _wait_for_embed_service():
+            break
+        logger.info("Embed request failed but /healthz answers — retrying once")
     return None
 
 
@@ -1141,7 +1186,20 @@ class _Embedder:
             resp = _embed_via_service(text, is_query)
             if resp is None:
                 st = embedder_status()
-                self._service_ok = st.get("status") == "ok"
+                reachable = st.get("status") == "ok"
+                self._service_ok = reachable
+                if reachable:
+                    # The service ANSWERS — the request failed (busy, timeout,
+                    # 5xx). Calling that "local embedder unavailable" was wrong
+                    # and unreadable: the note even said the service answers on
+                    # this address. Report the request instead, and stay
+                    # "available" so the next attempt simply tries again.
+                    raise RuntimeError(
+                        f"Nexus embed request failed: the service at "
+                        f"{_embed_service_base()} answers /healthz but returned "
+                        f"no vector after {max(1, int(_EMBED_SERVICE_RETRY_ROUNDS))} "
+                        f"attempt(s); fix: {st.get('repair', '')}"
+                    )
                 raise RuntimeError(
                     f"{_EMBEDDER_NOTE_PREFIX}: {st.get('detail', '')}; "
                     f"fix: {st.get('repair', '')}"
@@ -1721,6 +1779,14 @@ class NexusMemoryProvider:
         # without waiting (see _coldstart_catch_up), the NEXT turn takes the
         # result. Cleared by every publication and every clear path.
         self._prefetch_followup_pending = False
+        # Publications are ordered by generation: each run takes the next number
+        # when it starts, the last publication records its number. A run that
+        # outlived the deadline may still deliver — as long as no run that
+        # STARTED LATER has published meanwhile. That keeps the zombie rule
+        # (a fresher result is never overwritten) and stops throwing away a
+        # slow-but-only result.
+        self._prefetch_gen = 0
+        self._prefetch_pub_gen = -1
         # Room status the published prefetch block was FILTERED under. A block
         # built at the end of the previous turn must not be injected into a
         # room that became shared this turn — see prefetch().
@@ -2431,6 +2497,30 @@ class NexusMemoryProvider:
         threading.Thread(target=_watch, name="nexus-coldstart-watch",
                          daemon=True).start()
         return ""
+
+    def _next_prefetch_gen(self) -> int:
+        """Next run number. Caller holds ``_prefetch_lock``; __new__-safe."""
+        current = int(getattr(self, "_prefetch_gen", 0) or 0) + 1
+        self._prefetch_gen = current
+        if getattr(self, "_prefetch_pub_gen", None) is None:
+            self._prefetch_pub_gen = -1
+        return current
+
+    def _may_prefetch_write(self, gate: "Optional[threading.Lock]", gen: Optional[int]) -> bool:
+        """May this run publish/clear? Caller holds ``_prefetch_lock``.
+
+        With a generation: yes, unless a run that STARTED LATER has published
+        already (then this one is stale). Without one (direct callers, tests):
+        the old gate-identity rule.
+        """
+        if gen is not None:
+            return int(gen) >= int(getattr(self, "_prefetch_pub_gen", -1))
+        return gate is None or gate is getattr(self, "_prefetch_gate", None)
+
+    def _record_prefetch_publication(self, gen: Optional[int]) -> None:
+        """Remember which run published last. Caller holds ``_prefetch_lock``."""
+        self._prefetch_pub_gen = (
+            int(gen) if gen is not None else int(getattr(self, "_prefetch_gen", 0) or 0))
 
     def _mark_followup_pending(self, pending: bool) -> None:
         """Remember process-locally that a catch-up run is still out.
@@ -3245,7 +3335,8 @@ class NexusMemoryProvider:
                         max_workers=1, thread_name_prefix="nexus-rewrite")
         return ex
 
-    def _clear_prefetch_result(self, gate: "Optional[threading.Lock]" = None) -> None:
+    def _clear_prefetch_result(self, gate: "Optional[threading.Lock]" = None,
+                               gen: Optional[int] = None) -> None:
         """Publish "no result" under the lock — used by every abort checkpoint
         (shutdown checkpoints and the exception path) so a consumer reading
         during shutdown never sees a stale result from an earlier query.
@@ -3257,11 +3348,12 @@ class NexusMemoryProvider:
         that is the room-change path in ``prefetch()``, which is not a zombie.
         """
         with self._prefetch_lock:
-            if gate is not None and gate is not getattr(self, "_prefetch_gate", None):
+            if not self._may_prefetch_write(gate, gen):
                 return
             self._prefetch_result = ""
             self._prefetch_prepared = False
             self._prefetch_followup_pending = False
+            self._record_prefetch_publication(gen)
 
     def _do_prefetch(self, query: str, gate: Optional[threading.Lock] = None) -> None:
         """Worker entry for queue_prefetch.
@@ -3299,18 +3391,35 @@ class NexusMemoryProvider:
         (e.g. _do_prefetch, direct calls) means no guard.
         """
         if not self._embedder or not self._qdrant: return
+        # This run's number, taken when the work begins: a run that outlives the
+        # deadline may still publish unless a LATER run published in between
+        # (see _may_prefetch_write). Taken here, not passed in, so the method
+        # signature stays compatible with every direct caller.
+        with self._prefetch_lock:
+            gen = self._next_prefetch_gen()
+        if not self._embedder_available():
+            # The cached flag comes from the LAST contact, which can be a whole
+            # process start ago: a service that was still coming up when the
+            # process began leaves every later turn looking "unavailable"
+            # (measured 26.11.2026: the note claimed the service "answers on …"
+            # while it answered /healthz in milliseconds). Wait briefly and
+            # re-check before publishing the note.
+            emb = getattr(self, "_embedder", None)
+            if isinstance(emb, _Embedder) and _wait_for_embed_service():
+                emb._service_ok = True
         if not self._embedder_available():
             # A prefetch must never publish an empty block when the embedder is
             # down — that reads as "no memories". Publish the visible note.
             note = self._embedder_note() or _embedder_unavailable_note()
             if note:
                 with self._prefetch_lock:
-                    if gate is None or gate is self._prefetch_gate:
+                    if self._may_prefetch_write(gate, gen):
                         self._prefetch_result = note
                         # A note IS a published outcome: the run completed, it
                         # just cannot search. Do not repeat it every turn.
                         self._prefetch_prepared = True
                         self._prefetch_followup_pending = False
+                        self._record_prefetch_publication(gen)
                 _note_embedder_unavailable_once(getattr(self, "_session_id", ""))
             return
         try:
@@ -3319,7 +3428,7 @@ class NexusMemoryProvider:
             # Embedding/rewriting can outlast the shutdown grace period: abort
             # at this last checkpoint before the client is dereferenced below.
             if getattr(self, "_shutting_down", False):
-                self._clear_prefetch_result(gate)
+                self._clear_prefetch_result(gate, gen)
                 return
             # Budget und Auswahlregel des Vorlaufs (20.11.2026): drei
             # Eintraege, 800 Zeichen, nur fact/rule/preference ueber der
@@ -3421,7 +3530,7 @@ class NexusMemoryProvider:
             # later turn can tell whether it may still be injected (prefetch).
             room_status = self._chat_is_shared()
             with self._prefetch_lock:
-                if gate is None or gate is self._prefetch_gate:
+                if self._may_prefetch_write(gate, gen):
                     self._prefetch_result = (
                         _banner + "\n".join(items)
                     ) if items else ""
@@ -3429,6 +3538,7 @@ class NexusMemoryProvider:
                     # next turn from repeating the same search synchronously.
                     self._prefetch_prepared = True
                     self._prefetch_followup_pending = False
+                    self._record_prefetch_publication(gen)
                     self._prefetch_room_status = room_status
         except Exception as exc:
             if getattr(self, "_shutting_down", False):
@@ -3451,7 +3561,7 @@ class NexusMemoryProvider:
             # not wipe a fresher result it no longer owns. A failed run
             # published nothing, so "prepared" is cleared with it and the next
             # turn may catch up again instead of staying dark for good.
-            self._clear_prefetch_result(gate)
+            self._clear_prefetch_result(gate, gen)
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "",
                   messages: Optional[List[Dict[str, Any]]] = None) -> None:

@@ -1,3 +1,16 @@
+## [0.22.75] - 2026-11-26
+
+**Ein einzelner fehlgeschlagener Abruf beim Einbetter galt als „Dienst weg" — jetzt wird kurz gewartet, einmal wiederholt, und nur ein wirklich unerreichbarer Dienst gemeldet; ein Lauf, der die Frist ueberschreitet, darf sein Ergebnis nachliefern.**
+
+Ein Befund aus dem Betrieb, 18 Mal im Protokoll.
+
+- **Der Satz widersprach sich selbst.** „Prefetch failed: ⚠ local embedder unavailable: local embedder service answers on http://127.0.0.1:9122" — der Dienst antwortete also, waehrend der Plugin-Pfad ihn fuer tot erklaerte. Ursache, aus den Zeitstempeln belegt: ein einzelner `POST /embed` lief zur vollen Stunde in seine 15-Sekunden-Frist (Start 12:00:30, Waechter 12:00:38, Fehler 12:00:45), wurde nicht wiederholt, und die Fehlermeldung uebernahm den Healthz-Text — der Dienst war erreichbar, nur gerade nicht fertig.
+- **Jetzt wird wiederholt.** Nach einem Fehlschlag wartet der Plugin-Weg kurz und begrenzt, laesst sich von `/healthz` bestaetigen, dass der Dienst da ist, und versucht es **einmal** erneut; erst danach gibt er auf. Antwortet `/healthz`, heisst die Meldung „embed request failed" statt „unavailable". Einen veralteten Verfuegbarkeitsvermerk (Dienst war beim Prozessstart noch nicht fertig) prueft der Vorlauf jetzt nach, bevor er eine Notiz veroeffentlicht, statt sie aus dem Gedaechtnis zu setzen.
+- **Ein verspaeteter Lauf darf liefern.** Bisher wurde ein Lauf, der die Frist ueberschritt, endgueltig verworfen. Jetzt veroeffentlicht er sein Ergebnis, solange kein **spaeter gestarteter** Lauf inzwischen etwas veroeffentlicht hat; die alte Zombie-Regel bleibt damit erhalten — ein frischerer Treffer wird nie ueberschrieben.
+- **Gemessen** am selben Ablauf (der zweite `POST /embed` scheitert, der Dienst lebt): vorher 0 Zeichen Merkblock und die falsche Notiz, jetzt 652 Zeichen und keine Notiz; der erste Turn kostet weiterhin 0,00 s, weil er nicht wartet.
+
+Neue Pruefungen in `tests/test_embed_nach_start.py`, vier davon am Stand `b0d47b6` rot.
+
 ## [0.22.74] - 2026-11-26
 
 **Der erste Turn eines neuen Agenten wartet nicht mehr auf das Gedaechtnis, und der Agent laedt keine eigene Kopie des Einbettungsmodells mehr — das war die Ursache dafuer, dass der Kaltstart trotz 0.22.73 nicht sauber war.**
