@@ -21,7 +21,7 @@ from typing import Any
 import networkx as nx
 
 from nexus.graph.schema import Edge, EdgeRelation
-from nexus.graph.store import EdgeStore
+from nexus.graph.store import EdgeStore, _NO_VECTOR_NAME
 
 _logger = logging.getLogger(__name__)
 
@@ -44,11 +44,21 @@ class SkillGraph:
         qdrant_url: str | None = None,
         collection: str | None = None,
         binding: Any = None,
+        vector_name: Any = _NO_VECTOR_NAME,
     ):
+        # The default MUST be the sentinel, not None: ``None`` would travel to
+        # EdgeStore as an explicitly host-supplied name (``None is not
+        # _NO_VECTOR_NAME``) and silently turn every caller that names no
+        # vector into the "no provider, no ensure()" branch. A caller that
+        # gives no vector name keeps the old behaviour (provider + binding).
         self._store = store or EdgeStore(
             qdrant_url=qdrant_url,
             collection=collection,
             binding=binding,
+            # A host that knows the named vector passes it: the store then
+            # builds no embedding provider in that process (see
+            # EdgeStore.initialize).
+            vector_name=vector_name,
         )
         # W30-4: a DiGraph holds at most ONE edge per (source, target) pair, so
         # several active relations between the same pair (e.g. supports AND

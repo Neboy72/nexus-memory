@@ -1,3 +1,13 @@
+## [0.22.74] - 2026-11-26
+
+**Der erste Turn eines neuen Agenten wartet nicht mehr auf das Gedaechtnis, und der Agent laedt keine eigene Kopie des Einbettungsmodells mehr — das war die Ursache dafuer, dass der Kaltstart trotz 0.22.73 nicht sauber war.**
+
+Zwei Befunde, heute live gemessen.
+
+- **Die Frist lief im Turn, nicht im Hintergrund.** 0.22.73 hatte die Frist auf 7,5 s angehoben — gereicht hat es nicht: im Protokoll stand weiter „Coldstart prefetch still running after 7.5s", der Turn zahlte sie und bekam danach einen leeren Merkblock (10:43:03 und 10:47:15, an diesem Tag sechs Ladevorgaenge). Jetzt startet der Turn den Nachlauf und gibt sofort leer zurueck; die Frist gilt nur noch im Hintergrund, wo ein Waechter nach ihrem Ablauf das Gate tauscht, damit ein haengender Lauf spaetere Abrufe nicht verklemmt. Der naechste Turn nimmt das Ergebnis, und ein prozesslokales Merkmal sagt, dass ein Nachlauf offen ist. Gemessen am selben Ablauf mit 3 s Arbeit: erster Turn vorher 3,0 s (im Betrieb ueber der Frist: 7,5 s und leer), jetzt 0,00 s, Treffer im Folge-Turn.
+- **Der Agent lud eine zweite Modellkopie.** Die Regel „genau ein Prozess bettet ein“ galt fuer die Vektoren des Plugins, aber der Graph-Store baute beim ersten Zugriff seinen eigenen Einbetter: `EdgeStore.initialize()` rief `EmbeddingProvider()` im Agent-Prozess auf, obwohl der Wirt den Vektornamen laengst kannte. Folge: drei Prozesse hielten die Modelldatei (10:47 geprueft), der Agent selbst mit 3,3 GB, und der erste Graph-Zugriff kostete 2,4 s Modellaufbau mitten im Turn. Jetzt gibt der Wirt den Vektornamen mit; dann wird kein Einbetter gebaut. Wer keinen Namen mitgibt, behaelt das alte Verhalten — Einbetter, Bindung und Pruefung der Sammlung; die vier Graph-Werkzeuge des Plugins geben ihn ausdruecklich mit, weil die Sammlung dem Dienst gehoert und dort angelegt und geprueft wird. Gemessen im Wirts-Interpreter: ein Prozess mit dem Graph-Store hat vorher 1,44 GB RSS, jetzt 0,49 GB. Der laufende Agent gibt seine Kopie beim naechsten Neustart frei.
+
+Am alten Stand (`b01463c`) sind alle vier neuen Pruefungen in `tests/test_kaltstart_ohne_warten.py` rot.
 ## [0.22.73] - 2026-11-26
 
 **Der erste Turn nach dem Neubau eines Agenten wartet nicht mehr fuenf Sekunden auf das Gedaechtnis und steht dann doch ohne da: der Einbetter-Dienst wird jetzt beim Aufbau des Agenten vorgewaermt, und ein leeres Ergebnis gilt als Ergebnis.**

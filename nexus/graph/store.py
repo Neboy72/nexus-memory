@@ -97,6 +97,12 @@ def point_id_for_filter(value: Any) -> Any:
     return value
 
 
+# Sentinel: "the caller did not supply a vector name". A host that DOES supply
+# one (even ``None``) must not have an embedding provider built for it — see
+# ``initialize()``.
+_NO_VECTOR_NAME = object()
+
+
 class EdgeStore:
     """Qdrant-Payload-persisted edge store — the single Source of Truth.
 
@@ -116,11 +122,20 @@ class EdgeStore:
         collection: str | None = None,
         client: QdrantClient | None = None,
         binding: Any = None,
+        vector_name: Any = _NO_VECTOR_NAME,
     ):
         self._qdrant_url = qdrant_url or DEFAULT_QDRANT_URL
         self._collection = collection or DEFAULT_COLLECTION
         self._client: QdrantClient | None = client
         self._binding = binding
+        # A HOST that already knows the collection's named vector (it asked the
+        # engine's local service) passes it here. Building a binding for that
+        # case used to construct ``EmbeddingProvider()`` INSIDE the host and
+        # load a second 1.2 GB model copy into the agent process — measured
+        # 26.11.2026: three processes held the Qwen3 blob, the agent worker at
+        # 3.3 GB RSS, and every first graph read needed 2.4 s for the load.
+        self._host_vector_name = vector_name is not _NO_VECTOR_NAME
+        self._vector_name = None if vector_name is _NO_VECTOR_NAME else vector_name
         self._valid_relations = {e.value for e in EdgeRelation}
         # Serializes read-modify-write cycles on the ``edges`` payload array.
         # Threads sharing ONE EdgeStore no longer lose concurrent appends to
@@ -177,7 +192,15 @@ class EdgeStore:
         Raises:
             EdgeStoreError: If Qdrant is unreachable or binding is rejected.
         """
-        if self._binding is None:
+        if self._binding is None and self._host_vector_name:
+            # The host owns the collection through the engine's service; it
+            # only needs the named vector, which it already passed. Never build
+            # an embedding provider in this process.
+            _logger.debug(
+                "EdgeStore: host supplied the named vector %r — no embedding "
+                "provider is built in this process", self._vector_name,
+            )
+        elif self._binding is None:
             try:
                 from nexus_memory.collection_vectors import CollectionBinding
                 from nexus_memory.embeddings import EmbeddingProvider
@@ -191,10 +214,11 @@ class EdgeStore:
                 )
                 return False
 
-        try:
-            self._binding.ensure()
-        except Exception as e:
-            raise EdgeStoreError(f"Failed to bind Qdrant collection: {e}") from e
+        if self._binding is not None:
+            try:
+                self._binding.ensure()
+            except Exception as e:
+                raise EdgeStoreError(f"Failed to bind Qdrant collection: {e}") from e
 
         _logger.info(
             "EdgeStore initialized (Qdrant=%s, collection=%s)",

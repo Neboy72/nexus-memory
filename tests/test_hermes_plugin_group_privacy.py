@@ -1013,7 +1013,12 @@ class TestTurnStartIngress:
 
 class TestTurnStartOrdering:
     def test_the_same_turn_is_not_served_the_previous_turns_block(self, tmp_path):
-        """A block built before a stranger spoke must not be injected after."""
+        """A block built before a stranger spoke must not be injected after.
+
+        0.22.74: rebuilding under the new room status no longer blocks the
+        turn. It must still DROP the old block at once; the rebuilt block is
+        then taken by the next turn.
+        """
         p = _read_provider(shared=False)
         p._hermes_home = str(tmp_path)
         p._host_user_id = OWNER
@@ -1024,6 +1029,12 @@ class TestTurnStartOrdering:
         _turn_start(p, turn_number=2, author_id=STRANGER, author_is_bot=False)
 
         block = p.prefetch("wallbox")          # same turn, same query
+        for text in ("private note", "trusted note", "legacy note"):
+            assert text not in block, "the old private block reached the shared room"
+        if p._coldstart_thread is not None:
+            p._coldstart_thread.join(10.0)
+
+        block = p.prefetch("wallbox")          # next turn takes the rebuilt block
         assert "public note" in block
         for text in ("private note", "trusted note", "legacy note"):
             assert text not in block

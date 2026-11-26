@@ -3,9 +3,14 @@
 Why: Nexus prepares memory at the END of a turn (queue_prefetch) and serves
 it in the NEXT one. A freshly built agent therefore has nothing prepared in
 its first turn — and agents are rebuilt often (gateway eviction, background
-review, cron). Measured: 36 of 85 turns on one day started that way. The
-tests assert that:
-  1. a coldstart turn gets memory caught up synchronously,
+review, cron). Measured: 36 of 85 turns on one day started that way.
+
+0.22.74 changed the contract: the first turn STARTS the catch-up and returns
+at once (a turn must never wait; measured 26.11.2026: six loads a day, each
+paying the full 7.5 s deadline and then getting an empty block). The result
+lands in the background and the NEXT turn takes it. The tests assert that:
+  1. a coldstart turn gets memory caught up, in the background — the next
+     turn takes it,
   2. the warm path (already prepared) does NOT search twice,
   3. trivial queries ("ok", "/new") do not catch up,
   4. shutdown does not catch up,
@@ -49,14 +54,22 @@ def provider(isolated_env):
 
 
 def test_coldstart_catches_up(provider, monkeypatch):
-    """Empty buffer + real query -> the memory is caught up synchronously."""
+    """Empty buffer -> the catch-up runs in the background, the NEXT turn has it.
+
+    0.22.74: the turn does not wait any more. It starts the run (or joins an
+    in-flight one for at most the agreed 0.5-1.0 s) and returns empty; the
+    result is taken by the next turn.
+    """
     def fake_inner(query, gate=None):
         with provider._prefetch_lock:
             provider._prefetch_result = "HIT caught up by the coldstart"
+            provider._prefetch_prepared = True
+            provider._prefetch_followup_pending = False
 
     monkeypatch.setattr(provider, "_do_prefetch_inner", fake_inner)
-    result = provider.prefetch("What was our latest state?", session_id="s1")
-    assert result == "HIT caught up by the coldstart"
+    assert provider.prefetch("What was our latest state?", session_id="s1") == ""
+    provider._coldstart_thread.join(_WAIT_TIMEOUT)
+    assert provider.prefetch("What was our latest state?", session_id="s1")         == "HIT caught up by the coldstart"
 
 
 def test_warm_path_does_not_search_twice(provider, monkeypatch):
@@ -178,8 +191,14 @@ def test_timeout_installs_fresh_gate_and_later_prefetch_still_runs(
     assert provider.prefetch("What is X?", session_id="s1") == ""
     elapsed = time.time() - started
     assert elapsed < 2.0, f"the turn must not block past the deadline ({elapsed:.1f}s)"
+
+    # 0.22.74: the deadline now lives in the background watchdog. The turn
+    # returns at once and the swap follows after the deadline.
+    deadline = time.time() + 3.0
+    while time.time() < deadline and provider._prefetch_gate is gate_before:
+        time.sleep(0.02)
     assert provider._prefetch_gate is not gate_before, \
-        "the timeout must install a fresh gate"
+        "the timeout must install a fresh gate in the background"
     assert any(
         rec.levelno >= logging.WARNING and "fresh prefetch gate" in rec.getMessage()
         for rec in caplog.records
@@ -243,10 +262,18 @@ def test_zombie_cannot_overwrite_fresh_result(provider, monkeypatch):
         return (0.0, 1.0)
 
     monkeypatch.setattr(provider, "_embed_cached", fake_embed_cached)
+    gate_before = provider._prefetch_gate
 
-    assert provider.prefetch("Coldstart query", session_id="s1") == "", \
-        "the stuck coldstart must return empty after the deadline"
-    assert zombie_started.is_set(), "the zombie never reached the fake embedder"
+    assert provider.prefetch("Coldstart query", session_id="s1") == ""
+    assert zombie_started.wait(_WAIT_TIMEOUT), \
+        "the zombie never reached the fake embedder"
+
+    # 0.22.74: the turn did not wait; the watchdog installs the fresh gate
+    # after the deadline. Wait for it before the next prefetch.
+    swap_deadline = time.time() + 3.0
+    while (time.time() < swap_deadline
+           and provider._prefetch_gate is gate_before):
+        time.sleep(0.02)
 
     # While the zombie is frozen, a fresh prefetch lands through the new gate.
     provider.queue_prefetch("Fresh query")
@@ -309,8 +336,14 @@ def test_zombie_failure_path_cannot_clear_a_fresh_result(provider, monkeypatch):
     monkeypatch.setattr(provider, "_graph_boost",
                         lambda top_points, max_boost=3, max_depth=2, out_pids=None: [])
 
-    assert provider.prefetch("Coldstart query", session_id="s1") == "", \
-        "the stuck coldstart must return empty after the deadline"
+    gate_before = provider._prefetch_gate
+    assert provider.prefetch("Coldstart query", session_id="s1") == ""
+
+    # 0.22.74: wait for the watchdog's fresh gate (the turn returned at once).
+    swap_deadline = time.time() + 3.0
+    while (time.time() < swap_deadline
+           and provider._prefetch_gate is gate_before):
+        time.sleep(0.02)
 
     # A fresh prefetch lands through the replacement gate while the zombie hangs.
     provider.queue_prefetch("Fresh query")
