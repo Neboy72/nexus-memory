@@ -1,151 +1,151 @@
 ## [0.22.77] - 2026-11-26
 
-**Ein gescheiterter `/embed` nennt jetzt seinen Grund — und der Dienst schreibt hin, warum er abgelehnt oder nicht geantwortet hat.**
+**A failed `/embed` now says why it failed — and the service writes down why it refused a request or gave no answer.**
 
-Befund aus dem Betrieb, 14:48:45: vier POSTs in 0,13 s, `/healthz` antwortete, und der Agent bekam nur „answers /healthz but returned no vector after 2 attempt(s)". Warum der Abruf scheiterte, war nicht feststellbar, weil `_post_embed` jede Ausnahme mit `except Exception: return None, None` wegwarf.
+A finding from live operation, 14:48:45: four POSTs in 0.13 s, `/healthz` answering, and the agent only got "answers /healthz but returned no vector after 2 attempt(s)". Why the fetch failed could not be determined, because `_post_embed` threw away every exception with `except Exception: return None, None`.
 
-- **Der Grund wird festgehalten** (`_post_embed`, thread-lokal): die Ausnahmeart, ein HTTP-Status mit der Fehlerzeile des Dienstes, bei einem Zeitfehler die tatsaechlich gewartete Zeit neben der Frist, bei 200 ohne Vektor die Schluessel der Antwort. Kein Anfragetext, kein Schluessel — die Zeile ist protokoll- und antworttauglich. Die Wiederholungszeile und die Meldung an den Agenten tragen sie.
-- **Der Dienst schweigt nicht mehr.** `/embed` protokolliert, wenn der Store nicht gebaut werden kann (die 503, die von aussen wie ein toter Dienst aussieht) und wenn der Provider scheitert; ein abgewiesener Schluessel nennt seine Art (Installationsschluessel oder unbekannter Schluessel) und den User-Agent des Aufrufers.
-- **Der 14:48-Fall, eingeordnet (nicht geloest).** Der Dienstprozess lief seit 14:19:45 durch (PID 19114), `/healthz` antwortete, im Zugriffsprotokoll steht keine einzige 5xx auf `/embed`, und das Dienstprotokoll wurde seit 14:43 nicht mehr beschrieben. Die vier POSTs haben den Handler also nicht mit einem Fehlerstatus erreicht: entweder eine 200, deren Antwort der Plugin-Pfad nicht verwerten konnte, oder ein Verbindungsfehler. Beides benennt der neue Grund beim naechsten Mal. Ausgehungert hat der Hintergrundlauf den Vordergrund **nicht**: unter sechs CPU-Brennern antwortete der echte Dienst mit 1024 Dimensionen in 0,09 s (ohne Last 0,09 s warm, 0,47 s kalt); ein Zeitfehler haette 15 s gedauert, ein Ausgehungerter waere langsam, nicht in Millisekunden fertig.
-- **Die 772 x 401 im Zugriffsprotokoll.** 761 davon liegen vor dem 44.686. erfolgreichen `/embed` — laut dem Zaehler im Commit `d9d919b` (16.11.2026 01:02) der Stand, als die Agentenschluessel eingefuehrt und der Installationsschluessel auf `/enroll` beschraenkt wurde. Das ist das Rollout-Fenster: Aufrufer, die noch den Installationsschluessel schickten, bekamen „plugin update required"; dieser Rueckfall ist in solchen Skripten dokumentiert (z. B. `paperless_nexus_common.get_service_key`, eigener Schluessel erst seit 22.11.). Die restlichen 11 sind fuenf kleine Serien (drei bis vier 401, eine 400, dann 200) **ohne** anschliessendes `/enroll` — also keine Anmeldung eines Plugins, sondern eine Pruefung des Auth-Gates. Den Prozess konnte ich nicht zuordnen: das Zugriffsprotokoll traegt keine Zeitstempel, und die Verbindungen leben Millisekunden. Ab jetzt nennt der Dienst die Schluesselart und den User-Agent.
+- **The reason is recorded** (`_post_embed`, thread-local): the kind of exception, an HTTP status together with the service's own error line, for a timeout the time actually waited next to the limit, and for a 200 without a vector the keys of the answer. No request text, no key — the line is fit for a log and for an answer. The retry line and the message to the agent carry it.
+- **The service no longer stays silent.** `/embed` logs when the store cannot be built (the 503 that looks like a dead service from outside) and when the provider fails; a refused key names its kind (installation key or unknown key) and the caller's user agent.
+- **The 14:48 case, put in order (not solved).** The service process ran through from 14:19:45 (PID 19114), `/healthz` answered, the access log holds not a single 5xx on `/embed`, and the service log has not been written to since 14:43. The four POSTs therefore did not reach the handler with an error status: either a 200 whose answer the plugin path could not use, or a connection error. Both are named by the new reason the next time. The background run did **not** starve the foreground: under six CPU burners the real service answered with 1024 dimensions in 0.09 s (unloaded 0.09 s warm, 0.47 s cold); a timeout would have taken 15 s, and a starved service would be slow, not finished in milliseconds.
+- **The 772 x 401 in the access log.** 761 of them sit before the 44,686th successful `/embed` — according to the counter in commit `d9d919b` (16.11.2026 01:02) that is the point where agent keys were introduced and the installation key restricted to `/enroll`. That is the rollout window: callers still sending the installation key got "plugin update required"; that fallback is documented in such scripts (e.g. `paperless_nexus_common.get_service_key`, own key only since 22.11.). The remaining 11 are five small series (three to four 401, one 400, then 200) **without** a following `/enroll` — so not a plugin signing in, but a check of the auth gate. I could not attribute the process: the access log carries no timestamps, and the connections live for milliseconds. From now on the service names the kind of key and the user agent.
 
-Neue Pruefungen in `tests/test_embed_grund.py` (8) und `tests/test_serve_embed_endpoint.py` (4) — am Stand `7b7c234b` sind alle 12 rot.
+New checks in `tests/test_embed_grund.py` (8) and `tests/test_serve_embed_endpoint.py` (4) — at the stand `7b7c234b` all 12 are red.
 
 ## [0.22.76] - 2026-11-26
 
-**Eine Sicherung sagt jetzt, welcher Prozess sie geschrieben hat — der Testlauf zaehlt nur noch seine eigenen, und nach einem Start entsteht hoechstens eine Sicherung pro Tag.**
+**A backup now says which process wrote it — the test run counts only its own, and after a start at most one backup per day is created.**
 
-Ein Fehler im Testlauf vom 26.11.2026.
+A fault in the test run of 26.11.2026.
 
-- **Der Waechter beschuldigte den falschen.** Der Testlauf prueft am Ende, ob er Sicherungen im echten Ordner `~/.nexus-memory/backups` hinterlassen hat. Waehrend eines Laufs startete der Dienst neu und legte beim Start zwei Sicherungen von je 124 MB dort ab (13:56:50 und 13:56:52, Kennung `0.22.75`) — der Waechter meldete das als Fehler des Testlaufs, obwohl der Test nichts geschrieben hatte. Jetzt nennt jede Sicherung ihren Schreiber im Feld `pid`; der Waechter zaehlt nur Dateien der eigenen Prozess-Kennung und meldet weiter, wenn die Angabe fehlt (Herkunft unbekannt). Die Regel selbst ist geprueft (`test_waechter_zaehlt_nur_die_eigenen_sicherungen`).
-- **Der Installer-Test kippte unter Last.** `test_ensure_runs_script_and_reports_installed` startete dafuer wirklich `bash`; schlug der Start unter Last fehl, wurde der Test rot, ohne den Grund zu zeigen. Geprueft wird die Entscheidung (Skript laeuft, Ausgabe kommt an, Warteschleife ist begrenzt), und die ist jetzt ohne echten Prozessstart geprueft; die Ausgabe des Skripts selbst decken die uebrigen Tests der Datei ab.
-- **Die Sicherung nannte eine erfundene Fassung.** Das Plugin schrieb `"version": "0.4.0"` in jede Sicherung, der Dienst die echte. Beide nennen jetzt ihre eigene Fassung.
-- **Hoechstens eine Sicherung pro Tag nach einem Start.** Der Dienst sichert 60 Sekunden nach jedem Start. Vier Neustarts an einem Tag (13:53:28, 13:54:09, 13:56:50, 13:56:52) legten deshalb vier Dateien zu je 124 MB ab — kein Timer, sondern vier Start-Sicherungen. Die Start-Sicherung fragt jetzt, ob fuer heute schon eine Sicherung existiert (Kriterium: das Datum im Dateinamen, den dieser Code selbst schreibt), und legt dann keine zweite an. Der Takt danach bleibt unangetastet: der Dienst sichert weiter alle 6 Stunden, das Plugin taeglich, und ein Tageswechsel loest die naechste Sicherung aus — ein uebersprungener Start haelt den Takt nicht an. Bestehende Sicherungen werden nicht geloescht, es gibt keine Aufraeumroutine.
+- **The watchdog accused the wrong one.** At the end the test run checks whether it left backups in the real folder `~/.nexus-memory/backups`. During a run the service restarted and on start left two backups of 124 MB each there (13:56:50 and 13:56:52, version `0.22.75`) — the watchdog reported that as a fault of the test run, although the test had written nothing. Now every backup names its writer in the field `pid`; the watchdog counts only files of its own process id and keeps reporting when the field is missing (origin unknown). The rule itself is checked (`test_waechter_zaehlt_nur_die_eigenen_sicherungen`).
+- **The installer test tipped over under load.** `test_ensure_runs_script_and_reports_installed` really started `bash` for that purpose; when the start failed under load, the test turned red without showing the reason. What is checked is the decision (script runs, output arrives, wait loop is bounded), and that is now checked without a real process start; the script's own output is covered by the other tests of that file.
+- **The backup named an invented version.** The plugin wrote `"version": "0.4.0"` into every backup, the service its real one. Both now name their own version.
+- **At most one backup per day after a start.** The service backs up 60 seconds after every start. Four restarts in one day (13:53:28, 13:54:09, 13:56:50, 13:56:52) therefore left four files of 124 MB each — not a timer, but four start backups. The start backup now asks whether a backup already exists for today (criterion: the date in the file name, which this code writes itself), and then writes no second one. The cadence after that stays untouched: the service keeps backing up every 6 hours, the plugin daily, and a day change triggers the next backup — a skipped start does not stop the cadence. Existing backups are not deleted, there is no cleanup routine.
 
-Am alten Stand (`f605cf4`) scheitern alle neun neuen Pruefungen in `tests/test_backup_isolation.py`, weil die Helfer dort noch nicht existieren; inhaltlich haetten die beiden Tageswechsel-Pruefungen das alte Verhalten bereits erfuellt — sie belegen also, dass der Takt erhalten bleibt, nicht den Fix. Der Installer-Test ist so geschrieben, dass ein fehlgeschlagener Prozessstart ihn nicht mehr ohne Begruendung kippt.
+At the old stand (`f605cf4`) all nine new checks in `tests/test_backup_isolation.py` fail, because the helpers do not exist there yet; in content the two day-change checks would already have been satisfied by the old behaviour — so they show that the cadence is preserved, not the fix. The installer test is written so that a failed process start no longer tips it over without a reason.
 
 ## [0.22.75] - 2026-11-26
 
-**Ein einzelner fehlgeschlagener Abruf beim Einbetter galt als „Dienst weg" — jetzt wird kurz gewartet, einmal wiederholt, und nur ein wirklich unerreichbarer Dienst gemeldet; ein Lauf, der die Frist ueberschreitet, darf sein Ergebnis nachliefern.**
+**A single failed fetch at the embedder counted as "service gone" — now there is a short wait, one retry, and only a truly unreachable service is reported; a run that exceeds the deadline may still deliver its result.**
 
-Ein Befund aus dem Betrieb, 18 Mal im Protokoll.
+A finding from live operation, 18 times in the log.
 
-- **Der Satz widersprach sich selbst.** „Prefetch failed: ⚠ local embedder unavailable: local embedder service answers on http://127.0.0.1:9122" — der Dienst antwortete also, waehrend der Plugin-Pfad ihn fuer tot erklaerte. Ursache, aus den Zeitstempeln belegt: ein einzelner `POST /embed` lief zur vollen Stunde in seine 15-Sekunden-Frist (Start 12:00:30, Waechter 12:00:38, Fehler 12:00:45), wurde nicht wiederholt, und die Fehlermeldung uebernahm den Healthz-Text — der Dienst war erreichbar, nur gerade nicht fertig.
-- **Jetzt wird wiederholt.** Nach einem Fehlschlag wartet der Plugin-Weg kurz und begrenzt, laesst sich von `/healthz` bestaetigen, dass der Dienst da ist, und versucht es **einmal** erneut; erst danach gibt er auf. Antwortet `/healthz`, heisst die Meldung „embed request failed" statt „unavailable". Einen veralteten Verfuegbarkeitsvermerk (Dienst war beim Prozessstart noch nicht fertig) prueft der Vorlauf jetzt nach, bevor er eine Notiz veroeffentlicht, statt sie aus dem Gedaechtnis zu setzen.
-- **Ein verspaeteter Lauf darf liefern.** Bisher wurde ein Lauf, der die Frist ueberschritt, endgueltig verworfen. Jetzt veroeffentlicht er sein Ergebnis, solange kein **spaeter gestarteter** Lauf inzwischen etwas veroeffentlicht hat; die alte Zombie-Regel bleibt damit erhalten — ein frischerer Treffer wird nie ueberschrieben.
-- **Gemessen** am selben Ablauf (der zweite `POST /embed` scheitert, der Dienst lebt): vorher 0 Zeichen Merkblock und die falsche Notiz, jetzt 652 Zeichen und keine Notiz; der erste Turn kostet weiterhin 0,00 s, weil er nicht wartet.
+- **The sentence contradicted itself.** "Prefetch failed: ⚠ local embedder unavailable: local embedder service answers on http://127.0.0.1:9122" — so the service answered while the plugin path declared it dead. Cause, shown from the timestamps: a single `POST /embed` ran into its 15-second limit on the hour (start 12:00:30, watchdog 12:00:38, error 12:00:45), was not repeated, and the error message took over the healthz text — the service was reachable, just not ready at that moment.
+- **Now it is repeated.** After a failure the plugin path waits briefly and in bounded fashion, has `/healthz` confirm that the service is there, and tries **once** more; only then does it give up. If `/healthz` answers, the message reads "embed request failed" instead of "unavailable". A stale availability note (the service was not ready when the process started) is now verified by the prefetch before it publishes a note, instead of setting it from memory.
+- **A late run may still deliver.** Until now a run that exceeded the deadline was discarded for good. Now it publishes its result as long as no **later-started** run has published something in the meantime; the old zombie rule is thus preserved — a fresher hit is never overwritten.
+- **Measured** on the same sequence (the second `POST /embed` fails, the service lives): before 0 characters of memory block and the wrong note, now 652 characters and no note; the first turn still costs 0.00 s, because it does not wait.
 
-Neue Pruefungen in `tests/test_embed_nach_start.py`, vier davon am Stand `b0d47b6` rot.
+New checks in `tests/test_embed_nach_start.py`, four of them red at the stand `b0d47b6`.
 
 ## [0.22.74] - 2026-11-26
 
-**Der erste Turn eines neuen Agenten wartet nicht mehr auf das Gedaechtnis, und der Agent laedt keine eigene Kopie des Einbettungsmodells mehr — das war die Ursache dafuer, dass der Kaltstart trotz 0.22.73 nicht sauber war.**
+**The first turn of a new agent no longer waits for memory, and the agent no longer loads a copy of the embedding model of its own — that was the reason the cold start was still not clean despite 0.22.73.**
 
-Zwei Befunde, heute live gemessen.
+Two findings, measured live today.
 
-- **Die Frist lief im Turn, nicht im Hintergrund.** 0.22.73 hatte die Frist auf 7,5 s angehoben — gereicht hat es nicht: im Protokoll stand weiter „Coldstart prefetch still running after 7.5s", der Turn zahlte sie und bekam danach einen leeren Merkblock (10:43:03 und 10:47:15, an diesem Tag sechs Ladevorgaenge). Jetzt startet der Turn den Nachlauf und gibt sofort leer zurueck; die Frist gilt nur noch im Hintergrund, wo ein Waechter nach ihrem Ablauf das Gate tauscht, damit ein haengender Lauf spaetere Abrufe nicht verklemmt. Der naechste Turn nimmt das Ergebnis, und ein prozesslokales Merkmal sagt, dass ein Nachlauf offen ist. Gemessen am selben Ablauf mit 3 s Arbeit: erster Turn vorher 3,0 s (im Betrieb ueber der Frist: 7,5 s und leer), jetzt 0,00 s, Treffer im Folge-Turn.
-- **Der Agent lud eine zweite Modellkopie.** Die Regel „genau ein Prozess bettet ein“ galt fuer die Vektoren des Plugins, aber der Graph-Store baute beim ersten Zugriff seinen eigenen Einbetter: `EdgeStore.initialize()` rief `EmbeddingProvider()` im Agent-Prozess auf, obwohl der Wirt den Vektornamen laengst kannte. Folge: drei Prozesse hielten die Modelldatei (10:47 geprueft), der Agent selbst mit 3,3 GB, und der erste Graph-Zugriff kostete 2,4 s Modellaufbau mitten im Turn. Jetzt gibt der Wirt den Vektornamen mit; dann wird kein Einbetter gebaut. Wer keinen Namen mitgibt, behaelt das alte Verhalten — Einbetter, Bindung und Pruefung der Sammlung; die vier Graph-Werkzeuge des Plugins geben ihn ausdruecklich mit, weil die Sammlung dem Dienst gehoert und dort angelegt und geprueft wird. Gemessen im Wirts-Interpreter: ein Prozess mit dem Graph-Store hat vorher 1,44 GB RSS, jetzt 0,49 GB. Der laufende Agent gibt seine Kopie beim naechsten Neustart frei.
+- **The deadline ran inside the turn, not in the background.** 0.22.73 had raised the deadline to 7.5 s — it was not enough: the log still read "Coldstart prefetch still running after 7.5s", the turn paid it and then got an empty memory block (10:43:03 and 10:47:15, six load operations that day). Now the turn starts the follow-up run and returns empty at once; the deadline only applies in the background, where a watchdog swaps the gate once it expires, so that a stuck run cannot wedge later fetches. The next turn takes the result, and a process-local mark says that a follow-up run is open. Measured on the same sequence with 3 s of work: first turn before 3.0 s (in operation above the deadline: 7.5 s and empty), now 0.00 s, hit in the following turn.
+- **The agent loaded a second copy of the model.** The rule "exactly one process embeds" held for the plugin's vectors, but the graph store built its own embedder on first access: `EdgeStore.initialize()` called `EmbeddingProvider()` inside the agent process, although the host had long known the vector name. Consequence: three processes held the model file (checked 10:47), the agent itself with 3.3 GB, and the first graph access cost 2.4 s of model build-up in the middle of the turn. Now the host passes the vector name along; then no embedder is built. Anyone who does not pass a name keeps the old behaviour — embedder, binding and check of the collection; the four graph tools of the plugin pass it explicitly, because the collection belongs to the service and is created and checked there. Measured in the host interpreter: a process with the graph store had 1.44 GB RSS before, now 0.49 GB. The running agent releases its copy on the next restart.
 
-Am alten Stand (`b01463c`) sind alle vier neuen Pruefungen in `tests/test_kaltstart_ohne_warten.py` rot.
+At the old stand (`b01463c`) all four new checks in `tests/test_kaltstart_ohne_warten.py` are red.
 ## [0.22.73] - 2026-11-26
 
-**Der erste Turn nach dem Neubau eines Agenten wartet nicht mehr fuenf Sekunden auf das Gedaechtnis und steht dann doch ohne da: der Einbetter-Dienst wird jetzt beim Aufbau des Agenten vorgewaermt, und ein leeres Ergebnis gilt als Ergebnis.**
+**The first turn after rebuilding an agent no longer waits five seconds for memory and then stands there without it anyway: the embedder service is now warmed up while the agent is built, and an empty result counts as a result.**
 
-Vier Befunde aus dem Betrieb vom 25./26.11.2026.
+Four findings from live operation on 25/26.11.2026.
 
-- **Die Frist war genau so lang wie das Warten.** Die Nachholung im ersten Turn gab dem Dienst fuenf Sekunden Zeit — genau so lange, wie das Starten des Dienstes ohnehin dauert; fuer den Modellaufbau danach war kein Augenblick uebrig. Jeder Kaltstart lief deshalb in die Frist, der Turn wartete sie ab und bekam einen leeren Merkblock (am 26.11. zwoelfmal im Protokoll, z. B. 08:55:30 bis 08:55:35). Jetzt wird die Frist aus den Teilen des Kaltstarts abgeleitet (Startfenster plus Modellaufbau) und bleibt unter der Frist des Wirts, damit der nicht zuerst abbricht; die Vorwaermung selbst laeuft beim Aufbau des Agenten, wo noch niemand auf einen Turn wartet. Gemessen am kalten Dienst: erster Turn 5,00 s und leer, jetzt 1,79 s und mit Merkblock; am warmen Dienst 0,21 s, jetzt 0,00 s.
-- **Ein leeres Ergebnis war kein Ergebnis.** Fand der Vorlauf nichts, wurde eine leere Zeichenkette veroeffentlicht — beim naechsten Turn sah das aus wie „noch gar nichts gelaufen“, und die Nachholung suchte synchron erneut. Jetzt gibt es einen eigenen Zustand „vorbereitet“, den jeder Veroeffentlichungspfad setzt, auch der leere; er wird beim Verwerfen und beim Gate-Tausch geloescht. Derselbe Aufruf zweimal in Folge loest damit genau einen Suchlauf aus.
-- **Ein belegter Vorlauf war still.** Lief bereits ein Abruf, gab die Nachholung sofort leer zurueck — ohne Wartezeit und ohne eine Zeile im Protokoll. Jetzt wird kurz gewartet (0,5 bis 1,0 s), genommen was in der Zeit landet, und wenn nichts kommt, steht eine Zeile auf DEBUG. Nie mehr stumm.
-- **Geloescht wurde ohne Pruefung.** Zwei Abbruechstellen raeumten das Ergebnis ohne Blick auf das Gate ab, obwohl die Schreibstelle daneben genau das als Regel nennt („ein Zombie darf keinen frischeren Treffer loeschen“). Beide reichen jetzt ihr Gate durch; erreichbar waren sie nur beim Herunterfahren, falsch war es trotzdem.
+- **The deadline was exactly as long as the wait.** The catch-up in the first turn gave the service five seconds — exactly as long as starting the service takes anyway; no moment was left for building the model afterwards. Every cold start therefore ran into the deadline, the turn waited it out and got an empty memory block (on 26.11. twelve times in the log, e.g. 08:55:30 to 08:55:35). Now the deadline is derived from the parts of the cold start (start window plus model build-up) and stays below the host's deadline, so the host does not give up first; the warm-up itself runs while the agent is being built, where nobody is waiting on a turn. Measured on the cold service: first turn 5.00 s and empty, now 1.79 s and with a memory block; on the warm service 0.21 s, now 0.00 s.
+- **An empty result was not a result.** If the prefetch found nothing, an empty string was published — on the next turn that looked like "nothing has run yet", and the catch-up searched again synchronously. Now there is a state of its own, "prepared", which every publication path sets, including the empty one; it is cleared on discard and on a gate swap. The same call twice in a row thus triggers exactly one search run.
+- **An occupied prefetch was silent.** If a fetch was already running, the catch-up returned empty at once — with no wait and no line in the log. Now there is a short wait (0.5 to 1.0 s), whatever lands in that time is taken, and if nothing comes there is a line at DEBUG. Never silent again.
+- **Things were deleted without a check.** Two abort sites cleared the result without looking at the gate, although the write site next to them names exactly that as the rule ("a zombie must not delete a fresher hit"). Both now pass their gate through; they were only reachable during shutdown, but wrong is wrong.
 
-Neun neue Pruefungen in `tests/test_prefetch_vorbereitung.py`, alle neun am alten Stand rot (gegen den Stand `6d21d78` gemessen).
+Nine new checks in `tests/test_prefetch_vorbereitung.py`, all nine red at the old stand (measured against the stand `6d21d78`).
 
 ## [0.22.72] - 2026-11-25
 
-**Der Windows-Prueflauf war rot, weil ein neuer Test die Pfadform nicht beruecksichtigt hat — er traegt jetzt dieselbe Ausnahme wie seine Nachbarn.**
+**The Windows check run was red because a new test did not account for the path form — it now carries the same exception as its neighbours.**
 
-Der Test zum Installer prueft, ob die Startdatei auf die Umgebung des eigenen Checkouts zeigt. Unter Windows laeuft dieser Zweig in der Git-Bash, die Pfade in einer anderen Form schreibt als Python sie vergleicht; der Test ist deshalb dort uebersprungen, genau wie die drei Tests derselben Klasse, die dasselbe pruefen. Am Verhalten aendert sich nichts.
+The test for the installer checks whether the start file points at the environment of its own checkout. Under Windows that branch runs in Git Bash, which writes paths in a different form than Python compares them; the test is therefore skipped there, exactly like the three tests of the same class that check the same thing. Nothing changes in behaviour.
 
 ## [0.22.71] - 2026-11-25
 
-**Ein Schreibvorgang in einem Raum, dessen Lage niemand belegen kann, wird nicht mehr durchgelassen; der Graph-Zusatz bringt nur noch Erinnerungen und keine Etiketten mehr; Nexus Memory liest seine eigene Konfiguration zuerst, und ein Testlauf fasst die echte Agentenliste nicht mehr an.**
+**A write into a room whose state nobody can prove is no longer let through; the graph add-on brings memories only and no more labels; Nexus Memory reads its own configuration first, and a test run no longer touches the real agent list.**
 
-Vier Befunde vom 24./25.11.2026.
+Four findings from 24/25.11.2026.
 
-- **Die Absage griff nur bei Beweis.** Bisher wurde eine zu hohe Stufe nur dann abgelehnt, wenn der Raum nachweislich geteilt war. War die Lage unklar — Beobachtung fehlte oder war veraltet — ging der Schreibvorgang durch. Das ist die Luecke, die der Sicherheitsscan als „possible fail-open" gemeldet hat. Jetzt gilt: ein Aufruf **ohne jeden Raum** (DS Bot, Hermes, Claude Code, DSH schreiben so) darf weiter `private` schreiben; ein Aufruf **in einem Raum**, dessen Lage nicht belegbar ist, wird abgelehnt — mit derselben Kennung wie bei 0.22.69 und dem Grund `room_unknown`. Beide Wege, OpenClaw und Hermes, sagen dasselbe.
-- **Der Graph-Zusatz brachte Etiketten statt Erinnerungen.** Gemessen ueber 20 echte Fragen bestanden 87 % der Zusaetze aus Entitaets-Etiketten („service: Gateway (launchd_label=…)"); nur 24 % trafen das Thema, waehrend die naechsten normalen Vektortreffer 56 % erreichten. Jetzt kommen nur noch echte Erinnerungen in den Zusatz (dieselbe Einspielregel wie im Schreibweg), und der Weg laeuft ueber die **seltenen** Entitaeten zuerst — ein universell verknuepftes Etikett fuehrt zu allem und damit zu nichts. Nach der Aenderung: 27 von 49 Zusaetzen passend (55 %). Ausserdem versteht der Graph-Abruf jetzt die alten numerischen Kennungen im Bestand: als Text quittierte die Sammlung den Stapel mit einem Fehler, und der Zusatz fiel in mehr als der Haelfte der Abrufe ganz aus.
-- **Nexus Memory hing an Hermes.** Reranker und Konsolidierung lasen ihre Einstellungen standardmaessig aus `~/.hermes/config.yaml`. Wer keinen Agenten installiert hat, bekam dort nichts — und das sah wie „abgeschaltet" aus. Jetzt gilt die eigene Datei `~/.nexus-memory/config.json` zuerst, Hermes ist eine moegliche weitere Quelle; ohne Hermes laeuft beides normal weiter.
-- **Ein Testlauf legte einen echten Agenten an.** Zwei Testdateien benutzten die Testfigur `eigner-bot`, aber nicht die abgeschottete Datenumgebung — am 24.11. um 07:31 entstand dadurch ein echter Eintrag in `~/.nexus-memory/agents.json`. Beide Dateien laufen jetzt in der abgeschotteten Umgebung; die echte Liste bleibt unberuehrt.
+- **The refusal only applied with proof.** Until now an excessive level was rejected only when the room was provably shared. If the state was unclear — observation missing or stale — the write went through. That is the gap the security scan reported as "possible fail-open". Now: a call **without any room** (DS Bot, Hermes, Claude Code, DSH write that way) may still write `private`; a call **inside a room** whose state cannot be proven is refused — with the same identifier as in 0.22.69 and the reason `room_unknown`. Both paths, OpenClaw and Hermes, say the same thing.
+- **The graph add-on brought labels instead of memories.** Measured over 20 real questions, 87 % of the add-ons consisted of entity labels ("service: Gateway (launchd_label=…)"); only 24 % hit the topic, while the next normal vector hits reached 56 %. Now only real memories enter the add-on (the same feed rule as in the write path), and the path goes through the **rare** entities first — a universally linked label leads to everything and therefore to nothing. After the change: 27 of 49 add-ons fitting (55 %). In addition the graph fetch now understands the old numeric identifiers in the store: as text the collection answered the batch with an error, and the add-on dropped out entirely in more than half of the fetches.
+- **Nexus Memory hung off Hermes.** Reranker and consolidation read their settings from `~/.hermes/config.yaml` by default. Anyone without an agent installed got nothing there — and that looked like "switched off". Now the own file `~/.nexus-memory/config.json` applies first, Hermes is one possible further source; without Hermes both keep running normally.
+- **A test run created a real agent.** Two test files used the test figure `eigner-bot`, but not the isolated data environment — on 24.11. at 07:31 that produced a real entry in `~/.nexus-memory/agents.json`. Both files now run in the isolated environment; the real list stays untouched.
 
 ## [0.22.70] - 2026-11-24
 
-**Die Absage aus 0.22.69 sagt jetzt "access level" statt "access_level" — nur die Formulierung, die Regel bleibt.**
+**The refusal from 0.22.69 now says "access level" instead of "access_level" — only the wording, the rule stays.**
 
-Die Pruefung, die jeden fest hingeschriebenen `public`-Wert in einem Schreibweg meldet, hatte die Absage selbst als Zuweisung gelesen und den Lauf rot gemacht. In der Prosa heisst die Stufe deshalb jetzt "access level"; gemeint ist dasselbe, und die Maschinenfelder (`code`, `reason`, `requested_level`, `max_level`) sind unveraendert. In einem nachweislich geteilten Raum wird eine zu hohe Stufe weiter abgelehnt, nicht still gesenkt — in beiden Schreibwegen, mit demselben Wortlaut.
+The check that reports every firmly written `public` value in a write path had read the refusal itself as an assignment and turned the run red. In prose the level is therefore now called "access level"; the same thing is meant, and the machine fields (`code`, `reason`, `requested_level`, `max_level`) are unchanged. In a provably shared room an excessive level is still refused, not silently lowered — in both write paths, with the same wording.
 
 ## [0.22.69] - 2026-11-24
 
-**In einem geteilten Raum wird eine Notiz, die als vertraulich gedacht war, nicht mehr stillschweigend oeffentlich gespeichert: der Schreibvorgang wird abgelehnt und sagt warum.**
+**In a shared room a note meant as confidential is no longer stored publicly without a word: the write is refused and says why.**
 
-Ein Befund aus der Pruefung des ClawHub-Pakets 1.22.68.
+A finding from the review of the ClawHub package 1.22.68.
 
-- **Die Stufe fiel still.** Wer in einem Raum schrieb, in dem Fremde mitschreiben, und dabei `trusted` oder `private` verlangte, bekam `public` gespeichert — und die Antwort meldete "Stored: … (access_level: public)", als waere das so bestellt gewesen. Der Aufrufer erfuhr nicht, dass seine Notiz fuer alle lesbar lag. Die Regel war seit dem 13.11. als Datenschutz-Korrektur gedacht, wirkte aber in die andere Richtung: sie aenderte die Ablage, ohne zu fragen.
-- **Jetzt wird abgelehnt.** In einem nachweislich geteilten Raum ist `public` die Obergrenze. Verlangt ein Schreibvorgang mehr, kommt eine Absage mit Grund (der Raum), mit der Obergrenze und mit zwei Wegen: bewusst `public` verlangen, wenn alle es lesen duerfen, oder in einem eigenen Chat schreiben, wo die verlangte Stufe gilt. Gespeichert wird dann nichts, auch nicht teilweise, und es wird nichts vorbereitet.
-- **Beide Schreibwege sagen dasselbe.** Die Regel sitzt im OpenClaw-Plugin (Werkzeug zum Speichern) und im Hermes-Plugin; beide nennen dieselbe Kennung (`shared-room-write-rejected`) und dieselben Felder, damit ein Agent die Antwort unabhaengig vom Wirt lesen kann. Im Hermes-Weg wird zusaetzlich das automatische Sitzungsprotokoll in einem geteilten Raum gar nicht mehr geschrieben, statt es oeffentlich abzulegen — es gibt dort niemanden, der eine niedrigere Stufe freigeben koennte.
-- **Nur bei Beweis.** Ein Aufruf ohne Raum, mit unbekanntem Raum oder mit veraltetem Merkmal bleibt wie bisher unberuehrt. Die Leseseite ist unveraendert: geteilte Raeume liefern weiter nur `public`; die automatische Sitzungsablage deckelt weiter die eingestellte Stufe, weil dort niemand eine Stufe verlangt.
+- **The level fell silently.** Anyone writing in a room where strangers write along and asking for `trusted` or `private` got `public` stored — and the answer reported "Stored: … (access_level: public)", as if that had been ordered. The caller did not learn that his note lay readable for everyone. The rule had been meant as a privacy correction since 13.11., but worked in the other direction: it changed the storage without asking.
+- **Now it is refused.** In a provably shared room `public` is the upper limit. If a write asks for more, a refusal comes with the reason (the room), with the upper limit and with two ways out: deliberately ask for `public` if everyone may read it, or write in an own chat where the requested level applies. Nothing is stored then, not even in part, and nothing is prepared.
+- **Both write paths say the same.** The rule sits in the OpenClaw plugin (tool for storing) and in the Hermes plugin; both name the same identifier (`shared-room-write-rejected`) and the same fields, so that an agent can read the answer independently of the host. On the Hermes path the automatic session log in a shared room is additionally not written at all, instead of storing it publicly — there is nobody there who could release a lower level.
+- **Only with proof.** A call without a room, with an unknown room or with a stale mark stays untouched as before. The read side is unchanged: shared rooms keep delivering only `public`; the automatic session storage keeps capping at the configured level, because nobody asks for a level there.
 
-Geprueft mit echten Aufrufen beider Wege (`plugins/openclaw/test-store-room-rejection.mjs`, sechs Faelle, und die Python-Aufrufe in der Pruefung) und mit der Quellpruefung `tests/test_raum_deckel_schreiben.py`, die beide Dateien abdeckt.
+Checked with real calls of both paths (`plugins/openclaw/test-store-room-rejection.mjs`, six cases, and the Python calls in the review) and with the source check `tests/test_raum_deckel_schreiben.py`, which covers both files.
 
 ## [0.22.68] - 2026-11-24
 
-**Ein Eintrag, der neu geschrieben wird, verliert seine Felder nicht mehr, das Zusammenfuehren kann kein Schreiber mehr vergessen, fremde Eintraege lassen sich nicht mehr ueberschreiben — und die Antwort sagt, wo der Eintrag wirklich liegt.**
+**An entry that is written anew no longer loses its fields, no writer can forget the merge any more, foreign entries can no longer be overwritten — and the answer says where the entry really lies.**
 
-Vier Befunde aus dem Betrieb.
+Four findings from live operation.
 
-- **Beim Ueberschreiben fielen Felder zurueck.** Wer eine Erinnerung mit derselben Kennung neu schrieb, sah danach Vorgabewerte: `created_at`, `valid_from`, `use_count`, `salience`, `state_value`, `expiry_policy`, der Bereich und die Kanten standen wieder auf Anfang. Ursache war der Schreibvorgang selbst — die Sammlung ersetzt die ganze Payload. Jetzt ist der vorhandene Eintrag die Basis; ueberschrieben werden nur Inhalt, Einordnung, Verfasser, die strengere Zugriffsstufe, `provenance` und `updated_at`. Der Ursprung steht zusaetzlich in `provenance_origin` und bleibt dort, auch wenn er nach zwanzig Vorversionen aus dem Trail faellt; der Trail selbst ist auf zwanzig Eintraege gedeckelt, daneben steht die Gesamtzahl.
-- **Das Zusammenfuehren hing an drei Aufrufstellen.** Wer eine vierte baute, konnte es vergessen — und ein neuer Schreiber haette demselben Eintrag wieder die Felder geloescht. Es sitzt jetzt in `upsert_named`, der einzigen Stelle, die in eine Sammlung mit benannten Vektoren schreibt. Ein neuer Punkt kostet dabei keinen zusaetzlichen Lesezugriff; wer die Payload schon gelesen hat, reicht sie durch; nur die Wiederherstellung aus einer Sicherung ersetzt bewusst roh.
-- **Ein fremder Eintrag liess sich ueberschreiben.** Der HTTP-Schreibweg der Plugins (`POST /write`) landete in `remember` und pruefte den Eigentuemer nicht: ein Agent mit der Rolle `know` konnte mit fremder Kennung einen fremden Punkt ueberschreiben, und der Punkt trug danach seinen Namen. Jetzt gilt dort dieselbe Pruefung wie im Aenderungsweg (`roles.is_owner`, aufgeloest aus dem Agentenschluessel, nie aus einem Feld). Ein fremder Schreiber bekommt eine Absage mit Grund, der Punkt bleibt Zeichen fuer Zeichen unveraendert, und im Bewegungsprotokoll steht genau eine Zeile mit der Absage — keine, die einen Schreibvorgang behauptet. `work` und `admin` duerfen weiterhin fremde Eintraege aendern; ein neuer Punkt mit frischer Kennung bleibt fuer jede Stufe erlaubt.
-- **Die Antwort nannte den falschen Bereich.** Ein Punkt im Bereich `hermes`, ohne Bereichsangabe neu geschrieben, antwortete mit `scope: "default"` — im Punkt stand weiter `hermes`, weil das Zusammenfuehren den alten Wert behaelt. Falsch war die Auskunft: Antwort und Bewegungsprotokoll behaupteten einen Bereich, in dem der Eintrag nicht lag. Beide nennen jetzt den gespeicherten Wert.
+- **Fields fell back when overwriting.** Anyone rewriting a memory with the same identifier saw default values afterwards: `created_at`, `valid_from`, `use_count`, `salience`, `state_value`, `expiry_policy`, the scope and the edges were back at the start. The cause was the write itself — the collection replaces the whole payload. Now the existing entry is the base; only content, classification, author, the stricter access level, `provenance` and `updated_at` are overwritten. The origin additionally sits in `provenance_origin` and stays there even when it falls out of the trail after twenty previous versions; the trail itself is capped at twenty entries, and the total count stands next to it.
+- **The merge hung off three call sites.** Anyone building a fourth could forget it — and a new writer would have deleted the fields of the same entry again. It now sits in `upsert_named`, the only place that writes into a collection with named vectors. A new point costs no additional read access; whoever has already read the payload passes it through; only restoration from a backup deliberately replaces raw.
+- **A foreign entry could be overwritten.** The plugins' HTTP write path (`POST /write`) landed in `remember` and did not check the owner: an agent with the role `know` could overwrite a foreign point with a foreign identifier, and the point then carried its name. Now the same check applies there as in the modification path (`roles.is_owner`, resolved from the agent key, never from a field). A foreign writer gets a refusal with a reason, the point stays unchanged character by character, and the movement log holds exactly one line with the refusal — none claiming a write. `work` and `admin` may still change foreign entries; a new point with a fresh identifier stays allowed for every level.
+- **The answer named the wrong scope.** A point in the scope `hermes`, rewritten without a scope, answered with `scope: "default"` — the point still said `hermes`, because the merge keeps the old value. What was wrong was the information: answer and movement log claimed a scope in which the entry did not lie. Both now name the stored value.
 
-Die Regeln stehen an einer Stelle (`payload_merge.py`) statt an jeder Aufrufstelle, und die Tests decken die Schreibwege ab: `test_overwrite_erhaelt_felder.py`, `test_upsert_named_zusammenfuehren.py`, `test_write_eigentum.py`, `test_restore_eigentum.py`, `test_scope_antwort.py`.
+The rules sit in one place (`payload_merge.py`) instead of at every call site, and the tests cover the write paths: `test_overwrite_erhaelt_felder.py`, `test_upsert_named_zusammenfuehren.py`, `test_write_eigentum.py`, `test_restore_eigentum.py`, `test_scope_antwort.py`.
 
 ## [0.22.67] - 2026-11-22
 
-**Ein Testlauf schreibt keine Sicherungen mehr ins echte Zuhause — und eine Sicherung ist fuer andere Konten unlesbar.**
+**A test run no longer writes backups into the real home — and a backup is unreadable for other accounts.**
 
-Der Befund aus dem Veroeffentlichungslauf von 0.22.66: `~/.nexus-memory/backups`
-fuellte sich waehrend der Testsuite mit sieben Dateien a 54,9 MB, und im Protokoll
-standen 16 Zeilen `Auto-backup failed: not enough values to unpack (expected 2, got
-0)` — ohne einen roten Test.
+The finding from the release run of 0.22.66: `~/.nexus-memory/backups`
+filled with seven files of 54.9 MB each during the test suite, and the log
+held 16 lines of `Auto-backup failed: not enough values to unpack (expected 2, got
+0)` — without a single red test.
 
-- **Ursache:** jeder `MemoryStore` und jeder Hermes-Provider startet beim Bau einen
-  Thread, der 60 s spaeter die ganze Sammlung abzieht. Der Ablageort stand fest auf
-  `~/.nexus-memory/backups`; `NEXUS_DATA_DIR` wurde ignoriert. Gegen Attrappen
-  scheiterte der Scroll, die Schleife fing ihn und schrieb nur eine Warnung.
-- **Der Ordner folgt der Umgebung:** `NEXUS_BACKUP_DIR`, sonst
-  `<Datenverzeichnis>/backups`. Ohne Umgebungsvariablen derselbe Pfad wie vorher.
-- **Schalter:** `NEXUS_AUTO_BACKUP=0` haelt den Thread ganz aus dem Prozess. In
-  Tests ist er aus; im Betrieb bleibt die Vorgabe an, und eine wirklich gescheiterte
-  Sicherung meldet sich weiter als Warnung.
-- **Aufbewahrung 7 -> 4:** ein Tag beim 6-Stunden-Takt des Dienstes, 220 statt
-  385 MB. Die zwei alten Handabzuege im Ordner zaehlt sie nicht, die bleiben liegen.
-- **Rechte der Plugin-Sicherung:** sie entstand mit `open(..., "w")` und damit mit
-  dem umask des Prozesses — bei 0o022 konnte jedes lokale Konto jede private
-  Erinnerung lesen. Jetzt wie der Dienst: Ordner 0o700, Datei 0o600, Nachpruefung
-  per `stat`, unter Windows der ACL-Helfer.
-- **Werkzeugbeschreibung:** `backup` sagte "Includes payloads + vectors" und "every
-  24h". Richtig ist: nur Payloads (die Sammlung hat benannte Vektoren, ein Abzug
-  traegt also keine, und Wiederherstellen bettet neu ein) und alle sechs Stunden.
-- **Waechter:** eine Sitzungswache vergleicht den ECHTEN Ordner vor und nach dem
-  Testlauf und laesst den Lauf scheitern, wenn eine neue Sicherung dazukommt;
-  `tests/test_backup_isolation.py` deckt Pfad, Schalter, Aufbewahrung, Rechte und
-  die bleibende Warnung in elf Faellen ab.
+- **Cause:** every `MemoryStore` and every Hermes provider starts a thread when built, which pulls the whole collection 60 s later. The storage location was fixed at
+  `~/.nexus-memory/backups`; `NEXUS_DATA_DIR` was ignored. Against stand-ins the scroll failed, the loop caught it and wrote only a warning.
+- **The folder follows the environment:** `NEXUS_BACKUP_DIR`, otherwise
+  `<data directory>/backups`. Without environment variables the same path as before.
+- **Switch:** `NEXUS_AUTO_BACKUP=0` keeps the thread out of the process altogether. In
+  tests it is off; in operation the default stays on, and a backup that really failed
+  keeps reporting as a warning.
+- **Retention 7 -> 4:** one day at the service's 6-hour cadence, 220 instead of
+  385 MB. The two old manual dumps in the folder are not counted, they stay.
+- **Permissions of the plugin backup:** it was created with `open(..., "w")` and thus with
+  the process's umask — at 0o022 every local account could read every private
+  memory. Now like the service: folder 0o700, file 0o600, verification
+  via `stat`, under Windows the ACL helper.
+- **Tool description:** `backup` said "Includes payloads + vectors" and "every
+  24h". Correct is: payloads only (the collection has named vectors, so a dump
+  carries none, and restoring embeds anew) and every six hours.
+- **Watchdog:** a session guard compares the REAL folder before and after the
+  test run and lets the run fail if a new backup is added;
+  `tests/test_backup_isolation.py` covers path, switch, retention, permissions and
+  the persistent warning in eleven cases.
 
-Python: 3404 Tests gruen, 1 bekannter roter
+Python: 3404 tests green, 1 known red
 (`tests/test_claude_code_write_path.py::test_leseweg_funktioniert`), 11
-uebersprungen — vorher 3394 gruen, derselbe rote, 10 uebersprungen. Der eine
-Uebersprungene mehr ist der Erreichbarkeitstest der Pin-Kette: der Pin zeigt auf
-einen Commit, den noch kein entferntes Ref enthaelt.
+skipped — before 3394 green, the same red, 10 skipped. The one additional
+skipped test is the reachability test of the pin chain: the pin points at
+a commit that no remote ref contains yet.
+
+> Entries from v0.22.67 onward are written in English, matching the published releases. Sections below v0.22.67 were written in German at the time and are kept unchanged as the historical record.
 
 ## [0.22.66] - 2026-11-22
 
