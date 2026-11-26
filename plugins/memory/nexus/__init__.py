@@ -313,6 +313,27 @@ _try_import_qdrant()
 #   reply : {"embedding": [float...], "model": "<str>", "dim": <int>}
 _EMBED_SERVICE_TIMEOUT_SEC = 15.0
 
+# Cold-start budget of the local embedder service, in the pieces it is made of.
+# `_ensure_embed_service` polls the service for the poll window, and the
+# service then loads its model on the first request. Measured 26.11.2026 in
+# agent.log (08:55): 5.7 s until the service started loading, 3.6 s until the
+# first vector existed. The coldstart deadline below is DERIVED from these
+# numbers: a deadline that equals only the poll window times out on every
+# genuinely cold start by construction (5.0 s poll + any model work > 5.0 s).
+_EMBED_SERVICE_START_POLLS = 10
+_EMBED_SERVICE_START_INTERVAL = 0.5
+_EMBED_SERVICE_START_BUDGET_SEC = _EMBED_SERVICE_START_POLLS * _EMBED_SERVICE_START_INTERVAL
+_EMBED_MODEL_LOAD_ALLOWANCE_SEC = 4.0
+# The core (hermes: agent/memory_manager.py) aborts an external provider's
+# prefetch after its own `_EXTERNAL_PREFETCH_TIMEOUT_S = 8.0`; staying below it
+# means the core never abandons our call first.
+_CORE_PREFETCH_DEADLINE_SEC = 8.0
+_COLDSTART_CEILING_SEC = 7.5
+_COLDSTART_DEFAULT_SEC = min(
+    _COLDSTART_CEILING_SEC,
+    _EMBED_SERVICE_START_BUDGET_SEC + _EMBED_MODEL_LOAD_ALLOWANCE_SEC,
+)
+
 # The one-line note every read answer must start with when the embedder is
 # down — one shape for the model, the user and the log.
 _EMBEDDER_NOTE_PREFIX = "⚠ local embedder unavailable"
@@ -501,11 +522,42 @@ def _ensure_embed_service() -> "Tuple[bool, Optional[Any]]":
             start_new_session=True, env=env)
     except Exception:
         return False, process
-    for _ in range(10):
-        time.sleep(0.5)
+    for _ in range(_EMBED_SERVICE_START_POLLS):
+        time.sleep(_EMBED_SERVICE_START_INTERVAL)
         if _embed_service_healthz():
             return True, process
     return False, process
+
+
+def _coldstart_deadline_sec() -> float:
+    """Effective coldstart catch-up deadline, in seconds.
+
+    Never below a cold start (service-start poll window + model load) and
+    never at or above the core's own prefetch deadline — the floor and the
+    ceiling are derived from the same constants as the work they bound, so
+    the two can no longer drift into "deadline == poll window".
+    """
+    raw = os.environ.get("NEXUS_COLDSTART_TIMEOUT")
+    try:
+        value = float(raw) if raw is not None else _COLDSTART_DEFAULT_SEC
+    except (TypeError, ValueError):
+        value = _COLDSTART_DEFAULT_SEC
+    return min(max(value, 0.5), _COLDSTART_CEILING_SEC)
+
+
+def _prefetch_gate_wait_sec() -> float:
+    """Bounded wait when another prefetch holds the single-flight gate.
+
+    Long enough that a prefetch that is about to publish is taken along
+    instead of dropped, short enough not to delay a turn: never outside
+    0.5–1.0 s, as required for the "never silently lose it" rule.
+    """
+    raw = os.environ.get("NEXUS_PREFETCH_GATE_WAIT")
+    try:
+        value = float(raw) if raw is not None else 0.75
+    except (TypeError, ValueError):
+        value = 0.75
+    return min(max(value, 0.5), 1.0)
 
 
 def _stop_embed_service(process: "Any") -> None:
@@ -1658,6 +1710,13 @@ class NexusMemoryProvider:
         self._session_id = ""; self._hermes_home = ""; self._agent_context = "primary"
         self._qdrant: Optional[QdrantClient] = None; self._embedder: Optional[_Embedder] = None
         self._collection = _COLLECTION; self._prefetch_result = ""
+        # "A prefetch run has completed" — independent of whether it found
+        # anything. Without this flag an EMPTY published result ("") is
+        # indistinguishable from "nothing has run yet", so every turn after a
+        # fruitless search repeated the search synchronously (coldstart
+        # catch-up). Set by every publication path (including the empty one),
+        # cleared by _clear_prefetch_result() and by the gate swap.
+        self._prefetch_prepared = False
         # Room status the published prefetch block was FILTERED under. A block
         # built at the end of the previous turn must not be injected into a
         # room that became shared this turn — see prefetch().
@@ -1710,6 +1769,14 @@ class NexusMemoryProvider:
         # up at the same time.
         self._coldstart_lock = threading.Lock()
         self._shutting_down = False
+        # Embedder warm-up (26.11.2026): a freshly rebuilt agent used to pay the
+        # whole cold start of the local service inside its FIRST turn (measured
+        # 5.7 s until the service started loading + 3.6 s model load; 12
+        # coldstart timeouts in one day's agent.log, each losing the memory
+        # block). The work now starts in initialize(), where the agent is being
+        # built and no turn is waiting yet. See _start_embed_warmup().
+        self._embed_warmup_thread: Optional[threading.Thread] = None
+        self._embed_warmup_lock = threading.Lock()
         # Serializes the flywheel read-modify-write (Qdrant has no atomic
         # increment, so concurrent recalls would lose a bump).
         self._flywheel_lock = threading.Lock()
@@ -1843,6 +1910,10 @@ class NexusMemoryProvider:
                 # and the ENGINE owns collection creation. Adopt the collection's
                 # existing named vector, read-only (never create one from here).
                 self.vector_name = _discover_vector_name(self._qdrant, self._collection)
+            # Pay the embedder's cold start HERE, not in the first turn: the
+            # build is not serving anybody yet, a turn is. Bounded so a hung
+            # service can never hang the build.
+            self._start_embed_warmup()
             self._write_stop.clear()
             self._write_thread = threading.Thread(target=self._write_loop, name="nexus-writer", daemon=True)
             self._write_thread.start()
@@ -1860,6 +1931,57 @@ class NexusMemoryProvider:
         # Second (and last) self-report of the process: the provider is now
         # known-good, so clear any failure recorded at register() time.
         write_agent_selfcheck(True, "", _repair_command())
+
+    def _start_embed_warmup(self, wait: "Optional[float]" = None) -> "Optional[threading.Thread]":
+        """Run one embed in a daemon thread so the FIRST vector already exists.
+
+        Why: ``_Embedder`` talks to the local service, and a service that was
+        just restarted needs seconds before it can answer — measured
+        26.11.2026 in ``agent.log`` (08:55): 5.7 s until it started loading its
+        model, 3.6 s until the model was ready. That work used to happen in the
+        first turn of a freshly built agent, inside the coldstart catch-up,
+        which is bounded by ``NEXUS_COLDSTART_TIMEOUT``: the turn waited the
+        whole 5.0 s and was left with an empty memory block (12 such WARNINGs
+        in one day). ``initialize()`` is the right place to pay for it — the
+        agent is being built, no turn is waiting yet.
+
+        The embed runs in its own thread (not on the caller's stack) so the
+        wait stays bounded and a wedged service cannot wedge the build. The
+        bound is the coldstart deadline: the same amount of work, derived from
+        the same constants, just not in the turn.
+
+        Returns the thread, or ``None`` when there is nothing to warm.
+        """
+        emb = getattr(self, "_embedder", None)
+        if emb is None:
+            return None
+        lock = getattr(self, "_embed_warmup_lock", None)
+        if lock is None:
+            lock = self._embed_warmup_lock = threading.Lock()
+        with lock:
+            thread = getattr(self, "_embed_warmup_thread", None)
+            if thread is None or not thread.is_alive():
+                def _warm() -> None:
+                    try:
+                        emb.embed("nexus memory warmup", is_query=True)
+                        logger.debug("Embedder warmup finished — first vector exists")
+                    except Exception as exc:
+                        # Fail-open: the first turn will report what is wrong
+                        # with its own note; a warmup must never break a build.
+                        logger.debug("Embedder warmup failed (the first turn pays it): %s", exc)
+                thread = threading.Thread(target=_warm, name="nexus-embed-warmup",
+                                          daemon=True)
+                self._embed_warmup_thread = thread
+                thread.start()
+        if wait is None:
+            wait = _coldstart_deadline_sec()
+        if thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, float(wait)))
+            if thread.is_alive():
+                logger.info(
+                    "Embedder warmup still running after %.1fs — the build "
+                    "continues without waiting", wait)
+        return thread
 
     def _start_auto_backup(self) -> None:
         """Start automatic daily backup of all memories."""
@@ -2093,6 +2215,12 @@ class NexusMemoryProvider:
                     "closing the Qdrant client underneath it "
                     "(the prefetch aborts at its next checkpoint)",
                     _PREFETCH_JOIN_TIMEOUT)
+        warmup_thread = getattr(self, "_embed_warmup_thread", None)
+        if (warmup_thread and warmup_thread.is_alive()
+                and warmup_thread is not threading.current_thread()):
+            # Best effort only: the warmup talks to the embedder, not to
+            # _qdrant, so an unfinished one cannot be hurt by the close below.
+            warmup_thread.join(timeout=1.0)
         if self._write_thread and self._write_thread.is_alive():
             self._write_thread.join(timeout=5.0)
         # Nr 290: backup/update threads share self._qdrant — give them a
@@ -2158,6 +2286,7 @@ class NexusMemoryProvider:
         """
         with self._prefetch_lock:
             ready = self._prefetch_result
+            prepared = bool(getattr(self, "_prefetch_prepared", False))
             built_under = getattr(self, "_prefetch_room_status", _UNSET)
         if ready and ready.strip():
             # A block built at the END of the previous turn was filtered under
@@ -2169,9 +2298,17 @@ class NexusMemoryProvider:
                 return ready
             self._clear_prefetch_result()
             ready = ""
+            prepared = False
         if not query or not query.strip() or _is_trivial_query(query):
             return ready
         if getattr(self, "_shutting_down", False):
+            return ready
+        if prepared:
+            # A prefetch run HAS completed — it simply found nothing worth
+            # injecting. An empty block is a result, not "nothing prepared":
+            # searching again inside this turn would burn the turn's time for
+            # the same empty answer. The end-of-turn queue_prefetch refreshes
+            # the block for the next turn.
             return ready
         # Instances built via __new__ (bench/test pattern) never saw __init__:
         # create the lock defensively instead of dying with AttributeError.
@@ -2180,6 +2317,10 @@ class NexusMemoryProvider:
         with self._coldstart_lock:
             with self._prefetch_lock:
                 if self._prefetch_result and self._prefetch_result.strip():
+                    return self._prefetch_result
+                if getattr(self, "_prefetch_prepared", False):
+                    # A concurrent run published (an empty result counts) while
+                    # we waited for the coldstart lock: nothing left to do.
                     return self._prefetch_result
             attempt = self._coldstart_catch_up(query)
             if attempt and attempt.strip():
@@ -2205,6 +2346,20 @@ class NexusMemoryProvider:
         if gate is None:
             gate = self._prefetch_gate = threading.Lock()
         if not gate.acquire(blocking=False):
+            # Another prefetch (the end-of-turn one) is already in flight. Do
+            # NOT drop the turn silently: wait a bounded moment for it, take
+            # whatever landed, and say so when nothing did.
+            wait = _prefetch_gate_wait_sec()
+            if gate.acquire(timeout=wait):
+                gate.release()
+            with self._prefetch_lock:
+                landed = self._prefetch_result or ""
+            if landed.strip():
+                return landed
+            logger.debug(
+                "Coldstart catch-up skipped: a prefetch was in flight and "
+                "nothing landed within %.2fs — continuing without caught-up "
+                "memory (the in-flight run still fills the next turn)", wait)
             return ""
 
         def _run() -> None:
@@ -2229,14 +2384,13 @@ class NexusMemoryProvider:
                     except RuntimeError:
                         pass
 
-        try:
-            deadline = float(os.environ.get("NEXUS_COLDSTART_TIMEOUT", "5.0"))
-        except Exception:
-            deadline = 5.0
-        # Measured (05.10.): cold recall 3.8s, warm 1.7-1.8s. Default 5.0s
-        # covers the cold case; the 7.0s ceiling stays below the core's own
-        # 8.0s deadline so the core never aborts first.
-        deadline = min(max(deadline, 0.5), 7.0)
+        # Measured (05.10.): cold recall 3.8s, warm 1.7-1.8s. The DEFAULT is now
+        # derived from the cold start's own pieces (service-start poll window
+        # + model load) instead of being set equal to the poll window, which
+        # made every cold start time out by construction. The ceiling stays
+        # below the core's 8.0 s prefetch deadline so the core never aborts
+        # first. See _coldstart_deadline_sec().
+        deadline = _coldstart_deadline_sec()
         t = threading.Thread(target=_run, name="nexus-coldstart", daemon=True)
         t.start()
         t.join(deadline)
@@ -2248,6 +2402,10 @@ class NexusMemoryProvider:
                 deadline)
             with self._prefetch_lock:
                 self._prefetch_gate = threading.Lock()
+                # The orphaned run may never publish through the new gate, so
+                # "prepared" must not claim a result that does not exist: the
+                # next turn is allowed to catch up again.
+                self._prefetch_prepared = False
             return ""
         return result[0] if result else ""
 
@@ -2261,7 +2419,19 @@ class NexusMemoryProvider:
         if gate is None:
             gate = self._prefetch_gate = threading.Lock()
         if not gate.acquire(blocking=False):
-            return  # one prefetch in flight — skip instead of racing it
+            # One prefetch in flight — skip instead of racing it. But never
+            # silently: give it a bounded moment, take what lands, and say so
+            # when the wait ends empty.
+            wait = _prefetch_gate_wait_sec()
+            if gate.acquire(timeout=wait):
+                gate.release()
+            with self._prefetch_lock:
+                landed = self._prefetch_result or ""
+            if not landed.strip():
+                logger.debug(
+                    "queue_prefetch skipped: a prefetch was in flight and "
+                    "nothing landed within %.2fs", wait)
+            return
         # __init__ always defines this lock; shutdown() uses the attribute
         # directly too, so a missing one is a real bug and must fail fast
         # rather than silently substituting a second, unseen lock.
@@ -3036,12 +3206,22 @@ class NexusMemoryProvider:
                         max_workers=1, thread_name_prefix="nexus-rewrite")
         return ex
 
-    def _clear_prefetch_result(self) -> None:
+    def _clear_prefetch_result(self, gate: "Optional[threading.Lock]" = None) -> None:
         """Publish "no result" under the lock — used by every abort checkpoint
         (shutdown checkpoints and the exception path) so a consumer reading
-        during shutdown never sees a stale result from an earlier query."""
+        during shutdown never sees a stale result from an earlier query.
+
+        ``gate`` is the single-flight lock the CALLER holds. A stale gate (a
+        coldstart thread that timed out had it replaced) means the caller is a
+        zombie: it must not wipe a fresher result it no longer owns, exactly
+        like the publication path. ``gate=None`` clears unconditionally —
+        that is the room-change path in ``prefetch()``, which is not a zombie.
+        """
         with self._prefetch_lock:
+            if gate is not None and gate is not getattr(self, "_prefetch_gate", None):
+                return
             self._prefetch_result = ""
+            self._prefetch_prepared = False
 
     def _do_prefetch(self, query: str, gate: Optional[threading.Lock] = None) -> None:
         """Worker entry for queue_prefetch.
@@ -3058,7 +3238,7 @@ class NexusMemoryProvider:
             # A shutdown may have started between spawn and first run: do not
             # touch the shared client at all in that case.
             if getattr(self, "_shutting_down", False):
-                self._clear_prefetch_result()
+                self._clear_prefetch_result(gate)
                 return
             self._do_prefetch_inner(query, gate=gate)
         finally:
@@ -3087,6 +3267,9 @@ class NexusMemoryProvider:
                 with self._prefetch_lock:
                     if gate is None or gate is self._prefetch_gate:
                         self._prefetch_result = note
+                        # A note IS a published outcome: the run completed, it
+                        # just cannot search. Do not repeat it every turn.
+                        self._prefetch_prepared = True
                 _note_embedder_unavailable_once(getattr(self, "_session_id", ""))
             return
         try:
@@ -3095,7 +3278,7 @@ class NexusMemoryProvider:
             # Embedding/rewriting can outlast the shutdown grace period: abort
             # at this last checkpoint before the client is dereferenced below.
             if getattr(self, "_shutting_down", False):
-                self._clear_prefetch_result()
+                self._clear_prefetch_result(gate)
                 return
             # Budget und Auswahlregel des Vorlaufs (20.11.2026): drei
             # Eintraege, 800 Zeichen, nur fact/rule/preference ueber der
@@ -3201,6 +3384,9 @@ class NexusMemoryProvider:
                     self._prefetch_result = (
                         _banner + "\n".join(items)
                     ) if items else ""
+                    # An empty outcome is an outcome too: "prepared" stops the
+                    # next turn from repeating the same search synchronously.
+                    self._prefetch_prepared = True
                     self._prefetch_room_status = room_status
         except Exception as exc:
             if getattr(self, "_shutting_down", False):
@@ -3220,10 +3406,10 @@ class NexusMemoryProvider:
                 logger.warning("Prefetch failed: %s", exc)
                 _refresh_selfcheck_if_needed()
             # The "clear" is also a write to _prefetch_result: a zombie must
-            # not wipe a fresher result it no longer owns.
-            with self._prefetch_lock:
-                if gate is None or gate is self._prefetch_gate:
-                    self._prefetch_result = ""
+            # not wipe a fresher result it no longer owns. A failed run
+            # published nothing, so "prepared" is cleared with it and the next
+            # turn may catch up again instead of staying dark for good.
+            self._clear_prefetch_result(gate)
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "",
                   messages: Optional[List[Dict[str, Any]]] = None) -> None:

@@ -1,3 +1,16 @@
+## [0.22.73] - 2026-11-26
+
+**Der erste Turn nach dem Neubau eines Agenten wartet nicht mehr fuenf Sekunden auf das Gedaechtnis und steht dann doch ohne da: der Einbetter-Dienst wird jetzt beim Aufbau des Agenten vorgewaermt, und ein leeres Ergebnis gilt als Ergebnis.**
+
+Vier Befunde aus dem Betrieb vom 25./26.11.2026.
+
+- **Die Frist war genau so lang wie das Warten.** Die Nachholung im ersten Turn gab dem Dienst fuenf Sekunden Zeit — genau so lange, wie das Starten des Dienstes ohnehin dauert; fuer den Modellaufbau danach war kein Augenblick uebrig. Jeder Kaltstart lief deshalb in die Frist, der Turn wartete sie ab und bekam einen leeren Merkblock (am 26.11. zwoelfmal im Protokoll, z. B. 08:55:30 bis 08:55:35). Jetzt wird die Frist aus den Teilen des Kaltstarts abgeleitet (Startfenster plus Modellaufbau) und bleibt unter der Frist des Wirts, damit der nicht zuerst abbricht; die Vorwaermung selbst laeuft beim Aufbau des Agenten, wo noch niemand auf einen Turn wartet. Gemessen am kalten Dienst: erster Turn 5,00 s und leer, jetzt 1,79 s und mit Merkblock; am warmen Dienst 0,21 s, jetzt 0,00 s.
+- **Ein leeres Ergebnis war kein Ergebnis.** Fand der Vorlauf nichts, wurde eine leere Zeichenkette veroeffentlicht — beim naechsten Turn sah das aus wie „noch gar nichts gelaufen“, und die Nachholung suchte synchron erneut. Jetzt gibt es einen eigenen Zustand „vorbereitet“, den jeder Veroeffentlichungspfad setzt, auch der leere; er wird beim Verwerfen und beim Gate-Tausch geloescht. Derselbe Aufruf zweimal in Folge loest damit genau einen Suchlauf aus.
+- **Ein belegter Vorlauf war still.** Lief bereits ein Abruf, gab die Nachholung sofort leer zurueck — ohne Wartezeit und ohne eine Zeile im Protokoll. Jetzt wird kurz gewartet (0,5 bis 1,0 s), genommen was in der Zeit landet, und wenn nichts kommt, steht eine Zeile auf DEBUG. Nie mehr stumm.
+- **Geloescht wurde ohne Pruefung.** Zwei Abbruechstellen raeumten das Ergebnis ohne Blick auf das Gate ab, obwohl die Schreibstelle daneben genau das als Regel nennt („ein Zombie darf keinen frischeren Treffer loeschen“). Beide reichen jetzt ihr Gate durch; erreichbar waren sie nur beim Herunterfahren, falsch war es trotzdem.
+
+Neun neue Pruefungen in `tests/test_prefetch_vorbereitung.py`, alle neun am alten Stand rot (gegen den Stand `6d21d78` gemessen).
+
 ## [0.22.72] - 2026-11-25
 
 **Der Windows-Prueflauf war rot, weil ein neuer Test die Pfadform nicht beruecksichtigt hat — er traegt jetzt dieselbe Ausnahme wie seine Nachbarn.**
