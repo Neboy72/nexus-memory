@@ -1,0 +1,33 @@
+# Release backlog
+
+One place for everything that still has to be done, and for what each release actually closed. It exists because findings otherwise live in chat transcripts and get lost between releases.
+
+## Rules
+
+- Every defect, finding or improvement lands under **Open** with its date and who found it. No entry without both.
+- A release may only be pushed when its version appears under **Released**.
+- Whatever a release closes moves from **Open** to **Released**, with the version and the date, in the same change that bumps the version.
+- Nothing is ever deleted from this file. A closed entry moves; an entry that no longer applies is marked `dropped` with a reason.
+- Findings are added by whoever found them: Developer while building, Inspector while reviewing, the other agents through their own work. The Commander moves entries when publishing.
+
+## Open
+
+| # | Item | Found | By | Notes |
+|---|---|---|---|---|
+| 1 | Hermes catalog entry for 0.22.79 | 2026-11-27 | Ayosha | PR #160437 still describes 0.22.75/0.22.76. Needs the new version text after a release; the reviewer works by hand, so this goes in one step per release, never per fix. |
+| 2 | ClawHub package on 0.22.79 | 2026-11-27 | Ayosha | Package is still at 1.22.77. Publish and check the scan verdict. |
+| 3 | Docstring in `scripts/scope_payload_index.py` names 68,602 points | 2026-11-27 | Kiosha | That number is from before the dedupe run; date it "before the dedupe" so the difference to 68,545 is not read as a bug. |
+| 4 | OpenClaw shows an update banner for 0.22.78 | 2026-11-27 | OpenClaw | Cosmetic; the install is already on 0.22.79. Check where OpenClaw reads the version from before changing anything. |
+| 5 | Silent agent `ds5w6k` in the self-report | 2026-11-27 | Ayosha | Last seen 2026-11-22, more than 107 h. Decide whether to retire it or find out what it was. |
+| 6 | Embed failure of 2026-11-26 14:48 still unexplained | 2026-11-26 | Ayosha | Four POSTs in 0.13 s, `/healthz` answering, no vector. Different from the 15 s timeouts (those were long texts under load). Since 0.22.78 every attempt logs chars, duration, status and thread — re-read on the next occurrence. |
+| 7 | Turn-budget guardrail: is 6 calls / 120 s right? | 2026-11-27 | Ayosha | Several blocks today, including two that stopped a release mid-way. Collect a week from `~/.ds-bot/logs/turn-budget.log`, then decide the limit — not silently. |
+| 8 | Inspector on Inkling 2 Small | 2026-11-26 | Ayosha | Watch three real releases before the old rules are dropped. 0.22.78 and 0.22.79 count as two. |
+| 9 | Stale leftovers on the Mac mini | 2026-11-27 | Ayosha | `nexus-memory.alt-20261124` (0.22.49) and `.hermes/hermes-agent/.venv` (0.22.40). Both inactive. Removing needs the user's word. |
+| 10 | Editable install means the release tree is live code | 2026-11-27 | OpenClaw | OpenClaw and Hermes import straight from the release working tree. Announce a heads-up before changing that tree while other agents are running. |
+| 11 | The backlog gate only runs when someone calls it | 2026-11-27 | Developer | `tools/nexus-release-check.py` sits outside this repository: no CI job and no push hook runs the Backlog group, so a release still goes out if nobody calls it. Wire it into the release path or into `nexus-push-audit.py`. |
+
+## Released
+
+- **0.22.79** · 2026-11-27 · `scripts/dedupe_content_groups.py`: merges duplicate memories without breaking the graph (dry run by default, snapshot required, references rerouted, full re-scan before any delete, one write per point). `scope_payload_index.py` now waits for the payload schema instead of reporting an index that exists as missing. Applied once on the live collection: 80 copies removed, 41 references rerouted, 0 dangling. 0.22.78 and 0.22.79 count for entry 8 (Inspector on Inkling).
+- **0.22.78** · 2026-11-27 · prefetch embedding capped at 1000 characters (head plus tail, marker in between, prefetch path only); one log line per embed attempt with duration, character count, status and thread; `scripts/scope_payload_index.py` added; four docstrings corrected to the generation rule the code actually implements.
+- **0.22.77** · 2026-11-26 · a failed `/embed` now says why it failed, the service records why it refused a request or gave no answer, and the start backup asks for a backup from the same day.
