@@ -1,3 +1,15 @@
+## [0.22.79] - 2026-11-27
+
+**Duplicate memories can now be merged without breaking the graph — and the scope index script no longer reports a failure that is not there.**
+
+The memory held 59 groups of identical documents (139 points, 80 surplus copies), all of them imported more than once from Paperless. Merging them by hand was impossible: a point cannot simply disappear, because other points reference it.
+
+- New `scripts/dedupe_content_groups.py`. Dry run by default; `--apply` needs a snapshot with name, size and checksum first. For every group it re-checks that the content is byte-identical, chooses a keeper by incoming references, reroutes the references of the copies onto it, and only then deletes — and only if a full re-scan of the collection finds no surviving point that still points at a copy.
+- A keeper rule detail that the dry run made visible: ten points belong to two groups, so a per-group write would have overwritten the first group's rerouted edges with the stale snapshot. The tool now writes once per point, with all its assignments at the same time.
+- `scripts/scope_payload_index.py` read the payload schema once, right after building the index, and reported `payload_schema does not name 'scope' as keyword` although the index was already there — Qdrant fills the schema asynchronously. It now waits in bounded steps (30 s, every 0.5 s) and says how long it waited.
+
+Applied once on the live collection: 80 copies removed, 68.545 points left, 41 references rerouted, 11 carried over, and no reference left pointing at a deleted copy (verified over the whole collection). A recall through the running service answers normally.
+
 ## [0.22.78] - 2026-11-27
 
 **The prefetch embedding no longer sends the whole turn — and every embed attempt now records how long it took.**

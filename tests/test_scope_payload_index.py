@@ -36,7 +36,8 @@ class _FakeQdrant:
     """Stands in for the HTTP layer; records every call in order."""
 
     def __init__(self, *, indexed=False, snapshot=None, snapshot_error=None,
-                 put_error=None, counts=(5, 5), becomes_keyword=True):
+                 put_error=None, counts=(5, 5), becomes_keyword=True,
+                 delay_gets=None):
         self.calls: list[tuple[str, str, dict | None]] = []
         self.indexed = indexed
         self.snapshot = ({"name": "snap-2026-11-27", "size": 124_000_000,
@@ -46,6 +47,12 @@ class _FakeQdrant:
         self.put_error = put_error
         self.counts = list(counts)
         self.becomes_keyword = becomes_keyword
+        # Qdrant fills payload_schema from the optimiser side: on 27.11.2026
+        # the index was built and working while the collection info still said
+        # nothing. This many GETs AFTER the PUT are needed before it shows up.
+        self.delay_gets = delay_gets
+        self._put_done = False
+        self._gets_after_put = 0
 
     def _info(self) -> dict:
         schema = ({"scope": {"data_type": "keyword"}} if self.indexed else {})
@@ -59,6 +66,10 @@ class _FakeQdrant:
     def __call__(self, method, url, body=None, timeout=600.0):
         self.calls.append((method, url, body))
         if method == "GET":
+            if self.delay_gets is not None and self._put_done:
+                self._gets_after_put += 1
+                if self._gets_after_put >= self.delay_gets:
+                    self.indexed = self.becomes_keyword
             return self._info()
         if url.endswith("/points/count"):
             count = self.counts.pop(0) if len(self.counts) > 1 else self.counts[0]
@@ -73,7 +84,9 @@ class _FakeQdrant:
         if url.endswith("/index?wait=true") and method == "PUT":
             if self.put_error:
                 raise RuntimeError(self.put_error)
-            self.indexed = self.becomes_keyword
+            self._put_done = True
+            self.indexed = (False if self.delay_gets is not None
+                            else self.becomes_keyword)
             return {"result": True}
         raise AssertionError(f"unexpected call: {method} {url}")
 
@@ -95,6 +108,19 @@ def fake(monkeypatch):
         monkeypatch.setattr(script, "_request", f)
         return f
     return install
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    """Fake clock: the bounded wait costs no real seconds in tests."""
+    ticks = {"t": 1000.0}
+
+    def _sleep(seconds):
+        ticks["t"] += seconds
+
+    monkeypatch.setattr(script, "_now", lambda: ticks["t"])
+    monkeypatch.setattr(script, "_sleep", _sleep)
+    return ticks
 
 
 def _argv(*extra):
@@ -147,10 +173,36 @@ def test_apply_refuses_when_the_visible_set_changes(fake, capsys):
     assert "filtered set changed" in out
 
 
-def test_apply_aborts_when_the_schema_stays_not_keyword(fake, capsys):
+def test_schema_that_shows_up_late_is_waited_for(fake, clock, capsys):
+    """The 27.11.2026 field failure: the index was there, the schema lagged.
+
+    The build worked (index in place, filtered search 2-3 ms) and the script
+    still shouted "does not name 'scope' as keyword". It must poll the
+    finished state instead of reading it once.
+    """
+    f = fake(delay_gets=3)
+    assert script.main(_argv("--apply")) == 0
+    out = capsys.readouterr().out
+    assert "payload_schema     : appeared after" in out, out
+    assert "done: index on 'scope' is in place" in out, out
+    # the build happened exactly once — waiting must not rebuild
+    assert [m for m, url, _ in f.calls if url.endswith("/index?wait=true")] == ["PUT"]
+
+
+def test_schema_that_never_shows_up_is_a_real_error(fake, clock, capsys):
+    """Bounded wait, then a message that says what to do — no false alarm."""
+    fake(becomes_keyword=False)
+    assert script.main(_argv("--apply")) == 1
+    out = capsys.readouterr().out
+    assert "ERROR: after waiting" in out, out
+    assert "still does not report" in out, out
+    assert "idempotent" in out, out
+
+
+def test_apply_aborts_when_the_schema_stays_not_keyword(fake, clock, capsys):
     f = fake(becomes_keyword=False)
     assert script.main(_argv("--apply")) == 1
-    assert "does not name 'scope' as keyword" in capsys.readouterr().out
+    assert "still does not report" in capsys.readouterr().out
 
 
 def test_existing_keyword_index_is_a_no_op(fake, capsys):

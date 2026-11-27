@@ -40,6 +40,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -76,7 +77,8 @@ def filtered_count(base: str, collection: str, bundle: str) -> int:
 
 def scope_index_state(base: str, collection: str) -> dict | None:
     info = _request("GET", base + "/collections/%s" % collection)["result"]
-    schema = info.get("config", {}).get("params", {}).get("payload_schema") or {}
+    params = (info.get("config") or {}).get("params") or {}
+    schema = params.get("payload_schema") or info.get("payload_schema") or {}
     entry = schema.get("scope")
     return entry if isinstance(entry, dict) else None
 
@@ -84,6 +86,48 @@ def scope_index_state(base: str, collection: str) -> dict | None:
 def _index_is_keyword(state: dict) -> bool:
     kind = str(state.get("data_type") or state.get("type") or "").lower()
     return "keyword" in kind
+
+
+# ``wait=true`` on the index call makes Qdrant build the index before it
+# answers, but ``payload_schema`` in the collection info is filled from the
+# optimiser side and can lag by a moment. On 27.11.2026 that turned a finished
+# build (index in place, filtered search down to 2-3 ms) into a red alarm:
+# "payload_schema does not name 'scope' as keyword after the build: null".
+# Poll for the finished state instead of reading it once.
+_INDEX_WAIT_SEC = 30.0
+_INDEX_POLL_SEC = 0.5
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def wait_for_scope_index(base: str, collection: str,
+                         timeout: float | None = None,
+                         poll: float | None = None) -> "tuple[dict | None, float]":
+    """Poll until the collection reports a keyword index on ``scope``.
+
+    Returns ``(state, waited_seconds)``: the last state seen and how long the
+    check took. ``state`` is ``None`` when the schema never named ``scope``.
+    Bounded on purpose — a schema that never shows up is a real error, just
+    not the one a single read reports.
+    """
+    limit = _INDEX_WAIT_SEC if timeout is None else timeout
+    step = _INDEX_POLL_SEC if poll is None else poll
+    started = _now()
+    state = None
+    while True:
+        state = scope_index_state(base, collection)
+        if state is not None and _index_is_keyword(state):
+            return state, _now() - started
+        waited = _now() - started
+        if waited >= limit:
+            return state, waited
+        _sleep(step)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -173,11 +217,18 @@ def main(argv: list[str] | None = None) -> int:
               "snapshot above: %s" % name)
         return 1
 
-    after_state = scope_index_state(base, col)
+    after_state, waited = wait_for_scope_index(base, col)
     if after_state is None or not _index_is_keyword(after_state):
-        print("ERROR: payload_schema does not name 'scope' as keyword after the "
-              "build: %s" % json.dumps(after_state, sort_keys=True))
+        print("ERROR: after waiting %.1f s the collection still does not report "
+              "a keyword index on 'scope': %s"
+              % (waited, json.dumps(after_state, sort_keys=True)))
+        print("       The index may still be building. Check by hand with "
+              "GET /collections/%s (config.params.payload_schema) and re-run "
+              "this script — it is idempotent and will report the finished "
+              "state instead of building again." % col)
         return 1
+    if waited >= _INDEX_POLL_SEC:
+        print("payload_schema     : appeared after %.1f s" % waited)
     print("payload_schema     : %s" % json.dumps(after_state, sort_keys=True))
 
     try:
