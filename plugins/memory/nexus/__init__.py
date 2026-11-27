@@ -376,6 +376,57 @@ _COLDSTART_DEFAULT_SEC = min(
 _EMBEDDER_NOTE_PREFIX = "⚠ local embedder unavailable"
 
 
+# ── How much of a turn's text one /embed request may carry (27.11.2026) ─────
+# Why: the coldstart/prefetch request used to send the WHOLE trigger turn.
+# Measured case 27.11. 08:00: a 13,750-character turn; that request needs
+# ~29 s, so BOTH 15 s attempts ran into their timeout ("returned no vector
+# after 2 attempt(s)") and the turn lost its memory block. Two independent
+# measurements of the same service size the limit below:
+#   8.47 s / 4,000 chars = 2.12 ms/char (Kiosha, cold, 27.11.)
+#   2.51 s / 1,000 chars = 2.51 ms/char (this plugin, warm + busy, 27.11.)
+# Taking the larger rate, 1,000 characters cost ~2.5 s: one attempt is far
+# below the 15 s request timeout, and even two attempts plus the bounded
+# /healthz wait (~6.0 s) stay under the 7.5 s coldstart deadline — so the
+# result lands with the NEXT turn instead of one turn later.
+# Start AND end are kept: a turn's opening names the subject, its end carries
+# the decision. The middle is not worth 29 s. Short texts are untouched, so
+# warm runs (~0.86 s) and every ordinary recall behave exactly as before.
+_PREFETCH_EMBED_CHARS_DEFAULT = 1000
+_PREFETCH_EMBED_WINDOW_MARKER = " …[middle cut]… "
+
+
+def _prefetch_embed_chars() -> int:
+    """Character limit for one prefetch/coldstart ``/embed`` request.
+
+    ``NEXUS_PREFETCH_EMBED_CHARS`` overrides it; clamped to 200…8000 so a
+    mis-set value cannot reintroduce the 29 s case or starve the text.
+    """
+    raw = os.environ.get("NEXUS_PREFETCH_EMBED_CHARS")
+    try:
+        value = int(raw) if raw is not None else _PREFETCH_EMBED_CHARS_DEFAULT
+    except (TypeError, ValueError):
+        value = _PREFETCH_EMBED_CHARS_DEFAULT
+    return min(max(value, 200), 8000)
+
+
+def _embed_window(text: str) -> str:
+    """Head and tail of ``text``, at most ``_prefetch_embed_chars()`` long.
+
+    A text that already fits is returned UNCHANGED — the warm path and every
+    ordinary query keep working exactly as before; only an over-long turn text
+    is cut, and it keeps both ends.
+    """
+    body = text if isinstance(text, str) else str(text)
+    limit = _prefetch_embed_chars()
+    if len(body) <= limit:
+        return body
+    marker = _PREFETCH_EMBED_WINDOW_MARKER
+    room = max(limit - len(marker), 2)
+    head = room - room // 2
+    tail = room - head
+    return body[:head] + marker + body[-tail:]
+
+
 def _serve_port() -> int:
     """HTTP port of the local service: NEXUS_SERVE_PORT, else the engine default."""
     default = 9122
@@ -450,7 +501,7 @@ def _embed_failure_note() -> str:
     return str(getattr(_EMBED_FAILURE, "reason", "") or "")
 
 
-def _post_embed(url: str, body: bytes, key: str):
+def _post_embed_attempt(url: str, body: bytes, key: str):
     """One ``POST /embed``: ``(payload, None, "")`` or ``(None, status, reason)``.
 
     ``reason`` is the diagnosis this call used to throw away: the exception
@@ -518,6 +569,31 @@ def _post_embed(url: str, body: bytes, key: str):
     }, None, ""
 
 
+def _post_embed(url: str, body: bytes, key: str, *, text_chars: int = -1):
+    """One logged ``POST /embed`` attempt — see ``_post_embed_attempt``.
+
+    Diagnosis gap this closes (27.11.2026): the service logs nothing about
+    ``/embed``, so an outlier was undiagnosable from both sides — nobody could
+    say WHICH thread asked or how large the request was. One line per attempt,
+    always: duration, character count, status, thread name and the reason
+    ``_post_embed_attempt`` found. No request text and no key. Logging must
+    never break a call, so every failure in here is swallowed.
+    """
+    import time as _time
+
+    started = _time.monotonic()
+    payload, status, reason = _post_embed_attempt(url, body, key)
+    try:
+        logger.info(
+            "/embed attempt: chars=%d duration=%.3fs status=%s thread=%s reason=%s",
+            text_chars, _time.monotonic() - started,
+            "-" if status is None else status,
+            threading.current_thread().name, reason or "ok")
+    except Exception:
+        pass
+    return payload, status, reason
+
+
 def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, Any]]":
     """POST /embed. Returns ``{"embedding","model","dim"}`` or None (never raises).
 
@@ -547,7 +623,8 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
                     _embed_service_base(), _plugin_data_dir(), _SERVICE_AUTH_KEY_FILE)
                 _remember_embed_failure("no agent key (enrolment did not deliver one)")
                 return None
-            payload, status, reason = _post_embed(url, body, key)
+            payload, status, reason = _post_embed(
+                url, body, key, text_chars=len(text))
             if payload is not None:
                 _remember_embed_failure("")
                 return payload
@@ -2548,10 +2625,14 @@ class NexusMemoryProvider:
         never wedge later prefetches, and the run's result lands as
         ``_prefetch_result`` for the NEXT turn.
 
-        Single-flight and zombie rules are unchanged: the run holds the exact
-        gate it acquired, it publishes only while that gate is still the
-        current one, and the watchdog's replacement gate makes a late run a
-        zombie that can neither publish nor clear.
+        Single-flight is unchanged: the run holds the exact gate it acquired,
+        and the watchdog's replacement gate lets later prefetches run at once.
+        What a LATE run may still do is decided by its RUN NUMBER, not by the
+        gate: it publishes unless a run that STARTED LATER has published in
+        between (``_may_prefetch_write``). A late but successful run is
+        therefore taken, not thrown away — and the gate it still holds is
+        released only while it is still the current one, so the replacement
+        gate stays untouched.
         """
         gate = getattr(self, "_prefetch_gate", None)
         if gate is None:
@@ -2614,8 +2695,11 @@ class NexusMemoryProvider:
             with self._prefetch_lock:
                 if gate is self._prefetch_gate:
                     self._prefetch_gate = threading.Lock()
-                    # The orphaned run may never publish through the new gate,
-                    # so "prepared" must not claim a result that does not exist.
+                    # A late run MAY still publish — that is the generation
+                    # rule, not a zombie ban (it only loses to a run that
+                    # started later and published first). What it must not do
+                    # is claim a result that does not exist yet, so "prepared"
+                    # stays false until such a run really publishes.
                     self._prefetch_prepared = False
 
         threading.Thread(target=_watch, name="nexus-coldstart-watch",
@@ -3465,11 +3549,12 @@ class NexusMemoryProvider:
         (shutdown checkpoints and the exception path) so a consumer reading
         during shutdown never sees a stale result from an earlier query.
 
-        ``gate`` is the single-flight lock the CALLER holds. A stale gate (a
-        coldstart thread that timed out had it replaced) means the caller is a
-        zombie: it must not wipe a fresher result it no longer owns, exactly
-        like the publication path. ``gate=None`` clears unconditionally —
-        that is the room-change path in ``prefetch()``, which is not a zombie.
+        ``gate`` is the single-flight lock the CALLER holds; it decides only
+        when no run number is given. With one, the RUN NUMBER is the rule: a
+        late run may clear (or publish) unless a run that STARTED LATER already
+        published — the gate it once acquired may long be replaced without that
+        making the run a zombie. ``gate=None`` and no ``gen`` clears
+        unconditionally — that is the room-change path in ``prefetch()``.
         """
         with self._prefetch_lock:
             if not self._may_prefetch_write(gate, gen):
@@ -3508,11 +3593,12 @@ class NexusMemoryProvider:
         """Run the actual prefetch search and publish ``_prefetch_result``.
 
         ``gate`` is the single-flight lock the CALLER holds (snapshot taken at
-        acquire time). Writes to ``_prefetch_result`` only happen while that
-        snapshot is still the current gate: a coldstart thread that timed out
-        had its gate replaced (_coldstart_catch_up), and a zombie finishing
-        late must not overwrite — or clear — a fresher result. ``gate=None``
-        (e.g. _do_prefetch, direct calls) means no guard.
+        acquire time). The publication check uses the RUN NUMBER taken here
+        when the work begins, not the gate: a run that outlives the deadline
+        may still publish unless a run that STARTED LATER published first —
+        and then it must not overwrite (or clear) that fresher result. The gate
+        only decides for callers that pass no run number (direct calls, tests).
+        ``gate=None`` (e.g. _do_prefetch, direct calls) means no gate guard.
         """
         if not self._embedder or not self._qdrant: return
         # This run's number, taken when the work begins: a run that outlives the
@@ -3548,7 +3634,11 @@ class NexusMemoryProvider:
             return
         try:
             query = self._rewrite_if_enabled(query)
-            vector = self._embed_cached(query)
+            # Only the EMBEDDING input is bounded, not the query: the keyword
+            # list and the token window below still see the whole turn. A cold
+            # /embed costs 2.1-2.5 ms per character (two measurements,
+            # 27.11.2026), so the full 13,750-character turn needed ~29 s.
+            vector = self._embed_cached(_embed_window(query))
             # Embedding/rewriting can outlast the shutdown grace period: abort
             # at this last checkpoint before the client is dereferenced below.
             if getattr(self, "_shutting_down", False):

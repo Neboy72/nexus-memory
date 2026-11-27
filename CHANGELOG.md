@@ -1,3 +1,16 @@
+## [0.22.78] - 2026-11-27
+
+**The prefetch embedding no longer sends the whole turn — and every embed attempt now records how long it took.**
+
+Prefetch (auto-recall) embeds the text of the turn before the next one starts. On a cold process it sent the full prompt: the failed turn of 2026-11-27 08:00 carried 13,750 characters, which is roughly 29 s of embedding against a 7.5 s deadline and two 15 s attempts. It could never arrive, and the memory was lost for that turn — not late, gone.
+
+- The prefetch embedding text is now capped at 1000 characters (`NEXUS_PREFETCH_EMBED_CHARS`, clamped to 200–8000): the head and the tail, with a marker in between. A text that fits passes through unchanged. Only the prefetch path is capped; the write path and `nexus_recall` are untouched.
+- Every embed attempt now writes one log line with its duration, character count, status and the thread that asked. The service logged nothing for `/embed` before, so an outlier could not be attributed to a caller.
+- New script `scripts/scope_payload_index.py`: creates the missing payload index on the `scope` field (68,602 points, `payload_schema` was empty; a filtered query cost ~400 ms against ~5 ms unfiltered). Idempotent, requires a snapshot plus checksum before writing, dry run by default. It was not executed as part of this release.
+- Four docstrings and comments described an older gate rule instead of the generation rule the code implements. They now say what the code does: a late run may still publish, unless a run that started later has already published.
+
+Numbers: 19 new tests. On the previous commit six of them fail and the other three are counter-proofs that stay green (a short text passes unchanged, a late run may publish, a later publication wins). Full suite: 3500 passed, 1 pre-existing failure, 22 skipped.
+
 ## [0.22.77] - 2026-11-26
 
 **A failed `/embed` now says why it failed — and the service writes down why it refused a request or gave no answer.**
