@@ -1,3 +1,17 @@
+## [0.22.80] - 2026-11-28
+
+**An installation can no longer enrol itself twice — and the two entries it already produced can be healed.**
+
+On 26 November the same harness enrolled twice, 25 seconds apart. The first call took the admin entry that had no key yet; the second could not adopt it (it now had one) and created a second "Hermes Agent" with the standard role. The key file then held the smaller entry's key, so the installation worked with `know` while the admin entry sat next to it as a corpse with the whole history.
+
+- The plugin serialises its enrolment: a lock file next to the key (`agent_keys/<harness>.key.lock`, `O_CREAT|O_EXCL`), a bounded wait of 2 s in small steps, and a second read under the lock. A crashed process cannot wedge it — an abandoned lock is reported and overridden after the wait.
+- The key file is created with `O_CREAT|O_EXCL` and mode 0600 and is never replaced: whichever process writes first wins, the other discards its own key and adopts the file. Both cases are logged ("key existing, own key discarded", "enrolled after lock wait X s"), so the next investigation sees what happened.
+- New `scripts/fix_duplicate_agent.py` (dry run by default, `--apply` to write): it groups entries by harness and host, keeps the one with the larger history, issues it a new key, writes that key into `agent_keys/<harness>.key` (0600, atomic, never printed) and retires the others.
+- Retiring keeps history: `retired_at` and `retired_into` are set and the key hash is dropped; nothing is deleted, so the writes stay attributable. The service honours both fields — a retired entry cannot authenticate and is never adopted by a later enrolment.
+- Two installations of the same harness on two machines are not duplicates: the grouping includes the host, because DSH runs on the Mac mini and on the Windows PC.
+
+Measured: a concurrent double enrolment now leaves exactly one key file, whose content belongs to the first writer, and the service is asked once. The live dry run names `hx7m2p` as keeper and `674zw5` to retire.
+
 ## [0.22.79] - 2026-11-27
 
 **Duplicate memories can now be merged without breaking the graph — and the scope index script no longer reports a failure that is not there.**

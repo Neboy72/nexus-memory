@@ -163,22 +163,70 @@ def _forget_agent_key(harness: str = _HARNESS) -> None:
         pass
 
 
-def _write_agent_key(key: str, harness: str = _HARNESS) -> None:
-    """Store the key with mode 0600, replacing any previous one atomically."""
+# One enrolment per harness at a time (26.11.2026): two plugin processes both
+# found no key file and both enrolled 25 s apart; the installation ended up on
+# the SECOND, smaller registry entry while the admin entry stayed behind as a
+# corpse — "Hermes Agent" listed twice in Connected Agents.
+_AGENT_KEY_LOCK_WAIT_SEC = 2.0
+_AGENT_KEY_LOCK_STEP_SEC = 0.05
+
+
+def _agent_key_lock_path(harness: str = _HARNESS) -> Path:
+    """``<data-dir>/agent_keys/<harness>.key.lock`` — the enrolment window."""
+    return _agent_key_path(harness).with_name(f"{harness}.key.lock")
+
+
+def _acquire_agent_key_lock(harness: str = _HARNESS) -> "Optional[Path]":
+    """Take the enrolment lock with ``O_CREAT|O_EXCL``.
+
+    Returns the lock path when THIS process owns the window, ``None`` when
+    another one holds it. Never blocks: the caller decides how long to wait.
+    """
+    path = _agent_key_lock_path(harness)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return None
+    return path
+
+
+def _release_agent_key_lock(path: "Optional[Path]") -> None:
+    """Always drop the lock — a crashed enrolment must not wedge the next one."""
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except Exception:
+        pass
+
+
+def _write_agent_key(key: str, harness: str = _HARNESS) -> bool:
+    """Store the key with mode 0600 — never overwrite an existing file.
+
+    ``O_CREAT|O_EXCL`` is the point: two processes that both decided to enrol
+    cannot both win. True means this call wrote the file; False means another
+    writer got there first and the caller must adopt that key instead of its
+    own (the older key belongs to the entitled entry, in practice the admin).
+    """
     path = _agent_key_path(harness)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".key.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(key)
-        os.replace(tmp, path)
+            handle.flush()
+            os.fsync(handle.fileno())
     except Exception:
         try:
-            tmp.unlink()
+            os.unlink(path)
         except Exception:
             pass
         raise
+    return True
 
 
 def _enroll(base_url: str) -> str:
@@ -209,7 +257,16 @@ def _enroll(base_url: str) -> str:
         if not isinstance(key, str) or not key.strip():
             logger.warning("service-auth: /enroll returned no key")
             return ""
-        _write_agent_key(key.strip())
+        if not _write_agent_key(key.strip()):
+            existing = _read_agent_key()
+            logger.info(
+                "service-auth: key existing, own key discarded (%s) — the key "
+                "on disk wins", _agent_key_path())
+            if existing:
+                return existing
+            logger.warning(
+                "service-auth: %s exists but is empty; the freshly enrolled "
+                "key is used for this process only", _agent_key_path())
         return key.strip()
     except Exception as exc:
         logger.warning("service-auth: /enroll against %s failed: %s", base_url, exc)
@@ -217,11 +274,59 @@ def _enroll(base_url: str) -> str:
 
 
 def _service_auth_key() -> str:
-    """This plugin's own key — read once, enrolled once when missing."""
+    """This plugin's own key — read once, enrolled once, never duplicated.
+
+    The window this closes: two processes of the SAME harness both found no
+    key file and both enrolled, seconds apart. The second one could not adopt
+    the first one's registry entry (it already had a key), so it created a new
+    one with the standard role — and the key file then held the SMALLER
+    entry's key.
+
+    Now the enrolment is serialised: one lock file next to the key, an
+    exclusive create for the key itself, and a bounded wait (2 s) instead of a
+    second enrolment. A lock left behind by a crashed process is reported and
+    overridden after the wait — a broken lock file must not block every turn.
+    """
     key = _read_agent_key()
     if key:
         return key
-    return _enroll(_embed_service_base())
+
+    base = _embed_service_base()
+    started = time.monotonic()
+    lock = None
+    while True:
+        lock = _acquire_agent_key_lock()
+        if lock is not None:
+            break
+        key = _read_agent_key()
+        if key:
+            logger.info(
+                "service-auth: another instance enrolled — existing key taken "
+                "after %.1f s", time.monotonic() - started)
+            return key
+        if time.monotonic() - started >= _AGENT_KEY_LOCK_WAIT_SEC:
+            logger.warning(
+                "service-auth: enrolment lock %s still held after %.1f s — "
+                "enrolling without it", _agent_key_lock_path(),
+                _AGENT_KEY_LOCK_WAIT_SEC)
+            break
+        time.sleep(_AGENT_KEY_LOCK_STEP_SEC)
+
+    waited = time.monotonic() - started
+    try:
+        # Double check under the lock: the other instance may have finished
+        # between our last read and the moment we got the lock.
+        key = _read_agent_key()
+        if key:
+            logger.info("service-auth: key appeared while enrolling — existing "
+                        "key taken, own enrolment skipped")
+            return key
+        key = _enroll(base)
+        if key and lock is not None:
+            logger.info("service-auth: enrolled after lock wait %.1f s", waited)
+        return key
+    finally:
+        _release_agent_key_lock(lock)
 
 
 def _plugin_venv_dir() -> Path:

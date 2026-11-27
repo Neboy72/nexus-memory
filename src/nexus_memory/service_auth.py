@@ -73,6 +73,12 @@ KEY_HASH_PREFIX = "sha256:"
 HARNESS_FIELD = "harness"
 ENROLLED_AT_FIELD = "enrolled_at"
 ENROLL_COUNT_FIELD = "enroll_count"
+# Stillgelegt (27.11.2026): a duplicate entry keeps its whole history — its
+# writes stay attributable — but loses its key and is never adopted again.
+# 26.11.2026: a race produced two "Hermes Agent" entries; the installation
+# ended up on the SMALLER one while the admin entry stayed behind.
+RETIRED_AT_FIELD = "retired_at"
+RETIRED_INTO_FIELD = "retired_into"
 AGENT_KEY_DIR = "agent_keys"
 #: The dashboard enrols like a plugin (it embeds through the service) but is
 #: not an agent: it never becomes the owner and never shows up in the list.
@@ -286,6 +292,8 @@ def verify_key(key: str, declared: str = "") -> tuple[str, bool]:
 
     wanted = hash_key(presented).encode("ascii")
     for agent in _agent_entries():
+        if _is_retired(agent):
+            continue
         stored = agent.get(KEY_HASH_FIELD)
         if not isinstance(stored, str) or not stored.strip():
             continue
@@ -453,6 +461,17 @@ def _newest_entry(entries: list[dict]) -> Optional[dict]:
     return max(entries, key=lambda e: str(e.get("last_seen") or ""))
 
 
+def _is_retired(entry: dict) -> bool:
+    """True for an entry retired by ``scripts/fix_duplicate_agent.py``.
+
+    Read by the service itself: a retired entry never authenticates with a key
+    and is never the target of an enrolment. Without those two readers the
+    marker would be decoration.
+    """
+    value = entry.get(RETIRED_AT_FIELD)
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _has_own_key(entry: dict) -> bool:
     """True, wenn der Eintrag schon einen eigenen Schluessel traegt.
 
@@ -490,6 +509,7 @@ def _find_enroll_target(agents: list, name: str) -> Optional[dict]:
 
     candidates = [a for a in agents
                   if isinstance(a, dict) and not _is_unadoptable(a)
+                  and not _is_retired(a)
                   and not _has_own_key(a)]
 
     for entry in candidates:
@@ -621,6 +641,35 @@ def revoke_key(agent_id: str) -> bool:
     return False
 
 
+def retire_agent(agent_id: str, into: str = "") -> dict:
+    """Retire a duplicate entry WITHOUT deleting it.
+
+    The entry keeps ``reads``, ``writes``, ``formerly`` and its timestamps, so
+    everything it did stays attributable; it loses the key hash (the credential
+    is withdrawn) and gets ``retired_at``/``retired_into``. The service honours
+    both: :func:`verify_key` refuses a retired entry and
+    :func:`_find_enroll_target` never adopts it again.
+
+    ``into`` names the entry that keeps the identity — the keeper.
+    """
+    from nexus_memory import agent_detect
+
+    with agent_detect._registry_lock():
+        registry = agent_detect._load_registry_unlocked()
+        agents = registry.setdefault("agents", [])
+        entry = next((a for a in agents
+                      if isinstance(a, dict) and a.get("id") == agent_id), None)
+        if entry is None:
+            raise ValueError(f"unknown agent id {agent_id!r}")
+        if not _is_retired(entry):
+            entry[RETIRED_AT_FIELD] = datetime.now(timezone.utc).isoformat()
+        if into:
+            entry[RETIRED_INTO_FIELD] = into
+        entry.pop(KEY_HASH_FIELD, None)
+        agent_detect._save_registry_unlocked(registry)
+        return dict(entry)
+
+
 def rename_agent(old_id: str, new_id: str) -> dict:
     """Rename a registered agent, keeping the old name as ``formerly``.
 
@@ -725,6 +774,8 @@ def list_agent_keys() -> list[dict]:
             "formerly": _former_names(entry),
             "has_key": isinstance(stored, str) and bool(stored.strip()),
             "issued_at": str(entry.get(KEY_ISSUED_FIELD) or ""),
+            "retired": _is_retired(entry),
+            "retired_into": str(entry.get(RETIRED_INTO_FIELD) or ""),
         })
     return rows
 
