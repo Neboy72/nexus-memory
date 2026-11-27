@@ -38,4 +38,4 @@ package = false
 # another review. The sha cannot move. `tests/test_pin_chain_is_closed.py`
 # proves both places name it and that the commit the catalog pins changes no
 # engine file over it.
-nexus-memory = { git = "https://github.com/Neboy72/nexus-memory.git", rev = "f3a43eebae51dbbb7f0d5d599f4e6d5627364ca1" }
+nexus-memory = { git = "https://github.com/Neboy72/nexus-memory.git", rev = "7cb0fe6a489908cec73f3af1727c96910fd8c76b" }
