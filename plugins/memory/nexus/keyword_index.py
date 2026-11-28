@@ -7,9 +7,9 @@ liegen. Ein BM25-Index gewichtet genau dieses seltene Wort hoch und liefert die
 Kandidaten, die die Aehnlichkeit verpasst.
 
 Der Index liegt in einer eigenen SQLite-Datei (FTS5) und wird aus einem
-einmaligen Lesen der Sammlung gebaut. Er ist unabhaengig von Qdrant: Schreiben
-in die Sammlung findet hier nicht statt. Ist die Datei kaputt oder fehlt sie,
-faellt der Aufrufer auf die reine Aehnlichkeitssuche zurueck.
+vollstaendigen, seitenweisen Lesen der Sammlung gebaut. Er ist unabhaengig von
+Qdrant: Schreiben in die Sammlung findet hier nicht statt. Ist die Datei kaputt
+oder fehlt sie, faellt der Aufrufer auf die reine Aehnlichkeitssuche zurueck.
 
 Oeffentliche Schnittstelle:
     tokenize            Wortmarken einer Zeile (Umlaute gefaltet, Versionen ganz)
@@ -29,6 +29,8 @@ import os
 import re
 import sqlite3
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -179,12 +181,62 @@ def _point_parts(point: Any) -> Tuple[str, Dict[str, Any]]:
     return str(pid), _slim_payload(payload)
 
 
+def _utc_now() -> str:
+    """Zeitstempel fuer ``built_at`` (ISO 8601, UTC)."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _mark_incomplete(db_path: Path, collection: str) -> None:
+    """Vermerkt in der dienenden Datei, dass ihr Inhalt unvollstaendig ist.
+
+    Nur ein kleiner Eintrag in der meta-Tabelle, kein Neuaufbau: die Datei
+    bleibt lesbar und liefert bis zum naechsten gelungenen Aufbau weiter
+    Treffer. Fehlt die Datei, gehoert sie einer anderen Sammlung oder ist sie
+    gesperrt, bleibt sie unangetastet.
+    """
+    if not db_path.exists():
+        return
+    try:
+        con = sqlite3.connect(str(db_path), timeout=2.0)
+    except sqlite3.Error as exc:
+        logger.debug("Stichwortindex nicht markierbar: %s", exc)
+        return
+    try:
+        with con:
+            has_meta = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+            ).fetchone()
+            if not has_meta:
+                return
+            row = con.execute(
+                "SELECT value FROM meta WHERE key = 'collection'"
+            ).fetchone()
+            if collection and row is not None and str(row[0]) != str(collection):
+                # Der Index gehoert einer anderen Sammlung; nicht vergiften.
+                return
+            con.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('complete', '0')"
+            )
+    except (sqlite3.Error, OSError) as exc:
+        logger.debug("Stichwortindex nicht markierbar: %s", exc)
+    finally:
+        con.close()
+
+
 def build_index(points: Iterable[Any], path: Optional[os.PathLike] = None,
-                collection: str = "") -> int:
+                collection: str = "", expected: Optional[int] = None) -> int:
     """Baut den Index aus einer Punktliste und ersetzt die Datei atomar.
 
     Geschrieben wird in eine Nachbardatei und erst nach erfolgreichem Schluss
     umbenannt; ein abgebrochener Aufbau hinterlaesst so nie einen halben Index.
+
+    Ist ``expected`` bekannt (Punktzahl der Sammlung), wird der neue Index nur
+    getauscht, wenn er genau so viele Punkte traegt; dann wird er als
+    vollstaendig (``complete=1``, ``built_at``) vermerkt. Bei einer Abweichung
+    bleibt die dienende Datei im Dienst und wird als unvollstaendig markiert —
+    ein kurzer Aufbau faellt so laut auf, statt still einen blinden Index
+    auszuliefern.
+
     Rueckgabe: Anzahl der aufgenommenen Punkte.
     """
     db_path = Path(path) if path is not None else default_db_path()
@@ -194,6 +246,8 @@ def build_index(points: Iterable[Any], path: Optional[os.PathLike] = None,
         tmp_path.unlink()
     except FileNotFoundError:
         pass
+    started = time.monotonic()
+    wanted = int(expected) if expected is not None else None
     con = sqlite3.connect(str(tmp_path))
     count = 0
     try:
@@ -223,8 +277,12 @@ def build_index(points: Iterable[Any], path: Optional[os.PathLike] = None,
         if docs_batch:
             con.executemany("INSERT OR REPLACE INTO docs VALUES (?, ?)", docs_batch)
             con.executemany("INSERT INTO docs_fts (doc_id, body) VALUES (?, ?)", fts_batch)
-        con.executemany("INSERT INTO meta (key, value) VALUES (?, ?)",
-                        [("collection", str(collection or "")), ("points", str(count))])
+        rows = [("collection", str(collection or "")), ("points", str(count))]
+        if wanted is not None:
+            rows.append(("complete", "1" if count == wanted else "0"))
+            if count == wanted:
+                rows.append(("built_at", _utc_now()))
+        con.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", rows)
         con.commit()
     except Exception:
         con.close()
@@ -235,24 +293,60 @@ def build_index(points: Iterable[Any], path: Optional[os.PathLike] = None,
         raise
     else:
         con.close()
+    if wanted is not None and count != wanted:
+        # Keine Gegenprobe bestanden: die bisherige Fassung bleibt im Dienst.
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        _mark_incomplete(db_path, collection)
+        logger.error(
+            "Stichwortindex unvollstaendig: %d von %d Punkten geschrieben; "
+            "die vorherige Fassung bleibt im Dienst", count, wanted)
+        return count
     os.replace(tmp_path, db_path)
+    if wanted is not None:
+        logger.info("Stichwortindex gebaut: %d Punkte in %.1f s",
+                    count, time.monotonic() - started)
     return count
 
 
 def build_from_qdrant(qdrant: Any, collection: str,
                       path: Optional[os.PathLike] = None) -> int:
-    """Liest die Sammlung einmal vollstaendig und baut daraus den Index.
+    """Liest die Sammlung vollstaendig (seitenweise) und baut daraus den Index.
 
-    Bewusst ohne seitenweises Blaettern: die Sammlung traegt gemischte
-    Kennungen, und der Seitenzeiger laeuft dabei im Kreis. Ein einzelner
-    Scroll mit hohem Limit liefert alle Punkte.
+    Gemessen am 28.11.2026 an ``nexus_hf``: 68869 Punkte, 35 Seiten a 2000,
+    68869 eindeutige Kennungen — der Seitenzeiger laeuft nicht im Kreis. Der
+    frueher benutzte Gesamtdeckel (``NEXUS_FTS_LIMIT`` = 60000) liess dagegen
+    8869 Punkte (12.9 %) unauffindbar, ohne dass der Index krank aussah.
+
+    ``NEXUS_FTS_LIMIT`` ist deshalb die Seitengroesse (Standard 5000), keine
+    Obergrenze: gelesen wird, bis ``next_page_offset`` None ist. Getauscht
+    wird nur, wenn die Punktzahl mit der Sammlung uebereinstimmt; faellt die
+    Gegenprobe aus (``collection_count`` liefert None), gar nicht.
     """
-    limit = _env_int("NEXUS_FTS_LIMIT", 60000, 1, 1_000_000)
-    records, _offset = qdrant.scroll(
-        collection_name=collection, limit=limit,
-        with_payload=True, with_vectors=False,
-    )
-    return build_index(records or [], path=path, collection=collection)
+    page = _env_int("NEXUS_FTS_LIMIT", 5000, 1, 1_000_000)
+    records: List[Any] = []
+    offset: Any = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "collection_name": collection, "limit": page,
+            "with_payload": True, "with_vectors": False,
+        }
+        if offset is not None:
+            kwargs["offset"] = offset
+        batch, offset = qdrant.scroll(**kwargs)
+        records.extend(batch or [])
+        if offset is None:
+            break
+    expected = collection_count(qdrant, collection)
+    if expected is None:
+        logger.error(
+            "Stichwortindex nicht getauscht: Punktzahl der Sammlung %r nicht "
+            "ermittelbar", collection)
+        return 0
+    return build_index(records, path=path, collection=collection,
+                       expected=expected)
 
 
 class KeywordIndex:
@@ -291,12 +385,20 @@ class KeywordIndex:
             return -1
 
     def is_current(self, expected_count: Optional[int] = None) -> bool:
-        """Passt der Index zur Sammlung (Name und, falls bekannt, Zeilenzahl)?"""
+        """Passt der Index zur Sammlung (Name, Vollstaendigkeit, Zeilenzahl)?
+
+        Ohne bekannte Punktzahl genuegt der Sammlungsname. Mit Punktzahl muss
+        der Index zusaetzlich als vollstaendig vermerkt sein: ein als
+        unvollstaendig markierter Index ist nie aktuell, auch wenn seine
+        Zeilenzahl zufaellig passt.
+        """
         info = self.meta()
         if info.get("collection") != self.collection:
             return False
         if expected_count is None:
             return True
+        if info.get("complete") == "0":
+            return False
         try:
             stored = int(info.get("points", "-1"))
         except (TypeError, ValueError):

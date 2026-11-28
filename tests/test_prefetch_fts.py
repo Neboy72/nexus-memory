@@ -8,7 +8,9 @@ bevorzugen.
 """
 
 import importlib.util
+import logging
 import os
+import sqlite3
 import sys
 import threading
 
@@ -133,10 +135,14 @@ class TestRrfFusion:
 
 
 class _FakeQdrant:
-    def __init__(self, count=None, records=None, fail=False):
+    def __init__(self, count=None, records=None, fail=False, short_read=None):
         self._count = count
         self._records = records or []
         self._fail = fail
+        # Liefert nur die ersten ``short_read`` Punkte, egal wie geblaettert
+        # wird — eine Sammlung, die waehrend des Aufbaus kuerzer antwortet.
+        self._short_read = short_read
+        self.scrolls = []  # (limit, offset) je Aufruf
 
     def count(self, collection_name, exact=True):
         if self._fail:
@@ -145,10 +151,17 @@ class _FakeQdrant:
             raise AttributeError("count")
         return type("R", (), {"count": self._count})()
 
-    def scroll(self, **_kwargs):
+    def scroll(self, collection_name=None, limit=10, offset=None, **_kwargs):
         if self._fail:
             raise RuntimeError("Qdrant nicht erreichbar")
-        return self._records, None
+        self.scrolls.append((limit, offset))
+        start = 0 if offset is None else int(offset)
+        punkte = self._records
+        if self._short_read is not None:
+            punkte = punkte[: self._short_read]
+        seite = punkte[start:start + limit]
+        naechste = start + len(seite)
+        return seite, (None if naechste >= len(punkte) else naechste)
 
 
 class TestAusfall:
@@ -199,6 +212,110 @@ class TestAusfall:
         assert ensure_index(_FakeQdrant(count=1), "testcoll", pfad) is None
         # Der fremde Index bleibt unangetastet.
         assert KeywordIndex(pfad, "nexus_hf").count() == 1
+
+
+# ── Vollstaendigkeit: kein Gesamtdeckel, Tausch nur mit Gegenprobe ─────────
+
+def _punkte_anzahl(n, praefix="p"):
+    return [{"id": f"{praefix}{i}", "payload": {"content": f"notiz {i}"}}
+            for i in range(n)]
+
+
+class TestVollstaendigerAufbau:
+    def test_k1_kein_gesamtdeckel(self, tmp_path, monkeypatch):
+        """K1: 70.001 Punkte werden vollstaendig gelesen, nicht bei 60.000 gekappt."""
+        monkeypatch.delenv("NEXUS_FTS_LIMIT", raising=False)
+        anzahl = 70001
+        fake = _FakeQdrant(count=anzahl, records=_punkte_anzahl(anzahl))
+        pfad = tmp_path / "fts.db"
+
+        assert fts.build_from_qdrant(fake, "nexus_hf", pfad) == anzahl
+
+        index = KeywordIndex(pfad, "nexus_hf")
+        assert index.count() == anzahl
+        assert index.is_current(anzahl)
+        assert index.meta()["complete"] == "1"
+        assert index.meta()["built_at"]
+        # Standard-Seitengroesse 5000: 14 volle Seiten und eine Restseite.
+        assert [limit for limit, _ in fake.scrolls] == [5000] * 15
+        assert [offset for _, offset in fake.scrolls] == \
+            [None] + [5000 * i for i in range(1, 15)]
+
+    def test_k2_seiten_liefern_keine_doppelten_zeilen(self, tmp_path, monkeypatch):
+        """K2: geblaettert wird ueber next_page_offset, jede Kennung genau einmal."""
+        monkeypatch.setenv("NEXUS_FTS_LIMIT", "500")
+        anzahl = 2000
+        fake = _FakeQdrant(count=anzahl, records=_punkte_anzahl(anzahl))
+        pfad = tmp_path / "fts.db"
+
+        assert fts.build_from_qdrant(fake, "testcoll", pfad) == anzahl
+        assert fake.scrolls == [(500, None), (500, 500), (500, 1000), (500, 1500)]
+
+        con = sqlite3.connect(str(pfad))
+        try:
+            zeilen = con.execute("SELECT count(*) FROM docs").fetchone()[0]
+            eindeutig = con.execute(
+                "SELECT count(DISTINCT doc_id) FROM docs").fetchone()[0]
+        finally:
+            con.close()
+        assert zeilen == eindeutig == anzahl
+
+    def test_k4_kurzer_aufbau_tauscht_nicht_und_ist_laut(self, tmp_path, caplog):
+        """K4: weniger Punkte als die Sammlung -> kein Tausch, ERROR, complete=0."""
+        pfad = tmp_path / "fts.db"
+        build_index([{"id": f"alt{i}", "payload": {"content": f"altbestand {i}"}}
+                     for i in range(3)], pfad, "testcoll")
+        # Die Sammlung meldet 3 Punkte, der Scroll liefert nur 2.
+        fake = _FakeQdrant(count=3, records=_punkte_anzahl(3, "neu"), short_read=2)
+
+        with caplog.at_level(logging.ERROR,
+                             logger="nexus.hermes_plugin.keyword_index"):
+            assert fts.build_from_qdrant(fake, "testcoll", pfad) == 2
+
+        index = KeywordIndex(pfad, "testcoll")
+        # Die alte, vollstaendige Fassung bleibt inhaltlich im Dienst.
+        assert index.count() == 3
+        assert index.search("altbestand", stopwords=STOPP)
+        assert index.search("notiz") == []
+        # ... ist aber als unvollstaendig vermerkt und gilt nicht als aktuell.
+        assert index.meta()["complete"] == "0"
+        assert not index.is_current(3)
+        assert "unvollstaendig" in caplog.text
+        assert "2 von 3" in caplog.text
+
+    def test_k5_rueckfall_bleibt_still(self, tmp_path, monkeypatch):
+        """K5: fehlende oder kaputte Datei wirft nicht und liefert None."""
+        monkeypatch.setattr(fts, "_rebuild_in_background", lambda *a, **k: None)
+        fehlt = tmp_path / "fehlt.db"
+        assert ensure_index(_FakeQdrant(count=4), "testcoll", fehlt) is None
+        assert not fehlt.exists()
+
+        kaputt = tmp_path / "kaputt.db"
+        kaputt.write_bytes(b"das ist keine datenbank")
+        assert ensure_index(_FakeQdrant(count=4), "testcoll", kaputt) is None
+        assert kaputt.read_bytes() == b"das ist keine datenbank"
+        assert KeywordIndex(kaputt, "testcoll").search("Kessel") == []
+
+    def test_aktueller_index_baut_nicht_erneut(self, tmp_path, monkeypatch):
+        """Ist der Index aktuell, loest keine Anfrage einen Aufbau aus."""
+        pfad = tmp_path / "fts.db"
+        anzahl = 5
+        assert fts.build_from_qdrant(
+            _FakeQdrant(count=anzahl, records=_punkte_anzahl(anzahl)),
+            "testcoll", pfad) == anzahl
+        index = KeywordIndex(pfad, "testcoll")
+        assert index.is_current(anzahl)
+        vorher = index.meta()["built_at"]
+
+        aufbauten = []
+        monkeypatch.setattr(fts, "_rebuild_in_background",
+                            lambda *a, **k: aufbauten.append(1))
+        for _ in range(100):
+            assert ensure_index(_FakeQdrant(count=anzahl), "testcoll", pfad) \
+                is not None
+
+        assert aufbauten == []
+        assert index.meta()["built_at"] == vorher
 
 
 # ── Plugin-Weg: Fusion ersetzt die Ja/Nein-Umsortierung ────────────────────
