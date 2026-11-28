@@ -962,9 +962,24 @@ export function apply(ctx, config = {}) {
       }
       const text = renderMemories(Array.isArray(memories) ? memories : [], recallBudget)
       if (!text) return decision
-      ctx.logger?.info?.(
-        `nexus-memory: recall block injected (${(Array.isArray(memories) ? memories : []).length} `
-        + `entries, ${text.length} chars, user message ${hostUserMessage ? 'host' : 'local'})`)
+      {
+        // Sichtbar machen, dass der Block wirklich eingespielt wurde: die
+        // App zeigt Plugin-Logs nicht zuverlaessig, deshalb zusaetzlich eine
+        // eigene Zeile je Einspielung (28.11.2026).
+        const eintraege = (Array.isArray(memories) ? memories : []).length
+        const zeile = `nexus-memory: recall block injected (${eintraege} entries, `
+          + `${text.length} chars, user message ${hostUserMessage ? 'host' : 'local'})`
+        if (typeof ctx.logger?.info === 'function') ctx.logger.info(zeile)
+        else ctx.logger?.warn?.(zeile)
+        try {
+          const ordner = path.join(os.homedir(), '.nexus-memory', 'logs')
+          mkdirSync(ordner, { recursive: true })
+          appendFileSync(
+            path.join(ordner, `dsh-recall-${new Date().toISOString().slice(0, 10)}.jsonl`),
+            JSON.stringify({ ts: new Date().toISOString(), entries: eintraege,
+                             chars: text.length, source: hostUserMessage ? 'host' : 'local' }) + '\n')
+        } catch { /* fail-open: eine Logzeile darf den Turn nicht kippen */ }
+      }
       return {
         ...decision,
         messages: [
