@@ -19,7 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { Config, apply } from './index.js'
+import { normalizeConfig as Config, apply } from './index.js'
 
 const INSTALL_KEY = 'test-installation-key'
 
@@ -259,6 +259,15 @@ cases.push([
   async () => {
     // Der Config-Parser darf die Felder nicht ablehnen (alte Datei ohne sie
     // muss ebenfalls durchlaufen — deshalb die zweite Pruefung).
+    // Seit DS Bot 0.4.0 liegt `@deepseek-ai/schemastery` nur noch INNERHALB
+    // der App und ist fuer das Plugin nicht mehr aufloesbar; dann gibt es
+    // keine Schema-Form und damit auch keinen Parser, der etwas ablehnen
+    // koennte. Die Pruefung faellt dann aus — sie ist nicht bestanden, sondern
+    // gegenstandslos, und das wird hier gesagt statt still uebersprungen.
+    if (Config === undefined) {
+      console.log('   (kein Config-Schema: Host-Paket @deepseek-ai/schemastery nicht aufloesbar)')
+      return
+    }
     Config({ recallExcludeCategories: ['session'], recallMinScore: 0.2, recallFilter: true })
     Config({})
   },

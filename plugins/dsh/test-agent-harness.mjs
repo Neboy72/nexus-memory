@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:f
 import os from 'node:os'
 import path from 'node:path'
 
-import { Config, apply, captureText } from './index.js'
+import { normalizeConfig as Config, apply, captureText } from './index.js'
 
 const INSTALL_KEY = 'test-installation-key'
 

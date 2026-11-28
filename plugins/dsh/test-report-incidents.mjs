@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { Config, apply, incidentFromToolResult } from './index.js'
+import { normalizeConfig as Config, apply, incidentFromToolResult } from './index.js'
 
 const INSTALL_KEY = 'test-installation-key'
 

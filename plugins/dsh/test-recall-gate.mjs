@@ -17,7 +17,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { Config, apply, isSubstantialQuery } from './index.js'
+import { normalizeConfig as Config, apply, isSubstantialQuery } from './index.js'
 
 const INSTALL_KEY = 'test-installation-key'
 
@@ -172,6 +172,13 @@ cases.push([
       assert.equal(decision.messages.length, 2, 'one block injected')
       const injected = decision.messages[1]
       assert.equal(injected.source?.kind, 'nexus-memory', 'attributed, not silent')
+      // Form wie beim Host-Paket: eine echte User-Nachricht mit eigener Kennung,
+      // eingefroren. Genau das baut der lokale Ersatz, seit `dsh-llm` aus dem
+      // Plugin nicht mehr aufloesbar ist.
+      assert.equal(injected.role, 'user', 'der Merkblock ist eine User-Nachricht')
+      assert.match(String(injected.id), /^[0-9a-f-]{36}$/i, 'eigene Kennung fehlt')
+      assert.ok(Object.isFrozen(injected), 'Nachrichten werden eingefroren veroeffentlicht')
+      assert.ok(String(injected.content?.[0]?.text || '').length > 0, 'Inhalt fehlt')
     })
   },
 ])

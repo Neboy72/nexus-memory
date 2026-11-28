@@ -26,8 +26,53 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import z from '@deepseek-ai/schemastery'
+import { randomUUID } from 'node:crypto'
+
+// The two host packages used to be hoisted into the plugin's reach. Since
+// DS Bot 0.4.0 loads this plugin from the checkout and keeps both inside
+// app.asar (`node_modules/@deepseek-ai/dsh-llm`, `.../schemastery`), neither
+// import resolves — and a static import that fails takes the whole plugin
+// down ("failed to import … Cannot find package '@deepseek-ai/dsh-llm'").
+// So both are optional now, with a local stand-in that produces the same
+// message object the host package builds (read from
+// `dsh-llm/src/message.ts`: {...input, role: 'user', id: <uuid>}, deep-frozen).
+let createUserMessage
+let z
+let hostUserMessage = false
+try {
+  ;({ createUserMessage } = await import('@deepseek-ai/dsh-llm'))
+} catch {
+  createUserMessage = null
+}
+try {
+  z = (await import('@deepseek-ai/schemastery')).default
+} catch {
+  z = undefined
+}
+
+/** Recursive freeze, as the host package does before publishing a message. */
+function deepFreeze(value) {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const key of Object.keys(value)) deepFreeze(value[key])
+  }
+  return value
+}
+
+/**
+ * Local copy of the host's ``createUserMessage``: same shape, same identity.
+ * A message without an ``id`` would be refused by the transcript, so the
+ * fallback has to carry one exactly like the original.
+ */
+function localUserMessage(input) {
+  return deepFreeze(structuredClone({ ...input, role: 'user', id: randomUUID() }))
+}
+
+if (createUserMessage === null) {
+  createUserMessage = localUserMessage
+} else {
+  hostUserMessage = true
+}
 
 export const name = 'nexus-memory'
 
@@ -48,7 +93,7 @@ function debugTrace(line) {
   }
 }
 
-export const Config = z.object({
+export const Config = z?.object({
   transport: z.string().description('http (serve daemon) or stdio (local nexus_memory package).'),
   baseUrl: z.string().description('Serve daemon base URL (default http://127.0.0.1:9122).'),
   serviceKey: z.string().description('Value for x-nexus-service-key; overrides keyFile.'),
@@ -822,7 +867,38 @@ function createStore(ctx, config) {
   })
 }
 
-export function apply(ctx, config) {
+/**
+ * Config without the host's schema package.
+ *
+ * `@deepseek-ai/schemastery` is no longer resolvable from a plugin loaded out
+ * of the checkout (it lives inside app.asar), and a Config schema that cannot
+ * be built must not take the plugin down. The two things the schema actually
+ * enforced here — the ``dsh`` default and the harness pattern — live in this
+ * function instead, so they still hold when the schema is absent. Everything
+ * else is read with its default at the place that uses it.
+ */
+export function normalizeConfig(input = {}) {
+  if (input === null || typeof input !== 'object') {
+    throw new TypeError('nexus-memory: config must be an object')
+  }
+  const out = { ...input }
+  if (out.agentHarness === undefined) {
+    out.agentHarness = 'dsh'
+  } else if (typeof out.agentHarness !== 'string'
+             || !AGENT_HARNESS_PATTERN.test(out.agentHarness)) {
+    throw new TypeError(
+      `invalid agentHarness ${JSON.stringify(out.agentHarness)} — must match regexp ${AGENT_HARNESS_PATTERN}`)
+  }
+  if (out.agentLabel === undefined) {
+    out.agentLabel = 'DeepSeek Harness'
+  } else if (typeof out.agentLabel !== 'string') {
+    throw new TypeError('nexus-memory: agentLabel must be a string')
+  }
+  return out
+}
+
+export function apply(ctx, config = {}) {
+  config = normalizeConfig(config)
   const store = createStore(ctx, config)
   ctx.effect(() => () => store.dispose(), 'nexus-memory transport')
 
@@ -886,6 +962,9 @@ export function apply(ctx, config) {
       }
       const text = renderMemories(Array.isArray(memories) ? memories : [], recallBudget)
       if (!text) return decision
+      ctx.logger?.info?.(
+        `nexus-memory: recall block injected (${(Array.isArray(memories) ? memories : []).length} `
+        + `entries, ${text.length} chars, user message ${hostUserMessage ? 'host' : 'local'})`)
       return {
         ...decision,
         messages: [
