@@ -772,9 +772,13 @@ async def get_agents():
     registry = load_agents_registry()
     # Das Dashboard meldet sich selbst an, um einbetten zu duerfen — es ist
     # aber kein Agent und gehoert nicht in die Liste.
+    # 28.11.2026: stillgelegte Eintraege (retired_at gesetzt) sind Grabsteine —
+    # sie bleiben im Register, damit alte Schreibvorgaenge zurechenbar sind,
+    # gehoeren aber nicht in die Liste der verbundenen Agenten.
     registry["agents"] = [
         agent for agent in registry.get("agents", [])
-        if not (isinstance(agent, dict) and agent.get("harness") == "dashboard")
+        if not (isinstance(agent, dict) and (
+            agent.get("harness") == "dashboard" or agent.get("retired_at")))
     ]
     # 15.11.2026: der Browser sieht nie den Schluessel-Hash — nur, OB ein
     # eigener Schluessel hinterlegt ist, und wann/wie oft sich der Agent
