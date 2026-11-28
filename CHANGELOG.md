@@ -12,6 +12,17 @@ On 26 November the same harness enrolled twice, 25 seconds apart. The first call
 
 Measured: a concurrent double enrolment now leaves exactly one key file, whose content belongs to the first writer, and the service is asked once. The live dry run names `hx7m2p` as keeper and `674zw5` to retire.
 
+**The keyword index now covers the whole collection — and stops rebuilding itself on every request.**
+
+The keyword half of a search was silently blind to part of the memory: the index held 60,000 of 68,869 points (12.9 % missing), because the build read the collection with one `scroll` capped by `NEXUS_FTS_LIMIT`. Worse, the index therefore never counted as current, so every request started another rebuild — which is where the daily "coldstart prefetch still running" warnings came from.
+
+- The build reads page by page with no overall cap (`NEXUS_FTS_LIMIT` is now the page size, default 5000), until `next_page_offset` is empty.
+- A build only replaces the serving index if its point count matches the collection: it writes to a temporary file, compares against `collection_count()`, and swaps with `os.replace` on a match. On a mismatch the complete full index stays in service and `complete=0` is written into its meta, so the morning report shows the alarm without an outage.
+- Nothing is topped up incrementally: a full rebuild measured 3.8 s and 90 MB, which is cheaper than the special case.
+- The dashboard list no longer shows retired agents. They stay in the registry so their writes remain attributable, but "Connected agents" hides them.
+
+Measured after the change: 68,869 of 68,869 points in the index, `is_current` true and stable, and no rebuild on a repeated request.
+
 ## [0.22.79] - 2026-11-27
 
 **Duplicate memories can now be merged without breaking the graph — and the scope index script no longer reports a failure that is not there.**
