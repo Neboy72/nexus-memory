@@ -43,8 +43,8 @@ runner = _load(RUNNER_PATH, "nexus_release")
 def test_step_order_is_the_checklist():
     assert runner.STEP_NAMEN == (
         "vorpruefung", "version", "changelog", "commit", "pin", "push",
-        "tag", "release", "clawhub", "katalog", "neustart", "fassungen",
-        "bilanz")
+        "tag", "release", "prueflauf", "clawhub", "katalog", "neustart",
+        "fassungen", "bilanz")
 
 
 def test_there_is_no_force_and_no_skip_option():
