@@ -1,4 +1,3 @@
-import os
 """Ein Schluessel, ein Eintrag: die Einschreibung darf sich nicht verdoppeln.
 
 Befund 26.11.2026: 13:53:57 UTC meldet sich die Installation an und bekommt
@@ -16,6 +15,7 @@ Diese Datei haelt die zwei Wege fest, auf denen das jetzt nicht mehr passiert:
 Dazu die Grundregel: ``_write_agent_key`` ueberschreibt nie.
 """
 from __future__ import annotations
+import os
 
 import json
 import threading
