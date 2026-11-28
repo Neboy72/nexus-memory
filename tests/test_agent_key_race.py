@@ -1,3 +1,4 @@
+import os
 """Ein Schluessel, ein Eintrag: die Einschreibung darf sich nicht verdoppeln.
 
 Befund 26.11.2026: 13:53:57 UTC meldet sich die Installation an und bekommt
@@ -127,7 +128,10 @@ def test_write_agent_key_never_overwrites(keys):
     assert keys.read_text(encoding="utf-8") == "ERSTER"
     assert nx._write_agent_key("ZWEITER") is False
     assert keys.read_text(encoding="utf-8") == "ERSTER", "die Datei wurde ueberschrieben"
-    assert oct(keys.stat().st_mode & 0o777) == "0o600"
+    if os.name == "posix":
+        # Windows kennt keine POSIX-Rechte; dort ist 0o666 normal und die
+        # Aussage dieses Tests (nie ueberschreiben) steht schon oben.
+        assert oct(keys.stat().st_mode & 0o777) == "0o600"
 
 
 def test_existing_key_is_used_without_asking_the_service(keys, monkeypatch):
