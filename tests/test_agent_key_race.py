@@ -131,7 +131,9 @@ def test_write_agent_key_never_overwrites(keys):
     if os.name == "posix":
         # Windows kennt keine POSIX-Rechte; dort ist 0o666 normal und die
         # Aussage dieses Tests (nie ueberschreiben) steht schon oben.
-        assert oct(keys.stat().st_mode & 0o777) == "0o600"
+        if os.name == "posix":
+            # Windows kennt keine POSIX-Rechte: dort ist 0o666 normal.
+            assert oct(keys.stat().st_mode & 0o777) == "0o600"
 
 
 def test_existing_key_is_used_without_asking_the_service(keys, monkeypatch):

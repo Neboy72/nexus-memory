@@ -13,6 +13,7 @@ uebernommen — das prueft die Dienstseite mit.
 """
 from __future__ import annotations
 
+import os
 import importlib.util
 import json
 from pathlib import Path
@@ -132,7 +133,9 @@ def test_apply_writes_the_key_retires_the_duplicate_and_prints_no_secret(umgebun
 
     key_path = key_dir / "agent_keys" / "hermes.key"
     assert key_path.exists(), "keine Schluesseldatei geschrieben"
-    assert oct(key_path.stat().st_mode & 0o777) == "0o600"
+    if os.name == "posix":
+        # Windows kennt keine POSIX-Rechte: dort ist 0o666 normal.
+        assert oct(key_path.stat().st_mode & 0o777) == "0o600"
     key = key_path.read_text(encoding="utf-8").strip()
     assert len(key) > 20
     assert key not in out, "der Klartextschluessel steht in der Ausgabe"
