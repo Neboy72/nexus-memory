@@ -1,3 +1,16 @@
+## [0.22.81] - 2026-11-28
+
+**The prefetch deadline now covers the whole chain — embedding, search and rerank.**
+
+The catalog review of 0.22.79 found that the deadline arithmetic did not cover the implemented health-check retry loop. `_wait_for_embed_service` could spend up to 5.0 s (four 1.0 s probes plus four 0.25 s sleeps) while `tests/test_prefetch_embed_window.py` assumed 1.0 s, and two measured 1,000-character embed attempts cost 5.02 s: 10.02 s in the worst case against a ceiling of 7.5 s (plugin) and 8.0 s (core). The test proved a deadline guarantee the implementation did not provide.
+
+- One monotonic budget (`_EmbedBudget`) is created once per prefetch and sliced down the chain instead of every step opening its own window. Each wait and each HTTP timeout is clipped to the remaining time; an exhausted budget starts no further attempt.
+- The rerank reads the same budget. Below `_RERANK_MIN_BUDGET_SEC` (4.0 s, the model-load allowance already in the code — no new number) it is skipped, the similarity/RRF order is returned unchanged and one INFO line names the reason. The search itself always runs: it is local and cheap, and losing memories to a deadline meant for the expensive part would be the wrong trade.
+- "No time left" stays distinguishable from "no vector": an exhausted budget records `embed budget exhausted`.
+- `scripts/scope_payload_index.py` fails closed. An existing `scope` index with `data_type: text` now exits non-zero and names the type it found and the `keyword` type it needs, instead of a warning plus exit 0 that a human, a cron job and CI all read as success. `--recreate` drops and rebuilds it as `keyword`; a correct index stays a successful no-op.
+
+Measured: the worst case on a faked clock is 6.04 s against the 7.25 s budget, below both ceilings. 34 tests in the two affected files, with the red proof taken — the rerank tests fail without this change.
+
 ## [0.22.80] - 2026-11-28
 
 **An installation can no longer enrol itself twice — and the two entries it already produced can be healed.**

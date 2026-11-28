@@ -476,6 +476,78 @@ _COLDSTART_DEFAULT_SEC = min(
     _EMBED_SERVICE_START_BUDGET_SEC + _EMBED_MODEL_LOAD_ALLOWANCE_SEC,
 )
 
+# ── One shared deadline for the whole embed chain (28.11.2026) ──────────────
+# `_wait_for_embed_service` alone could spend ~5.0 s (four hangs at 1.0 s plus
+# the 0.25 s pauses), and two measured 1,000-character attempts cost ~5.02 s —
+# 10.02 s together, past both the 7.5 s coldstart ceiling and the core's 8.0 s
+# prefetch deadline. Every step of the chain now reads ONE monotone clock, so
+# what the health check spent is gone for the retry as well. All limits below
+# are derived from the constants they bound: no new collection- or text-size
+# number, and the reserve keeps the chain strictly below the ceiling.
+_EMBED_SERVICE_HEALTHZ_TIMEOUT_SEC = 1.0
+_EMBED_BUDGET_RESERVE_SEC = _EMBED_SERVICE_RETRY_INTERVAL
+_EMBED_BUDGET_DEFAULT_SEC = _COLDSTART_CEILING_SEC - _EMBED_BUDGET_RESERVE_SEC
+_EMBED_MIN_ATTEMPT_SEC = _EMBED_SERVICE_RETRY_INTERVAL
+# A rerank is only worth starting when the shared budget still holds what the
+# chain already reserves for loading the embed model. Below that the model call
+# cannot arrive before the ceiling, and the similarity/RRF order is worth more
+# than a late rerank. Derived from an existing value on purpose: no new number.
+_RERANK_MIN_BUDGET_SEC = _EMBED_MODEL_LOAD_ALLOWANCE_SEC
+
+
+class _EmbedBudget:
+    """One monotone deadline shared by every step of an embed chain.
+
+    ``remaining()`` and ``expired()`` read the same clock (``time.monotonic``),
+    so a step cannot hand itself a fresh window. ``slice()`` returns a
+    sub-budget that leaves room for the steps still to come — without it an
+    early wait could consume everything and the retry would never start.
+    """
+
+    __slots__ = ("deadline",)
+
+    def __init__(self, seconds: float) -> None:
+        self.deadline = time.monotonic() + max(0.0, float(seconds))
+
+    @classmethod
+    def default(cls) -> "_EmbedBudget":
+        return cls(_EMBED_BUDGET_DEFAULT_SEC)
+
+    def remaining(self) -> float:
+        return max(0.0, self.deadline - time.monotonic())
+
+    def expired(self) -> bool:
+        return self.remaining() <= 0.0
+
+    def slice(self, steps_left: int) -> "_EmbedBudget":
+        """A sub-budget for one step, leaving room for *steps_left* others."""
+        return _EmbedBudget(self.remaining() / (max(1, int(steps_left)) + 1))
+
+
+_EMBED_BUDGET = threading.local()
+
+
+@contextlib.contextmanager
+def _embed_budget_scope(budget: "Optional[_EmbedBudget]"):
+    """Make *budget* this thread's chain clock (prefetch top → attempt).
+
+    ``_embed_cached`` sits between the prefetch top and ``_Embedder.embed``,
+    and every test double of it accepts only ``(text, is_query)``. The scope
+    carries the budget across that seam without changing a signature the whole
+    test suite replaces; the attempt-level functions still take it explicitly.
+    """
+    previous = getattr(_EMBED_BUDGET, "current", None)
+    _EMBED_BUDGET.current = budget
+    try:
+        yield budget
+    finally:
+        _EMBED_BUDGET.current = previous
+
+
+def _current_embed_budget() -> "Optional[_EmbedBudget]":
+    return getattr(_EMBED_BUDGET, "current", None)
+
+
 # The one-line note every read answer must start with when the embedder is
 # down — one shape for the model, the user and the log.
 _EMBEDDER_NOTE_PREFIX = "⚠ local embedder unavailable"
@@ -570,20 +642,36 @@ def _embed_service_healthz(timeout: float = 2.0) -> bool:
         return False
 
 
-def _wait_for_embed_service() -> bool:
+def _wait_for_embed_service(
+        budget: "Optional[_EmbedBudget]" = None) -> bool:
     """Wait briefly for ``/healthz``; True as soon as the service answers.
 
     Used BEFORE declaring the embedder gone and BEFORE repeating a failed
     ``/embed``. A service that was just restarted (launchd, first request after
     a reboot) or is busy (backup at the top of the hour) answers ``/healthz``
     long before it can serve a vector, and a single 15 s timeout is not proof
-    that it is unreachable. Bounded: at most a few healthz probes, never a
-    minute.
+    that it is unreachable.
+
+    With *budget* every probe timeout and every pause is clipped to what is
+    left of the ONE deadline the calling chain shares, and an exhausted budget
+    starts no further probe at all. Without one (direct callers) the old
+    bounded behaviour is unchanged.
     """
     for _ in range(max(1, int(_EMBED_SERVICE_RETRY_STEPS))):
-        if _embed_service_healthz(timeout=1.0):
+        if budget is not None and (
+                budget.expired() or budget.remaining() < _EMBED_MIN_ATTEMPT_SEC):
+            return False
+        timeout = _EMBED_SERVICE_HEALTHZ_TIMEOUT_SEC
+        if budget is not None:
+            timeout = min(timeout, budget.remaining())
+        if _embed_service_healthz(timeout=timeout):
             return True
-        time.sleep(_EMBED_SERVICE_RETRY_INTERVAL)
+        if budget is not None and budget.expired():
+            return False
+        pause = _EMBED_SERVICE_RETRY_INTERVAL
+        if budget is not None:
+            pause = min(pause, budget.remaining())
+        time.sleep(pause)
     return False
 
 
@@ -606,14 +694,17 @@ def _embed_failure_note() -> str:
     return str(getattr(_EMBED_FAILURE, "reason", "") or "")
 
 
-def _post_embed_attempt(url: str, body: bytes, key: str):
+def _post_embed_attempt(url: str, body: bytes, key: str,
+                        *, timeout: float = _EMBED_SERVICE_TIMEOUT_SEC):
     """One ``POST /embed``: ``(payload, None, "")`` or ``(None, status, reason)``.
 
-    ``reason`` is the diagnosis this call used to throw away: the exception
-    kind, the HTTP status together with the service's own error line, or — for
-    a timeout — how long the call actually waited next to its limit. It carries
-    no request text and no key, so it is safe in a log line and in the answer
-    the model reads.
+    ``timeout`` is the caller's share of the shared embed budget; without a
+    budget it stays ``_EMBED_SERVICE_TIMEOUT_SEC``. ``reason`` is the
+    diagnosis this call used to throw away: the exception kind, the HTTP
+    status together with the service's own error line, or — for a timeout —
+    how long the call actually waited next to its limit. It carries no request
+    text and no key, so it is safe in a log line and in the answer the model
+    reads.
     """
     import socket
     import time as _time
@@ -630,7 +721,7 @@ def _post_embed_attempt(url: str, body: bytes, key: str):
             url, data=body,
             headers={"Content-Type": "application/json",
                      _SERVICE_AUTH_HEADER: key})
-        with urllib.request.urlopen(req, timeout=_EMBED_SERVICE_TIMEOUT_SEC) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         # The service answered and refused. Its own error line names why — the
@@ -650,7 +741,7 @@ def _post_embed_attempt(url: str, body: bytes, key: str):
                 exc, (socket.timeout, TimeoutError)):
             return None, None, (
                 f"timeout after {_waited():.2f}s "
-                f"(limit {_EMBED_SERVICE_TIMEOUT_SEC:.1f}s)")
+                f"(limit {timeout:.1f}s)")
         text = " ".join(str(cause).split())[:160]
         if isinstance(cause, ConnectionRefusedError):
             text = "connection refused (nothing listening)"
@@ -674,7 +765,8 @@ def _post_embed_attempt(url: str, body: bytes, key: str):
     }, None, ""
 
 
-def _post_embed(url: str, body: bytes, key: str, *, text_chars: int = -1):
+def _post_embed(url: str, body: bytes, key: str, *, text_chars: int = -1,
+                timeout: float = _EMBED_SERVICE_TIMEOUT_SEC):
     """One logged ``POST /embed`` attempt — see ``_post_embed_attempt``.
 
     Diagnosis gap this closes (27.11.2026): the service logs nothing about
@@ -687,7 +779,8 @@ def _post_embed(url: str, body: bytes, key: str, *, text_chars: int = -1):
     import time as _time
 
     started = _time.monotonic()
-    payload, status, reason = _post_embed_attempt(url, body, key)
+    payload, status, reason = _post_embed_attempt(
+        url, body, key, timeout=timeout)
     try:
         logger.info(
             "/embed attempt: chars=%d duration=%.3fs status=%s thread=%s reason=%s",
@@ -699,7 +792,8 @@ def _post_embed(url: str, body: bytes, key: str, *, text_chars: int = -1):
     return payload, status, reason
 
 
-def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, Any]]":
+def _embed_via_service(text: str, is_query: bool = True,
+                       budget: "Optional[_EmbedBudget]" = None) -> "Optional[Dict[str, Any]]":
     """POST /embed. Returns ``{"embedding","model","dim"}`` or None (never raises).
 
     ``is_query`` picks the query/document side of an asymmetric model, exactly
@@ -712,12 +806,32 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
     whole time but a single POST ran into its 15 s timeout, and the plugin
     reported the service as unavailable instead of taking the vector it could
     still deliver.
+
+    With *budget* (prefetch/coldstart) both the HTTP timeout and the wait
+    between rounds are clipped to the shared deadline, and each attempt takes
+    at most its slice so a later round still has room. An exhausted budget
+    starts no further attempt. Without one (remember/recall outside the
+    prefetch chain) the old 15 s behaviour is unchanged.
     """
     url = _embed_service_base() + "/embed"
     body = json.dumps({"text": text, "is_query": bool(is_query)}).encode("utf-8")
+    if budget is None:
+        budget = _current_embed_budget()
+    rounds = max(1, int(_EMBED_SERVICE_RETRY_ROUNDS))
     failures: "List[str]" = []
-    for round_no in range(max(1, int(_EMBED_SERVICE_RETRY_ROUNDS))):
+    for round_no in range(rounds):
+        rounds_left = rounds - round_no
         for attempt in (0, 1):
+            if budget is not None and (
+                    budget.expired()
+                    or budget.remaining() < _EMBED_MIN_ATTEMPT_SEC):
+                failures.append("embed budget exhausted")
+                _remember_embed_failure("; ".join(dict.fromkeys(failures)))
+                return None
+            timeout = _EMBED_SERVICE_TIMEOUT_SEC
+            if budget is not None:
+                timeout = min(
+                    timeout, budget.slice(rounds_left - 1).remaining())
             key = _service_auth_key()
             if not key:
                 # Missing key is a configuration problem, not "the service is gone".
@@ -729,7 +843,7 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
                 _remember_embed_failure("no agent key (enrolment did not deliver one)")
                 return None
             payload, status, reason = _post_embed(
-                url, body, key, text_chars=len(text))
+                url, body, key, text_chars=len(text), timeout=timeout)
             if payload is not None:
                 _remember_embed_failure("")
                 return payload
@@ -739,9 +853,16 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
                 _forget_agent_key()
                 continue
             break
-        if round_no + 1 >= max(1, int(_EMBED_SERVICE_RETRY_ROUNDS)):
+        if round_no + 1 >= rounds:
             break
-        if not _wait_for_embed_service():
+        if budget is not None and (
+                budget.expired()
+                or budget.remaining() < _EMBED_MIN_ATTEMPT_SEC):
+            failures.append("embed budget exhausted")
+            break
+        wait_budget = (budget.slice(rounds_left - 1)
+                       if budget is not None else None)
+        if not _wait_for_embed_service(wait_budget):
             failures.append("/healthz did not answer")
             break
         logger.info(
@@ -751,6 +872,38 @@ def _embed_via_service(text: str, is_query: bool = True) -> "Optional[Dict[str, 
     # names its cause instead of leaving "returned no vector" as the only fact.
     _remember_embed_failure("; ".join(dict.fromkeys(failures)))
     return None
+
+
+def _rerank_within_budget(
+        query: str, points: List[Any], cfg: Dict[str, Any],
+        budget: "Optional[_EmbedBudget]" = None) -> List[Any]:
+    """Rerank only when the shared chain budget still funds a real attempt.
+
+    The reranker sends up to ``pool_k`` candidates to a model and costs seconds
+    (measured ~3 s for the 40-candidate pool on this machine). Starting it with
+    less than ``_RERANK_MIN_BUDGET_SEC`` left would push the chain past
+    ``_COLDSTART_CEILING_SEC`` and the core's 8 s deadline for a result that
+    cannot arrive in time, so the similarity/RRF order is returned unchanged
+    and ONE line names the reason. No budget (the ordinary tool path, or a
+    caller outside any prefetch) means the old behaviour, unchanged.
+
+    The budget is the one the prefetch already created — it is read from the
+    thread-local scope or passed in, never created here.
+    """
+    if budget is None:
+        budget = _current_embed_budget()
+    if budget is not None and budget.remaining() < _RERANK_MIN_BUDGET_SEC:
+        logger.info(
+            "rerank skipped: prefetch budget (%.2fs left, needs %.2fs) — "
+            "returning the similarity/RRF order",
+            budget.remaining(), _RERANK_MIN_BUDGET_SEC)
+        return list(points)
+    from nexus_memory.reranker import rerank_points, DEFAULT_POOL_K
+    return rerank_points(
+        query, list(points),
+        reranker=cfg.get("reranker", "cross-encoder"),
+        pool_k=int(cfg.get("pool_k", DEFAULT_POOL_K)),
+    )
 
 
 def _plugin_venv_python() -> Path:
@@ -1467,6 +1620,9 @@ class _Embedder:
         if self._impl is None:
             # Service path: the vector comes from the local service, never from
             # an import in this (host) process.
+            # No explicit budget argument: ``_embed_via_service`` reads the
+            # chain's scoped budget itself, so a test double of it that only
+            # knows ``(text, is_query)`` keeps working.
             resp = _embed_via_service(text, is_query)
             if resp is None:
                 st = embedder_status()
@@ -3712,6 +3868,9 @@ class NexusMemoryProvider:
         # signature stays compatible with every direct caller.
         with self._prefetch_lock:
             gen = self._next_prefetch_gen()
+        # ONE budget for the whole chain below: the /healthz pre-check, every
+        # retry wait and every /embed attempt read the same monotone deadline.
+        budget = _EmbedBudget.default()
         if not self._embedder_available():
             # The cached flag comes from the LAST contact, which can be a whole
             # process start ago: a service that was still coming up when the
@@ -3720,7 +3879,8 @@ class NexusMemoryProvider:
             # while it answered /healthz in milliseconds). Wait briefly and
             # re-check before publishing the note.
             emb = getattr(self, "_embedder", None)
-            if isinstance(emb, _Embedder) and _wait_for_embed_service():
+            if isinstance(emb, _Embedder) and _wait_for_embed_service(
+                    budget.slice(_EMBED_SERVICE_RETRY_ROUNDS)):
                 emb._service_ok = True
         if not self._embedder_available():
             # A prefetch must never publish an empty block when the embedder is
@@ -3743,7 +3903,8 @@ class NexusMemoryProvider:
             # list and the token window below still see the whole turn. A cold
             # /embed costs 2.1-2.5 ms per character (two measurements,
             # 27.11.2026), so the full 13,750-character turn needed ~29 s.
-            vector = self._embed_cached(_embed_window(query))
+            with _embed_budget_scope(budget):
+                vector = self._embed_cached(_embed_window(query))
             # Embedding/rewriting can outlast the shutdown grace period: abort
             # at this last checkpoint before the client is dereferenced below.
             if getattr(self, "_shutting_down", False):
@@ -3764,6 +3925,10 @@ class NexusMemoryProvider:
             # — sie sind fuer diesen Aufbau Ballast und haben frueher den
             # Kontext verwaessert (gemessen: ein fremder Trip-Wire-Eintrag).
             bundle = _own_bundle()
+            # The search ALWAYS runs: it is local and costs milliseconds, so a
+            # spent clock must never drop the turn's memories. The budget bounds
+            # only the expensive steps (the embed above and the rerank, which
+            # `_rerank_within_budget` gates with this same budget).
             pts = self._qdrant.query_points(
                 collection_name=self._collection, query=vector, limit=32,
                 # Der Filter haelt fremde Verbunde schon aus dem
@@ -4109,9 +4274,15 @@ class NexusMemoryProvider:
             pass
 
     def _recall(self, query: str, limit: int = 5, as_of: str = "",
-                categories=None, min_score=None) -> List[Dict[str, Any]]:
+                categories=None, min_score=None,
+                budget: "Optional[_EmbedBudget]" = None) -> List[Dict[str, Any]]:
         """Roadmap 4.5: as_of='YYYY-MM-DD' limits recall to memories
-        created on/before that date (point-in-time view). Empty = no filter."""
+        created on/before that date (point-in-time view). Empty = no filter.
+
+        *budget* is the prefetch chain's ONE clock when this runs under it (or
+        a direct caller passes one). It gates the rerank only — the search
+        always runs. Without a budget the old behaviour is unchanged.
+        """
         if not self._embedder or not self._qdrant:
             # Fail loud (2026-10-11): without a working provider this used to
             # return [] — indistinguishable from an honest "nothing found".
@@ -4176,12 +4347,7 @@ class NexusMemoryProvider:
         _suppressed = {"deprecated", "rolled_back"}
         pts = [p for p in pts if (p.payload or {}).get("lifecycle_status") not in _suppressed]
         if cfg.get("enabled"):
-            from nexus_memory.reranker import rerank_points, DEFAULT_POOL_K
-            pts = rerank_points(
-                query, pts,
-                reranker=cfg.get("reranker", "cross-encoder"),
-                pool_k=int(cfg.get("pool_k", DEFAULT_POOL_K)),
-            )
+            pts = _rerank_within_budget(query, pts, cfg, budget)
         # v0.15 Memory Dynamics: applied ONLY when the active reranker is NOT
         # the LLM reranker. Measurement on 2026-10-24 showed that
         # _apply_dynamics_tiebreak after the LLM reranker reordered results

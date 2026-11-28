@@ -35,11 +35,15 @@ _COL = "nexus_hf"
 class _FakeQdrant:
     """Stands in for the HTTP layer; records every call in order."""
 
-    def __init__(self, *, indexed=False, snapshot=None, snapshot_error=None,
-                 put_error=None, counts=(5, 5), becomes_keyword=True,
-                 delay_gets=None):
+    def __init__(self, *, indexed=False, initial_type="keyword", snapshot=None,
+                 snapshot_error=None, put_error=None, counts=(5, 5),
+                 becomes_keyword=True, delay_gets=None):
         self.calls: list[tuple[str, str, dict | None]] = []
         self.indexed = indexed
+        # The type of the index that already exists (keyword unless a test
+        # simulates the wrong one, e.g. ``text``). A successful PUT rebuilds
+        # it as keyword.
+        self.current_type = initial_type
         self.snapshot = ({"name": "snap-2026-11-27", "size": 124_000_000,
                           "checksum": "deadbeef"} if snapshot is None
                          else snapshot)
@@ -55,7 +59,8 @@ class _FakeQdrant:
         self._gets_after_put = 0
 
     def _info(self) -> dict:
-        schema = ({"scope": {"data_type": "keyword"}} if self.indexed else {})
+        schema = ({"scope": {"data_type": self.current_type}}
+                  if self.indexed else {})
         return {"result": {
             "points_count": 68602,
             "config": {"params": {"on_disk_payload": True,
@@ -85,6 +90,8 @@ class _FakeQdrant:
             if self.put_error:
                 raise RuntimeError(self.put_error)
             self._put_done = True
+            if self.becomes_keyword:
+                self.current_type = "keyword"
             self.indexed = (False if self.delay_gets is not None
                             else self.becomes_keyword)
             return {"result": True}
@@ -210,6 +217,47 @@ def test_existing_keyword_index_is_a_no_op(fake, capsys):
     assert script.main(_argv("--apply")) == 0
     assert "PUT" not in f.methods()
     assert "nothing to do" in capsys.readouterr().out
+
+
+def test_wrong_index_type_fails_closed_without_recreate(fake, capsys):
+    """A ``text`` index on ``scope`` is a failure, not a WARNING + exit 0.
+
+    Red before 28.11.2026: the script printed "WARNING: it is not a keyword
+    index" and returned 0, so a human, a cron job and CI all read it as
+    "everything is fine" while every filtered read kept paying for the wrong
+    type. The message must name the found type, the needed type and the fix.
+    """
+    f = fake(indexed=True, initial_type="text")
+    assert script.main(_argv("--apply")) == 1
+
+    out = capsys.readouterr().out
+    assert "ERROR" in out, out
+    assert "'text'" in out, out
+    assert "keyword" in out, out
+    assert "--recreate" in out, out
+    assert "PUT" not in f.methods()
+    assert "DELETE" not in f.methods()
+
+
+def test_wrong_index_type_fails_closed_on_a_dry_run_too(fake, capsys):
+    """The read-only mode must not hide a wrong index either."""
+    f = fake(indexed=True, initial_type="text")
+    assert script.main(_argv()) == 1
+    out = capsys.readouterr().out
+    assert "'text'" in out and "--recreate" in out, out
+    assert "PUT" not in f.methods()
+
+
+def test_recreate_rebuilds_a_wrong_index_as_keyword(fake):
+    """``--recreate`` is the offered repair, and it must actually repair."""
+    f = fake(indexed=True, initial_type="text")
+    assert script.main(_argv("--apply", "--recreate")) == 0
+
+    index_calls = [m for m, url, _ in f.calls if "index" in url]
+    assert index_calls == ["DELETE", "PUT"], f.calls
+    assert f.put_body() == {"field_name": "scope", "field_schema": "keyword"}
+    state = script.scope_index_state("http://localhost:6333", _COL)
+    assert state is not None and script._index_is_keyword(state), state
 
 
 def test_recreate_drops_then_rebuilds(fake):

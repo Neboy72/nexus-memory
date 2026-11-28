@@ -17,7 +17,8 @@ migration step puts it back. That is what this script is for.
 Every step aborts with exit 1 instead of guessing:
   1. Read the collection: point count, payload_schema, on_disk_payload.
   2. Is ``scope`` already indexed as keyword? Then this is a no-op — unless
-     ``--recreate`` was asked for.
+     ``--recreate`` was asked for. An existing index with any OTHER type fails
+     closed (exit != 0) and names ``--recreate`` instead of warning.
   3. Snapshot the collection and require name, size and checksum. No
      successful snapshot, no build.
   4. Create the index: ``field_name=scope``, ``field_schema=keyword``,
@@ -86,6 +87,11 @@ def scope_index_state(base: str, collection: str) -> dict | None:
 def _index_is_keyword(state: dict) -> bool:
     kind = str(state.get("data_type") or state.get("type") or "").lower()
     return "keyword" in kind
+
+
+def _index_type(state: dict) -> str:
+    """The type Qdrant reports for an index, or ``"unknown"``."""
+    return str(state.get("data_type") or state.get("type") or "unknown")
 
 
 # ``wait=true`` on the index call makes Qdrant build the index before it
@@ -172,7 +178,14 @@ def main(argv: list[str] | None = None) -> int:
     if existing is not None and not args.recreate:
         print("index on 'scope' exists: %s" % json.dumps(existing, sort_keys=True))
         if not _index_is_keyword(existing):
-            print("WARNING: it is not a keyword index — check before relying on it.")
+            # Fail closed (28.11.2026): a WARNING plus exit 0 reads as "all
+            # good" to a human, a cron job and CI alike, while every filtered
+            # read keeps paying for the wrong index type.
+            print("ERROR: the index on 'scope' has data_type %r, but this "
+                  "script needs 'keyword'." % _index_type(existing))
+            print("       Re-run with --recreate to drop it and build the "
+                  "keyword index.")
+            return 1
         print("nothing to do (idempotent). Use --recreate to rebuild.")
         return 0
 
