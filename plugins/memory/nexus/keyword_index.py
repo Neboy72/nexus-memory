@@ -315,7 +315,7 @@ def build_from_qdrant(qdrant: Any, collection: str,
                       path: Optional[os.PathLike] = None) -> int:
     """Liest die Sammlung vollstaendig (seitenweise) und baut daraus den Index.
 
-    Gemessen am 28.11.2026 an ``nexus_hf``: 68869 Punkte, 35 Seiten a 2000,
+    Gemessen am 28.11.2026 an ``nexus_hf``: 68869 Punkte, Seiten der Groesse NEXUS_FTS_LIMIT (Vorgabe 5000),
     68869 eindeutige Kennungen — der Seitenzeiger laeuft nicht im Kreis. Der
     frueher benutzte Gesamtdeckel (``NEXUS_FTS_LIMIT`` = 60000) liess dagegen
     8869 Punkte (12.9 %) unauffindbar, ohne dass der Index krank aussah.
@@ -387,18 +387,20 @@ class KeywordIndex:
     def is_current(self, expected_count: Optional[int] = None) -> bool:
         """Passt der Index zur Sammlung (Name, Vollstaendigkeit, Zeilenzahl)?
 
-        Ohne bekannte Punktzahl genuegt der Sammlungsname. Mit Punktzahl muss
-        der Index zusaetzlich als vollstaendig vermerkt sein: ein als
-        unvollstaendig markierter Index ist nie aktuell, auch wenn seine
-        Zeilenzahl zufaellig passt.
+        Ein als unvollstaendig markierter Index ist NIE aktuell — unabhaengig
+        davon, ob die Punktzahl der Sammlung bekannt ist. Der frueher hier
+        stehende fruehe Ausstieg bei ``expected_count is None`` liess genau
+        diesen Fall durch: faellt ``collection_count()`` aus, kaeme ein halber
+        Index als aktuell durch und es startete kein Neuaufbau. Ohne bekannte
+        Punktzahl genuegt sonst der Sammlungsname.
         """
         info = self.meta()
         if info.get("collection") != self.collection:
             return False
-        if expected_count is None:
-            return True
         if info.get("complete") == "0":
             return False
+        if expected_count is None:
+            return True
         try:
             stored = int(info.get("points", "-1"))
         except (TypeError, ValueError):

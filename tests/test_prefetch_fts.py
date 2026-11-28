@@ -296,6 +296,23 @@ class TestVollstaendigerAufbau:
         assert kaputt.read_bytes() == b"das ist keine datenbank"
         assert KeywordIndex(kaputt, "testcoll").search("Kessel") == []
 
+    def test_unvollstaendiger_index_gilt_auch_ohne_punktzahl_nicht_als_aktuell(self, tmp_path):
+        """Der Fall, den Inspector am 28.11.2026 gefunden hat.
+
+        Faellt ``collection_count()`` aus, reicht ``ensure_index`` kein
+        ``expected_count`` durch. Vorher gab ``is_current(None)`` dann True
+        zurueck, bevor der Vollstaendigkeitsvermerk gelesen wurde — ein halber
+        Index galt als aktuell und es startete kein Neuaufbau mehr.
+        """
+        pfad = tmp_path / "index.db"
+        build_index(_punkte_anzahl(3), pfad, "testcoll")
+        assert KeywordIndex(pfad, "testcoll").is_current() is True
+
+        fts._mark_incomplete(pfad, "testcoll")
+
+        assert KeywordIndex(pfad, "testcoll").is_current() is False, "ohne Punktzahl"
+        assert KeywordIndex(pfad, "testcoll").is_current(3) is False, "mit Punktzahl"
+
     def test_aktueller_index_baut_nicht_erneut(self, tmp_path, monkeypatch):
         """Ist der Index aktuell, loest keine Anfrage einen Aufbau aus."""
         pfad = tmp_path / "fts.db"
