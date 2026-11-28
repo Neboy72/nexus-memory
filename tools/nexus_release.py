@@ -73,7 +73,10 @@ WAIT_DIENST_START_SEC = 60.0
 TIMEOUT_GIT = 120
 TIMEOUT_TEST = 1800
 TIMEOUT_PUSH = 300
-TIMEOUT_CI = int(os.environ.get('NEXUS_CI_TIMEOUT', '900'))
+# 28.11.2026: der Windows-Lauf braucht deutlich laenger als der Linux-Lauf
+# (Abhaengigkeiten + volle Testreihe); 900 s rissen knapp. 1800 s, damit ein
+# langsamer Lauf kein falsches "nicht fertig" erzeugt.
+TIMEOUT_CI = int(os.environ.get('NEXUS_CI_TIMEOUT', '1800'))
 TIMEOUT_GH = 180
 TIMEOUT_CLAWHUB = 600
 
